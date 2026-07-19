@@ -13,6 +13,7 @@ Dual-layer enforcement:
 Org context validated per-event for streaming (SSE) connections.
 """
 
+import asyncio
 import contextvars
 import json
 import logging
@@ -24,7 +25,7 @@ from typing import Any
 
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -457,6 +458,7 @@ async def list_pipelines_tool(
         except Exception:
             _log.exception("list_pipelines_tool failed")
             return _tool_error("Failed to list pipelines")
+    return None
 
 
 @mcp.tool(description="Create a new pipeline in the organisation. Returns the created pipeline details.")
@@ -524,6 +526,7 @@ async def create_pipeline(
         except Exception:
             _log.exception("create_pipeline failed")
             return _tool_error("Failed to create pipeline")
+    return None
 
 
 @mcp.tool(
@@ -585,6 +588,7 @@ async def list_runs(
         except Exception:
             _log.exception("list_runs failed")
             return _tool_error("Failed to list runs")
+    return None
 
 
 @mcp.tool(
@@ -651,6 +655,7 @@ async def update_pipeline_graph(
         except Exception:
             _log.exception("update_pipeline_graph failed")
             return _tool_error("Failed to update pipeline graph")
+    return None
 
 
 @mcp.tool(
@@ -733,6 +738,7 @@ async def bind_connector_to_node(
         except Exception:
             _log.exception("bind_connector_to_node failed")
             return _tool_error("Failed to bind connector to node")
+    return None
 
 
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
@@ -803,6 +809,7 @@ async def trigger_pipeline(
         except Exception:
             _log.exception("trigger_pipeline failed")
             return _tool_error("Failed to trigger pipeline")
+    return None
 
 
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
@@ -865,6 +872,7 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         except Exception:
             _log.exception("get_run_status failed")
             return _tool_error("Failed to get run status")
+    return None
 
 
 @mcp.tool(
@@ -922,6 +930,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         except Exception:
             _log.exception("get_run_output failed")
             return _tool_error("Failed to get node output")
+    return None
 
 
 @mcp.tool(
@@ -978,6 +987,7 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
         except Exception:
             _log.exception("get_run_evals failed")
             return _tool_error("Failed to get run evals")
+    return None
 
 
 @mcp.tool(
@@ -1032,6 +1042,7 @@ async def list_eval_definitions(
         except Exception:
             _log.exception("list_eval_definitions failed")
             return _tool_error("Failed to list eval definitions")
+    return None
 
 
 @mcp.tool(description="Cancel a running pipeline run.")
@@ -1075,6 +1086,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
         except Exception:
             _log.exception("cancel_run failed")
             return _tool_error("Failed to cancel run")
+    return None
 
 
 @mcp.tool(description="List all pending (undecided) HITL gates across all runs.")
@@ -1139,6 +1151,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         except Exception:
             _log.exception("list_pending_hitl failed")
             return _tool_error("Failed to list pending HITL gates")
+    return None
 
 
 @mcp.tool(
@@ -1188,7 +1201,7 @@ async def review_hitl(
     if action == "deliver_manual" and output is None:
         return {"error": "output_required", "detail": "deliver_manual requires output dict"}
 
-    for attempt in range(3):
+    for _attempt in range(3):
         try:
             async with _session(org_id) as s:
                 # Check human_only for approve action
@@ -1295,6 +1308,7 @@ async def review_hitl(
         except Exception:
             _log.exception("review_hitl operation failed")
             return _tool_error("Failed to process HITL action")
+    return None
 
 
 @mcp.tool(
@@ -1430,6 +1444,7 @@ async def search_library(
         except Exception:
             _log.exception("search_library failed")
             return _tool_error("Failed to search library")
+    return None
 
 
 @mcp.tool(
@@ -1557,6 +1572,7 @@ async def list_trigger_events(
         except Exception:
             _log.exception("list_trigger_events failed")
             return _tool_error("Failed to list trigger events")
+    return None
 
 
 @mcp.tool(
@@ -1614,6 +1630,7 @@ async def list_triggers(
         except Exception:
             _log.exception("list_triggers failed")
             return _tool_error("Failed to list triggers")
+    return None
 
 
 @mcp.tool(
@@ -1687,6 +1704,7 @@ async def create_model_backend(
         except Exception:
             _log.exception("create_model_backend failed")
             return _tool_error("Failed to create model backend")
+    return None
 
 
 @mcp.tool(
@@ -1749,6 +1767,7 @@ async def create_connector(
         except Exception:
             _log.exception("create_connector failed")
             return _tool_error("Failed to create connector")
+    return None
 
 
 @mcp.tool(description="Create a new trigger for a pipeline.")
@@ -1808,6 +1827,7 @@ async def create_trigger(
         except Exception:
             _log.exception("create_trigger failed")
             return _tool_error("Failed to create trigger")
+    return None
 
 
 @mcp.tool(description="Delete a pipeline by ID.")
@@ -1848,6 +1868,7 @@ async def delete_pipeline(
         except Exception:
             _log.exception("delete_pipeline failed")
             return _tool_error("Failed to delete pipeline")
+    return None
 
 
 @mcp.tool(description="Create a new agent. Returns the created agent details.")
@@ -1926,10 +1947,11 @@ async def create_agent(
     _DOC_INDEX: DocumentationIndex | None = None
     _DOC_INDEX_TS: float = 0.0
     _DOC_INDEX_TTL: float = 300.0  # 5 minutes
+    return None
 
 
 def _get_doc_index() -> DocumentationIndex:
-    global _DOC_INDEX, _DOC_INDEX_TS
+    global _DOC_INDEX, _DOC_INDEX_TS, _DOC_INDEX_TTL
     import time as _time
 
     now = _time.time()
@@ -2225,6 +2247,7 @@ async def list_schemas(
         except Exception:
             _log.exception("list_schemas failed")
             return _tool_error("Failed to list schemas")
+    return None
 
 
 @mcp.tool(
@@ -2282,6 +2305,7 @@ async def infer_schema(
         except Exception:
             _log.exception("infer_schema failed")
             return _tool_error("Failed to infer schema")
+    return None
 
 
 @mcp.tool(
@@ -2406,6 +2430,7 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
         except Exception:
             _log.exception("list_housekeeping failed")
             return _tool_error("Failed to list housekeeping candidates")
+    return None
 
 
 @mcp.tool(
