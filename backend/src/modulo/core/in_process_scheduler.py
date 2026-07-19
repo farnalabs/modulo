@@ -2,9 +2,9 @@
 
 Started by the application lifespan when Redis/Celery is not configured.
 Each scheduler runs as an ``asyncio.Task`` that polls the database for due
-triggers and fires them directly — no Celery or Redis required.
+triggers and fires them directly â€” no Celery or Redis required.
 
-For multi-replica deployments, configure Redis — the Celery beat scheduler
+For multi-replica deployments, configure Redis â€” the Celery beat scheduler
 coordinates across workers to prevent duplicate firings.
 """
 
@@ -14,12 +14,13 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.cleanup_jobs.webhook_dedup_cleanup import cleanup_scheduler_loop
 from modulo.core.cron_scheduler import fire_cron_trigger
 from modulo.core.trigger_engine.polling import fire_polling_trigger
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.trigger import Trigger
 from modulo.settings import get_settings
 
@@ -73,7 +74,7 @@ async def start_schedulers(
         asyncio.create_task(_polling_scheduler_loop(factory), name="polling-scheduler"),
         asyncio.create_task(cleanup_scheduler_loop(factory), name="cleanup-scheduler"),
     ]
-    _log.info("In-process schedulers started — cron, polling, and cleanup tasks active")
+    _log.info("In-process schedulers started â€” cron, polling, and cleanup tasks active")
     return tasks
 
 
@@ -142,10 +143,28 @@ async def _fetch_due_cron_triggers(factory: async_sessionmaker[AsyncSession]) ->
         for row in result.all():
             config = row.config_json or {}
             snapshot_id_str = config.get("snapshot_id")
-            try:
-                snapshot_id = uuid.UUID(snapshot_id_str) if snapshot_id_str else uuid.uuid4()
-            except (ValueError, TypeError):
-                snapshot_id = uuid.uuid4()
+            if snapshot_id_str:
+                try:
+                    snapshot_id = uuid.UUID(snapshot_id_str)
+                except (ValueError, TypeError):
+                    _log.warning("Cron trigger %s has invalid snapshot_id in config — skipping", row.id)
+                    continue
+            else:
+                # Look up the latest snapshot for this pipeline
+                snap_result = await session.execute(
+                    select(PipelineSnapshot.id)
+                    .where(
+                        PipelineSnapshot.pipeline_id == row.pipeline_id,
+                        PipelineSnapshot.organisation_id == row.organisation_id,
+                    )
+                    .order_by(desc(PipelineSnapshot.created_at))
+                    .limit(1)
+                )
+                snap_row = snap_result.scalar_one_or_none()
+                if snap_row is None:
+                    _log.warning("Cron trigger %s has no snapshot_id and no snapshots for pipeline — skipping", row.id)
+                    continue
+                snapshot_id = snap_row
             triggers.append(
                 {
                     "id": row.id,
@@ -210,7 +229,7 @@ async def _fetch_due_polling_triggers(factory: async_sessionmaker[AsyncSession])
 
 
 async def _fire_cron_wrapper(factory: async_sessionmaker[AsyncSession], info: dict[str, Any]) -> None:
-    """Fire one cron trigger — wrapper that logs outcomes and submits to bg worker."""
+    """Fire one cron trigger â€” wrapper that logs outcomes and submits to bg worker."""
     try:
         result = await fire_cron_trigger(
             trigger_id=info["id"],
@@ -222,17 +241,17 @@ async def _fire_cron_wrapper(factory: async_sessionmaker[AsyncSession], info: di
         )
         if result.get("status") == "fired":
             run_id = result.get("run_id")
-            _log.info("In-process cron trigger %s → run %s", info["id"], run_id)
+            _log.info("In-process cron trigger %s -> run %s", info["id"], run_id)
             if _bg_worker is not None and run_id is not None:
                 _bg_worker.submit(
                     uuid.UUID(run_id),
                     info["org_id"],
                     result.get("input_payload", {}),
                 )
-                _log.info("In-process cron trigger %s → run %s submitted to worker", info["id"], run_id)
+                _log.info("In-process cron trigger %s -> run %s submitted to worker", info["id"], run_id)
             elif _bg_worker is None:
                 _log.warning(
-                    "Cron trigger %s fired but background worker not available — run %s will not execute",
+                    "Cron trigger %s fired but background worker not available â€” run %s will not execute",
                     info["id"],
                     run_id,
                 )
@@ -241,7 +260,7 @@ async def _fire_cron_wrapper(factory: async_sessionmaker[AsyncSession], info: di
 
 
 async def _fire_polling_wrapper(factory: async_sessionmaker[AsyncSession], info: dict[str, Any]) -> None:
-    """Fire one polling trigger — wrapper that logs outcomes."""
+    """Fire one polling trigger â€” wrapper that logs outcomes."""
     try:
         result = await fire_polling_trigger(
             trigger_id=info["id"],
@@ -252,7 +271,7 @@ async def _fire_polling_wrapper(factory: async_sessionmaker[AsyncSession], info:
             condition_expression=info.get("condition_expression"),
         )
         if result.get("status") == "fired":
-            _log.info("In-process polling trigger %s → run %s", info["id"], result.get("run_id"))
+            _log.info("In-process polling trigger %s -> run %s", info["id"], result.get("run_id"))
     except Exception:
         _log.exception("In-process polling trigger %s failed", info["id"])
 
