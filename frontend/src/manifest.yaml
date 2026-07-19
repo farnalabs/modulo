@@ -468,8 +468,8 @@ routes:
         breadcrumb: Connectors
         parent: /
         product_map:
-        sidebar_group: system
-        sidebar_order: 1
+        sidebar_group: core
+        sidebar_order: 6
         type: list_page
         <<: *team
         deprecated: false
