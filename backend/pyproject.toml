@@ -175,7 +175,6 @@ ignore = [
     "B008",     # FastAPI Depends() in function defaults is the idiomatic pattern
 ]
 
-[tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "B"]
 "src/modulo/auth/sso.py" = ["N817"]
 "tests/unit/auth/test_sso.py" = ["N817"]
@@ -186,6 +185,7 @@ ignore = [
 "src/modulo/db/bootstrap_role.py" = ["T20"]
 "scripts/*" = ["T20"]
 "scripts/gen_seed_sql.py" = ["S608"]
+"src/modulo/api/mcp_server.py" = ["RET503"]
 "scripts/generate_remy_primer.py" = ["ASYNC240"]
 "deploy/*" = ["T20"]
 "tests/bdd/check-bdd-coverage.py" = ["N999"]
@@ -325,5 +325,4 @@ disable_error_code = ["var-annotated", "attr-defined"]
 module = "modulo.core.pipeline_engine.graph_cache"
 disable_error_code = ["no-redef"]
 
-[tool.ruff.lint.per-file-ignores]
 "src/modulo/api/mcp_server.py" = ["RET503"]
