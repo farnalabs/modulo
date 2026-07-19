@@ -22,33 +22,26 @@ def mock_redis():
 
 
 class TestTokenBucket:
-    async def test_consume_allows_when_tokens_available(self):
-        bucket = TokenBucket(max_requests=5, window_s=1)
-        for _ in range(5):
-            assert await bucket.consume() is True
-
-    async def test_consume_blocks_when_empty(self):
-        bucket = TokenBucket(max_requests=2, window_s=20)
-        assert await bucket.consume() is True
-        assert await bucket.consume() is True
-        assert await bucket.consume() is False
-
-    async def test_refills_over_time(self):
-        # Values: [init=0.0, consume1=0.0, consume2=0.0, consume3(False)=0.0, consume4(True)=0.2]
-        # __init__ consumes the first monotonic() call before the bucket is used.
-        times = iter([0.0, 0.0, 0.0, 0.0, 0.5])
-        with patch.object(time, "monotonic", side_effect=times):
-            bucket = TokenBucket(max_requests=2, window_s=1)
-            await bucket.consume()
-            await bucket.consume()
-            assert await bucket.consume() is False
-            assert await bucket.consume() is True
-
-    async def test_burst_limits_max_tokens(self):
-        bucket = TokenBucket(max_requests=3, window_s=3)
-        for _ in range(3):
-            assert await bucket.consume() is True
-        assert await bucket.consume() is False
+    @pytest.mark.parametrize(
+        "max_requests,window_s,consume_count,expected_results",
+        [
+            (5, 1, 5, [True] * 5),
+            (2, 20, 3, [True, True, False]),
+            (2, 1, 4, [True, True, False, True]),
+            (3, 3, 4, [True, True, True, False]),
+        ],
+    )
+    async def test_token_bucket(self, max_requests, window_s, consume_count, expected_results):
+        if max_requests == 2 and window_s == 1:
+            times = iter([0.0, 0.0, 0.0, 0.0, 0.5])
+            with patch.object(time, "monotonic", side_effect=times):
+                bucket = TokenBucket(max_requests=max_requests, window_s=window_s)
+                for expected in expected_results:
+                    assert await bucket.consume() is expected
+        else:
+            bucket = TokenBucket(max_requests=max_requests, window_s=window_s)
+            for expected in expected_results:
+                assert await bucket.consume() is expected
 
 
 class TestRedisSlidingWindowRateLimiter:
@@ -77,17 +70,19 @@ class TestRedisSlidingWindowRateLimiter:
 
 
 class TestRateLimiterRegistry:
-    async def test_in_memory_fallback_by_default(self):
-        registry = RateLimiterRegistry()
-        assert registry.has_redis is False
-        assert await registry.check("k", max_requests=100) is True
-
-    async def test_uses_redis_when_available(self, mock_redis):
-        registry = RateLimiterRegistry(redis_client=mock_redis)
-        assert registry.has_redis is True
-        assert await registry.check("k", max_requests=5) is True
-
-    async def test_redis_blocks_over_limit(self, mock_redis):
-        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 6, True))
-        registry = RateLimiterRegistry(redis_client=mock_redis)
-        assert await registry.check("k", max_requests=5) is False
+    @pytest.mark.parametrize(
+        "has_redis,redis_result,expected",
+        [
+            (False, None, True),
+            (True, (None, None, 1, True), True),
+            (True, (None, None, 6, True), False),
+        ],
+    )
+    async def test_registry(self, has_redis, redis_result, expected):
+        if has_redis:
+            mock_redis = MagicMock()
+            mock_redis.pipeline.return_value.execute = AsyncMock(return_value=redis_result)
+            registry = RateLimiterRegistry(redis_client=mock_redis)
+        else:
+            registry = RateLimiterRegistry()
+        assert await registry.check("k", max_requests=5) is expected
