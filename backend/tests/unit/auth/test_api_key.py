@@ -128,53 +128,29 @@ async def test_validate_api_key_expired_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_validate_team_key_role_rejects_admin() -> None:
+@pytest.mark.parametrize(
+    ("role", "team_id", "should_raise"),
+    [
+        ("admin", uuid.uuid4(), True),
+        ("operator", uuid.uuid4(), False),
+        ("runner", uuid.uuid4(), False),
+        ("admin", None, False),
+    ],
+)
+def test_validate_team_key_role(role: str, team_id, should_raise: bool) -> None:
     from unittest.mock import MagicMock
 
     from modulo.auth.api_key import ApiKeyInvalidError, _validate_team_key_role
 
     key = MagicMock()
-    key.team_id = uuid.uuid4()
-    key.role = "admin"
+    key.team_id = team_id
+    key.role = role
 
-    with pytest.raises(ApiKeyInvalidError, match="team-scoped API keys cannot have admin role"):
+    if should_raise:
+        with pytest.raises(ApiKeyInvalidError, match="team-scoped API keys cannot have admin role"):
+            _validate_team_key_role(key)
+    else:
         _validate_team_key_role(key)
-
-
-def test_validate_team_key_role_allows_operator() -> None:
-    from unittest.mock import MagicMock
-
-    from modulo.auth.api_key import _validate_team_key_role
-
-    key = MagicMock()
-    key.team_id = uuid.uuid4()
-    key.role = "operator"
-
-    _validate_team_key_role(key)
-
-
-def test_validate_team_key_role_allows_runner() -> None:
-    from unittest.mock import MagicMock
-
-    from modulo.auth.api_key import _validate_team_key_role
-
-    key = MagicMock()
-    key.team_id = uuid.uuid4()
-    key.role = "runner"
-
-    _validate_team_key_role(key)
-
-
-def test_validate_team_key_role_skips_org_wide() -> None:
-    from unittest.mock import MagicMock
-
-    from modulo.auth.api_key import _validate_team_key_role
-
-    key = MagicMock()
-    key.team_id = None
-    key.role = "admin"
-
-    _validate_team_key_role(key)
 
 
 # ---------------------------------------------------------------------------

@@ -35,6 +35,7 @@ from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_email import router as admin_email_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
+from modulo.api.routes.admin_housekeeping import router as admin_housekeeping_router
 from modulo.api.routes.admin_license import router as admin_license_router
 from modulo.api.routes.admin_monitor_config import router as admin_monitor_config_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
@@ -415,6 +416,7 @@ async def _seed_demo_data(settings: Settings) -> None:
         if existing_stages.scalar_one_or_none() is None:
             stage = Stage(
                 organisation_id=org_id,
+                account_id=demo_account.id,
                 name="Development",
                 description="Development stage for testing pipelines",
                 position=0,
@@ -713,6 +715,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         from modulo.api.routes.health import set_worker_ref as set_health_bg_worker
 
         set_health_bg_worker(_bg_worker)
+        from modulo.core.in_process_scheduler import set_bg_worker as set_scheduler_bg_worker
+
+        set_scheduler_bg_worker(_bg_worker)
     except Exception:
         logger.warning("startup.background_worker_init_failed", exc_info=True)
 
@@ -859,6 +864,7 @@ app.include_router(admin_sso_router)
 app.include_router(admin_system_config_router)
 app.include_router(admin_tiers_router)
 app.include_router(admin_triggers_router)
+app.include_router(admin_housekeeping_router)
 app.include_router(auth_router)
 app.include_router(changelog_router)
 app.include_router(sso_router)

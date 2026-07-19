@@ -50,13 +50,20 @@
             { key: 'trigger_type', label: $t('views.RunsListView.trigger'), sortable: true },
             { key: 'run_number', label: '#', numeric: true, sortable: true },
             { key: 'created_at', label: $t('views.RunsListView.created'), sortable: true },
+            { key: 'started_at', label: $t('views.RunsListView.last_run'), sortable: true },
             { key: 'total_cost_usd', label: $t('views.RunsListView.cost'), numeric: true, sortable: true },
           ]"
           :rows="runs"
           @row-click="(row: any) => navigateToDetail(row.run_id)"
         >
-          <template #cell-pipeline_name="{ value }">
-            <span class="font-medium">{{ value || '(deleted pipeline)' }}</span>
+          <template #cell-pipeline_name="{ row, value }">
+            <router-link
+              :to="`/runs/${row.run_id}`"
+              class="font-medium hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 rounded"
+              @click.stop
+            >
+              {{ value || '(deleted pipeline)' }}
+            </router-link>
           </template>
           <template #cell-status="{ value }">
             <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
@@ -71,6 +78,9 @@
           </template>
           <template #cell-created_at="{ value }">
             <span class="whitespace-nowrap text-muted-foreground">{{ formatRunDate(value as string) }}</span>
+          </template>
+          <template #cell-started_at="{ value }">
+            <span class="whitespace-nowrap text-muted-foreground">{{ formatRunDate(value as string) || '—' }}</span>
           </template>
           <template #cell-total_cost_usd="{ value }">
             <span class="tabular-nums">{{ value != null ? '$' + Number(value).toFixed(4) : '—' }}</span>

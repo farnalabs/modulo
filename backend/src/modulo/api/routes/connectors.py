@@ -21,6 +21,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.connectors.base import ConnectorType
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
 from modulo.connectors.github import GitHubConnector
 from modulo.db.crud.connector_instance import (
@@ -34,8 +35,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
-
-_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
 
@@ -102,6 +101,21 @@ class ConnectorListResponse(BaseModel):
     page_size: int
     next_cursor: str | None = None
     has_more: bool = False
+
+
+class ConnectorTypeItem(BaseModel):
+    id: str
+    display_name: str
+
+
+class ConnectorTypeListResponse(BaseModel):
+    items: list[ConnectorTypeItem]
+
+
+@router.get("/types", response_model=ConnectorTypeListResponse)
+async def list_connector_types() -> ConnectorTypeListResponse:
+    items = [ConnectorTypeItem(id=t.value, display_name=t.value.replace("_", " ").title()) for t in ConnectorType]
+    return ConnectorTypeListResponse(items=items)
 
 
 def _to_response(ci: Any) -> ConnectorResponse:

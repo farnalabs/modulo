@@ -31,6 +31,16 @@ _POLL_INTERVAL = 30  # seconds between DB polls
 # on shutdown to clean up the connection pool.
 _scheduler_engine: AsyncEngine | None = None
 
+# Background worker reference set by set_bg_worker(). When set, cron and
+# polling triggers submit their runs to the worker for execution.
+_bg_worker: Any | None = None
+
+
+def set_bg_worker(worker: Any) -> None:
+    """Set the background worker reference for run submission."""
+    global _bg_worker
+    _bg_worker = worker
+
 
 async def start_schedulers(
     engine: AsyncEngine | None = None,
@@ -48,9 +58,13 @@ async def start_schedulers(
     """
     global _scheduler_engine
     settings = get_settings()
-    _scheduler_engine = engine if engine is not None else create_async_engine(
-        settings.database_url,
-        connect_args={"ssl": False, "statement_cache_size": 0} if settings.modulo_db == "postgres" else {},
+    _scheduler_engine = (
+        engine
+        if engine is not None
+        else create_async_engine(
+            settings.database_url,
+            connect_args={"ssl": False, "statement_cache_size": 0} if settings.modulo_db == "postgres" else {},
+        )
     )
     factory = async_sessionmaker(_scheduler_engine, expire_on_commit=False)
 
@@ -196,7 +210,7 @@ async def _fetch_due_polling_triggers(factory: async_sessionmaker[AsyncSession])
 
 
 async def _fire_cron_wrapper(factory: async_sessionmaker[AsyncSession], info: dict[str, Any]) -> None:
-    """Fire one cron trigger — wrapper that logs outcomes."""
+    """Fire one cron trigger — wrapper that logs outcomes and submits to bg worker."""
     try:
         result = await fire_cron_trigger(
             trigger_id=info["id"],
@@ -206,7 +220,21 @@ async def _fire_cron_wrapper(factory: async_sessionmaker[AsyncSession], info: di
             cron_expression=info["cron_expression"],
         )
         if result.get("status") == "fired":
-            _log.info("In-process cron trigger %s → run %s", info["id"], result.get("run_id"))
+            run_id = result.get("run_id")
+            _log.info("In-process cron trigger %s → run %s", info["id"], run_id)
+            if _bg_worker is not None and run_id is not None:
+                _bg_worker.submit(
+                    uuid.UUID(run_id),
+                    info["org_id"],
+                    result.get("input_payload", {}),
+                )
+                _log.info("In-process cron trigger %s → run %s submitted to worker", info["id"], run_id)
+            elif _bg_worker is None:
+                _log.warning(
+                    "Cron trigger %s fired but background worker not available — run %s will not execute",
+                    info["id"],
+                    run_id,
+                )
     except Exception:
         _log.exception("In-process cron trigger %s failed", info["id"])
 

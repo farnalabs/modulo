@@ -67,7 +67,7 @@ jobs:
         run: |
           $expectedSha = git rev-parse HEAD
           $expectedSha7 = $expectedSha.Substring(0, 7)
-          $info = curl.exe -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
+          $info = curl -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) {
             Write-Host "staging.modulo.run - no deployment info available"
             exit 1
