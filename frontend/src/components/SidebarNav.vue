@@ -29,7 +29,7 @@
           /></SidebarGroup>
       </template>
     </div>
-    <div class="pointer-events-none absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-background to-transparent" aria-hidden="true" />
+    <div class="pointer-events-none sticky bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-background to-transparent" aria-hidden="true" />
   </OverlayScrollbarsComponent>
 </template>
 

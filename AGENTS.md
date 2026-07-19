@@ -54,13 +54,32 @@ git worktree remove .agents/worktrees/<branch-name>
 git branch -d <branch-name>
 ```
 
-**Gate script:** `..\..\..\..\devtools\harness\tools\gate.ps1` runs the local CI suite (migration-collision check, backend pytest unit + architecture tests, frontend vitest, vue-tsc type-check, frontend build, eslint, ruff), bumps the semver in both version files AND their lockfiles, and merges the worktree branch to local main on success â€” does NOT push to remote. From the worktree root:
+**PR-based delivery (standard):** Create a worktree branch, implement, commit, then push and create a PR:
 ```powershell
-..\..\..\..\devtools\harness\tools\gate.ps1 -Branch <branch-name>
+# From worktree root:
+git push origin <branch-name>
+gh pr create --title "feat(<scope>): <summary>" --fill
 ```
-Accepts `-Semver patch|minor|major` (default patch) and `-SkipTests` (migration-collision check still runs). There is no `-Fast` or `-Yes` parameter.
+GitHub CI (ci.yml) validates the PR automatically. The `merge-to-main.yml` workflow
+squash-merges when all checks pass and the threshold is met. Track with:
+```powershell
+..\..\..\..\devtools\harness\tools\wait-for-pr.ps1 -PRNumber <N> -WaitForCI
+```
 
-**Publish:** A Windows scheduled task runs `publish.ps1` every 4 hours â€” it tests local main and pushes to remote only if clean. Remote main should always be green, but Workers sometimes merge broken tests despite the gate (see AGENTS.md Lessons Learned â€” "Never use -SkipTests to bypass preexisting failures on main"). If you see a CI failure on main, fix it immediately â€” don't merge on top of it.
+**Legacy gate.ps1** (local-only skills only [`find-and-fix`, `explore-deployment`]):
+`..\..\..\..\devtools\harness\tools\gate.ps1 -Branch <branch-name>` runs local CI
+and merges to local main. Accepts `-Semver patch|minor|major` (default patch),
+`-SkipTests` (migration-collision check still runs), and `-PushAndPR` to skip
+local merge and push+create PR instead.
+
+**New scripts (PR-based flow):**
+- `create-pr.ps1` - push branch + create PR from any worktree
+- `wait-for-pr.ps1` - poll a PR until it is merged (or timeout)
+- `pr-flow-config.ps1` - shared configuration for the PR-based delivery flow
+
+**Publish:** The scheduled `publish.ps1` is now verify-only (no push). Pushing to
+remote is handled by the GitHub `merge-to-main.yml` workflow when PRs are merged.
+If you see a CI failure on main, fix it immediately - do not merge on top of it.
 
 ### Subagent pattern (mandatory)
 
@@ -872,3 +891,25 @@ ADR 003 establishes the **Agent Dispatch Model**:
 When creating new pipeline features, prefer the `sandbox_agent` node type for
 code-generation tasks. The `agent` node type (single-shot LLM call) remains
 valid for non-coding tasks (classification, summarization, analysis).
+
+### Fly --strategy immediate desyncs the proxy routing table
+
+\lyctl deploy --strategy immediate\ replaces machines immediately, which desynchronizes Fly's edge proxy routing table from actual machine state. The machines remain healthy (health checks pass at 200), but the proxy returns 503 with "no known healthy instances found for route tcp/443" because old routing entries reference stale machines.
+
+**Symptoms:**
+- \lyctl status\ shows machines "started" with "1 total, 1 passing" health checks
+- Edge proxy returns 503
+- Individual restarts (\lyctl machine restart\, \lyctl apps restart\) do NOT fix it
+- The error message hints: "are you using the 'immediate' strategy?"
+
+**Fix — scale-to-zero then scale-up:**
+\\\powershell
+flyctl scale count 0 --yes -a app-modulo
+flyctl scale count 2 --yes -a app-modulo
+\\\
+This destroys all machines and creates fresh ones that register correctly with the proxy routing table.
+
+**Prevention:**
+- \[deploy] strategy = 'rolling'\ is set in \ly.toml\ and \ly.staging.toml\
+- Always use the deploy pipeline or \deploy.ps1\ — never \lyctl deploy\ directly
+- Never pass \--strategy immediate\ — rolling/canary/bluegreen are the safe options

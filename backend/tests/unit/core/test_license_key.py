@@ -36,28 +36,23 @@ class TestDefaultPublicKey:
 
 
 class TestValidatePublicKeyHex:
-    def test_accepts_valid_key(self) -> None:
-        _validate_public_key_hex("a" * 64)
-
-    def test_rejects_short_key(self) -> None:
-        with pytest.raises(ValueError, match="must be 64 hex chars"):
-            _validate_public_key_hex("a" * 63)
-
-    def test_rejects_long_key(self) -> None:
-        with pytest.raises(ValueError, match="must be 64 hex chars"):
-            _validate_public_key_hex("a" * 65)
-
-    def test_rejects_empty_string(self) -> None:
-        with pytest.raises(ValueError, match="must be 64 hex chars"):
-            _validate_public_key_hex("")
-
-    def test_rejects_non_hex_chars(self) -> None:
-        with pytest.raises(ValueError, match="not valid hex"):
-            _validate_public_key_hex("z" + "a" * 63)
-
-    def test_accepts_uppercase_hex(self) -> None:
-        # bytes.fromhex accepts uppercase hex chars (A-F)
-        _validate_public_key_hex("A" * 64)
+    @pytest.mark.parametrize(
+        ("key", "expect_error", "error_match"),
+        [
+            ("a" * 64, False, None),
+            ("A" * 64, False, None),
+            ("a" * 63, True, "must be 64 hex chars"),
+            ("a" * 65, True, "must be 64 hex chars"),
+            ("", True, "must be 64 hex chars"),
+            ("z" + "a" * 63, True, "not valid hex"),
+        ],
+    )
+    def test_validate_key(self, key: str, expect_error: bool, error_match: str | None) -> None:
+        if expect_error:
+            with pytest.raises(ValueError, match=error_match):
+                _validate_public_key_hex(key)
+        else:
+            _validate_public_key_hex(key)
 
 
 class TestSetPublicKeyValidates:

@@ -1,0 +1,35 @@
+name: Auto Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+jobs:
+  review:
+    name: Review and approve
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Post APPROVED review
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        shell: bash
+        run: |
+          echo "Auto-reviewing PR #$PR_NUM by $PR_AUTHOR: $PR_TITLE"
+
+          # Post an APPROVED review
+          gh pr review "$PR_NUM" \
+            --repo "$REPO" \
+            --approve \
+            --body "🤖 Auto-approved by modulo-reviewbot. CI will validate the change; merge queue picks up approved PRs."

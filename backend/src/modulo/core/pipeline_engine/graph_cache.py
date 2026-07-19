@@ -139,6 +139,40 @@ def _make_conditional_router(
     return _router
 
 
+def _make_llm_router(
+    routing_edges: list[dict[str, Any]],
+    normal_targets: list[str],
+    default_target: str | None,
+) -> Callable[[dict[str, Any]], str]:
+    """Build a router for LLM-driven conditional edges.
+
+    Reads ``_llm_next_node`` from state (set by the LLM agent node) and
+    returns the target of the first outgoing edge whose ``routing_label``
+    matches.  If no match is found, returns *default_target*, then the first
+    *normal_targets* entry, then the last routing edge's target, or raises.
+    """
+    label_to_target: dict[str, str] = {}
+    for edge in routing_edges:
+        label = edge.get("routing_label")
+        if label:
+            target = _get_edge_val(edge, "target", "target_node_id")
+            label_to_target[str(label)] = target
+
+    def _router(state: dict[str, Any]) -> str:
+        next_node = state.get("_llm_next_node")
+        if next_node and str(next_node) in label_to_target:
+            return label_to_target[str(next_node)]
+        if default_target:
+            return default_target
+        if normal_targets:
+            return normal_targets[0]
+        if label_to_target:
+            return list(label_to_target.values())[-1]
+        raise ValueError("no edges to route through")
+
+    return _router
+
+
 def _make_loop_router(
     source: str,
     target: str,
@@ -316,7 +350,13 @@ def build_graph_from_json(
     target_ids: set[str] = set()
     gate_node_ids: set[str] = set()
 
+    # Build a node-id-to-def lookup for quick access.
+    nodes_by_id: dict[str, dict[str, Any]] = {str(n["id"]): n for n in nodes}
+
     for source, src_edges in source_edges.items():
+        source_node_def = nodes_by_id.get(source, {})
+        routing_mode: str | None = source_node_def.get("routing_mode")
+
         conditional = [e for e in src_edges if _get_edge_type(e) == "conditional"]
         loop_edges = [e for e in src_edges if _get_edge_type(e) == "loop"]
         normal = [e for e in src_edges if _get_edge_type(e) not in ("conditional", "loop")]
@@ -354,15 +394,28 @@ def build_graph_from_json(
 
             continue
 
-        if conditional:
-            # All outgoing edges from this source are handled by the router.
+        if routing_mode == "llm":
+            # All outgoing edges from this node are handled by the LLM router.
+            llm_edges = conditional or normal
             normal_targets: list[str] = []
             for edge_def in normal:
                 tgt = _get_edge_val(edge_def, "target", "target_node_id")
                 normal_targets.append(tgt)
                 target_ids.add(tgt)
 
-            default_target: str | None = None
+            default_target: str | None = source_node_def.get("default_target")
+
+            router = _make_llm_router(llm_edges, normal_targets, default_target)
+            graph.add_conditional_edges(source, router)
+        elif conditional:
+            # All outgoing edges from this source are handled by the router.
+            normal_targets = []
+            for edge_def in normal:
+                tgt = _get_edge_val(edge_def, "target", "target_node_id")
+                normal_targets.append(tgt)
+                target_ids.add(tgt)
+
+            default_target = None
             # Check for an explicit default on any conditional edge.
             for edge_def in conditional:
                 dft = edge_def.get("default_target")

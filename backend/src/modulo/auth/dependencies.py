@@ -45,13 +45,13 @@ async def get_current_user(
     """Decode the Bearer JWT and return its validated identity and tenant claims."""
     try:
         principal = decode_principal(credentials.credentials, settings.secret_key)
-    except JWTError:
-        _log.warning("auth.jwt_decode_failed", extra={"token_prefix": credentials.credentials[:10] + "..."})
+    except JWTError as exc:
+        _log.warning("auth.jwt_decode_failed", extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
-        ) from None
+        ) from exc
 
     return principal
 

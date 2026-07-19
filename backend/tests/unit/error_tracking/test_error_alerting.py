@@ -39,140 +39,65 @@ def _make_rule(**overrides: object) -> MagicMock:
     return rule
 
 
+def _make_session_with_rules(rules: list[MagicMock]) -> AsyncMock:
+    session = _make_session()
+    session.execute = AsyncMock(
+        return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=rules))))
+    )
+    return session
+
+
 # =========================================================================
-# Alert evaluation
+# Alert evaluation — parametrized
 # =========================================================================
 
 
 class TestAlertEngineEvaluate:
-    async def test_level_match_triggers_alert(self) -> None:
+    """Parametrized: evaluate scenarios across level, count, rules combinations."""
+
+    @pytest.mark.parametrize(
+        ("rules", "level", "count", "expected_alerts", "expected_action_type"),
+        [
+            pytest.param([_make_rule()], "error", 1, 1, "in_app", id="level_match_triggers_alert"),
+            pytest.param([_make_rule()], "warning", 1, 0, None, id="level_mismatch_skips"),
+            pytest.param([_make_rule(condition_min_count=5)], "error", 3, 0, None, id="count_below_threshold_skips"),
+            pytest.param(
+                [_make_rule(condition_min_count=5)], "error", 5, 1, "in_app", id="count_meets_threshold_triggers"
+            ),
+            pytest.param(
+                [_make_rule(name="Rule A"), _make_rule(name="Rule B")],
+                "error",
+                1,
+                2,
+                None,
+                id="multiple_rules_all_triggered",
+            ),
+            pytest.param([_make_rule(enabled=False)], "error", 1, 0, None, id="disabled_rule_not_evaluated"),
+            pytest.param([], "error", 1, 0, None, id="no_rules_for_org_returns_empty"),
+        ],
+    )
+    async def test_evaluate(
+        self,
+        rules: list[MagicMock],
+        level: str,
+        count: int,
+        expected_alerts: int,
+        expected_action_type: str | None,
+    ) -> None:
         engine = AlertEngine()
-        session = _make_session()
-        session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
-            )
-        )
+        session = _make_session_with_rules(rules)
 
         alerts = await engine.evaluate(
             org_id=_ORG_ID,
             session=session,
             error_group_id=_GROUP_ID,
             fingerprint="abc123",
-            level="error",
-            count=1,
+            level=level,
+            count=count,
         )
-        assert len(alerts) == 1
-        assert alerts[0].action_type == "in_app"
-
-    async def test_level_mismatch_skips(self) -> None:
-        engine = AlertEngine()
-        session = _make_session()
-        session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
-            )
-        )
-
-        alerts = await engine.evaluate(
-            org_id=_ORG_ID,
-            session=session,
-            error_group_id=_GROUP_ID,
-            fingerprint="abc123",
-            level="warning",
-            count=1,
-        )
-        assert len(alerts) == 0
-
-    async def test_count_below_threshold_skips(self) -> None:
-        rule = _make_rule(condition_min_count=5)
-        engine = AlertEngine()
-        session = _make_session()
-        session.execute = AsyncMock(
-            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
-        )
-
-        alerts = await engine.evaluate(
-            org_id=_ORG_ID,
-            session=session,
-            error_group_id=_GROUP_ID,
-            fingerprint="abc123",
-            level="error",
-            count=3,
-        )
-        assert len(alerts) == 0
-
-    async def test_count_meets_threshold_triggers(self) -> None:
-        rule = _make_rule(condition_min_count=5)
-        engine = AlertEngine()
-        session = _make_session()
-        session.execute = AsyncMock(
-            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
-        )
-
-        alerts = await engine.evaluate(
-            org_id=_ORG_ID,
-            session=session,
-            error_group_id=_GROUP_ID,
-            fingerprint="abc123",
-            level="error",
-            count=5,
-        )
-        assert len(alerts) == 1
-
-    async def test_multiple_rules_all_triggered(self) -> None:
-        r1 = _make_rule(name="Rule A", condition_level="error")
-        r2 = _make_rule(name="Rule B", condition_level="error")
-        engine = AlertEngine()
-        session = _make_session()
-        session.execute = AsyncMock(
-            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2]))))
-        )
-
-        alerts = await engine.evaluate(
-            org_id=_ORG_ID,
-            session=session,
-            error_group_id=_GROUP_ID,
-            fingerprint="abc123",
-            level="error",
-            count=1,
-        )
-        assert len(alerts) == 2
-
-    async def test_disabled_rule_not_evaluated(self) -> None:
-        rule = _make_rule(enabled=False)
-        engine = AlertEngine()
-        session = _make_session()
-        session.execute = AsyncMock(
-            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
-        )
-
-        alerts = await engine.evaluate(
-            org_id=_ORG_ID,
-            session=session,
-            error_group_id=_GROUP_ID,
-            fingerprint="abc123",
-            level="error",
-            count=1,
-        )
-        assert len(alerts) == 0
-
-    async def test_no_rules_for_org_returns_empty(self) -> None:
-        engine = AlertEngine()
-        session = _make_session()
-        session.execute = AsyncMock(
-            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
-        )
-
-        alerts = await engine.evaluate(
-            org_id=_ORG_ID,
-            session=session,
-            error_group_id=_GROUP_ID,
-            fingerprint="abc123",
-            level="error",
-            count=1,
-        )
-        assert len(alerts) == 0
+        assert len(alerts) == expected_alerts
+        if expected_alerts > 0 and expected_action_type:
+            assert alerts[0].action_type == expected_action_type
 
 
 # =========================================================================
@@ -183,14 +108,8 @@ class TestAlertEngineEvaluate:
 class TestAlertEngineCooldown:
     async def test_same_rule_group_does_not_duplicate_within_cooldown(self) -> None:
         engine = AlertEngine()
-        session = _make_session()
-        session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
-            )
-        )
+        session = _make_session_with_rules([_make_rule()])
 
-        # First call — should fire
         alerts1 = await engine.evaluate(
             org_id=_ORG_ID,
             session=session,
@@ -201,7 +120,6 @@ class TestAlertEngineCooldown:
         )
         assert len(alerts1) == 1
 
-        # Second call — cooldown active, should not fire
         alerts2 = await engine.evaluate(
             org_id=_ORG_ID,
             session=session,
@@ -214,13 +132,7 @@ class TestAlertEngineCooldown:
 
     async def test_different_group_not_affected_by_cooldown(self) -> None:
         engine = AlertEngine()
-        session = _make_session()
-        session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
-            )
-        )
-
+        session = _make_session_with_rules([_make_rule()])
         other_group_id = uuid.UUID("00000000-0000-0000-0000-000000000099")
 
         await engine.evaluate(
@@ -246,12 +158,8 @@ class TestAlertEngineCooldown:
         r1 = _make_rule(name="Rule A", condition_min_count=1)
         r2 = _make_rule(name="Rule B", condition_min_count=5)
         engine = AlertEngine()
-        session = _make_session()
-        session.execute = AsyncMock(
-            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2]))))
-        )
+        session = _make_session_with_rules([r1, r2])
 
-        # First call — only r1 fires (count=1 < r2's min_count=5)
         await engine.evaluate(
             org_id=_ORG_ID,
             session=session,
@@ -261,7 +169,6 @@ class TestAlertEngineCooldown:
             count=1,
         )
 
-        # Second call — r1 is on cooldown, but r2 should fire (count=5 meets threshold)
         alerts = await engine.evaluate(
             org_id=_ORG_ID,
             session=session,
@@ -334,7 +241,6 @@ class TestDispatchWebhook:
         error_group = MagicMock()
         error_group.sample_event = None
 
-        # Should not raise
         await dispatch_alert(_ORG_ID, alert, session, error_group)
 
 
@@ -355,17 +261,20 @@ class TestCRUDRules:
         assert body.condition_level == "critical"
         assert body.action_type == "webhook"
 
-    async def test_create_rule_invalid_level(self) -> None:
-        with pytest.raises(ValidationError, match="condition_level must be one of"):
-            ErrorNotificationRuleCreate(name="Bad", condition_level="debug")
-
-    async def test_create_rule_invalid_action(self) -> None:
-        with pytest.raises(ValidationError, match="action_type must be one of"):
-            ErrorNotificationRuleCreate(name="Bad", action_type="sms")
-
-    async def test_create_rule_webhook_url_validated(self) -> None:
-        with pytest.raises(ValidationError, match="webhook_url must start with"):
-            ErrorNotificationRuleCreate(name="Bad", action_type="webhook", webhook_url="ftp://bad.com")
+    @pytest.mark.parametrize(
+        ("field", "value", "match"),
+        [
+            pytest.param("condition_level", "debug", "condition_level must be one of", id="invalid_level"),
+            pytest.param("action_type", "sms", "action_type must be one of", id="invalid_action"),
+            pytest.param("webhook_url", "ftp://bad.com", "webhook_url must start with", id="invalid_webhook_url"),
+        ],
+    )
+    async def test_create_rule_invalid_field(self, field: str, value: object, match: str) -> None:
+        kwargs: dict = {"name": "Bad", field: value}
+        if field == "webhook_url":
+            kwargs["action_type"] = "webhook"
+        with pytest.raises(ValidationError, match=match):
+            ErrorNotificationRuleCreate(**kwargs)
 
     async def test_update_rule_partial(self) -> None:
         body = ErrorNotificationRuleUpdate(name="Renamed")
@@ -376,7 +285,6 @@ class TestCRUDRules:
         max_rules = 10
         rules = [_make_rule() for _ in range(max_rules)]
         assert len(rules) == 10
-        # No exception — rule count at limit
 
 
 # =========================================================================
@@ -387,18 +295,21 @@ class TestCRUDRules:
 class TestErrorNotificationRuleModel:
     def test_required_columns_exist(self) -> None:
         cols = {c.name: c for c in ErrorNotificationRule.__table__.columns}
-        assert "name" in cols
-        assert "enabled" in cols
-        assert "condition_level" in cols
-        assert "condition_min_count" in cols
-        assert "condition_window_seconds" in cols
-        assert "action_type" in cols
-        assert "cooldown_seconds" in cols
-        assert "webhook_url" in cols
-        assert "organisation_id" in cols
-        assert "id" in cols
-        assert "created_at" in cols
-        assert "updated_at" in cols
+        for col_name in (
+            "name",
+            "enabled",
+            "condition_level",
+            "condition_min_count",
+            "condition_window_seconds",
+            "action_type",
+            "cooldown_seconds",
+            "webhook_url",
+            "organisation_id",
+            "id",
+            "created_at",
+            "updated_at",
+        ):
+            assert col_name in cols, f"Missing column: {col_name}"
 
     def test_check_constraints_exist(self) -> None:
         constraints = list(ErrorNotificationRule.__table__.constraints)

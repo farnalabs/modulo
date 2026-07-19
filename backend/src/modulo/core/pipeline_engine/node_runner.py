@@ -156,6 +156,13 @@ def make_node_fn(
             template_vars["parameter"] = resolved
         rendered_prompt = template.render(**template_vars)
 
+        # Append routing prompt for LLM routing nodes.
+        routing_mode: str | None = node_def.get("routing_mode")
+        if routing_mode == "llm":
+            routing_prompt: str = node_def.get("routing_prompt", "")
+            if routing_prompt:
+                rendered_prompt = rendered_prompt + "\n\n" + routing_prompt
+
         # Get ModelBackendHub from ContextVar.
         from modulo.core.pipeline_engine.decorator import get_model_backend_hub
 
@@ -180,10 +187,18 @@ def make_node_fn(
         if isinstance(output_schema_json, dict) and isinstance(output_data, dict):
             _validate_against_schema(output_data, output_schema_json)
 
-        return {
+        result: dict[str, Any] = {
             "artifacts": [{"node_id": node_id, "status": "completed", "output": output_data}],
             "output": output_data,
         }
+
+        # Extract _next_node from LLM routing output for the router.
+        if routing_mode == "llm" and isinstance(output_data, dict):
+            next_node = output_data.pop("_next_node", None)
+            if next_node is not None:
+                result["_llm_next_node"] = next_node
+
+        return result
 
     _node.__name__ = f"node_{node_id}"
     return _node

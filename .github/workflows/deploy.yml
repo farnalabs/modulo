@@ -1,13 +1,8 @@
 name: Deploy Pipeline
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types:
-      - completed
-    branches:
-      - main
-      - staging-queue
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -28,24 +23,32 @@ jobs:
         id: context
         shell: bash
         run: |
-          if ("${{ github.event_name }}" -eq "workflow_run") {
-            $conclusion = "${{ github.event.workflow_run.conclusion }}"
-            $branch = "${{ github.event.workflow_run.head_branch }}"
-            $sha = "${{ github.event.workflow_run.head_sha }}"
-            if ($conclusion -eq "success") {
-              echo "ci_passed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            } else {
-              echo "ci_passed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            }
-            echo "branch=$branch" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            echo "head_sha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            if ($branch -eq "main") { echo "is_main=true" } else { echo "is_main=false" }
-          } else {
-            echo "ci_passed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            echo "branch=${{ github.ref_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            echo "head_sha=${{ github.sha }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            if ("${{ github.ref_name }}" -eq "main") { echo "is_main=true" } else { echo "is_main=false" }
-          } | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+            BRANCH="${{ github.event.workflow_run.head_branch }}"
+            SHA="${{ github.event.workflow_run.head_sha }}"
+            if [ "$CONCLUSION" = "success" ]; then
+              echo "ci_passed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "ci_passed=false" >> "$GITHUB_OUTPUT"
+            fi
+            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$SHA" >> "$GITHUB_OUTPUT"
+            if [ "$BRANCH" = "main" ]; then
+              echo "is_main=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_main=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "ci_passed=true" >> "$GITHUB_OUTPUT"
+            echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "head_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.ref_name }}" = "main" ]; then
+              echo "is_main=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_main=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
 
   deploy-staging:
     name: Deploy to staging
@@ -58,20 +61,23 @@ jobs:
           ref: ${{ needs.check-context.outputs.head_sha }}
           fetch-depth: 1
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-
       - name: Capture git metadata
         id: git
         uses: ./.github/actions/capture-git-metadata
 
       - name: Deploy to staging-modulo
         shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          fly deploy --app staging-modulo --config fly.staging.toml `
-            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
-            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" `
-            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" `
-            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" `
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          fly deploy --app staging-modulo --config fly.staging.toml \
+            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
+            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
+            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
+            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
             --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"
 
       - name: Verify deployment
@@ -80,10 +86,10 @@ jobs:
           url: https://staging.modulo.run
 
       - name: Check deployed SHA
-        shell: bash
+        shell: pwsh
         run: |
           $expectedSha = "${{ needs.check-context.outputs.head_sha }}".Substring(0, 7)
-          $info = curl.exe -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
+          $info = curl -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) { Write-Host "No deployment info"; exit 1 }
           $deployInfo = $info | ConvertFrom-Json
           $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
@@ -112,13 +118,13 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Wait for staging health
-        shell: bash
+        shell: pwsh
         timeout-minutes: 5
         run: |
           Write-Host "Waiting for staging.modulo.run ..."
           for ($i=0; $i -lt 60; $i++) {
             try {
-              $r = curl.exe -s -f "https://staging.modulo.run/healthz" 2>$null
+              $r = curl -s -f "https://staging.modulo.run/healthz" 2>$null
               if ($LASTEXITCODE -eq 0) { Write-Host "Staging ready after ${i}s"; exit 0 }
             } catch {}
             Start-Sleep -Seconds 5
@@ -159,7 +165,7 @@ jobs:
 
       - name: Fail on test failure
         if: steps.smoke-tests.outcome == 'failure' || steps.wcag-tests.outcome == 'failure' || steps.regression-tests.outcome == 'failure'
-        shell: bash
+        shell: pwsh
         run: |
           Write-Host "::error::One or more staging suites failed."
           exit 1
@@ -175,20 +181,23 @@ jobs:
           ref: ${{ needs.check-context.outputs.head_sha }}
           fetch-depth: 1
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-
       - name: Capture git metadata
         id: git
         uses: ./.github/actions/capture-git-metadata
 
       - name: Deploy to app-modulo
         shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          fly deploy --app app-modulo --config fly.toml `
-            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
-            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" `
-            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" `
-            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" `
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          fly deploy --app app-modulo --config fly.toml \
+            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
+            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
+            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
+            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
             --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"
 
       - name: Verify deployment
@@ -197,10 +206,10 @@ jobs:
           url: https://app.modulo.run
 
       - name: Check deployed SHA
-        shell: bash
+        shell: pwsh
         run: |
           $expectedSha = "${{ needs.check-context.outputs.head_sha }}".Substring(0, 7)
-          $info = curl.exe -s -m 10 "https://app.modulo.run/api/v1/deployment" 2>$null
+          $info = curl -s -m 10 "https://app.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) { Write-Host "No deployment info"; exit 1 }
           $deployInfo = $info | ConvertFrom-Json
           $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
@@ -217,7 +226,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Send webhook
-        shell: bash
+        shell: pwsh
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}

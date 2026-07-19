@@ -94,8 +94,14 @@ class TestCreateFeedbackRecord:
         mock_session.add.assert_called_once()
         mock_session.flush.assert_called_once()
 
-    async def test_creates_with_ai_correction_type(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
-        dummy = await self._dummy_record("ai_correction")
+    @pytest.mark.parametrize(
+        "handler_type",
+        ["ai_correction", "ai_correction_with_human_review"],
+    )
+    async def test_creates_with_handler_type(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, handler_type: str
+    ) -> None:
+        dummy = await self._dummy_record(handler_type)
         with (
             patch.object(mgr, "update_status", AsyncMock(return_value=dummy)),
             patch.object(mgr, "spawn_correction_run", AsyncMock(return_value=uuid.uuid4())),
@@ -107,29 +113,18 @@ class TestCreateFeedbackRecord:
                 rejection_reason="Bad output",
                 rejected_output={},
                 producing_node_id="node-b",
-                feedback_handler_type="ai_correction",
+                feedback_handler_type=handler_type,
             )
-        assert record.feedback_handler_type == "ai_correction"
+        assert record.feedback_handler_type == handler_type
 
-    async def test_creates_with_human_review_type(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
-        dummy = await self._dummy_record("ai_correction_with_human_review")
-        with (
-            patch.object(mgr, "update_status", AsyncMock(return_value=dummy)),
-            patch.object(mgr, "spawn_correction_run", AsyncMock(return_value=uuid.uuid4())),
-        ):
-            record = await mgr.create_feedback_record(
-                run_id=_RUN_ID,
-                gate_id=_GATE_ID,
-                account_id=_USER_ID,
-                rejection_reason="Needs review",
-                rejected_output={},
-                producing_node_id="node-b",
-                feedback_handler_type="ai_correction_with_human_review",
-            )
-        assert record.feedback_handler_type == "ai_correction_with_human_review"
-
-    async def test_auto_triggers_correction_for_ai_handler(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
-        dummy = await self._dummy_record("ai_correction")
+    @pytest.mark.parametrize(
+        "handler_type",
+        ["ai_correction", "ai_correction_with_human_review"],
+    )
+    async def test_auto_triggers_correction(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, handler_type: str
+    ) -> None:
+        dummy = await self._dummy_record(handler_type)
         with (
             patch.object(mgr, "update_status", AsyncMock(return_value=dummy)) as mock_update,
             patch.object(mgr, "spawn_correction_run", AsyncMock(return_value=uuid.uuid4())) as mock_spawn,
@@ -141,52 +136,22 @@ class TestCreateFeedbackRecord:
                 rejection_reason="Auto-fix this",
                 rejected_output={"result": "bad"},
                 producing_node_id="node-b",
-                feedback_handler_type="ai_correction",
+                feedback_handler_type=handler_type,
             )
 
             mock_update.assert_called_once_with(record.id, "correcting")
             mock_spawn.assert_called_once_with(record.id)
 
-    async def test_auto_triggers_correction_for_human_review_handler(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
+    @pytest.mark.parametrize("reason", ["", "   "])
+    async def test_rejects_empty_rejection_reason(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, reason: str
     ) -> None:
-        dummy = await self._dummy_record("ai_correction_with_human_review")
-        with (
-            patch.object(mgr, "update_status", AsyncMock(return_value=dummy)) as mock_update,
-            patch.object(mgr, "spawn_correction_run", AsyncMock(return_value=uuid.uuid4())) as mock_spawn,
-        ):
-            record = await mgr.create_feedback_record(
-                run_id=_RUN_ID,
-                gate_id=_GATE_ID,
-                account_id=_USER_ID,
-                rejection_reason="Auto-fix then show",
-                rejected_output={"result": "bad"},
-                producing_node_id="node-b",
-                feedback_handler_type="ai_correction_with_human_review",
-            )
-
-            mock_update.assert_called_once_with(record.id, "correcting")
-            mock_spawn.assert_called_once_with(record.id)
-
-    async def test_rejects_empty_rejection_reason(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         with pytest.raises(ValidationError, match="rejection_reason must not be empty"):
             await mgr.create_feedback_record(
                 run_id=_RUN_ID,
                 gate_id=_GATE_ID,
                 account_id=_USER_ID,
-                rejection_reason="",
-                rejected_output={},
-                producing_node_id="node-b",
-                feedback_handler_type="human",
-            )
-
-    async def test_rejects_whitespace_rejection_reason(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
-        with pytest.raises(ValidationError, match="rejection_reason must not be empty"):
-            await mgr.create_feedback_record(
-                run_id=_RUN_ID,
-                gate_id=_GATE_ID,
-                account_id=_USER_ID,
-                rejection_reason="   ",
+                rejection_reason=reason,
                 rejected_output={},
                 producing_node_id="node-b",
                 feedback_handler_type="human",
