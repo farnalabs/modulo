@@ -1944,21 +1944,21 @@ async def create_agent(
     # Context retrieval tools
     # ---------------------------------------------------------------------------
 
-    _DOC_INDEX: DocumentationIndex | None = None
-    _DOC_INDEX_TS: float = 0.0
-    _DOC_INDEX_TTL: float = 300.0  # 5 minutes
+    _doc_index: DocumentationIndex | None = None
+    _doc_index_ts: float = 0.0
+    _doc_index_ttl: float = 300.0  # 5 minutes
     return None
 
 
 def _get_doc_index() -> DocumentationIndex:
-    global _DOC_INDEX, _DOC_INDEX_TS, _DOC_INDEX_TTL
+    global _doc_index, _doc_index_ts, _doc_index_ttl
     import time as _time
 
     now = _time.time()
-    if _DOC_INDEX is None or (now - _DOC_INDEX_TS) > _DOC_INDEX_TTL:
-        _DOC_INDEX = DocumentationIndex.build()
-        _DOC_INDEX_TS = now
-    return _DOC_INDEX
+    if _doc_index is None or (now - _doc_index_ts) > _doc_index_ttl:
+        _doc_index = DocumentationIndex.build()
+        _doc_index_ts = now
+    return _doc_index
 
 
 SENSITIVE_CONFIG_KEYS: set[str] = {
