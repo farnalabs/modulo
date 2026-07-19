@@ -1,4 +1,4 @@
-name: Auto Review
+﻿name: Auto Review
 
 on:
   pull_request:
@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           if ! command -v opencode &>/dev/null; then
-            npm install -g opencode 2>&1
+            curl -sL https://github.com/opencode-ai/opencode/releases/download/v0.0.55/opencode-linux-amd64.deb -o /tmp/opencode.deb && sudo dpkg -i /tmp/opencode.deb 2>&1
           fi
           opencode --version
 
