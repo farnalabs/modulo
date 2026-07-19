@@ -218,6 +218,7 @@ async def _fire_cron_wrapper(factory: async_sessionmaker[AsyncSession], info: di
             pipeline_id=info["pipeline_id"],
             snapshot_id=info["snapshot_id"],
             cron_expression=info["cron_expression"],
+            factory=factory,
         )
         if result.get("status") == "fired":
             run_id = result.get("run_id")
