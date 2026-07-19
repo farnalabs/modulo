@@ -28,7 +28,7 @@ jobs:
           echo "files=$CHANGED" >> "$GITHUB_OUTPUT"
           echo "count=$(echo $CHANGED | wc -w)" >> "$GITHUB_OUTPUT"
 
-      - name: Exit early — no code changes
+      - name: Exit early ? no code changes
         if: steps.changed.outputs.count == '0'
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
@@ -40,7 +40,9 @@ jobs:
             --body "## ?? Modulo Review\n\n**No code changes detected.** Auto-approved."
 
       - name: Install opencode CLI
-        if: steps.changed.outputs.count != '0' && env.APP_MODULO_OPENCODE_API_KEY != ''
+        if: steps.changed.outputs.count != '0'
+        env:
+          APP_MODULO_OPENCODE_API_KEY: ${{ secrets.APP_MODULO_OPENCODE_API_KEY }}
         shell: bash
         run: |
           if ! command -v opencode &>/dev/null; then
@@ -104,19 +106,19 @@ jobs:
             BODY+="${QA_RESULT}"
 
             if [ "$CRITICAL" -gt 0 ] || [ "$MAJOR" -gt 0 ]; then
-              BODY+="\n\n### Decision\n**CHANGES_REQUESTED** — fix critical/major findings before merge."
+              BODY+="\n\n### Decision\n**CHANGES_REQUESTED** ? fix critical/major findings before merge."
               gh pr review "$PR_NUM" --repo "$REPO" --request-changes --body "$BODY"
               echo "Outcome: CHANGES_REQUESTED"
             else
-              BODY+="\n\n### Decision\n**APPROVED** — no critical or major issues found."
+              BODY+="\n\n### Decision\n**APPROVED** ? no critical or major issues found."
               gh pr review "$PR_NUM" --repo "$REPO" --approve --body "$BODY"
               echo "Outcome: APPROVED"
             fi
           else
-            echo "opencode CLI unavailable — approving with CI trust fallback."
+            echo "opencode CLI unavailable ? approving with CI trust fallback."
             gh pr review "$PR_NUM" \
               --repo "$REPO" \
               --approve \
-              --body "## ?? Modulo Review\n\n**APPROVED** (opencode CLI unavailable for deep review — CI will validate)."
+              --body "## ?? Modulo Review\n\n**APPROVED** (opencode CLI unavailable for deep review ? CI will validate)."
             echo "Outcome: APPROVED (fallback)"
           fi
