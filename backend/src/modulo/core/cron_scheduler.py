@@ -289,6 +289,7 @@ async def fire_cron_trigger(
             "run_id": str(run.id),
             "event_id": str(event.id),
             "next_fire_at": next_fire.isoformat(),
+            "input_payload": input_payload,
         }
 
 
