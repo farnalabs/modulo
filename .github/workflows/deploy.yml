@@ -61,8 +61,6 @@ jobs:
           ref: ${{ needs.check-context.outputs.head_sha }}
           fetch-depth: 1
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-
       - name: Capture git metadata
         id: git
         uses: ./.github/actions/capture-git-metadata
@@ -70,6 +68,9 @@ jobs:
       - name: Deploy to staging-modulo
         shell: bash
         run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
           fly deploy --app staging-modulo --config fly.staging.toml \
             --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
             --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
@@ -178,8 +179,6 @@ jobs:
           ref: ${{ needs.check-context.outputs.head_sha }}
           fetch-depth: 1
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-
       - name: Capture git metadata
         id: git
         uses: ./.github/actions/capture-git-metadata
@@ -187,6 +186,9 @@ jobs:
       - name: Deploy to app-modulo
         shell: bash
         run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
           fly deploy --app app-modulo --config fly.toml \
             --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
             --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
