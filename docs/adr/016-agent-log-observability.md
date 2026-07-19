@@ -50,23 +50,21 @@ These events flow through the configured `SpanExporter` — the same OTel pipeli
 
 This channel is opt-in: it activates automatically when OTel is configured (via `OTEL_EXPORTER_OTLP_ENDPOINT` or the standard OTel environment variables). Customers without OTel lose nothing — Channel 1 still works.
 
----
+### What was deliberately not built
 
-## What Was Deliberately NOT Built
-
-### Live log streaming / terminal emulator
+#### Live log streaming / terminal emulator
 
 The natural next step would be switching from `commands.run()` to `commands.stream()` or the E2B process API, building a terminal-emulator Vue component, and relaying output through the SSE EventBus in real time. This is scope creep: real-time streaming, backpressure handling, terminal rendering, and reconnection logic belong in a dedicated feature. E2B's own web UI already provides terminal access, and Grafana can stream logs from OTel. Modulo should not replicate either.
 
-### Log storage in Modulo's database
+#### Log storage in Modulo's database
 
 Agent stdout can be megabytes in size — a single opencode invocation running a PR review across a large codebase might emit hundreds of kilobytes of traces. Storing this in Postgres alongside pipeline entities is the wrong data model. The customer's existing OTel backend handles log retention, indexing, and search. Channel 1 stores a truncated snapshot in checkpoint state (for immediate display); Channel 2 delegates long-term storage to OTel.
 
-### Structured log contract
+#### Structured log contract
 
 Enforcing a structured logging format on external agents (levels, categories, timestamps, structured fields) would require rebuilding all E2B templates and adds no value for raw process output. If agents write structured logs (JSON lines, key=value pairs, etc.), they already flow through stdout. Modulo treats stdout/stderr as opaque text — structured parsing is the customer's concern, to be handled in their OTel pipeline.
 
-### Log search UI in Modulo
+#### Log search UI in Modulo
 
 Searching across agent logs (full-text search, filtering by time range or node type, faceted exploration) belongs in the customer's observability stack — Loki's LogQL, DataDog's log search, or Grafana's explore view. Building a log search UI in Modulo would duplicate functionality that every observability platform already provides.
 
