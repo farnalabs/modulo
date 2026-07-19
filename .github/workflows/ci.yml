@@ -152,7 +152,7 @@ jobs:
 
   backend-integration:
     name: Integration tests
-    if: false
+    if: github.event_name == 'pull_request'
     runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     steps:
