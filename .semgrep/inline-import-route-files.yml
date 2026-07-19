@@ -16,6 +16,6 @@ rules:
       Module-level imports are preferred over inline imports inside route handler
       functions. Inline imports in route files should only be used for lazy imports
       that break circular dependencies. Move `import $MODULE` to the top of the file.
-    severity: WARNING
+    severity: ERROR
     languages:
       - python
