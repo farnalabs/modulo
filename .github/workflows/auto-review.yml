@@ -59,7 +59,13 @@ jobs:
 
           if command -v opencode &>/dev/null && [ -n "$APP_MODULO_OPENCODE_API_KEY" ]; then
             echo "Running opencode qa on: $FILES"
-            opencode auth --api-key "$APP_MODULO_OPENCODE_API_KEY" 2>&1 || true
+            mkdir -p ~/.local/share/opencode
+            cat > ~/.local/share/opencode/auth.json << 'AUTHJSON'
+{
+  "opencode": {"type": "api", "key": "$APP_MODULO_OPENCODE_API_KEY"},
+  "opencode-go": {"type": "api", "key": "$APP_MODULO_OPENCODE_API_KEY"}
+}
+AUTHJSON
             RESULT=$(opencode qa $FILES 2>&1) || true
             echo "result<<EOF" >> "$GITHUB_OUTPUT"
             echo "$RESULT" >> "$GITHUB_OUTPUT"
