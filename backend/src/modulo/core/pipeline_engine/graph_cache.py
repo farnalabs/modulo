@@ -397,7 +397,7 @@ def build_graph_from_json(
         if routing_mode == "llm":
             # All outgoing edges from this node are handled by the LLM router.
             llm_edges = conditional or normal
-            normal_targets: list[str] = []
+            normal_targets = []
             for edge_def in normal:
                 tgt = _get_edge_val(edge_def, "target", "target_node_id")
                 normal_targets.append(tgt)
