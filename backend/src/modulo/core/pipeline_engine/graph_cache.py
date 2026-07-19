@@ -139,6 +139,80 @@ def _make_conditional_router(
     return _router
 
 
+def _make_llm_router(
+    routing_edges: list[dict[str, Any]],
+    normal_targets: list[str],
+    default_target: str | None,
+) -> Callable[[dict[str, Any]], str]:
+    """Build a router for LLM-driven conditional edges.
+
+    Reads ``_llm_next_node`` from state (set by the LLM agent node) and
+    returns the target of the first outgoing edge whose ``routing_label``
+    matches.  If no match is found, returns *default_target*, then the first
+    *normal_targets* entry, then the last routing edge's target, or raises.
+    """
+    label_to_target: dict[str, str] = {}
+    for edge in routing_edges:
+        label = edge.get("routing_label")
+        if label:
+            target = _get_edge_val(edge, "target", "target_node_id")
+            label_to_target[str(label)] = target
+
+    def _router(state: dict[str, Any]) -> str:
+        next_node = state.get("_llm_next_node")
+        if next_node and str(next_node) in label_to_target:
+            return label_to_target[str(next_node)]
+        if default_target:
+            return default_target
+        if normal_targets:
+            return normal_targets[0]
+        if label_to_target:
+            return list(label_to_target.values())[-1]
+        raise ValueError("no edges to route through")
+
+    return _router
+
+
+def _make_loop_router(
+    source: str,
+    target: str,
+    default_target: str,
+    max_iterations: int,
+    condition_expression: str | None,
+) -> Callable[[dict[str, Any]], str]:
+    """Build a router for loop edges.
+
+    Reads ``_iteration_counts`` from state, increments the counter for this
+    loop edge's source->target pair, and decides whether to continue looping
+    or exit to *default_target*.
+
+    Router logic (first match wins):
+    1. If *max_iterations* > 0 and counter >= max_iterations → exit to default_target
+    2. If *condition_expression* is set and truthy → loop back to *target*
+    3. If *condition_expression* is set and falsy → exit to default_target
+    4. If neither condition nor max_iterations → always loop back to *target*
+       (relies on RunawayGuard for infinite-loop protection)
+    """
+    loop_key = f"{source}->{target}"
+    compiled_expr = jmespath.compile(condition_expression) if condition_expression else None
+
+    def _router(state: dict[str, Any]) -> str:
+        iteration_counts: dict[str, int] = state.get("_iteration_counts", {})
+        count: int = iteration_counts.get(loop_key, 0) + 1
+        iteration_counts[loop_key] = count
+
+        if max_iterations > 0 and count >= max_iterations:
+            return default_target
+        if compiled_expr is not None:
+            result = compiled_expr.search(state)
+            if bool(result):
+                return target
+            return default_target
+        return target
+
+    return _router
+
+
 # ---------------------------------------------------------------------------
 # Graph builder
 # ---------------------------------------------------------------------------
@@ -146,7 +220,7 @@ def _make_conditional_router(
 
 # Keys whose values should be concatenated (not replaced) when multiple nodes
 # write to the same channel in the same step (e.g. parallel branches).
-_CONCAT_KEYS: frozenset[str] = frozenset({"artifacts", "_hitl_gates", "_run_context_write_log"})
+_CONCAT_KEYS: frozenset[str] = frozenset({"artifacts", "_hitl_gates", "_run_context_write_log", "_iteration_counts"})
 
 
 def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
@@ -276,19 +350,72 @@ def build_graph_from_json(
     target_ids: set[str] = set()
     gate_node_ids: set[str] = set()
 
-    for source, src_edges in source_edges.items():
-        conditional = [e for e in src_edges if _get_edge_type(e) == "conditional"]
-        normal = [e for e in src_edges if _get_edge_type(e) != "conditional"]
+    # Build a node-id-to-def lookup for quick access.
+    nodes_by_id: dict[str, dict[str, Any]] = {str(n["id"]): n for n in nodes}
 
-        if conditional:
-            # All outgoing edges from this source are handled by the router.
+    for source, src_edges in source_edges.items():
+        source_node_def = nodes_by_id.get(source, {})
+        routing_mode: str | None = source_node_def.get("routing_mode")
+
+        conditional = [e for e in src_edges if _get_edge_type(e) == "conditional"]
+        loop_edges = [e for e in src_edges if _get_edge_type(e) == "loop"]
+        normal = [e for e in src_edges if _get_edge_type(e) not in ("conditional", "loop")]
+
+        if loop_edges:
             normal_targets: list[str] = []
             for edge_def in normal:
                 tgt = _get_edge_val(edge_def, "target", "target_node_id")
                 normal_targets.append(tgt)
                 target_ids.add(tgt)
 
-            default_target: str | None = None
+            for loop_edge in loop_edges:
+                target = _get_edge_val(loop_edge, "target", "target_node_id")
+                max_iterations = int(loop_edge.get("max_iterations", 0))
+                condition_expression = loop_edge.get("condition_expression")
+                default_target_raw = loop_edge.get("default_target")
+                if default_target_raw:
+                    default_target_str = str(default_target_raw)
+                elif normal_targets:
+                    default_target_str = normal_targets[0]
+                else:
+                    msg = f"loop edge from '{source}' requires default_target (no normal targets available)"
+                    raise ValueError(msg)
+
+                router = _make_loop_router(
+                    source,
+                    target,
+                    default_target_str,
+                    max_iterations,
+                    condition_expression,
+                )
+                graph.add_conditional_edges(source, router)
+                target_ids.add(target)
+                target_ids.add(default_target_str)
+
+            continue
+
+        if routing_mode == "llm":
+            # All outgoing edges from this node are handled by the LLM router.
+            llm_edges = conditional or normal
+            normal_targets: list[str] = []
+            for edge_def in normal:
+                tgt = _get_edge_val(edge_def, "target", "target_node_id")
+                normal_targets.append(tgt)
+                target_ids.add(tgt)
+
+            default_target: str | None = source_node_def.get("default_target")
+
+            router = _make_llm_router(llm_edges, normal_targets, default_target)
+            graph.add_conditional_edges(source, router)
+        elif conditional:
+            # All outgoing edges from this source are handled by the router.
+            normal_targets = []
+            for edge_def in normal:
+                tgt = _get_edge_val(edge_def, "target", "target_node_id")
+                normal_targets.append(tgt)
+                target_ids.add(tgt)
+
+            default_target = None
             # Check for an explicit default on any conditional edge.
             for edge_def in conditional:
                 dft = edge_def.get("default_target")
