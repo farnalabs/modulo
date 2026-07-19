@@ -724,7 +724,11 @@ export default {
       "prompt_hidden_click_to_reveal": "[Prompt hidden — click to reveal]",
       "prompt_dialog_description": "Rendered prompt sent to the LLM for this node.",
       "copied": "Copied!",
-      "prompt_reveal_error": "Failed to reveal prompt."
+      "prompt_reveal_error": "Failed to reveal prompt.",
+      "logs": "Logs",
+      "agent_stdout": "Agent Stdout",
+      "agent_stderr": "Agent Stderr",
+      "no_agent_logs": "No agent logs for this node."
     },
     "AdminRunRetentionView": {
       "run_retention": "Run Retention",
