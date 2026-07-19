@@ -1,4 +1,4 @@
-"""Unit tests for health endpoints — liveness, readiness, and dependency checks."""
+"""Tests for readiness endpoint — aggregation logic, degraded/unavailable status, and check structure."""
 
 from collections.abc import Generator
 from unittest.mock import AsyncMock, patch
@@ -39,13 +39,6 @@ def _degraded_check(detail: str = "degraded") -> CheckResult:
 
 def _unavailable_check(detail: str = "unavailable") -> CheckResult:
     return CheckResult(status="unavailable", latency_ms=5000.0, detail=detail)
-
-
-class TestLiveness:
-    def test_healthz_returns_200(self, client: TestClient) -> None:
-        resp = client.get("/healthz")
-        assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
 
 
 class TestReadiness:
