@@ -1,6 +1,9 @@
 app = 'staging-modulo'
 primary_region = 'lhr'
 
+[deploy]
+  strategy = 'rolling'
+
 [build]
   dockerfile = "backend/Dockerfile.fly"
 

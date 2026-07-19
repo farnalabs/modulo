@@ -4,6 +4,9 @@
 app = 'app-modulo'
 primary_region = 'lhr'
 
+[deploy]
+  strategy = 'rolling'
+
 [build]
   dockerfile = "backend/Dockerfile.fly"
 
