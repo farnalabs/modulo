@@ -195,28 +195,44 @@ class TestFetchDuePollingTriggers:
 
 
 class TestFireCronWrapper:
-    async def test_calls_fire_cron_trigger(self):
-        """_fire_cron_wrapper should call fire_cron_trigger on success."""
+    async def test_calls_fire_cron_trigger_and_submits_to_worker(self):
+        """_fire_cron_wrapper should call fire_cron_trigger and submit run to bg worker."""
         import uuid
 
         import modulo.core.in_process_scheduler as ips
 
         trigger_id = uuid.uuid4()
+        run_id = uuid.uuid4()
+        org_id = uuid.uuid4()
         info = {
             "id": trigger_id,
-            "org_id": uuid.uuid4(),
+            "org_id": org_id,
             "pipeline_id": uuid.uuid4(),
             "snapshot_id": uuid.uuid4(),
             "cron_expression": "0 6 * * *",
         }
 
+        mock_worker = MagicMock()
+
         with (
             patch("modulo.core.in_process_scheduler.fire_cron_trigger", new_callable=AsyncMock) as mock_fire,
         ):
-            mock_fire.return_value = {"status": "fired", "run_id": str(uuid.uuid4())}
+            mock_fire.return_value = {"status": "fired", "run_id": str(run_id), "input_payload": {"key": "val"}}
             factory = MagicMock()
+
+            # Test without worker (should still work, just log warning)
             await ips._fire_cron_wrapper(factory, info)
-        mock_fire.assert_awaited_once_with(
+            mock_worker.submit.assert_not_called()
+
+            # Test with worker set
+            ips._bg_worker = mock_worker
+            await ips._fire_cron_wrapper(factory, info)
+            mock_worker.submit.assert_called_once_with(run_id, org_id, {"key": "val"})
+
+            # Clean up
+            ips._bg_worker = None
+
+        mock_fire.assert_awaited_with(
             trigger_id=info["id"],
             org_id=info["org_id"],
             pipeline_id=info["pipeline_id"],
