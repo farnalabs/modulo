@@ -30,6 +30,9 @@ class TestCheckToolScope:
             ("runner", "cancel_run"),
             ("runner", "list_pending_hitl"),
             ("runner", "copy_library_primitive"),
+            ("runner", "list_housekeeping"),
+            ("operator", "perform_housekeeping"),
+            ("admin", "perform_housekeeping"),
             ("operator", "review_hitl"),
             ("admin", "review_hitl"),
         ],
@@ -45,6 +48,7 @@ class TestCheckToolScope:
             ("viewer", "list_pending_hitl"),
             ("viewer", "copy_library_primitive"),
             ("viewer", "review_hitl"),
+            ("viewer", "list_housekeeping"),
             ("runner", "review_hitl"),
         ],
     )
@@ -191,6 +195,8 @@ class TestConstants:
             "list_eval_definitions",
             "bind_connector_to_node",
             "list_triggers",
+            "list_housekeeping",
+            "perform_housekeeping",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 
