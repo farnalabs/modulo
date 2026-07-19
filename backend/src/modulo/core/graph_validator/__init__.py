@@ -37,7 +37,7 @@ from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import SchemaVersion
 
-_SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback"})
+_SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback", "loop"})
 _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType(
     {
         "string": str,
@@ -220,7 +220,10 @@ class GraphValidator:
         # Validate conditional edge JMESPath expressions.
         self._check_condition_expressions(edges, result)
 
-        # Determine forwarding edges (exclude kickback + reject from topology flow).
+        # Validate loop-edge constraints.
+        self._check_loop_edges(edges, node_ids, result)
+
+        # Determine forwarding edges (exclude kickback + reject + loop from topology flow).
         flow_edges = [e for e in edges if e.get("type") not in _SKIPPED_EDGE_TYPES]
 
         # Entry node: no incoming forwarding edges
@@ -376,6 +379,65 @@ class GraphValidator:
                 f"Edge from '{src}': eval_condition.operator must be one of {valid_ops} (got {operator!r})",
                 node_id=src,
             )
+
+    @staticmethod
+    def _check_loop_edges(
+        edges: list[dict[str, Any]],
+        node_ids: set[str],
+        result: ValidationResult,
+    ) -> None:
+        """Validate loop-edge constraints.
+
+        Checks:
+        1. Every loop edge must have a ``default_target`` that references
+           an existing node ID.
+        2. If ``max_iterations`` is set, it must be a positive integer.
+        3. If ``condition_expression`` is set, it must compile as valid
+           JMESPath.
+        """
+        for edge in edges:
+            if edge.get("type") != "loop":
+                continue
+            source = _string_or_default(edge.get("source"))
+            target = _string_or_default(edge.get("target"))
+
+            # 1. default_target must exist.
+            default_raw = edge.get("default_target")
+            if default_raw is None:
+                result.error(
+                    "LOOP_MISSING_DEFAULT_TARGET",
+                    f"Loop edge from '{source}' to '{target}' has no default_target",
+                    node_id=source,
+                )
+            else:
+                default_target = str(default_raw)
+                if default_target not in node_ids:
+                    result.error(
+                        "LOOP_DEFAULT_TARGET_NOT_FOUND",
+                        f"Loop edge from '{source}' default_target '{default_target}' is not a node",
+                        node_id=source,
+                    )
+
+            # 2. max_iterations must be a positive integer if set.
+            max_it = edge.get("max_iterations")
+            if max_it is not None and (not isinstance(max_it, int) or isinstance(max_it, bool) or max_it < 0):
+                result.error(
+                    "LOOP_INVALID_MAX_ITERATIONS",
+                    f"Loop edge from '{source}' max_iterations must be a non-negative integer (got {max_it!r})",
+                    node_id=source,
+                )
+
+            # 3. condition_expression must be valid JMESPath if set.
+            expr: object = edge.get("condition_expression")
+            if isinstance(expr, str) and expr.strip():
+                try:
+                    jmespath.compile(expr.strip())
+                except jmespath.exceptions.JMESPathError as exc:
+                    result.error(
+                        "LOOP_INVALID_EXPRESSION",
+                        f"Loop edge from '{source}': invalid JMESPath expression: {exc}",
+                        node_id=source,
+                    )
 
     # ------------------------------------------------------------------
     # Schema compatibility
