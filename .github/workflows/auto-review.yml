@@ -1,12 +1,9 @@
-﻿name: Auto Review
+name: Auto Review
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
-
-env:
-  OPENCODE_VERSION: "0.0.55"
 
 jobs:
   review:
@@ -24,30 +21,29 @@ jobs:
         id: changed
         shell: bash
         run: |
-          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" | tr '\n' ' ' | xargs)
-          echo "files=$CHANGED" >> "$GITHUB_OUTPUT"
-          echo "count=$(echo $CHANGED | wc -w)" >> "$GITHUB_OUTPUT"
+          CHANGED=pwdgit diff --name-only "origin/pwd{{ github.base_ref }}...HEAD" | tr '\n' ' ' | xargs)
+          echo "files=" >> ""
+          echo "count=" >> ""
 
-      - name: Exit early ? no code changes
+      - name: Exit early - no code changes
         if: steps.changed.outputs.count == '0'
         env:
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
+          GH_TOKEN: pwd{{ secrets.MODULO_REVIEWBOT_TOKEN }}
         shell: bash
         run: |
-          gh pr review "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}" \
+          gh pr review "pwd{{ github.event.pull_request.number }}" \
+            --repo "pwd{{ github.repository }}" \
             --approve \
-            --body "## ?? Modulo Review\n\n**No code changes detected.** Auto-approved."
+            --body "## Modulo Review\n\n**No code changes detected.** Auto-approved."
 
       - name: Install opencode CLI
         if: steps.changed.outputs.count != '0'
         env:
-          APP_MODULO_OPENCODE_API_KEY: ${{ secrets.APP_MODULO_OPENCODE_API_KEY }}
+          APP_MODULO_OPENCODE_API_KEY: pwd{{ secrets.APP_MODULO_OPENCODE_API_KEY }}
         shell: bash
         run: |
           if ! command -v opencode &>/dev/null; then
-            curl -sL "https://github.com/opencode-ai/opencode/releases/download/v${OPENCODE_VERSION}/opencode-v${OPENCODE_VERSION}-linux-amd64.tar.gz" | tar xz -C /usr/local/bin opencode
-            chmod +x /usr/local/bin/opencode
+            npm install -g opencode 2>&1
           fi
           opencode --version
 
@@ -55,70 +51,46 @@ jobs:
         id: qa
         if: steps.changed.outputs.count != '0'
         env:
-          APP_MODULO_OPENCODE_API_KEY: ${{ secrets.APP_MODULO_OPENCODE_API_KEY }}
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
+          APP_MODULO_OPENCODE_API_KEY: pwd{{ secrets.APP_MODULO_OPENCODE_API_KEY }}
+          GH_TOKEN: pwd{{ secrets.MODULO_REVIEWBOT_TOKEN }}
         shell: bash
         run: |
-          FILES="${{ steps.changed.outputs.files }}"
+          FILES="pwd{{ steps.changed.outputs.files }}"
 
-          if command -v opencode &>/dev/null && [ -n "$APP_MODULO_OPENCODE_API_KEY" ]; then
-            mkdir -p ~/.local/share/opencode
-            cat > ~/.local/share/opencode/auth.json << 'EOF'
-            {
-              "opencode": {"type": "api", "key": "'"$APP_MODULO_OPENCODE_API_KEY"'"},
-              "opencode-go": {"type": "api", "key": "'"$APP_MODULO_OPENCODE_API_KEY"'"}
-            }
-            EOF
-
-            echo "Running opencode qa on: $FILES"
-            RESULT=$(opencode qa $FILES 2>&1) || true
-            echo "result<<EOF" >> "$GITHUB_OUTPUT"
-            echo "$RESULT" >> "$GITHUB_OUTPUT"
-            echo "EOF" >> "$GITHUB_OUTPUT"
-            echo "source=opencode" >> "$GITHUB_OUTPUT"
+          if command -v opencode &>/dev/null && [ -n "" ]; then
+            echo "Running opencode qa on: "
+            opencode auth --api-key "" 2>&1 || true
+            RESULT=[91m[1mError: [0mFailed to change directory to C:\Users\dunca\Modulo\Repos\modulo\qa || true
+            echo "result<<EOF" >> ""
+            echo "" >> ""
+            echo "EOF" >> ""
+            echo "source=opencode" >> ""
           else
-            echo "source=fallback" >> "$GITHUB_OUTPUT"
+            echo "source=fallback" >> ""
           fi
 
       - name: Post review decision
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
-          PR_NUM: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          QA_RESULT: ${{ steps.qa.outputs.result }}
-          QA_SOURCE: ${{ steps.qa.outputs.source }}
+          GH_TOKEN: pwd{{ secrets.MODULO_REVIEWBOT_TOKEN }}
+          PR_NUM: pwd{{ github.event.pull_request.number }}
+          REPO: pwd{{ github.repository }}
+          QA_RESULT: pwd{{ steps.qa.outputs.result }}
+          QA_SOURCE: pwd{{ steps.qa.outputs.source }}
         shell: bash
         run: |
-          echo "=== Modulo Review for PR #$PR_NUM ==="
-          echo "Title: ${{ github.event.pull_request.title }}"
-          echo "Files changed: ${{ steps.changed.outputs.count }}"
+          if [ "" = "opencode" ]; then
+            CRITICAL=
+            MAJOR=
+            CRITICAL=
+            MAJOR=
+            echo "Findings:  critical,  major"
 
-          if [ "$QA_SOURCE" = "opencode" ]; then
-            CRITICAL=$(echo "$QA_RESULT" | grep -oiE 'critical[ :]+[0-9]+' | grep -oP '[0-9]+' | head -1)
-            MAJOR=$(echo "$QA_RESULT" | grep -oiE 'major[ :]+[0-9]+' | grep -oP '[0-9]+' | head -1)
-            CRITICAL=${CRITICAL:-0}
-            MAJOR=${MAJOR:-0}
-
-            echo "Findings: $CRITICAL critical, $MAJOR major"
-
-            BODY="## ?? Modulo Review\n\n"
-            BODY+="${QA_RESULT}"
-
-            if [ "$CRITICAL" -gt 0 ] || [ "$MAJOR" -gt 0 ]; then
-              BODY+="\n\n### Decision\n**CHANGES_REQUESTED** ? fix critical/major findings before merge."
-              gh pr review "$PR_NUM" --repo "$REPO" --request-changes --body "$BODY"
-              echo "Outcome: CHANGES_REQUESTED"
+            if [ "" -gt 0 ] || [ "" -gt 0 ]; then
+              gh pr review "" --repo "" --request-changes --body "## Modulo Review\n\n\n\n### Decision\n**CHANGES_REQUESTED** - fix critical/major findings."
             else
-              BODY+="\n\n### Decision\n**APPROVED** ? no critical or major issues found."
-              gh pr review "$PR_NUM" --repo "$REPO" --approve --body "$BODY"
-              echo "Outcome: APPROVED"
+              gh pr review "" --repo "" --approve --body "## Modulo Review\n\n\n\n### Decision\n**APPROVED** - no critical or major issues."
             fi
           else
-            echo "opencode CLI unavailable ? approving with CI trust fallback."
-            gh pr review "$PR_NUM" \
-              --repo "$REPO" \
-              --approve \
-              --body "## ?? Modulo Review\n\n**APPROVED** (opencode CLI unavailable for deep review ? CI will validate)."
-            echo "Outcome: APPROVED (fallback)"
+            gh pr review "" --repo "" --approve --body "## Modulo Review\n\n**APPROVED** (opencode CLI unavailable - CI will validate)."
           fi
