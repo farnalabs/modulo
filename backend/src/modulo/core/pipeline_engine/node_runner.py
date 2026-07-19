@@ -601,6 +601,7 @@ def make_sandbox_agent_fn(
 
         from e2b import AsyncSandbox  # type: ignore[import-untyped]
         from jinja2.sandbox import SandboxedEnvironment
+        from opentelemetry import trace as _otel_trace
 
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input: Any = run_context.get("input", {})
@@ -653,6 +654,10 @@ def make_sandbox_agent_fn(
 
             elapsed = _time.monotonic() - start_time
             exit_code: int = getattr(cmd_result, "exit_code", -1)
+            agent_stdout: str = getattr(cmd_result, "stdout", "") or ""
+            agent_stderr: str = getattr(cmd_result, "stderr", "") or ""
+            agent_stdout = agent_stdout[-102400:]
+            agent_stderr = agent_stderr[-102400:]
 
             raw_output: str = ""
             output_json: Any = None
@@ -663,6 +668,18 @@ def make_sandbox_agent_fn(
                 _log.info(
                     "sandbox_agent.no_output_json",
                     extra={"node_id": node_id, "exit_code": exit_code},
+                )
+
+            _span = _otel_trace.get_current_span()
+            if _span.is_recording():
+                _span.add_event(
+                    "sandbox.agent.output",
+                    {
+                        "stdout": agent_stdout[-32768:],
+                        "stderr": agent_stderr[-32768:],
+                        "stdout_length": len(agent_stdout),
+                        "stderr_length": len(agent_stderr),
+                    },
                 )
 
             if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
@@ -685,6 +702,8 @@ def make_sandbox_agent_fn(
                                     "exit_code": exit_code,
                                     "wall_clock_time_ms": int(elapsed * 1000),
                                     "output_json": output_json,
+                                    "agent_stdout": agent_stdout,
+                                    "agent_stderr": agent_stderr,
                                 },
                             }
                         ],
@@ -692,6 +711,8 @@ def make_sandbox_agent_fn(
                             "status": "failed",
                             "summary": "Output failed schema validation",
                             "wall_clock_time_ms": int(elapsed * 1000),
+                            "agent_stdout": agent_stdout,
+                            "agent_stderr": agent_stderr,
                         },
                     }
 
@@ -718,6 +739,8 @@ def make_sandbox_agent_fn(
                             "exit_code": exit_code,
                             "wall_clock_time_ms": int(elapsed * 1000),
                             "output_json": output_json,
+                            "agent_stdout": agent_stdout,
+                            "agent_stderr": agent_stderr,
                         },
                     }
                 ],
@@ -725,6 +748,8 @@ def make_sandbox_agent_fn(
                     "status": status,
                     "summary": result_summary,
                     "wall_clock_time_ms": int(elapsed * 1000),
+                    "agent_stdout": agent_stdout,
+                    "agent_stderr": agent_stderr,
                 },
             }
 
@@ -748,6 +773,8 @@ def make_sandbox_agent_fn(
                     "exc_msg": _exc_msg,
                 },
             )
+            _exc_stdout = agent_stdout if "agent_stdout" in locals() else ""
+            _exc_stderr = agent_stderr if "agent_stderr" in locals() else ""
             return {
                 "artifacts": [
                     {
@@ -760,6 +787,8 @@ def make_sandbox_agent_fn(
                             "error_message": _exc_msg,
                             "exit_code": -1,
                             "wall_clock_time_ms": int(elapsed * 1000),
+                            "agent_stdout": _exc_stdout,
+                            "agent_stderr": _exc_stderr,
                         },
                     }
                 ],
@@ -767,6 +796,8 @@ def make_sandbox_agent_fn(
                     "status": "failed",
                     "summary": "Sandbox agent execution failed",
                     "wall_clock_time_ms": int(elapsed * 1000),
+                    "agent_stdout": _exc_stdout,
+                    "agent_stderr": _exc_stderr,
                 },
             }
         finally:
