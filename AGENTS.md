@@ -872,3 +872,25 @@ ADR 003 establishes the **Agent Dispatch Model**:
 When creating new pipeline features, prefer the `sandbox_agent` node type for
 code-generation tasks. The `agent` node type (single-shot LLM call) remains
 valid for non-coding tasks (classification, summarization, analysis).
+
+### Fly --strategy immediate desyncs the proxy routing table
+
+\lyctl deploy --strategy immediate\ replaces machines immediately, which desynchronizes Fly's edge proxy routing table from actual machine state. The machines remain healthy (health checks pass at 200), but the proxy returns 503 with "no known healthy instances found for route tcp/443" because old routing entries reference stale machines.
+
+**Symptoms:**
+- \lyctl status\ shows machines "started" with "1 total, 1 passing" health checks
+- Edge proxy returns 503
+- Individual restarts (\lyctl machine restart\, \lyctl apps restart\) do NOT fix it
+- The error message hints: "are you using the 'immediate' strategy?"
+
+**Fix — scale-to-zero then scale-up:**
+\\\powershell
+flyctl scale count 0 --yes -a app-modulo
+flyctl scale count 2 --yes -a app-modulo
+\\\
+This destroys all machines and creates fresh ones that register correctly with the proxy routing table.
+
+**Prevention:**
+- \[deploy] strategy = 'rolling'\ is set in \ly.toml\ and \ly.staging.toml\
+- Always use the deploy pipeline or \deploy.ps1\ — never \lyctl deploy\ directly
+- Never pass \--strategy immediate\ — rolling/canary/bluegreen are the safe options
