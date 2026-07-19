@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
     <div class="page-wide">
       <PageHeader
@@ -12,7 +12,7 @@
             :disabled="loading"
             @click="scan"
           >
-            {{ loading ? 'Scanning…' : 'Refresh Scan' }}
+            {{ loading ? 'Scanningâ€¦' : 'Refresh Scan' }}
           </Button>
         </template>
       </PageHeader>
@@ -145,7 +145,7 @@
               data-testid="hk-confirm-cleanup"
               @click="doCleanup"
             >
-              {{ cleaningUp ? 'Cleaning up…' : `Delete ${selectedCount} items` }}
+              {{ cleaningUp ? 'Cleaning upâ€¦' : `Delete ${selectedCount} items` }}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -158,9 +158,9 @@
 import { ref, computed } from 'vue'
 import { useApi } from '../composables/useApi'
 import { Button } from '../components/ui/button'
-import { LoadingSpinner } from '../components/shared/LoadingSpinner'
-import { PageHeader } from '../components/shared/PageHeader'
-import { EmptyState } from '../components/shared/EmptyState'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import {
   Dialog,
   DialogContent,

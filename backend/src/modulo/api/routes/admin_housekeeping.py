@@ -108,7 +108,7 @@ async def list_housekeeping(
         )
         for r in results
     ]
-    total = sum(r.count for r in results)
+    total = sum(len(r.candidates) for r in results)
     return HousekeepingScanResponse(categories=categories_list, total_count=total)
 
 
