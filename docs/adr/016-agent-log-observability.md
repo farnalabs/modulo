@@ -17,7 +17,7 @@ Modulo already has infrastructure that makes solving this tractable:
 - **SSE EventBus**: Real-time frontend sync via WebSocket fan-out, providing live run updates without polling.
 - **Run inspection API**: The existing run status and output API endpoints serve per-node state from LangGraph checkpoint snapshots.
 
-The PRD establishes two related requirements. First, a table-stakes requirement at §6.6: "OpenTelemetry-native observability — plugs into existing monitoring without custom work." Second, a scope boundary at §6.20: "Modulo is the SDLC orchestration layer — dispatch, auth, audit, cost tracking, eval gates, HITL — not the agent loop itself." Agent log observability sits at the intersection of these: it's observability, but it's observability of the dispatched agent, not of Modulo's internal execution.
+The PRD establishes two related requirements. First, a table-stakes requirement at 6.6: "OpenTelemetry-native observability — plugs into existing monitoring without custom work." Second, a scope boundary at 6.20: "Modulo is the SDLC orchestration layer — dispatch, auth, audit, cost tracking, eval gates, HITL — not the agent loop itself." Agent log observability sits at the intersection of these: it's observability, but it's observability of the dispatched agent, not of Modulo's internal execution.
 
 ---
 
@@ -30,20 +30,21 @@ Adopt a **two-channel approach** for agent stdout/stderr observability:
 stdout and stderr are captured from the `cmd_result` returned by `sandbox.commands.run()` and included in the `sandbox_agent` node's output dict. This flows into LangGraph checkpoint state alongside the structured output, serving two consumers:
 
 1. **Run inspection API**: The per-node output endpoint surfaces `agent_stdout` and `agent_stderr` alongside the structured `agent_output` field.
-2. **RunDetailView UI**: The run inspection view includes an expandable IO panel per node, showing stdout and stderr with basic formatting (monospace, scrollable, truncated at 100KB).
+2. **RunDetailView UI**: The run inspection view includes an expandable IO panel per node, showing stdout and stderr with basic formatting (monospace, scrollable, truncated to the first 100KB).
 
 This channel is always active — no configuration required. It works offline, without OTel exporters, and is available immediately after a run completes.
 
 ### Channel 2 — OTel Span Events
 
-stdout and stderr are also emitted as `sandbox.agent.output` span events on the current execution span via the OpenTelemetry API. Each event carries:
+stdout and stderr are also emitted as a single `sandbox.agent.output` span event on the current execution span via the OpenTelemetry API. The event carries:
 
-| Attribute | Value |
-|---|---|
-| `event.name` | `sandbox.agent.output` |
-| `sandbox.node_id` | The pipeline node ID |
-| `sandbox.stream` | `"stdout"` or `"stderr"` |
-| `sandbox.content` | The output text (truncated at 32KB per event) |
+| Attribute | Type | Description |
+|---|---|---|
+| `event.name` | string | `sandbox.agent.output` |
+| `stdout` | string | Truncated stdout text (first 32KB) |
+| `stderr` | string | Truncated stderr text (first 32KB) |
+| `stdout_length` | integer | Total stdout length before truncation |
+| `stderr_length` | integer | Total stderr length before truncation |
 
 These events flow through the configured `SpanExporter` — the same OTel pipeline used for LangGraph execution spans — to the customer's monitoring stack (Loki, Grafana, DataDog, SigNoz, etc.).
 
@@ -76,9 +77,14 @@ Searching across agent logs (full-text search, filtering by time range or node t
 - Customers can see agent stdout/stderr in the RunDetailView immediately after a run completes, without any configuration or infrastructure setup.
 - Customers with OTel configured get agent logs in their existing monitoring stack automatically — no additional pipeline or exporter needed.
 - No new infrastructure burden: Channel 1 leverages existing LangGraph checkpoint state; Channel 2 leverages the existing OTel bridge and exporter configuration.
-- stdout/stderr are truncated at 100KB for state storage (Channel 1) and 32KB per OTel span event (Channel 2). The truncation is documented in the API response schema and the OTel event specification.
+- stdout/stderr are truncated to the first 100KB for state storage (Channel 1) and to the first 32KB per OTel span event (Channel 2). Truncation limits are documented in the `node_runner.py` source as named constants `_MAX_ARTIFACT_LOG` and `_MAX_OTEL_LOG_ATTR`.
 - The output contract for `sandbox_agent` nodes is extended with optional `agent_stdout` and `agent_stderr` fields. This is backward compatible — existing pipelines that read the structured output from the well-known path continue to work unchanged. The new fields are absent when the sandbox agent produces no stdout/stderr.
-- Future enhancement: live log streaming using `sandbox.commands.stream()` or the E2B process API, relayed through the SSE EventBus, could be added without changing the data model or breaking existing consumers. The two-channel approach leaves room for a third "streaming" channel that bypasses checkpoint state entirely.
+
+---
+
+## Future Work
+
+- **Live log streaming**: Using `sandbox.commands.stream()` or the E2B process API, relayed through the SSE EventBus, could be added without changing the data model or breaking existing consumers. The two-channel approach leaves room for a third "streaming" channel that bypasses checkpoint state entirely.
 
 ---
 
@@ -86,7 +92,7 @@ Searching across agent logs (full-text search, filtering by time range or node t
 
 - ADR 003: Agent Dispatch Model — establishes Modulo's scope boundary as orchestration, not agent runtime
 - ADR 005: Agent Architecture Two-Tier — E2B template and sandbox architecture
-- PRD §6.6: OpenTelemetry — existing OTel strategy and table-stakes requirement
-- PRD §6.20: Agent Dispatch Model — output contract and observability requirements
-- PRD §8.22: SSE Event Bus — existing real-time infrastructure
+- PRD 6.6: OpenTelemetry — existing OTel strategy and table-stakes requirement
+- PRD 6.20: Agent Dispatch Model — output contract and observability requirements
+- PRD 8.22: SSE Event Bus — existing real-time infrastructure
 - `node_runner.py:make_sandbox_agent_fn` — the implementation location for sandbox agent dispatch
