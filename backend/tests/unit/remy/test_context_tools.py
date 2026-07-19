@@ -3,7 +3,8 @@
 import json
 from unittest.mock import MagicMock
 
-from modulo.api.mcp_server import SENSITIVE_CONFIG_KEYS, _get_doc_index, _is_sensitive_key
+from modulo.api.mcp_server import _DOC_INDEX, browse_documentation, search_documentation
+from modulo.api.mcp_server import _DOC_INDEX
 from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
 
 

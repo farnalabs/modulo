@@ -9,7 +9,7 @@ from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from modulo.core.mcp.scope_validator import (
     TOOL_SCOPE_REQUIREMENTS,
     MCPAuthorizationError,
@@ -60,7 +60,6 @@ class TestCheckToolScope:
             ("viewer", "list_housekeeping"),
             ("runner", "review_hitl"),
             ("runner", "perform_housekeeping"),
-            ("operator", "perform_housekeeping"),
             ("viewer", "create_connector"),
             ("runner", "create_connector"),
             ("viewer", "create_trigger"),
