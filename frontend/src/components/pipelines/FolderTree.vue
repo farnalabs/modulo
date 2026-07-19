@@ -204,8 +204,6 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 
 const draggableItems = ref<FlatTreeItem[]>([])
-const dragOverFolderId = ref<string | null>(null)
-
 const showCreateDialog = ref(false)
 const newFolderName = ref('')
 const newFolderParentId = ref<string | null>(null)
