@@ -16,7 +16,7 @@ class _AsyncIter:
         try:
             return next(self._iter)
         except StopIteration:
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
 
 import pytest  # noqa: E402

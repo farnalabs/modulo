@@ -529,7 +529,7 @@ class TestListAuditEvents:
                             payload_json={},
                             request_id=None,
                             previous_hash=None,
-                            created_at=MagicMock(isoformat=lambda: f"t{i}"),
+                            created_at=MagicMock(isoformat=lambda i=i: f"t{i}"),
                         )
                         for i in range(limit + 1)
                     ]

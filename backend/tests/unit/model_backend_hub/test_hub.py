@@ -42,7 +42,7 @@ provider_modules = sorted(
 )
 print(json.dumps(provider_modules))
 """
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 — trusted input (sys.executable)
         [sys.executable, "-c", script],
         check=True,
         capture_output=True,

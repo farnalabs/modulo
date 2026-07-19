@@ -82,11 +82,11 @@ async def _count_rows(db_engine: AsyncEngine, table: str, org_id: uuid.UUID | No
     async with db_engine.connect() as conn:
         if org_id:
             result = await conn.execute(
-                text(f"SELECT COUNT(*) FROM {table} WHERE organisation_id = :oid"),
+                text(f"SELECT COUNT(*) FROM {table} WHERE organisation_id = :oid"),  # noqa: S608
                 {"oid": str(org_id)},
             )
         else:
-            result = await conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
+            result = await conn.execute(text(f"SELECT COUNT(*) FROM {table}"))  # noqa: S608
         return result.scalar_one()
 
 

@@ -174,8 +174,8 @@ def test_encrypt_archive_round_trip(tmp_manifest_dir):
     assert not os.path.exists(plain)
 
     dec = os.path.join(tmp_manifest_dir, "decrypted.tar.gz")
-    result = subprocess.run(
-        [
+    result = subprocess.run(  # noqa: S603 — test fixture
+        [  # noqa: S607
             "openssl",
             "enc",
             "-d",

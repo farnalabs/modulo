@@ -1400,7 +1400,7 @@ def no_mcp_can_approve(ctx):
             import asyncio
 
             asyncio.run(mock_mgr.approve(uuid.uuid4(), "token"))
-            assert False, "MCP approve should have raised PermissionError for human_only gate"
+            raise AssertionError("MCP approve should have raised PermissionError for human_only gate")
         except PermissionError:
             pass
 
@@ -1791,7 +1791,7 @@ def check_docker_available():
         pytest.skip("Docker is not installed")
     try:
         subprocess.run(
-            ["docker", "info"],
+            ["docker", "info"],  # noqa: S607 — test helper
             capture_output=True,
             timeout=10,
             check=True,
