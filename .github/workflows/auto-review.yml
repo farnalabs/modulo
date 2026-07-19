@@ -1,4 +1,4 @@
-name: Auto Review
+﻿name: Auto Review
 
 on:
   workflow_dispatch:
@@ -55,7 +55,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Configure opencode auth
-        if: steps.install.outputs.installed == '"'"'true'"'"'
+        if: steps.install.outputs.installed == 'true'"'
         shell: bash
         run: |
           mkdir -p ~/.local/share/opencode
@@ -73,7 +73,7 @@ jobs:
 
       - name: Run opencode review
         id: review
-        if: steps.install.outputs.installed == '"'"'true'"'"' && steps.changed-files.outputs.count > 0
+        if: steps.install.outputs.installed == 'true'"' && steps.changed-files.outputs.count > 0
         shell: bash
         run: |
           FILES="${{ steps.changed-files.outputs.files }}"
