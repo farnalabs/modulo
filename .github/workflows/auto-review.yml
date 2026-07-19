@@ -1,4 +1,4 @@
-﻿name: Auto Review
+name: Auto Review
 
 on:
   workflow_dispatch:
@@ -92,7 +92,7 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
-          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_NUM: ${{ github.event.inputs.pr_number || github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         shell: bash
         run: |
