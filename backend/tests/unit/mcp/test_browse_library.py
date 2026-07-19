@@ -192,7 +192,7 @@ class TestBrowseLibrary:
 
         assert result == {
             "error": "auth_expired",
-            "detail": "Token revoked or expired — re-authenticate",
+            "detail": "Token revoked or expired - re-authenticate",
         }
 
     async def test_no_scope_check_needed(self) -> None:
