@@ -110,6 +110,10 @@ def _override_session(client: TestClient, session: AsyncMock) -> None:
             pass
 
     client.app.dependency_overrides[_get_session_factory] = lambda: _MockFactory(session)
+    # Clear in-memory dashboard cache so session-error tests always hit the DB
+    import modulo.api.routes.dashboard as _dashboard_mod
+
+    _dashboard_mod._in_memory_cache.clear()
 
 
 def _make_exc(error_type: type) -> Exception:
