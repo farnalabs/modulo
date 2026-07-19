@@ -91,6 +91,26 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.mark.parametrize(
+    "method,url,body",
+    [
+        ("GET", "/api/v1/views", None),
+        ("POST", "/api/v1/views", {"name": "Test", "view_type": "run_list"}),
+    ],
+    ids=["list", "create"],
+)
+def test_views_unauthenticated(
+    unauth_client: TestClient, method: str, url: str, body: dict[str, object] | None
+) -> None:
+    if method == "GET":
+        resp = unauth_client.get(url)
+    elif method == "POST":
+        resp = unauth_client.post(url, json=body or {})
+    else:
+        raise ValueError(f"Unsupported method: {method}")
+    assert resp.status_code in (401, 403)
+
+
 class TestListViews:
     def test_returns_200(self, client: TestClient) -> None:
         page_result = MagicMock(items=[_make_view()], total=1, page=1, page_size=20)
@@ -129,10 +149,6 @@ class TestListViews:
             resp = client.get("/api/v1/views")
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
-
-    def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.get("/api/v1/views")
-        assert resp.status_code in (401, 403)
 
 
 class TestCreateView:
@@ -192,10 +208,6 @@ class TestCreateView:
     def test_invalid_sort_order_returns_422(self, client: TestClient) -> None:
         resp = client.post("/api/v1/views", json={"name": "Test", "view_type": "run_list", "sort_order": "invalid"})
         assert resp.status_code == 422
-
-    def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.post("/api/v1/views", json={"name": "Test", "view_type": "run_list"})
-        assert resp.status_code in (401, 403)
 
 
 class TestGetView:

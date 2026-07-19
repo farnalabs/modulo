@@ -20,35 +20,24 @@ EVENT_ID = "00000000-0000-0000-0000-000000000002"
 
 
 class TestEventHash:
-    def test_same_inputs_produce_same_hash(self):
+    @pytest.mark.parametrize(
+        "event_type,previous_hash,org_id_str,event_id_str,expected_different",
+        [
+            ("a", None, ORG_ID, EVENT_ID, False),
+            ("b", None, ORG_ID, EVENT_ID, True),
+            ("e", "prev", ORG_ID, EVENT_ID, True),
+            ("e", None, "00000000-0000-0000-0000-000000000003", EVENT_ID, True),
+            ("e", None, ORG_ID, "00000000-0000-0000-0000-000000000099", True),
+        ],
+    )
+    def test_compute_event_hash(self, event_type, previous_hash, org_id_str, event_id_str, expected_different):
         h1 = _compute_event_hash("a", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t")
-        h2 = _compute_event_hash("a", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t")
-        assert h1 == h2
-        assert len(h1) == 64
-
-    def test_different_inputs_produce_different_hash(self):
-        h1 = _compute_event_hash("a", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t1")
-        h2 = _compute_event_hash("b", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t1")
-        assert h1 != h2
-
-    def test_previous_hash_changes_result(self):
-        h1 = _compute_event_hash("e", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t")
-        h2 = _compute_event_hash("e", None, None, None, {}, None, "prev", EVENT_ID, ORG_ID, "t")
-        assert h1 != h2
-
-    def test_org_id_changes_result(self):
-        h1 = _compute_event_hash("e", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t")
-        h2 = _compute_event_hash(
-            "e", None, None, None, {}, None, None, EVENT_ID, "00000000-0000-0000-0000-000000000003", "t"
-        )
-        assert h1 != h2
-
-    def test_event_id_changes_result(self):
-        h1 = _compute_event_hash("e", None, None, None, {}, None, None, EVENT_ID, ORG_ID, "t")
-        h2 = _compute_event_hash(
-            "e", None, None, None, {}, None, None, "00000000-0000-0000-0000-000000000099", ORG_ID, "t"
-        )
-        assert h1 != h2
+        h2 = _compute_event_hash(event_type, None, None, None, {}, None, previous_hash, event_id_str, org_id_str, "t")
+        if expected_different:
+            assert h1 != h2
+        else:
+            assert h1 == h2
+            assert len(h1) == 64
 
 
 class TestAppendAuditEvent:
@@ -563,8 +552,19 @@ class TestAppendAuditEventEdgeCases:
         s.begin = MagicMock()
         return s
 
-    @pytest.mark.parametrize("payload", [None, {}, {"key": "value"}])
-    async def test_payload_none_defaults_to_empty_dict(self, session, payload):
+    @pytest.mark.parametrize(
+        "kwargs,expected_checks",
+        [
+            ({"payload_json": None}, {"payload_json": {}}),
+            ({"payload_json": {}}, {"payload_json": {}}),
+            ({"payload_json": {"key": "value"}}, {"payload_json": {"key": "value"}}),
+            ({"request_id": "req-abc-123"}, {"request_id": "req-abc-123"}),
+            ({}, {"previous_hash": None}),
+            ({"actor_user_id": None}, {"account_id": None}),
+            ({"resource_type": None, "resource_id": None}, {"resource_type": None, "resource_id": None}),
+        ],
+    )
+    async def test_edge_cases(self, session, kwargs, expected_checks):
         async def _execute(*a, **kw):
             r = MagicMock()
             r.scalar_one_or_none = MagicMock(return_value=None)
@@ -576,74 +576,10 @@ class TestAppendAuditEventEdgeCases:
             session,
             org_id=uuid.uuid4(),
             event_type="test.event",
-            payload_json=payload,
+            **kwargs,
         )
-        assert event.payload_json == (payload if payload is not None else {})
-
-    async def test_request_id_passed_through(self, session):
-        async def _execute(*a, **kw):
-            r = MagicMock()
-            r.scalar_one_or_none = MagicMock(return_value=None)
-            return r
-
-        session.execute = _execute
-
-        event = await append_audit_event(
-            session,
-            org_id=uuid.uuid4(),
-            event_type="test.event",
-            request_id="req-abc-123",
-        )
-        assert event.request_id == "req-abc-123"
-
-    async def test_previous_hash_none_for_first_event(self, session):
-        async def _execute(*a, **kw):
-            r = MagicMock()
-            r.scalar_one_or_none = MagicMock(return_value=None)
-            return r
-
-        session.execute = _execute
-
-        event = await append_audit_event(
-            session,
-            org_id=uuid.uuid4(),
-            event_type="test.event",
-        )
-        assert event.previous_hash is None
-
-    async def test_actor_user_id_optional(self, session):
-        async def _execute(*a, **kw):
-            r = MagicMock()
-            r.scalar_one_or_none = MagicMock(return_value=None)
-            return r
-
-        session.execute = _execute
-
-        event = await append_audit_event(
-            session,
-            org_id=uuid.uuid4(),
-            event_type="test.event",
-            actor_user_id=None,
-        )
-        assert event.account_id is None
-
-    async def test_resource_type_and_id_optional(self, session):
-        async def _execute(*a, **kw):
-            r = MagicMock()
-            r.scalar_one_or_none = MagicMock(return_value=None)
-            return r
-
-        session.execute = _execute
-
-        event = await append_audit_event(
-            session,
-            org_id=uuid.uuid4(),
-            event_type="test.event",
-            resource_type=None,
-            resource_id=None,
-        )
-        assert event.resource_type is None
-        assert event.resource_id is None
+        for field, expected in expected_checks.items():
+            assert getattr(event, field) == expected
 
 
 class TestExportEdgeCases:

@@ -41,18 +41,7 @@ class TestGenericRepository:
             await repo.set_org_context(session, _ORG_ID)
             mock_set_rls_org.assert_awaited_once_with(session, _ORG_ID)
 
-    def test_apply_tenant_filter_adds_where_clause(self, repo: GenericRepository) -> None:
-        stmt = MagicMock(spec=Select)
-        stmt.column_descriptions = [{"entity": EntityWithOrg}]
-        where_return = MagicMock(spec=Select)
-        stmt.where.return_value = where_return
-
-        result = repo.apply_tenant_filter(stmt, _ORG_ID)
-
-        stmt.where.assert_called_once()
-        assert result is where_return
-
-    def test_apply_tenant_filter_adds_where_for_all_org_entities_in_join(self, repo: GenericRepository) -> None:
+    def test_apply_tenant_filter_adds_where_for_join(self, repo: GenericRepository) -> None:
         stmt = MagicMock(spec=Select)
         stmt.column_descriptions = [
             {"entity": EntityWithOrg},
@@ -67,49 +56,28 @@ class TestGenericRepository:
         assert where_return.where.call_count == 1
         assert result is not stmt
 
-    def test_apply_tenant_filter_skips_entities_without_org_column(self, repo: GenericRepository) -> None:
+    @pytest.mark.parametrize(
+        ("column_descriptions", "where_call_count", "result_is_stmt"),
+        [
+            ([{"entity": EntityWithOrg}], 1, False),
+            ([{"entity": EntityWithoutOrg}, {"entity": EntityWithOrg}], 1, False),
+            ([{"entity": None}, {"entity": object}, {"entity": EntityWithOrg}], 1, False),
+            ([{"entity": EntityWithoutOrg}], 0, True),
+            ([], 0, True),
+        ],
+    )
+    def test_apply_tenant_filter(
+        self, repo: GenericRepository, column_descriptions: list, where_call_count: int, result_is_stmt: bool
+    ) -> None:
         stmt = MagicMock(spec=Select)
-        stmt.column_descriptions = [
-            {"entity": EntityWithoutOrg},
-            {"entity": EntityWithOrg},
-        ]
+        stmt.column_descriptions = column_descriptions
         where_return = MagicMock(spec=Select)
         stmt.where.return_value = where_return
 
         result = repo.apply_tenant_filter(stmt, _ORG_ID)
 
-        stmt.where.assert_called_once()
-        assert result is where_return
-
-    def test_apply_tenant_filter_skips_none_and_object_entities(self, repo: GenericRepository) -> None:
-        stmt = MagicMock(spec=Select)
-        stmt.column_descriptions = [
-            {"entity": None},
-            {"entity": object},
-            {"entity": EntityWithOrg},
-        ]
-        where_return = MagicMock(spec=Select)
-        stmt.where.return_value = where_return
-
-        result = repo.apply_tenant_filter(stmt, _ORG_ID)
-
-        stmt.where.assert_called_once()
-        assert result is where_return
-
-    def test_apply_tenant_filter_returns_stmt_unchanged_when_no_match(self, repo: GenericRepository) -> None:
-        stmt = MagicMock(spec=Select)
-        stmt.column_descriptions = [{"entity": EntityWithoutOrg}]
-
-        result = repo.apply_tenant_filter(stmt, _ORG_ID)
-
-        stmt.where.assert_not_called()
-        assert result is stmt
-
-    def test_apply_tenant_filter_returns_stmt_when_descriptions_empty(self, repo: GenericRepository) -> None:
-        stmt = MagicMock(spec=Select)
-        stmt.column_descriptions = []
-
-        result = repo.apply_tenant_filter(stmt, _ORG_ID)
-
-        stmt.where.assert_not_called()
-        assert result is stmt
+        assert stmt.where.call_count == where_call_count
+        if result_is_stmt:
+            assert result is stmt
+        else:
+            assert result is where_return

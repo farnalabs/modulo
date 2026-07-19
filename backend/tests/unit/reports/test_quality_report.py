@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 
 from modulo.core.reports.quality_report import (
     _fmt_delta,
@@ -95,20 +96,18 @@ def _mock_resp(is_success: bool = True, status_code: int = 200, text: str = "ok"
 
 
 class TestPctDelta:
-    def test_returns_none_when_previous_zero(self) -> None:
-        assert _pct_delta(10.0, 0.0) is None
-
-    def test_returns_correct_positive(self) -> None:
-        assert _pct_delta(150.0, 100.0) == 50.0
-
-    def test_returns_negative_when_current_less(self) -> None:
-        assert _pct_delta(50.0, 100.0) == -50.0
-
-    def test_returns_zero_when_equal(self) -> None:
-        assert _pct_delta(100.0, 100.0) == 0.0
-
-    def test_handles_floats_correctly(self) -> None:
-        assert _pct_delta(110.0, 200.0) == -45.0
+    @pytest.mark.parametrize(
+        "current,previous,expected",
+        [
+            (10.0, 0.0, None),
+            (150.0, 100.0, 50.0),
+            (50.0, 100.0, -50.0),
+            (100.0, 100.0, 0.0),
+            (110.0, 200.0, -45.0),
+        ],
+    )
+    def test_pct_delta(self, current: float, previous: float, expected: float | None) -> None:
+        assert _pct_delta(current, previous) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -117,17 +116,17 @@ class TestPctDelta:
 
 
 class TestTrendSymbol:
-    def test_up_arrow_when_delta_above_5(self) -> None:
-        assert _trend_symbol(10.0) == "\u2191"
-
-    def test_down_arrow_when_delta_below_neg5(self) -> None:
-        assert _trend_symbol(-10.0) == "\u2193"
-
-    def test_flat_when_delta_zero(self) -> None:
-        assert _trend_symbol(0.0) == "\u2192"
-
-    def test_flat_when_delta_none(self) -> None:
-        assert _trend_symbol(None) == "\u2192"
+    @pytest.mark.parametrize(
+        "delta,expected",
+        [
+            (10.0, "\u2191"),
+            (-10.0, "\u2193"),
+            (0.0, "\u2192"),
+            (None, "\u2192"),
+        ],
+    )
+    def test_trend_symbol(self, delta: float | None, expected: str) -> None:
+        assert _trend_symbol(delta) == expected
 
     def test_within_threshold_returns_flat(self) -> None:
         assert _trend_symbol(3.0) == "\u2192"
@@ -150,17 +149,17 @@ class TestTrendSymbol:
 
 
 class TestFmtDelta:
-    def test_returns_na_when_none(self) -> None:
-        assert _fmt_delta(None) == "N/A"
-
-    def test_formatted_with_plus(self) -> None:
-        assert _fmt_delta(10.0) == "+10.0%"
-
-    def test_formatted_with_minus(self) -> None:
-        assert _fmt_delta(-10.0) == "-10.0%"
-
-    def test_formatted_zero(self) -> None:
-        assert _fmt_delta(0.0) == "+0.0%"
+    @pytest.mark.parametrize(
+        "delta,expected",
+        [
+            (None, "N/A"),
+            (10.0, "+10.0%"),
+            (-10.0, "-10.0%"),
+            (0.0, "+0.0%"),
+        ],
+    )
+    def test_fmt_delta(self, delta: float | None, expected: str) -> None:
+        assert _fmt_delta(delta) == expected
 
 
 # ---------------------------------------------------------------------------
