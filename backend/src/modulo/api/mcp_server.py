@@ -469,17 +469,25 @@ async def create_pipeline(
     lock_wait_timeout_seconds: int = 300,
     node_timeout_seconds: int = 300,
     default_autonomy_level: str = "manual_approval",
+    folder_id: str | None = None,
 ) -> dict[str, Any]:
+    parsed_folder_id: uuid.UUID | None = None
+    if folder_id is not None:
+        try:
+            parsed_folder_id = uuid.UUID(folder_id)
+        except ValueError:
+            return {"error": "invalid_folder_id", "detail": f"Invalid folder_id UUID: {folder_id}"}
+
     for attempt in range(3):
         try:
             if not await validate_current_auth():
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "create_pipeline")
             from modulo.db.crud.pipeline import create_pipeline
-    
+
             org_id = _ctx_org_id_val()
             account_id = _ctx_user_id_val()
-    
+
             async with _session(org_id) as s:
                 pipeline = await create_pipeline(
                     s,
@@ -492,8 +500,9 @@ async def create_pipeline(
                     lock_wait_timeout_seconds=lock_wait_timeout_seconds,
                     node_timeout_seconds=node_timeout_seconds,
                     default_autonomy_level=default_autonomy_level,
+                    folder_id=parsed_folder_id,
                 )
-    
+
             return {
                 "id": str(pipeline.id),
                 "name": pipeline.name,
