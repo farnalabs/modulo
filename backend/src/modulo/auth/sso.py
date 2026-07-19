@@ -10,7 +10,7 @@ import uuid
 import zlib
 from datetime import UTC, datetime, timedelta
 
-import defusedxml.ElementTree as ET
+import defusedxml.ElementTree as ElementTree
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -451,7 +451,7 @@ async def saml_get_auth_url(
 
     try:
         idp_sso_url, _ = _saml_parse_idp_metadata(idp_metadata)
-    except (ET.ParseError, ValueError) as exc:
+    except (ElementTree.ParseError, ValueError) as exc:
         raise ValueError(f"Failed to parse IdP metadata: {exc}") from None
 
     request_id = f"_{uuid.uuid4().hex}"
@@ -499,13 +499,13 @@ async def saml_process_response(
 
     try:
         _, idp_entity_id = _saml_parse_idp_metadata(idp_metadata)
-    except (ET.ParseError, ValueError) as exc:
+    except (ElementTree.ParseError, ValueError) as exc:
         raise ValueError(f"Failed to parse IdP metadata: {exc}") from None
 
     try:
         decoded = base64.b64decode(saml_response).decode()
-        root = ET.fromstring(decoded)
-    except (binascii.Error, ET.ParseError, UnicodeDecodeError, ValueError) as exc:
+        root = ElementTree.fromstring(decoded)
+    except (binascii.Error, ElementTree.ParseError, UnicodeDecodeError, ValueError) as exc:
         _log.warning("sso.saml_decode_failed", extra={"error": str(exc)})
         raise ValueError(str(exc)) from None
 
@@ -629,7 +629,7 @@ def _saml_parse_idp_metadata(
     xml_str: str,
 ) -> tuple[str, str]:
     """Parse IdP metadata XML. Returns (sso_url, entity_id)."""
-    root = ET.fromstring(xml_str)
+    root = ElementTree.fromstring(xml_str)
     md_ns = "urn:oasis:names:tc:SAML:2.0:metadata"
 
     entity_id = root.get("entityID", "")
