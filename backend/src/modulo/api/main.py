@@ -35,6 +35,7 @@ from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_email import router as admin_email_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
+from modulo.api.routes.admin_housekeeping import router as admin_housekeeping_router
 from modulo.api.routes.admin_license import router as admin_license_router
 from modulo.api.routes.admin_monitor_config import router as admin_monitor_config_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
@@ -859,6 +860,7 @@ app.include_router(admin_sso_router)
 app.include_router(admin_system_config_router)
 app.include_router(admin_tiers_router)
 app.include_router(admin_triggers_router)
+app.include_router(admin_housekeeping_router)
 app.include_router(auth_router)
 app.include_router(changelog_router)
 app.include_router(sso_router)

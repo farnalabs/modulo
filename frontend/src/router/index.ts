@@ -97,6 +97,7 @@ const SettingsMcpView = () => import('../views/SettingsMcpView.vue')
 const SettingsTriggersView = () => import('../views/SettingsTriggersView.vue')
 const SettingsHitlReviewView = () => import('../views/SettingsHitlReviewView.vue')
 const AdminNotificationDeliveryLogView = () => import('../views/AdminNotificationDeliveryLogView.vue')
+const AdminHousekeepingView = () => import('../views/AdminHousekeepingView.vue')
 const AdminEnvironmentProfilesView = () => import('../views/AdminEnvironmentProfilesView.vue')
 const AdminSystemOrgsView = () => import('../views/AdminSystemOrgsView.vue')
 const AdminSystemConfigView = () => import('../views/AdminSystemConfigView.vue')
@@ -370,6 +371,12 @@ const router = createRouter({
       path: '/admin/notification-delivery',
       name: 'admin-notification-delivery',
       component: AdminNotificationDeliveryLogView,
+    },
+    {
+      path: '/admin/housekeeping',
+      name: 'admin-housekeeping',
+      component: AdminHousekeepingView,
+      meta: { requiresSystemAdmin: false, breadcrumb: 'Housekeeping', testid: 'admin-housekeeping' },
     },
     {
       path: '/admin/environments',

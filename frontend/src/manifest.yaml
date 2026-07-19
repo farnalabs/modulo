@@ -507,6 +507,17 @@ routes:
         <<: *team
         deprecated: false
 
+    /admin/housekeeping:
+        name: admin-housekeeping
+        breadcrumb: Housekeeping
+        parent: /
+        product_map:
+        sidebar_group: monitoring
+        sidebar_order: 3
+        type: page
+        <<: *community
+        deprecated: false
+
     /admin/environments:
         name: admin-environments
         breadcrumb: Environments
