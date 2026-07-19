@@ -304,12 +304,14 @@ def _graph_response(
             edges=[PipelineGraphEdge.model_validate(edge) for edge in edges],
             validation_issues=validation_issues or [],
         )
-    except ValidationError:
-        _log.exception("Pipeline graph data validation failed")
+    except ValidationError as e:
+        _log.error("Pipeline graph data validation failed: %s", e.errors())
+        detail = "Pipeline graph contains invalid data. This may be caused by a schema migration."
+        detail += f" Validation errors: {e.errors()}"
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Pipeline graph contains invalid data. This may be caused by a schema migration.",
-        ) from None
+            detail=detail,
+        ) from e
 
 
 async def _resolve_graph_references(
