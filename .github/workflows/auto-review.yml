@@ -1,6 +1,12 @@
 name: Auto Review
 
 on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: number
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
@@ -128,3 +134,4 @@ $(cat /tmp/qa-output.txt 2>/dev/null | head -3000)
 \`\`\`
 </details>"
           gh pr review "$PR_NUM" --repo "$REPO" --request-changes --body "${BODY}"
+
