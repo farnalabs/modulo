@@ -237,10 +237,7 @@ async def _fire_cron_wrapper(factory: async_sessionmaker[AsyncSession], info: di
                     run_id,
                 )
     except Exception:
-        import traceback
-
         _log.exception("In-process cron trigger %s failed", info["id"])
-        print(f"CRON TRIGGER ERROR: {info['id']}: {traceback.format_exc()}", flush=True)  # noqa: T201
 
 
 async def _fire_polling_wrapper(factory: async_sessionmaker[AsyncSession], info: dict[str, Any]) -> None:
