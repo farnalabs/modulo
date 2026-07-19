@@ -432,7 +432,7 @@ async def list_pipelines_tool(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         org_id = _ctx_org_id_val()
         from modulo.db.crud.pipeline import list_pipelines
 
@@ -462,7 +462,7 @@ async def create_pipeline(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "create_pipeline")
         from modulo.db.crud.pipeline import create_pipeline
 
@@ -510,7 +510,7 @@ async def list_runs(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired â€” re-authenticate")
+            return _tool_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "list_runs")
         from modulo.db.crud.run import list_runs as db_list_runs
 
@@ -564,7 +564,7 @@ async def update_pipeline_graph(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
         from modulo.db.crud.pipeline import replace_pipeline_graph
 
@@ -621,7 +621,7 @@ async def bind_connector_to_node(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "bind_connector_to_node")
 
         from modulo.db.crud.connector_instance import get_connector_instance
@@ -688,7 +688,7 @@ async def trigger_pipeline(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "trigger_pipeline")
         from modulo.db.crud.pipeline import get_pipeline
         from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -743,7 +743,7 @@ async def trigger_pipeline(
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         org_id = _ctx_org_id_val()
         try:
             rid = uuid.UUID(run_id)
@@ -802,7 +802,7 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
 async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "get_run_output")
         from modulo.api.routes.runs import _mask_output_value
 
@@ -847,7 +847,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
 async def get_run_evals(run_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired â€” re-authenticate")
+            return _tool_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "get_run_evals")
         from modulo.db.crud.eval_run import get_run_evals as db_get_run_evals
 
@@ -897,7 +897,7 @@ async def list_eval_definitions(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired â€” re-authenticate")
+            return _tool_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "list_eval_definitions")
         from modulo.db.crud.eval_definition import list_eval_definitions as db_list_eval_definitions
 
@@ -936,7 +936,7 @@ async def list_eval_definitions(
 async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "cancel_run")
         from modulo.db.crud.run import request_cancellation
 
@@ -970,7 +970,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
 async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "list_pending_hitl")
         from sqlalchemy import func, select
 
@@ -1039,7 +1039,7 @@ async def review_hitl(
     output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
-        return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+        return _tool_auth_error("Token revoked or expired - re-authenticate")
 
     from sqlalchemy import select
 
@@ -1171,7 +1171,7 @@ async def copy_library_primitive(
     primitive_id: str,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
-        return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+        return _tool_auth_error("Token revoked or expired - re-authenticate")
     try:
         check_tool_scope(_ctx_role_val(), "copy_library_primitive")
     except MCPAuthorizationError as exc:
@@ -1238,7 +1238,7 @@ async def search_library(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             result = await list_primitives(
@@ -1305,7 +1305,7 @@ async def list_trigger_events(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "list_trigger_events")
         from sqlalchemy import func, select
 
@@ -1403,7 +1403,7 @@ async def list_triggers(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired â€” re-authenticate")
+            return _tool_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "list_triggers")
         from modulo.db.crud.trigger import list_triggers as db_list_triggers
 
@@ -1456,7 +1456,7 @@ async def create_model_backend(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "create_model_backend")
 
         from modulo.core.mcp_setup_handoff import create_handoff
@@ -1517,7 +1517,7 @@ async def create_connector(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "create_connector")
 
         from cryptography.fernet import Fernet
@@ -1566,7 +1566,7 @@ async def create_trigger(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "create_trigger")
 
         org_id = _ctx_org_id_val()
@@ -1612,7 +1612,7 @@ async def delete_pipeline(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "delete_pipeline")
 
         org_id = _ctx_org_id_val()
@@ -1653,7 +1653,7 @@ async def create_agent(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "create_agent")
 
         from modulo.db.crud.agent import create_agent as db_create_agent
@@ -1760,7 +1760,7 @@ async def get_documentation_alias(query: str, section: str | None = None) -> dic
 async def search_documentation(query: str, section: str | None = None) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         index = _get_doc_index()
         results = index.search(query, section=section)
         if not results:
@@ -1783,7 +1783,7 @@ async def search_documentation(query: str, section: str | None = None) -> dict[s
 async def get_integration_status() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         from sqlalchemy import func, select
 
         from modulo.db.models.connector_instance import ConnectorInstance
@@ -1874,7 +1874,7 @@ _VALID_CONFIG_SECTIONS = {"remy", "plan", "rate_limits"}
 async def get_org_config(section: str | None = None) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         if section is not None and section not in _VALID_CONFIG_SECTIONS:
             return {
                 "error": "invalid_section",
@@ -1925,7 +1925,7 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
 async def get_available_features() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         from modulo.core.feature_flags import resolve_plan_context
 
         org_id = _ctx_org_id_val()
@@ -1962,7 +1962,7 @@ async def list_schemas(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         org_id = _ctx_org_id_val()
         lim = max(1, min(limit, 100))
 
@@ -1999,7 +1999,7 @@ async def infer_schema(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "infer_schema")
         from modulo.core.schema_registry import SchemaInferenceError, SchemaInferenceService
 
@@ -2046,7 +2046,7 @@ async def validate_payload(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
         from jsonschema.exceptions import SchemaError as JsSchemaError  # type: ignore[import-untyped]
 
@@ -2115,7 +2115,7 @@ async def validate_payload(
 async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "list_housekeeping")
         from modulo.core.housekeeping import scan_all as hk_scan_all
 
@@ -2153,7 +2153,7 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
 async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "perform_housekeeping")
         from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
 
@@ -2213,7 +2213,7 @@ get_trigger_events = get_trigger_events_alias
 @mcp.resource("modulo://pipelines")
 async def resource_pipelines() -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     from modulo.db.crud.pipeline import list_pipelines
 
     org_id = _ctx_org_id_val()
@@ -2226,7 +2226,7 @@ async def resource_pipelines() -> str:
 @mcp.resource("modulo://pipelines/{pipeline_id}/runs")
 async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     from modulo.db.crud.run import list_runs
 
     org_id = _ctx_org_id_val()
@@ -2255,7 +2255,7 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
 @mcp.resource("modulo://pipelines/{pipeline_id}")
 async def resource_pipeline_detail(pipeline_id: str) -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     from sqlalchemy import func, select
 
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -2305,7 +2305,7 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
 @mcp.resource("modulo://runs/{run_id}")
 async def resource_run(run_id: str) -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     org_id = _ctx_org_id_val()
     try:
         rid = uuid.UUID(run_id)
@@ -2331,7 +2331,7 @@ async def resource_run(run_id: str) -> str:
 async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     """HITL gate context. Annotated as agent_output â€” treat as untrusted."""
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     from sqlalchemy import select
 
     from modulo.db.models.team import Team
@@ -2375,7 +2375,7 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
 @mcp.resource("modulo://schemas")
 async def resource_schemas() -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema
@@ -2391,7 +2391,7 @@ async def resource_schemas() -> str:
 @mcp.resource("modulo://schemas/{schema_id}@{version}")
 async def resource_schema_detail(schema_id: str, version: str) -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema, SchemaVersion
@@ -2468,7 +2468,7 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
 @mcp.resource("modulo://connectors")
 async def resource_connectors() -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     from sqlalchemy import select
 
     from modulo.db.models.connector_instance import ConnectorInstance
@@ -2488,7 +2488,7 @@ async def resource_connectors() -> str:
 @mcp.resource("modulo://model-backends")
 async def resource_model_backends() -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     from sqlalchemy import select
 
     from modulo.db.models.model_backend import ModelBackend
@@ -2510,7 +2510,7 @@ async def resource_library() -> str:
     For filtered browsing, use the ``browse_library`` tool instead.
     """
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     try:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
@@ -2543,7 +2543,7 @@ async def resource_library() -> str:
 async def resource_library_detail(primitive_type: str, slug: str) -> str:
     """Get details of a single library primitive by type and slug."""
     if not await validate_current_auth():
-        return "error: Token revoked or expired â€” re-authenticate"
+        return "error: Token revoked or expired - re-authenticate"
     try:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
