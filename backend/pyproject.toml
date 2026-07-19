@@ -175,6 +175,8 @@ ignore = [
     "B008",     # FastAPI Depends() in function defaults is the idiomatic pattern
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"src/modulo/api/mcp_server.py" = ["RET503"]
 "tests/**" = ["S", "B"]
 "src/modulo/auth/sso.py" = ["N817"]
 "tests/unit/auth/test_sso.py" = ["N817"]
@@ -185,16 +187,13 @@ ignore = [
 "src/modulo/db/bootstrap_role.py" = ["T20"]
 "scripts/*" = ["T20"]
 "scripts/gen_seed_sql.py" = ["S608"]
-"src/modulo/api/mcp_server.py" = ["RET503"]
 "scripts/generate_remy_primer.py" = ["ASYNC240"]
-[tool.ruff.lint.per-file-ignores]
 "deploy/*" = ["T20"]
 "tests/bdd/check-bdd-coverage.py" = ["N999"]
 "pipeline-scripts/**" = ["S", "T201", "E402", "RET"]
 "tests/unit/runtime_provider/*" = ["E402"]
 "tests/unit/secrets_backend/*" = ["E402"]
 "src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
-"src/modulo/api/mcp_server.py" = ["RET503"]
 
 [tool.mypy]
 strict = true
@@ -215,6 +214,19 @@ allow_untyped_defs = true
 disallow_any_unimported = false
 disallow_untyped_calls = false
 disallow_incomplete_defs = false
+
+
+[[tool.mypy.overrides]]
+module = "modulo.api.mcp_server"
+disable_error_code = ["return-value", "return", "attr-defined", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "modulo.api.routes.admin_housekeeping"
+disable_error_code = ["var-annotated", "attr-defined"]
+
+[[tool.mypy.overrides]]
+module = "modulo.core.pipeline_engine.graph_cache"
+disable_error_code = ["no-redef"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -316,15 +328,3 @@ dev = [
     "celery[redis]>=5.4.0",
     "pip-audit>=2.9.0",
 ]
-
-[[tool.mypy.overrides]]
-module = "modulo.api.mcp_server"
-disable_error_code = ["return-value", "return", "attr-defined", "var-annotated", "RET503"]
-[[tool.mypy.overrides]]
-module = "modulo.api.routes.admin_housekeeping"
-disable_error_code = ["var-annotated", "attr-defined"]
-[[tool.mypy.overrides]]
-module = "modulo.core.pipeline_engine.graph_cache"
-disable_error_code = ["no-redef"]
-
-"src/modulo/api/mcp_server.py" = ["RET503"]
