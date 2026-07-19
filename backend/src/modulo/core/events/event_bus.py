@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """In-memory event bus for real-time frontend sync via SSE."""
 
+from __future__ import annotations
 
 import asyncio
 import contextlib
@@ -66,7 +65,7 @@ class EventBus:
             except asyncio.QueueFull:
                 dead.append(q)
         await self._remove_dead_queues(org_id, dead)
-        await self._redis_broadcast_if_configured(org_id, event)
+        self._redis_broadcast_if_configured(org_id, event)
 
     async def _remove_dead_queues(
         self,
@@ -85,7 +84,7 @@ class EventBus:
             if not sub_list:
                 del self._subscribers[org_id]
 
-    async def _redis_broadcast_if_configured(self, org_id: str, event: dict[str, Any]) -> None:
+    def _redis_broadcast_if_configured(self, org_id: str, event: dict[str, Any]) -> None:
         broker = self._redis_broker
         if broker is None:
             return
@@ -97,6 +96,8 @@ class EventBus:
         """Fire-and-forget: publish event to Redis channel (best-effort)."""
         try:
             await broker.publish(f"resource:{org_id}", event)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("event_bus.redis_broadcast_failed", extra={"org_id": org_id})
 
@@ -143,7 +144,8 @@ def get_event_bus() -> EventBus:
         with _bus_init_lock:
             if _event_bus is None:
                 _set_event_bus(EventBus())
-    return _event_bus  # type: ignore[return-value]
+    assert _event_bus is not None
+    return _event_bus
 
 
 async def configure_event_bus(redis_broker: RedisEventBroker | None = None) -> None:
@@ -152,14 +154,17 @@ async def configure_event_bus(redis_broker: RedisEventBroker | None = None) -> N
     Call during application startup (before any events are published) to
     enable cross-worker event broadcasting via Redis.
     """
+    old: RedisEventBroker | None = None
     with _bus_init_lock:
         if _event_bus is None:
             _set_event_bus(EventBus(redis_broker=redis_broker))
             return
-    old = _event_bus._redis_broker
+        old = _event_bus._redis_broker
+        _event_bus._redis_broker = redis_broker
     if old is not None and old is not redis_broker:
         try:
             await old.close()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.warning("event_bus.close_old_broker_failed", exc_info=True)
-    _event_bus._redis_broker = redis_broker

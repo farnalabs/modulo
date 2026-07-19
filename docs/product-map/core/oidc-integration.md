@@ -17,7 +17,6 @@ unit-tests:
   - backend/tests/unit/auth/test_oidc_verify.py
   - backend/tests/unit/auth/test_sso_oidc_bdd.py
   - backend/tests/unit/auth/test_sso_team_mapping_bdd.py
-
 status: partial
 ---
 
@@ -258,7 +257,7 @@ status: partial
 - [ ] OIDC logout / session termination not implemented — tokens must expire naturally
 - [ ] No refresh token rotation for OIDC-initiated sessions (token family is created but refresh flow not tested end-to-end)
 - [ ] Group mapping test coverage is limited to unit tests with mocked provider lookups — no integration test with seeded DB provider
-- [ ] `oidc_verify.py` depends on `python-jose` library — consider migrating to `PyJWT` with JWKS support for reduced dependency footprint
+- [x] `oidc_verify.py` migrated from `python-jose` to cryptography-backed PyJWT JWK verification
 - [x] Non-list `groups` claim (string) in ID token silently coerced to `[]` — defensive type guard present (`isinstance` check at `sso.py:306`)
 
 ## QA History

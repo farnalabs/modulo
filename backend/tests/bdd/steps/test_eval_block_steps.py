@@ -1,5 +1,6 @@
 """Step definitions for Eval Gate Enforcement feature."""
 
+import contextlib
 import json
 import uuid
 
@@ -11,10 +12,8 @@ from modulo.core.eval_engine import EvalBlockedError
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/evals/eval_block.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -293,7 +292,6 @@ def eval_blocked_on(eval_name: str, ctx):
 
 @then("remaining evals are not evaluated")
 def remaining_not_evaluated(ctx):
-    evaluated = [n for n, d in ctx.get("eval_defs", {}).items() if d.get("evaluated")]
     failed_one = ctx.get("eval_blocked_detail")
     for name, data in ctx.get("eval_defs", {}).items():
         if name != failed_one:

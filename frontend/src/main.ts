@@ -4,11 +4,13 @@ import App from './App.vue'
 import router from './router'
 import i18n from './i18n'
 import { useLocaleStore } from './stores/localeStore'
-import { createErrorTracker, getErrorTracker } from './lib/error-tracking'
+import { createErrorTracker } from './lib/error-tracking'
 import { loadMonitorConfig, loadBackends } from './monitor'
 import { VueQueryPlugin } from '@tanstack/vue-query'
 import { onAuthChange } from './lib/api/client'
 import './style.css'
+import 'overlayscrollbars/styles/overlayscrollbars.css'
+import 'overlayscrollbars/styles/overlayscrollbars.css'
 
 async function main() {
   const app = createApp(App)

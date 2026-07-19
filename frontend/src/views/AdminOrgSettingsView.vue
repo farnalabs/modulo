@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
 
     <div data-theme="agent" class="page-wide">
@@ -106,6 +106,7 @@
       :open="deleteDialogOpen"
       @update:open="deleteDialogOpen = false"
       title="Delete Organisation"
+      description="Permanently delete this organisation and all associated data. This action cannot be undone."
       confirmText="Permanently Delete"
       :confirmDisabled="confirmName !== orgInfo.name || deleting"
       :loading="deleting"
@@ -136,7 +137,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
@@ -156,8 +157,8 @@ const router = useRouter()
 const { data: orgData, loading, error: loadError, load: loadData } = useDataFetch(
   async () => {
     const [overviewResp, exportResp] = await Promise.all([
-      (api as any).GET('/api/v1/admin/billing/overview'),
-      (api as any).GET('/api/v1/admin/org/export'),
+      (api as any).GET('/api/v1/admin/billing/overview').catch(() => null),
+      (api as any).GET('/api/v1/admin/org/export').catch(() => null),
     ])
     if (overviewResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(overviewResp.error)}` } }
     if (exportResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(exportResp.error)}` } }
@@ -243,7 +244,7 @@ function downloadExport() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `org-export-${orgInfo.slug || orgInfo.id}-${formatDateFilename(new Date())}.json`
+  a.download = `org-export-${orgInfo.value.slug || orgInfo.value.id}-${formatDateFilename(new Date())}.json`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -256,14 +257,8 @@ function resetExport() {
   exportData.exportedAt = ''
 }
 
-function cancelDelete() {
-  deleteDialogOpen.value = false
-  confirmName.value = ''
-  deleteError.value = null
-}
-
 async function confirmDelete() {
-  if (confirmName.value !== orgInfo.name) return
+  if (confirmName.value !== orgInfo.value.name) return
   deleting.value = true
   deleteError.value = null
   try {

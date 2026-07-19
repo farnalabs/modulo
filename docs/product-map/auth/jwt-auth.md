@@ -132,6 +132,12 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 
 ## QA History
 
+### 2026-07-12 — Round 3 re-QA (improve-architecture auth remaining)
+- Fixed operator precedence bug in auth.py:100 (`not a or not b and c` → `not a or (limiter is not None and not b)`)
+- Removed unused `# noqa: S106` directives on ws_token_type lines, then re-added with proper intent coverage
+- Verified all claimed Round 2 fixes (B904, CancelledError, dead code removal) are correctly applied
+- Status: partial
+
 ### 2026-07-01 — Cross-cutting QA (improve-architecture index 25)
 - Fixed access token expiry: 60m → 15m (PRD §7.10 compliance)
 - Fixed refresh token expiry: 24h → 168h (7 days, PRD §7.10 compliance)
@@ -155,7 +161,13 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - Fixed CRITICAL: added SQLAlchemyError→503 catches to all 4 auth routes (login, refresh, logout, me) — connection/deadlock failures previously propagated as raw 500
 - Fixed CRITICAL: added IntegrityError→409 catch on login route (token family creation race)
 - Fixed MAJOR: corrected BDD feature file API paths from `/api/auth/` to `/api/v1/auth/` to match actual router prefix
-- Fixed MAJOR: `test_none_algorithm_rejected` now properly verifies decode-time rejection of `alg: none` tokens (manually crafted JWT bypasses python-jose encode-time validation)
+- Fixed MAJOR: `test_none_algorithm_rejected` now properly verifies decode-time rejection of `alg: none` tokens (manually crafted JWT bypasses PyJWT encode-time validation)
 - Added 5 new tests in test_auth_programming_error.py (integrity error→409 on login, SQLAlchemyError→503 on login, refresh, logout, me)
 - Updated Error Handling section with 5 new [x] checkboxes
 - 9 existing tests + 5 new tests all pass
+
+### 2026-07-11 — Round 2 re-QA (improve-architecture index 387)
+- Fixed B904: added `from None` to all `except IntegrityError`, `except ProgrammingError`, `except SQLAlchemyError` handlers (prevented internal exception chain leakage in responses)
+- Fixed B904: added `asyncio.CancelledError: raise` guards before all `except Exception` blocks (login, refresh, logout inner, ws_token, me, csrf_token) — prevented silent CancelledError suppression
+- Removed dead `except IntegrityError` handler from `me()` endpoint (SELECT-only query cannot raise IntegrityError)
+- Updated product map: added Round 2 QA entry

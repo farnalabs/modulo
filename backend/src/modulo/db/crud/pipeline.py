@@ -7,7 +7,7 @@ before calling. The session must be within an active transaction.
 import copy
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -36,6 +36,7 @@ async def create_pipeline(
     node_timeout_seconds: int = 300,
     run_context_defaults: dict[str, Any] | None = None,
     default_autonomy_level: str = "manual_approval",
+    max_duration_seconds: int | None = None,
 ) -> Pipeline:
     pipeline = Pipeline(
         organisation_id=org_id,
@@ -49,6 +50,7 @@ async def create_pipeline(
         node_timeout_seconds=node_timeout_seconds,
         run_context_defaults=run_context_defaults or {},
         default_autonomy_level=default_autonomy_level,
+        max_duration_seconds=max_duration_seconds,
     )
     session.add(pipeline)
     await session.flush()
@@ -84,10 +86,13 @@ async def list_pipelines(
     page_size: int = 20,
     cursor: str | None = None,
     include_archived: bool = False,
+    folder_id: uuid.UUID | None = None,
 ) -> PageResult[Pipeline]:
     base = select(Pipeline)
     if not include_archived:
         base = base.where(Pipeline.archived_at.is_(None))
+    if folder_id is not None:
+        base = base.where(Pipeline.folder_id == folder_id)
 
     if cursor is not None:
         paginator = CursorPaginator()
@@ -151,7 +156,7 @@ async def archive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pip
     pipeline = await get_pipeline(session, pipeline_id)
     if pipeline is None:
         return None
-    pipeline.archived_at = datetime.now(datetime.UTC)
+    pipeline.archived_at = datetime.now(UTC)
     await session.flush()
     return pipeline
 
@@ -163,6 +168,19 @@ async def unarchive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> P
     pipeline.archived_at = None
     await session.flush()
     return pipeline
+
+
+async def count_pipelines(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    include_archived: bool = False,
+) -> int:
+    query = select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
+    if not include_archived:
+        query = query.where(Pipeline.archived_at.is_(None))
+    result = await session.execute(query)
+    return result.scalar_one() or 0
 
 
 async def get_pipeline_graph(

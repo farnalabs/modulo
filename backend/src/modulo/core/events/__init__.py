@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Event system for real-time resource-change notifications via SSE."""
 
+from __future__ import annotations
 
 from typing import TYPE_CHECKING
 

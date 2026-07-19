@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-narrow">
     <PageHeader :title="$t('views.ApiChangelogView.api_changelog')" data-test-id="changelog-title" :subtitle="$t('views.ApiChangelogView.version_history_and_deprecation_notices_for_the_modulo_api')" />
 
@@ -69,14 +69,11 @@
 </template>
 
 <script setup lang="ts">
-import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-
-const { t } = useI18n()
 
 interface ChangelogEntry {
   version: string
@@ -88,7 +85,10 @@ interface ChangelogEntry {
 }
 
 const { loading, error, data: entries, load: loadChangelog } = useDataFetch<ChangelogEntry[]>(
-  () => api.GET('/api/v1/changelog'),
+  async () => {
+    const response = await api.GET('/api/v1/changelog')
+    return { data: response.data as unknown as ChangelogEntry[] | undefined, error: response.error }
+  },
   { initialValue: [] as ChangelogEntry[] },
 )
 </script>

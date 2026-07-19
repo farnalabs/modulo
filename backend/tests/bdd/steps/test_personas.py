@@ -1901,7 +1901,7 @@ def each_event_hash_derived_from_previous(ctx, request):
     assert len(events) >= 2, f"Need at least 2 events for chain verification, got {len(events)}"
     for i in range(1, len(events)):
         assert events[i]["previous_hash"] == events[i - 1].get("_hash"), (
-            f"Event {i} hash chain broken: expected prev_hash={events[i - 1].get('_hash')}, got {events[i]['previous_hash']}"
+            f"Event {i}: hash chain broken — prev_hash={events[i - 1].get('_hash')}, got {events[i]['previous_hash']}"
         )
     request.node._chain_verified = True
 

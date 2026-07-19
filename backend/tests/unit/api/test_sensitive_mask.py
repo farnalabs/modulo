@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -21,23 +22,26 @@ from modulo.api.middleware.sensitive_mask import (
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _VALID_32 = "a" * 32
+_FERNET_KEY = Fernet.generate_key().decode()
 
 
 def _make_settings() -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key=_VALID_32,
-        fernet_key=_VALID_32,
+        fernet_key=_FERNET_KEY,
         modulo_admin_password="testpass",
     )
 
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -270,6 +274,50 @@ class TestRevealEndpoint:
         assert body["value"] == "sso-secret-value"
         assert len(body["token"]) == 36  # UUID
         assert body["expires_in_seconds"] == 30
+
+    @pytest.mark.parametrize("stored", [b"legacy-byte-secret", "legacy-string-secret"])
+    def test_reveal_legacy_sso_secret_forms(self, client: TestClient, stored: bytes | str) -> None:
+        provider_id = uuid.uuid4()
+        mock_provider = MagicMock(client_secret=stored)
+        self._setup_session_execute(mock_provider)
+
+        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url", side_effect=RuntimeError("offline")):
+            resp = client.post(
+                "/api/v1/admin/sensitive/reveal",
+                json={"resource_type": "sso_provider", "resource_id": str(provider_id)},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["value"] == (stored.decode() if isinstance(stored, bytes) else stored)
+
+    def test_reveal_decrypts_sso_secret(self, client: TestClient) -> None:
+        provider_id = uuid.uuid4()
+        encrypted = Fernet(_FERNET_KEY.encode()).encrypt(b"encrypted-secret")
+        mock_provider = MagicMock(client_secret=encrypted)
+        self._setup_session_execute(mock_provider)
+
+        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url", side_effect=RuntimeError("offline")):
+            resp = client.post(
+                "/api/v1/admin/sensitive/reveal",
+                json={"resource_type": "sso_provider", "resource_id": str(provider_id)},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["value"] == "encrypted-secret"
+
+    @pytest.mark.parametrize("stored", [object(), b"\xff\xfe"])
+    def test_reveal_rejects_invalid_sso_secret_forms(self, client: TestClient, stored: object) -> None:
+        provider_id = uuid.uuid4()
+        mock_provider = MagicMock(client_secret=stored)
+        self._setup_session_execute(mock_provider)
+
+        resp = client.post(
+            "/api/v1/admin/sensitive/reveal",
+            json={"resource_type": "sso_provider", "resource_id": str(provider_id)},
+        )
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "Stored SSO provider secret is invalid"
 
     def test_reveal_connector_config(self, client: TestClient) -> None:
         connector_id = uuid.uuid4()

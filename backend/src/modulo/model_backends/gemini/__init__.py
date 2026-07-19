@@ -46,7 +46,7 @@ class GeminiBackend(ModelBackendBase):
             async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
                 response = await client.get(
                     f"{GEMINI_BASE_URL}/models",
-                    params={"key": self._api_key},
+                    headers={"x-goog-api-key": self._api_key},
                 )
                 if response.is_success:
                     return HealthResult(ok=True)
@@ -55,7 +55,7 @@ class GeminiBackend(ModelBackendBase):
             logger.warning("Health check timed out for GeminiBackend")
             return HealthResult(ok=False, detail="Health check timed out")
         except httpx.HTTPError as exc:
-            logger.warning("Health check failed for GeminiBackend")
+            logger.warning("Health check failed for GeminiBackend: %s", exc)
             return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
@@ -64,7 +64,7 @@ class GeminiBackend(ModelBackendBase):
     def stream(
         self,
         messages: list[BaseMessage],
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, tools=tools, **kwargs)

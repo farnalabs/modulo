@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <BackLink to="/library" label="Back to Library" />
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
@@ -78,8 +78,8 @@
 
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-foreground mb-1">{{ $t('views.LibraryPipelineWizard.pipeline_name') }}</label>
-              <input
+              <label for="librarypipelinewizard-field-2" class="block text-sm font-medium text-foreground mb-1">{{ $t('views.LibraryPipelineWizard.pipeline_name') }}</label>
+              <input id="librarypipelinewizard-field-2"
                 v-model="pipelineName"
                 type="text"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -89,8 +89,8 @@
             </div>
 
             <div>
-              <label class="block text-sm font-medium text-foreground mb-1">Description</label>
-              <textarea
+              <label for="librarypipelinewizard-field-1" class="block text-sm font-medium text-foreground mb-1">Description</label>
+              <textarea id="librarypipelinewizard-field-1"
                 v-model="pipelineDescription"
                 rows="3"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -270,7 +270,7 @@ function layoutNodes(
   for (const e of edges) inDegree[e.target] = (inDegree[e.target] || 0) + 1
 
   const layers: string[][] = []
-  let remaining = new Set(nodes.map(n => n.id))
+  const remaining = new Set(nodes.map(n => n.id))
   while (remaining.size > 0) {
     const layer = [...remaining].filter(id => inDegree[id] === 0 || [...remaining].every(other => {
       if (other === id) return true

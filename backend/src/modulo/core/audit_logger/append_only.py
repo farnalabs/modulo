@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Application-layer append-only guard for AuditEvent and ErrorEvent records.
 
 Provides defense-in-depth via SQLAlchemy ORM event listeners that prevent
@@ -10,7 +8,6 @@ Usage:
     from modulo.core.audit_logger.append_only import register_append_only_guard
     register_append_only_guard()
 """
-
 
 import logging
 import threading

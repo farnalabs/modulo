@@ -8,6 +8,12 @@ import { usePlanStore } from '../stores/planStore'
 
 const mockFetch = vi.fn()
 
+function expectRecord(value: unknown): asserts value is Record<string, unknown> {
+  expect(value).toBeDefined()
+  expect(typeof value).toBe('object')
+  expect(value).not.toBeNull()
+}
+
 function mockSessionKey(key = 'test-session-key') {
   mockFetch.mockImplementation((url: string) => {
     if (url.includes('/api/v1/errors/session-key')) {
@@ -29,6 +35,7 @@ function mockSessionKey(key = 'test-session-key') {
 beforeEach(() => {
   mockFetch.mockReset()
   mockSessionKey()
+  window.fetch = mockFetch as unknown as typeof fetch
   setActivePinia(createPinia())
 })
 
@@ -37,10 +44,8 @@ afterEach(() => {
   if (tracker) tracker.dispose()
   ;(window as unknown as Record<string, unknown>).__MODULO_ERROR_TRACKING_DISABLED__ = false
   vi.restoreAllMocks()
+  mockSessionKey()
   vi.useRealTimers()
-  if (typeof window !== 'undefined') {
-    delete (window as any).fetch
-  }
 })
 
 describe('ErrorTracker', () => {
@@ -118,21 +123,16 @@ describe('ErrorTracker', () => {
       }
       window.fetch = mockFetch as unknown as typeof fetch
       const tracker = createErrorTracker()
-
-      for (let i = 0; i < 9; i++) {
-        tracker.captureMessage(`fill ${i}`)
-      }
+      const captureError = vi.spyOn(tracker, 'captureError')
       window.dispatchEvent(new PromiseRejectionEvent('unhandledrejection', {
         reason: new Error('promise rejected'),
-        promise: Promise.reject(new Error('promise rejected')),
+        promise: Promise.resolve(),
       }))
 
-      await vi.waitFor(() => {
-        const ingestCalls = mockFetch.mock.calls.filter(
-          (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('/ingest'),
-        )
-        expect(ingestCalls.length).toBeGreaterThanOrEqual(1)
-      })
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'promise rejected' }),
+        { type: 'unhandled_promise_rejection' },
+      )
     })
   })
 
@@ -151,12 +151,14 @@ describe('ErrorTracker', () => {
 
     it('captures errors thrown in Vue lifecycle', async () => {
       window.fetch = mockFetch as unknown as typeof fetch
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
       const tracker = createErrorTracker({ monitorBackends: [new BuiltinMonitorBackend()] })
       const app = createApp({
         mounted() { throw new Error('vue-lifecycle-error') },
         render() { return h('div') },
       })
       app.config.warnHandler = vi.fn()
+      app.use(createPinia())
       app.use(tracker.vuePlugin)
 
       app.mount(document.createElement('div'))
@@ -171,6 +173,14 @@ describe('ErrorTracker', () => {
         )
         expect(ingestCalls.length).toBeGreaterThanOrEqual(1)
       })
+
+      expect(consoleError).toHaveBeenCalledWith(
+        '[vue] mounted hook:',
+        expect.objectContaining({ message: 'vue-lifecycle-error' }),
+      )
+      app.unmount()
+      tracker.dispose()
+      consoleError.mockRestore()
     })
   })
 
@@ -368,9 +378,19 @@ describe('Transport batching', () => {
 
 describe('Context enrichment', () => {
   it('includes URL and viewport in context', () => {
-    const tracker = createErrorTracker()
+    const mockBackend = new BuiltinMonitorBackend()
+    const captureSpy = vi.spyOn(mockBackend, 'captureError')
+    const tracker = createErrorTracker({ monitorBackends: [mockBackend] })
     const error = new Error('context test')
     tracker.captureError(error)
+
+    expect(captureSpy).toHaveBeenCalledTimes(1)
+    const event = captureSpy.mock.calls[0]?.[0]
+    expectRecord(event?.context_json)
+    expect(event.context_json.url).toBeTypeOf('string')
+    expectRecord(event.context_json.viewport)
+    expect(event.context_json.viewport.width).toBeTypeOf('number')
+    expect(event.context_json.viewport.height).toBeTypeOf('number')
 
     tracker.dispose()
   })
@@ -380,9 +400,16 @@ describe('Context enrichment', () => {
     const plan = usePlanStore()
     plan.$patch({ currentTier: 'enterprise' })
 
-    const tracker = createErrorTracker()
+    const mockBackend = new BuiltinMonitorBackend()
+    const captureSpy = vi.spyOn(mockBackend, 'captureError')
+    const tracker = createErrorTracker({ monitorBackends: [mockBackend] })
     const error = new Error('tier test')
     tracker.captureError(error)
+
+    expect(captureSpy).toHaveBeenCalledTimes(1)
+    const event = captureSpy.mock.calls[0]?.[0]
+    expectRecord(event?.context_json)
+    expect(event.context_json.tier).toBe('enterprise')
 
     tracker.dispose()
   })

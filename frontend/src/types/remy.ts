@@ -35,17 +35,17 @@ export interface SkillBase {
   name: string
   description: string | null
   triggers: string[] | null
-  body: string | null
+  body: string
 }
 
 export interface SkillItem extends SkillBase {
   active: boolean
+  created_at: string
+  updated_at: string
 }
 
 export interface UserSkill extends SkillBase {
-  description: string
-  triggers: string[]
-  body: string
+  active?: boolean
   created_at: string
   updated_at: string
 }

@@ -1,15 +1,19 @@
-import { computed, ref } from 'vue'
-import { useQuery } from '@tanstack/vue-query'
+import { computed, ref, type ComputedRef, type WritableComputedRef } from 'vue'
+import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { formatApiError } from '../lib/api/formatError'
 
 let keyCounter = 0
 
 interface DataFetchResult<T> {
-  loading: ReturnType<typeof computed<boolean>>
-  error: ReturnType<typeof computed<string | null>>
-  data: ReturnType<typeof computed<T | undefined>>
-  fetched: ReturnType<typeof computed<boolean>>
+  loading: ComputedRef<boolean>
+  error: WritableComputedRef<string | null>
+  data: WritableComputedRef<T | undefined>
+  fetched: ComputedRef<boolean>
   load: () => Promise<void>
+}
+
+interface InitializedDataFetchResult<T> extends Omit<DataFetchResult<T>, 'data'> {
+  data: WritableComputedRef<T>
 }
 
 interface DataFetchOptions<T> {
@@ -17,17 +21,26 @@ interface DataFetchOptions<T> {
   immediate?: boolean
 }
 
-type FetcherResult<T> = { data?: T; error?: { detail?: string } }
+type FetcherResult<T> = { data?: T; error?: { detail?: unknown } }
 
+export function useDataFetch<T>(
+  fetcher: () => Promise<FetcherResult<T>> | FetcherResult<T>,
+  options: DataFetchOptions<T> & { initialValue: T },
+): InitializedDataFetchResult<T>
+export function useDataFetch<T>(
+  fetcher: () => Promise<FetcherResult<T>> | FetcherResult<T>,
+  options?: DataFetchOptions<T>,
+): DataFetchResult<T>
 export function useDataFetch<T>(
   fetcher: () => Promise<FetcherResult<T>> | FetcherResult<T>,
   options?: DataFetchOptions<T>,
 ): DataFetchResult<T> {
   const key = [`useDataFetch`, ++keyCounter]
-
+  const queryClient = useQueryClient()
   const fetched = ref(false)
+  const errorOverride = ref<string | null>(null)
 
-  const { data, error, isLoading, isFetching, refetch } = useQuery({
+  const { data, error, isLoading, isFetching, refetch } = useQuery<T, Error>({
     queryKey: key,
     queryFn: async () => {
       const result = await fetcher()
@@ -36,16 +49,24 @@ export function useDataFetch<T>(
       return result.data as T
     },
     enabled: options?.immediate !== false,
-    initialData: options?.initialValue,
-    retry: 1,
+    retry: import.meta.env.MODE === 'test' ? false : 1,
     staleTime: 30_000,
   })
 
   return {
     loading: computed(() => isLoading.value || isFetching.value),
-    error: computed(() => error.value ? (error.value?.message ?? 'An error occurred') : null),
-    data: computed(() => data.value),
+    error: computed({
+      get: () => errorOverride.value ?? (error.value ? (error.value.message ?? 'An error occurred') : null),
+      set: value => { errorOverride.value = value },
+    }),
+    data: computed({
+      get: () => data.value ?? options?.initialValue,
+      set: value => queryClient.setQueryData<T | undefined>(key, value),
+    }),
     fetched: computed(() => fetched.value),
-    load: async () => { await refetch() },
+    load: async () => {
+      errorOverride.value = null
+      await refetch()
+    },
   }
 }

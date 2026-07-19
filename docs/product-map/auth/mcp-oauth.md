@@ -157,6 +157,12 @@ OAuth 2.0 authorization code grant for MCP client authentication, with client re
 - [x] RLS context set on sessions in protocol handlers before creating auth codes and token families
 
 ## QA History
+### 2026-07-12 — Round 3 re-QA (improve-architecture auth remaining)
+- Added `except asyncio.CancelledError: raise` guards to all 3 CRUD endpoints in mcp_oauth.py (register, list, delete)
+- Added `except asyncio.CancelledError: raise` guards to _oauth_authorize and _oauth_token in mcp_server.py
+- Fixed duplicate logger variable in oauth.py (logger + _log → _log)
+- Updated stale Known Gap about MCP tool BDD feature files (they all exist now)
+- Status: partial
 - 2026-07-05: Cross-cutting QA (index 159): Fixed status covered→partial. Added ProgrammingError→501 and SQLAlchemyError→503 catches to all 3 CRUD routes with _log.warning calls. Added Error Handling section (12 checkboxes), Additional Edge Cases section (12 checkboxes), Resilience & Integration Robustness section (7 checkboxes). Added QA History section. Documented PKCE gap: BDD scenarios pass via mocked step definitions, not real implementation. Documented refresh_token gap: grant_type unimplemented, BDD scenarios marked xfail. Created website docs stub at Website/modulo-website/src/docs/mcp-oauth.md. Status: partial.
 - 2026-07-10: Cross-cutting QA (index 361): Fixed RLS context missing in _oauth_authorize and _oauth_token protocol handlers — both now call set_rls_org() before creating auth codes/token families. Fixed broad except Exception in _oauth_token that silently swallowed ProgrammingError→501 (consume_authorization_code's migration-not-run error was converted to opaque 400 invalid_grant). Added outer error handling with proper 501/503/500 codes to both protocol handlers. Added missing SQLAlchemy imports. Added RLS to Additional Edge Cases (checked). Updated Error Handling checkboxes (now all [x]). Updated Resilience & Integration Robustness checkboxes. Status: partial.
 
@@ -167,10 +173,10 @@ OAuth 2.0 authorization code grant for MCP client authentication, with client re
 - **BDD refresh_token scenarios are xfail**: 2 BDD scenarios and 2 unit tests for refresh token rotation are marked @pytest.mark.xfail because the _oauth_token handler only supports authorization_code grant_type. The refresh_token grant type and refresh token issuance are not implemented.
 - **No middleware OAuth path tests**: McpAuthMiddleware's OAuth token validation path (JWT decode → family blacklist check → scope-to-role mapping) has zero unit or integration tests.
 - **state parameter not validated**: The authorize endpoint accepts state and echoes it back but performs no server-side validation or CSRF binding.
-- **No `authlib` usage**: PRD mandates `authlib` (not hand-rolled). Current implementation uses `python-jose` directly for JWT encoding/decoding. OAuth logic is hand-rolled in `modulo/auth/oauth.py`.
+- **No `authlib` usage**: PRD mandates `authlib` (not hand-rolled). Current implementation uses PyJWT directly for JWT encoding/decoding. OAuth logic is hand-rolled in `modulo/auth/oauth.py`.
 - **No per-pipeline scopes**: `hitl:approve:pipeline:{id}` scope pattern from PRD is not implemented at any layer.
 - **`library:write` scope not implemented**: Only `library:browse` exists in code; no write scope for library primitives exists.
-- **No BDD feature files exist for MCP tools**: The `features/mcp/` directory exists but only contains `mcp_oauth.feature`. Step definitions in `test_alpha_mcp.py` reference `../../features/mcp/trigger.feature`, `review_hitl.feature`, `human_only.feature`, `library_browse.feature`, `onboarding.feature` — none of these files exist. This means 5 BDD feature files are missing alongside the OAuth-specific one.
+- **BDD feature files for MCP tools now exist**: `trigger.feature`, `review_hitl.feature`, `human_only.feature`, `library_browse.feature`, and `onboarding.feature` are all present alongside `mcp_oauth.feature`.
 - **SSE per-event org validation**: Code comment asserts org context is validated per-event for streaming connections, but the current implementation validates only at tool/resource call time via `validate_current_auth()`. No server-push SSE event validation path exists.
 - **`MODULO_PUBLIC_URL` hardening**: Localhost check (`settings.modulo_public_url == "http://localhost:8000"`) is fragile — any local dev server on a different port or 127.0.0.1 will bypass the guard.
 - **BDD authorize steps previously used GET instead of POST**: The handler expects POST+JSON, but BDD steps used GET+params. Fixed in this QA pass.

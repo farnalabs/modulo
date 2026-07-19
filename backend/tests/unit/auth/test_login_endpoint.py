@@ -1,16 +1,17 @@
 """Login endpoint and /me tests via FastAPI TestClient."""
 
-import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
+from modulo.api.routes.auth import router as auth_router
+from modulo.api.routes.health import router as health_router
 from modulo.auth.passwords import hash_password
 from modulo.settings import Settings, get_settings
 
@@ -25,6 +26,8 @@ def _override(admin_password: str = "testpass") -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password=admin_password,
+        modulo_auth_rate_limit_enabled=False,
+        redis_url="",
     )
 
 
@@ -42,23 +45,11 @@ def _make_mock_user() -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _set_env() -> Generator[None, None, None]:
-    """Set required env vars for middleware that calls get_settings() directly."""
-    old = {k: os.environ.pop(k, None) for k in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY")}
-    os.environ["DATABASE_URL"] = "postgresql+asyncpg://localhost/test"
-    os.environ["SECRET_KEY"] = _VALID_32
-    os.environ["FERNET_KEY"] = _VALID_32
-    # bust the lru_cache so get_settings() picks up the new env values
+def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+    monkeypatch.setenv("SECRET_KEY", _VALID_32)
+    monkeypatch.setenv("FERNET_KEY", _VALID_32)
     get_settings.cache_clear()
-    try:
-        yield
-    finally:
-        for k, v in old.items():
-            if v is not None:
-                os.environ[k] = v
-            else:
-                os.environ.pop(k, None)
-        get_settings.cache_clear()
 
 
 @pytest.fixture()
@@ -68,7 +59,6 @@ def mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
-    # Make session.execute().scalars().all() return an empty list by default
     result_mock = MagicMock()
     scalars_mock = MagicMock()
     scalars_mock.all.return_value = []
@@ -78,7 +68,15 @@ def mock_session() -> AsyncMock:
 
 
 @pytest.fixture()
-def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
+def app() -> FastAPI:
+    _app = FastAPI()
+    _app.include_router(auth_router)
+    _app.include_router(health_router)
+    return _app
+
+
+@pytest.fixture()
+def client(mock_session: AsyncMock, app: FastAPI) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
@@ -89,11 +87,6 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
         yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
-
-
-# ---------------------------------------------------------------------------
-# /api/v1/auth/login
-# ---------------------------------------------------------------------------
 
 
 def test_login_success(client: TestClient) -> None:
@@ -135,6 +128,20 @@ def test_login_wrong_password(client: TestClient) -> None:
     assert resp.status_code == 401
 
 
+def test_login_wrong_password_when_rate_limiter_unavailable(client: TestClient) -> None:
+    mock_user = _make_mock_user()
+    with (
+        patch("modulo.api.routes.auth.get_auth_rate_limiter", return_value=None),
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.authenticate_db_user", return_value=False),
+    ):
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@example.com", "password": "wrong"},
+        )
+    assert resp.status_code == 401
+
+
 def test_login_unknown_user(client: TestClient) -> None:
     with patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)):
         resp = client.post(
@@ -142,11 +149,6 @@ def test_login_unknown_user(client: TestClient) -> None:
             json={"email": "nobody@example.com", "password": "testpass"},
         )
     assert resp.status_code == 401
-
-
-# ---------------------------------------------------------------------------
-# /api/v1/auth/me
-# ---------------------------------------------------------------------------
 
 
 def test_me_returns_username(client: TestClient) -> None:

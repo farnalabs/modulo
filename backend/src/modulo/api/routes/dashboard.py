@@ -4,17 +4,20 @@ import json
 import logging
 import time as _time
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
+from redis.asyncio import Redis
 from sqlalchemy import Date, case, cast, func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.remy.config_service import RemyConfigService
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
@@ -24,7 +27,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -34,7 +37,7 @@ router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 
 def _safe_int(value: object, default: int = 0) -> int:
     """Convert *value* to int, returning *default* for None, NaN, or conversion error."""
-    if value is None:
+    if not isinstance(value, (int, float, str, bytes, bytearray, Decimal)):
         return default
     try:
         return int(value)
@@ -44,7 +47,7 @@ def _safe_int(value: object, default: int = 0) -> int:
 
 def _safe_float(value: object, default: float = 0.0) -> float:
     """Convert *value* to float, returning *default* for None, NaN, or conversion error."""
-    if value is None:
+    if not isinstance(value, (int, float, str, bytes, bytearray, Decimal)):
         return default
     try:
         return float(value)
@@ -52,7 +55,6 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
-_ACTIVE_RUN_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
 
 _DASHBOARD_CACHE_TTL = 60  # seconds — dashboard summary cached to avoid repeated aggregate queries
@@ -65,22 +67,23 @@ async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
     if settings.redis_url:
         redis: Any = None
         try:
-            from redis.asyncio import Redis
-
-            redis = Redis.from_url(settings.redis_url, decode_responses=True)
+            redis = Redis.from_url(
+                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+            )
             key = f"dashboard:summary:{org_id}"
             cached = await redis.get(key)
             if cached:
                 cached_data: dict[str, Any] = json.loads(cached)
                 return cached_data
-        except Exception as exc:
-            _log.warning("dashboard.cache_read_failed — %s", exc)
+        except Exception:
+            _log.warning("dashboard.cache_read_failed", exc_info=True)
         finally:
             if redis is not None:
                 await redis.aclose()
     entry = _in_memory_cache.get(org_id)
     if entry is not None and (_time.monotonic() - entry[0]) < _DASHBOARD_CACHE_TTL:
-        return json.loads(json.dumps(entry[1], default=str))
+        cached_data = json.loads(json.dumps(entry[1], default=str))
+        return cached_data if isinstance(cached_data, dict) else None
     return None
 
 
@@ -89,24 +92,25 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
     if settings.redis_url:
         redis: Any = None
         try:
-            from redis.asyncio import Redis
-
-            redis = Redis.from_url(settings.redis_url, decode_responses=True)
+            redis = Redis.from_url(
+                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+            )
             key = f"dashboard:summary:{org_id}"
             await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))
             return
-        except Exception as exc:
-            _log.warning("dashboard.cache_write_failed — %s", exc)
+        except Exception:
+            _log.warning("dashboard.cache_write_failed", exc_info=True)
         finally:
             if redis is not None:
                 await redis.aclose()
     _in_memory_cache[org_id] = (_time.monotonic(), data)
 
 
+@handle_db_errors("dashboard.dashboard_summary")
 @router.get("/summary")
 async def dashboard_summary(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend."""
     try:
@@ -118,15 +122,14 @@ async def dashboard_summary(
 
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             org_id = principal.organisation_id
 
             # --- Queries that can all run independently (no dependencies between them) ---
 
-            active_pipelines_result = await session.execute(
-                select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
-            )
-            active_pipelines = _safe_int(active_pipelines_result.scalar_one())
+            count_query = select(func.count()).select_from(Pipeline).where(Pipeline.archived_at.is_(None))
+            active_pipelines = (await session.execute(count_query)).scalar_one() or 0
 
             status_count_query = (
                 select(
@@ -142,8 +145,8 @@ async def dashboard_summary(
             for tracked_status in _TRACKED_STATUSES:
                 status_counts.setdefault(tracked_status, 0)
 
-            _IDLE_STATUSES = ("pending", "claimed", "waiting_for_lock")
-            idle_count = sum(status_counts.get(s, 0) for s in _IDLE_STATUSES)
+            _idle_statuses = ("pending", "claimed", "waiting_for_lock")
+            idle_count = sum(status_counts.get(s, 0) for s in _idle_statuses)
             status_counts["idle"] = idle_count
 
             teams_result = await session.execute(select(Team).where(Team.organisation_id == org_id).order_by(Team.name))
@@ -193,8 +196,6 @@ async def dashboard_summary(
                 team_statuses: dict[str, int] = {}
                 for tracked_status in _TRACKED_STATUSES:
                     team_statuses[tracked_status] = run_data.get(tracked_status, 0)
-                team_active_in_tracked = sum(run_data.get(s, 0) for s in ("running", "awaiting_human"))
-                team_failed = run_data.get("failed", 0)
                 team_idle_from_db = sum(run_data.get(s, 0) for s in ("pending", "claimed", "waiting_for_lock"))
                 team_statuses["idle"] = team_idle_from_db
 
@@ -375,24 +376,22 @@ async def dashboard_summary(
             config_warnings: list[dict[str, Any]] = []
 
             try:
-                mb_with_creds_result = await session.execute(
-                    select(func.count())
-                    .select_from(ModelBackend)
-                    .where(
-                        ModelBackend.organisation_id == org_id,
-                        ModelBackend.credentials_ciphertext.is_not(None),
-                    )
+                mb_count_result = await session.execute(
+                    select(func.count()).select_from(ModelBackend).where(ModelBackend.organisation_id == org_id)
                 )
-                mb_with_creds = int(mb_with_creds_result.scalar_one())
+                mb_count = int(mb_count_result.scalar_one())
             except Exception:
-                mb_with_creds = 0
+                _log.exception("dashboard.dashboard_summary.model_backend_count")
+                mb_count = 0
 
-            if mb_with_creds == 0:
+            if mb_count == 0:
                 config_warnings.append(
                     {
                         "type": "no_model_backends",
                         "severity": "high",
-                        "message": "No AI providers configured. Add a model backend with API credentials to run pipelines.",
+                        "message": (
+                            "No AI providers configured. Add a model backend with API credentials to run pipelines."
+                        ),
                         "action_label": "Configure provider",
                         "action_url": "/admin/model-backends",
                     }
@@ -407,17 +406,20 @@ async def dashboard_summary(
                         .where(
                             ModelBackend.organisation_id == org_id,
                             ModelBackend.provider == default_provider,
-                            ModelBackend.credentials_ciphertext.is_not(None),
+                            ModelBackend.credentials_ciphertext != b"",
                         )
                     )
                     default_provider_count = int(default_provider_result.scalar_one())
-                    if default_provider_count == 0 and mb_with_creds > 1:
+                    if default_provider_count == 0 and mb_count > 1:
                         config_warnings.append(
                             {
                                 "type": "remy_provider_not_configured",
                                 "severity": "low",
-                                "message": f"Remy is configured to use {default_provider} but no API key is set for that provider. "
-                                "Remy will auto-detect the first configured provider. Change the default in Remy Config.",
+                                "message": (
+                                    f"Remy is configured to use {default_provider} but no API key is set "
+                                    "for that provider. Remy will auto-detect the first configured "
+                                    "provider. Change the default in Remy Config."
+                                ),
                                 "action_label": f"Configure {default_provider}",
                                 "action_url": "/admin/model-backends",
                             }
@@ -439,29 +441,30 @@ async def dashboard_summary(
 
         await _set_cached_dashboard(org_id_str, result)
         return result
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("dashboard.summary_failed")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while loading the dashboard.",
-        )
+        ) from exc
 
 
+@handle_db_errors("dashboard.dashboard_trends")
 @router.get("/trends")
 async def dashboard_trends(
     days: int = Query(7, ge=1, le=90),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Trend data over the specified number of days — run counts, eval pass rate, token spend."""
     try:
@@ -655,29 +658,30 @@ async def dashboard_trends(
             "correlation": correlation,
             "feedback_volume": feedback_volume,
         }
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("dashboard.trends_failed")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while loading trends.",
-        )
+        ) from exc
 
 
+@handle_db_errors("dashboard.daily_run_counts")
 @router.get("/daily-run-counts")
 async def daily_run_counts(
     days: int = Query(30, ge=1, le=365),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Return daily run counts for the last N days, grouped by status."""
     try:
@@ -708,19 +712,19 @@ async def daily_run_counts(
             daily[day][dr_row.status] = dr_row.cnt
 
         return {"daily_counts": daily, "days": days}
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("dashboard.daily_run_counts_failed")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while loading daily run counts.",
-        )
+        ) from exc

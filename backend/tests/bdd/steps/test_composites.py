@@ -3,6 +3,7 @@
 Covers: composite_crud, composite_runtime, composite_library, composite_mapping.
 """
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,22 +14,14 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature files — each call loads its scenarios into this module.
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/composites/composite_crud.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/composites/composite_runtime.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/composites/composite_library.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/composites/composite_mapping.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -629,10 +622,9 @@ def when_graph_validator_checks(request: pytest.FixtureRequest) -> None:
     # Check template existence
     if composite_node.get("composite_ref") and not errors:
         tid = composite_node["composite_ref"]
-        if len(tid) == 36 or len(tid) == 32:
-            # Patch-level: simulate 404
-            if tid == "00000000-0000-0000-0000-000000099999":
-                errors.append("Composite template not found")
+        # Patch-level: simulate 404 for a syntactically valid template ID.
+        if (len(tid) == 36 or len(tid) == 32) and tid == "00000000-0000-0000-0000-000000099999":
+            errors.append("Composite template not found")
 
     request.node._validation_errors = errors
 

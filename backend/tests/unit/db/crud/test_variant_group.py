@@ -410,8 +410,7 @@ class TestGetPromptDiffs:
 
         assert result == []
 
-    @patch("modulo.db.crud.variant_group.PipelineSnapshot", create=True)
-    async def test_detects_hash_differences(self, _mock_pipeline_snapshot: MagicMock) -> None:
+    async def test_detects_hash_differences(self) -> None:
         session = AsyncMock()
         snap1 = MagicMock()
         snap1.id = uuid.uuid4()
@@ -437,8 +436,7 @@ class TestGetPromptDiffs:
         assert result[0]["agent_diffs"][0]["base_hash"] == "hash_v1"
         assert result[0]["agent_diffs"][0]["variant_hash"] == "hash_v2"
 
-    @patch("modulo.db.crud.variant_group.PipelineSnapshot", create=True)
-    async def test_skips_missing_snapshots(self, _mock_pipeline_snapshot: MagicMock) -> None:
+    async def test_skips_missing_snapshots(self) -> None:
         session = AsyncMock()
         snap1 = MagicMock()
         snap1.id = uuid.uuid4()
@@ -459,8 +457,7 @@ class TestGetPromptDiffs:
 
         assert result == []
 
-    @patch("modulo.db.crud.variant_group.PipelineSnapshot", create=True)
-    async def test_no_diffs_when_hashes_match(self, _mock_pipeline_snapshot: MagicMock) -> None:
+    async def test_no_diffs_when_hashes_match(self) -> None:
         session = AsyncMock()
         snap1 = MagicMock()
         snap1.id = uuid.uuid4()
@@ -483,8 +480,7 @@ class TestGetPromptDiffs:
 
         assert result == []
 
-    @patch("modulo.db.crud.variant_group.PipelineSnapshot", create=True)
-    async def test_handles_none_prompt_pins_json(self, _mock_pipeline_snapshot: MagicMock) -> None:
+    async def test_handles_none_prompt_pins_json(self) -> None:
         session = AsyncMock()
         snap = MagicMock()
         snap.id = uuid.uuid4()
@@ -505,8 +501,7 @@ class TestGetPromptDiffs:
 
 
 class TestGetPromptDiffsNonDictSnapshot:
-    @patch("modulo.db.crud.variant_group.PipelineSnapshot", create=True)
-    async def test_handles_non_list_prompt_pins_json(self, _mock_pipeline_snapshot: MagicMock) -> None:
+    async def test_handles_non_list_prompt_pins_json(self) -> None:
         session = AsyncMock()
         snap = MagicMock()
         snap.id = uuid.uuid4()

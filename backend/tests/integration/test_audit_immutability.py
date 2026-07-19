@@ -80,9 +80,20 @@ class TestAuditOrmImmutability:
     async def _register_guard(self) -> None:
         register_append_only_guard()
 
+    async def _seed_org(self, db_session: AsyncSession, org_id: uuid.UUID, suffix: str = "") -> None:
+        await db_session.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
+            ),
+            {"id": str(org_id), "name": f"Audit Immutability Org{suffix}", "slug": f"audit-imm-{org_id.hex[:8]}"},
+        )
+        await db_session.commit()
+
     async def test_orm_update_raises_append_only(self, db_session: AsyncSession) -> None:
         event_id = uuid.uuid4()
         org_id = uuid.uuid4()
+        await self._seed_org(db_session, org_id, "-update")
         await db_session.execute(
             text("""
                 INSERT INTO audit_events
@@ -104,6 +115,7 @@ class TestAuditOrmImmutability:
     async def test_orm_delete_raises_append_only(self, db_session: AsyncSession) -> None:
         event_id = uuid.uuid4()
         org_id = uuid.uuid4()
+        await self._seed_org(db_session, org_id, "-delete")
         await db_session.execute(
             text("""
                 INSERT INTO audit_events
@@ -125,6 +137,7 @@ class TestAuditOrmImmutability:
     async def test_event_survives_failed_delete(self, db_session: AsyncSession) -> None:
         event_id = uuid.uuid4()
         org_id = uuid.uuid4()
+        await self._seed_org(db_session, org_id, "-survive")
         await db_session.execute(
             text("""
                 INSERT INTO audit_events
@@ -242,6 +255,15 @@ class TestAuditChainIntegrity:
         from modulo.core.audit_logger import append_audit_event, verify_chain
 
         org_id = uuid.uuid4()
+        await db_session.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
+            ),
+            {"id": str(org_id), "name": "Chain Test Org", "slug": f"chain-{org_id.hex[:8]}"},
+        )
+        await db_session.commit()
+
         for i in range(3):
             await append_audit_event(
                 session=db_session,

@@ -6,6 +6,26 @@ import { formatApiError } from "../lib/api/formatError";
 import { registerHandler } from "./syncRegistry";
 import type { EventBusEvent } from "@/types/events";
 
+interface ApiResult<T> {
+  data?: T;
+  error?: unknown;
+}
+
+interface FeatureFlagsPayload {
+  license: { tier: string };
+  flags: Array<{ name: string; currently_active: boolean }>;
+}
+
+interface LicensePayload {
+  expires_at?: string | null;
+  org_id?: string | null;
+  tier?: string;
+}
+
+interface TiersPayload {
+  tiers: Array<{ tier_id: string; label: string; rank: number }>;
+}
+
 export const usePlanStore = defineStore("plan", () => {
   const currentTier = ref("community");
   const features = ref<Record<string, boolean>>({});
@@ -17,8 +37,6 @@ export const usePlanStore = defineStore("plan", () => {
   const tierRanks = ref<Record<string, number>>({
     community: 0,
     team: 1,
-    v1: 2,
-    v2: 3,
   });
   const syncingIds = ref(new Set<string>());
   const unsubHandlers: (() => void)[] = [];
@@ -26,6 +44,8 @@ export const usePlanStore = defineStore("plan", () => {
   const isTeam = computed(() => isAtMinimumTier("team"));
 
   function featureEnabled(name: string): boolean {
+    const override = orgOverrides.value[name];
+    if (override !== undefined && override !== null) return override;
     return features.value[name] ?? false;
   }
 
@@ -70,7 +90,7 @@ export const usePlanStore = defineStore("plan", () => {
       const [flagsSettled, licenseSettled, tiersSettled] = results;
 
       if (flagsSettled.status === "fulfilled") {
-        const flagsRes = flagsSettled.value;
+        const flagsRes = flagsSettled.value as unknown as ApiResult<FeatureFlagsPayload>;
         if (flagsRes.error) {
           apiErrors.push(`Feature flags: ${formatApiError(flagsRes.error)}`);
         } else if (flagsRes.data) {
@@ -86,7 +106,7 @@ export const usePlanStore = defineStore("plan", () => {
       }
 
       if (licenseSettled.status === "fulfilled") {
-        const licenseRes = licenseSettled.value;
+        const licenseRes = licenseSettled.value as unknown as ApiResult<LicensePayload>;
         if (licenseRes.error) {
           apiErrors.push(`License: ${formatApiError(licenseRes.error)}`);
         } else if (licenseRes.data) {
@@ -99,10 +119,10 @@ export const usePlanStore = defineStore("plan", () => {
       }
 
       if (tiersSettled.status === "fulfilled") {
-        const tiersRes = tiersSettled.value;
+        const tiersRes = tiersSettled.value as unknown as ApiResult<TiersPayload>;
         if (tiersRes.error) {
           apiErrors.push(`Tiers: ${formatApiError(tiersRes.error)}`);
-        } else if (tiersRes.data) {
+        } else if (tiersRes.data?.tiers?.length) {
           const labels: Record<string, string> = {};
           const ranks: Record<string, number> = {};
           for (const t of tiersRes.data.tiers) {
@@ -160,13 +180,14 @@ export const usePlanStore = defineStore("plan", () => {
 
   async function fetchOrgFlagOverride(flagName: string): Promise<boolean | null> {
     try {
-      const { data, error: err } = await (api.GET as any)(
+      const res = await (api.GET as any)(
         '/api/v1/admin/feature-flags/{flag_name}/org-override',
         { params: { path: { flag_name: flagName } } },
-      );
-      if (err) return null;
-      return data?.override ?? null;
-    } catch {
+      ) as { data?: { override: boolean | null }; error?: unknown };
+      if (res.error) return null;
+      return res.data?.override ?? null;
+    } catch (err) {
+      console.warn('[plan] Failed to fetch org flag override', err);
       return null;
     }
   }
@@ -174,24 +195,25 @@ export const usePlanStore = defineStore("plan", () => {
   async function setOrgFlagOverride(flagName: string, enabled: boolean | null): Promise<boolean> {
     try {
       if (enabled === null) {
-        const { error: err } = await (api.DELETE as any)(
+        const res = await (api.DELETE as any)(
           '/api/v1/admin/feature-flags/{flag_name}/org-override',
           { params: { path: { flag_name: flagName } } },
-        );
-        if (err) return false;
+        ) as { error?: unknown };
+        if (res.error) return false;
       } else {
-        const { error: err } = await (api.PUT as any)(
+        const res = await (api.PUT as any)(
           '/api/v1/admin/feature-flags/{flag_name}/org-override',
           {
             params: { path: { flag_name: flagName } },
             body: { enabled },
           },
-        );
-        if (err) return false;
+        ) as { error?: unknown };
+        if (res.error) return false;
       }
       orgOverrides.value[flagName] = enabled;
       return true;
-    } catch {
+    } catch (err) {
+      console.warn('[plan] Failed to set org flag override', err);
       return false;
     }
   }

@@ -91,7 +91,9 @@ async def test_query_issues_http_error(connector):
 async def test_query_single_issue(connector):
     issue = {"number": 42, "title": "The answer", "state": "open", "body": "Details"}
     respx.get("https://api.github.com/repos/owner/repo/issues/42").mock(return_value=httpx.Response(200, json=issue))
-    result = await connector.query(ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": 42}))
+    result = await connector.query(
+        ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "42"})
+    )
     assert result.records[0]["number"] == 42
 
 
@@ -101,7 +103,7 @@ async def test_query_single_issue_not_found(connector):
         return_value=httpx.Response(404, text="Not Found")
     )
     with pytest.raises(ValueError, match="404"):
-        await connector.query(ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": 999}))
+        await connector.query(ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "999"}))
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +181,7 @@ async def test_query_issue_comments(connector):
     result = await connector.query(
         ConnectorQuery(
             resource="issue_comments",
-            filters={"repo": "owner/repo", "issue_number": 42},
+            filters={"repo": "owner/repo", "issue_number": "42"},
         )
     )
     assert len(result.records) == 2
@@ -202,7 +204,7 @@ async def test_query_issue_events(connector):
     result = await connector.query(
         ConnectorQuery(
             resource="issue_events",
-            filters={"repo": "owner/repo", "issue_number": 42},
+            filters={"repo": "owner/repo", "issue_number": "42"},
         )
     )
     assert len(result.records) == 1
@@ -244,7 +246,7 @@ async def test_query_timeline(connector):
     result = await connector.query(
         ConnectorQuery(
             resource="timeline",
-            filters={"repo": "owner/repo", "issue_number": 42},
+            filters={"repo": "owner/repo", "issue_number": "42"},
         )
     )
     assert len(result.records) == 1
@@ -321,7 +323,7 @@ async def test_write_update_issue(connector):
     result = await connector.write(
         ConnectorPayload(
             resource="issue_update",
-            data={"repo": "owner/repo", "issue_number": 42, "state": "closed", "title": "Updated"},
+            data={"repo": "owner/repo", "issue_number": "42", "state": "closed", "title": "Updated"},
         )
     )
     assert result["state"] == "closed"
@@ -338,7 +340,7 @@ async def test_write_update_issue_partial(connector):
     await connector.write(
         ConnectorPayload(
             resource="issue_update",
-            data={"repo": "owner/repo", "issue_number": 42, "body": "New body text"},
+            data={"repo": "owner/repo", "issue_number": "42", "body": "New body text"},
         )
     )
     sent = json.loads(route.calls.last.request.content)
@@ -360,7 +362,7 @@ async def test_write_issue_comment(connector):
     result = await connector.write(
         ConnectorPayload(
             resource="issue_comment",
-            data={"repo": "owner/repo", "issue_number": 42, "body": "Nice work"},
+            data={"repo": "owner/repo", "issue_number": "42", "body": "Nice work"},
         )
     )
     assert result["id"] == 999
@@ -381,11 +383,36 @@ async def test_write_issue_label(connector):
     result = await connector.write(
         ConnectorPayload(
             resource="issue_label",
-            data={"repo": "owner/repo", "issue_number": 42, "labels": ["bug", "urgent"]},
+            data={"repo": "owner/repo", "issue_number": "42", "labels": ["bug", "urgent"]},
         )
     )
     assert len(result["labels"]) == 2
     assert json.loads(route.calls.last.request.content)["labels"] == ["bug", "urgent"]
+
+
+@pytest.mark.parametrize(
+    "labels",
+    ["bug", [], ["bug", 1]],
+    ids=["scalar", "empty", "mixed"],
+)
+async def test_write_issue_label_rejects_invalid_labels(connector, labels: object):
+    with pytest.raises(ValueError, match="must be a non-empty list of strings"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_label",
+                data={"repo": "owner/repo", "issue_number": "42", "labels": labels},
+            )
+        )
+
+
+async def test_write_issue_label_requires_labels(connector):
+    with pytest.raises(ValueError, match="requires 'labels' in data"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_label",
+                data={"repo": "owner/repo", "issue_number": "42"},
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +429,7 @@ async def test_write_issue_reaction(connector):
     result = await connector.write(
         ConnectorPayload(
             resource="issue_reaction",
-            data={"repo": "owner/repo", "issue_number": 42, "content": "+1"},
+            data={"repo": "owner/repo", "issue_number": "42", "content": "+1"},
         )
     )
     assert result["content"] == "+1"
@@ -523,7 +550,7 @@ async def test_write_issue_comment_missing_body(connector):
         await connector.write(
             ConnectorPayload(
                 resource="issue_comment",
-                data={"repo": "owner/repo", "issue_number": 1},
+                data={"repo": "owner/repo", "issue_number": "1"},
             )
         )
 

@@ -204,10 +204,10 @@ class TestSetRlsUserContextMultiBackend:
 
     async def test_postgres_calls_set_config_for_user_and_role(self) -> None:
         session = _make_session(dialect="postgresql")
-        _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
-        _ORG_ROLE = "admin"
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
+        org_role = "admin"
 
-        await set_rls_user_context(session, _USER_ID, _ORG_ROLE)
+        await set_rls_user_context(session, user_id, org_role)
 
         assert session.execute.await_count == 2
         first_call = session.execute.await_args_list[0]
@@ -224,43 +224,43 @@ class TestSetRlsUserContextMultiBackend:
 
     async def test_generic_stores_in_session_info(self) -> None:
         session = _make_session(dialect="sqlite")
-        _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
-        _ORG_ROLE = "admin"
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
+        org_role = "admin"
 
-        await set_rls_user_context(session, _USER_ID, _ORG_ROLE)
+        await set_rls_user_context(session, user_id, org_role)
 
         session.execute.assert_not_called()
-        assert session.info["user_id"] == _USER_ID
-        assert session.info["org_role"] == _ORG_ROLE
+        assert session.info["user_id"] == user_id
+        assert session.info["org_role"] == org_role
 
     async def test_mariadb_stores_in_session_info(self) -> None:
         session = _make_session(dialect="mysql")
-        _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
-        _ORG_ROLE = "viewer"
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000003")
+        org_role = "viewer"
 
-        await set_rls_user_context(session, _USER_ID, _ORG_ROLE)
+        await set_rls_user_context(session, user_id, org_role)
 
         session.execute.assert_not_called()
-        assert session.info["user_id"] == _USER_ID
-        assert session.info["org_role"] == _ORG_ROLE
+        assert session.info["user_id"] == user_id
+        assert session.info["org_role"] == org_role
 
     async def test_raises_without_active_transaction(self) -> None:
         session = _make_session(in_tx=False)
-        _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
-        _ORG_ROLE = "admin"
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000004")
+        org_role = "admin"
 
         with pytest.raises(RuntimeError, match="requires an active transaction"):
-            await set_rls_user_context(session, _USER_ID, _ORG_ROLE)
+            await set_rls_user_context(session, user_id, org_role)
 
     async def test_generic_resets_on_new_session(self) -> None:
         """Verify session.info is scoped to a single session — no cross-session leak."""
         session1 = _make_session(dialect="sqlite")
         session2 = _make_session(dialect="sqlite")
-        _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000005")
-        _ORG_ROLE = "admin"
+        user_id = uuid.UUID("00000000-0000-0000-0000-000000000005")
+        org_role = "admin"
 
-        await set_rls_user_context(session1, _USER_ID, _ORG_ROLE)
+        await set_rls_user_context(session1, user_id, org_role)
 
-        assert session1.info["user_id"] == _USER_ID
+        assert session1.info["user_id"] == user_id
         assert session2.info.get("user_id") is None
         assert session2.info.get("org_role") is None

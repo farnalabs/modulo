@@ -47,7 +47,8 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-run-context](core/run-context.md) => PRD 8.18
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6
 - [feat-core-runtime-config](core/runtime-config.md) => PRD 6
-- [feat-core-run-retention](core/run-retention.md) => PRD 7.11
+- [feat-core-run-retention](core/run-retention.md) => (no dedicated PRD section)
+- [feat-core-lifecycle-maps](core/lifecycle-maps.md) => PRD 8.31
 - [feat-core-pipeline-execution](core/pipeline-execution.md) => PRD 8.4
 - [feat-core-oidc-integration](core/oidc-integration.md) => PRD 9.4, 6.2, 9.2
 - [feat-core-notifications](core/notifications.md) => PRD 8.11
@@ -68,6 +69,10 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-schema-system](core/schema-system.md) => PRD 8.3
 - [feat-core-shared-manifest](core/shared-manifest.md) => PRD 8.28
 - [feat-core-secrets-backend](core/secrets-backend.md) => PRD 7.13
+- [feat-core-schema-diff](core/schema-diff.md) => PRD 8.3
+- [feat-core-schema-versioning](core/schema-versioning.md) => PRD 8.3
+- [feat-core-schema-deletion](core/schema-deletion.md) => PRD 8.3
+- [feat-core-schema-import-export](core/schema-import-export.md) => PRD 8.3
 - [feat-core-schema-union-types](core/schema-union-types.md) => PRD 8.3
 - [feat-core-contribution-provenance](core/contribution-provenance.md) => PRD 8.14
 - [feat-core-contribute-primitive](core/contribute-primitive.md) => PRD 8.14
@@ -89,7 +94,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-model-failover](core/model-failover.md) => PRD 8.1
 - [feat-core-node-categories](core/node-categories.md) => PRD 8
 - [feat-core-navigation-restructure](core/navigation-restructure.md) => PRD 8.26
-- [feat-core-multi-backend-tests](core/multi-backend-tests.md) => PRD 12
+- [feat-core-multi-backend-tests](core/multi-backend-tests.md) => PRD 6.2, 12
 - [feat-core-email-config](core/email-config.md) => PRD 8.11
 - [feat-core-determination](core/determination.md) => PRD 8.16
 - [feat-core-db-abstraction-remaining](core/db-abstraction-remaining.md) => PRD 6.1, 6.2
@@ -123,11 +128,11 @@ status: covered | partial | gap    # auto-updated by graph-validate
 ### Infrastructure
 - [feat-infra-security](infra/security-controls.md) => PRD 7
 - [feat-infra-sse-event-bus](infra/sse-event-bus.md) => PRD 8.22
-- [feat-infra-health](infra/health-checks.md) => PRD 10.5
-- [feat-infra-deployment](infra/deployment.md) => PRD 10.5
+- [feat-infra-health](infra/health-checks.md) => (no PRD section — internal infra concern)
+- [feat-infra-deployment](infra/deployment.md) => PRD 10.3a
 - [feat-infra-extensibility](infra/extensibility.md) => PRD 10
 
-### library
+### Library
 - [feat-library-schemas](library/library-schemas.md) => PRD 8.3
 - [feat-community-library](library/community-library.md) => PRD 8.14
 - [feat-library-auto-update](library/auto-update.md) => PRD 8.14
@@ -137,7 +142,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-model-backends-hub](model-backends/model-backend-hub.md) => PRD 8.1
 
 ### Observability
-- [feat-observability-monitoring-config](observability/monitoring-config.md) => PRD 8
+- [feat-observability-monitoring-config](observability/monitoring-config.md) => PRD 8.25.1
 - [feat-observability-otel-config-ui](observability/otel-config-ui.md) => PRD 6.6
 - [feat-observability-error-tracking](observability/error-tracking.md) => PRD 8.25
 - [feat-observability-data-residency](observability/data-residency.md) => PRD 10.5, 6.6, 6.2
@@ -157,7 +162,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-pipelines-library](pipelines/library.md) => PRD 8.14
 - [feat-pipelines-hitl-gates](pipelines/hitl-gates.md) => PRD 8.8
 
-### remy
+### Remy
 - [feat-remy-context-sources](remy/remy-context-sources.md) => PRD 8.29, 8.30
 - [feat-remy-assistant](remy/remy-assistant.md) => PRD 8.23, 8.27
 
@@ -192,3 +197,6 @@ status: covered | partial | gap    # auto-updated by graph-validate
 Run `..\..\harness\tools\graph-validate.ps1` to check graph integrity.
 Run `..\..\harness\tools\graph-query.ps1 --uncovered` to list entries needing attention.
 Run `..\..\harness\tools\graph-query.ps1 --impact feat-<id>` to see downstream dependents.
+
+### Admin
+- [feat-admin-housekeeping](admin/housekeeping.md) => PRD TBD

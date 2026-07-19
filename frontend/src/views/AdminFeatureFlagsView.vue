@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-wide">
     <header>
       <PageHeader :title="$t('views.AdminFeatureFlagsView.feature_flags')" :subtitle="$t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status')" />
@@ -195,14 +195,14 @@
     </div>
     <FormDialog
       :open="overrideDialogOpen"
-      @update:open="overrideDialogOpen = $event"
+      @update:open="overrideDialogOpen = !!$event"
       title="Org Override"
       :description="overrideDescription"
       confirm-text="Save"
       @confirm="saveOverride"
     >
       <div class="py-4">
-        <Select v-model="overrideDialogValue">
+        <Select aria-label="Form control" v-model="overrideDialogValue">
           <SelectTrigger>
             <SelectValue :placeholder="$t('views.AdminFeatureFlagsView.select_override')" />
           </SelectTrigger>
@@ -221,6 +221,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
@@ -245,6 +246,7 @@ import {
 import { formatDateShort } from '../lib/formatDate'
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 const enabledCount = computed(() => {
   return Object.values(planStore.features).filter(Boolean).length
@@ -372,7 +374,7 @@ const overrideDialogValue = ref<string>('null')
 
 const overrideDescription = computed(() =>
   overrideDialogFlag.value
-    ? `${$t('views.AdminFeatureFlagsView.org_override_for')} "${overrideDialogFlag.value.name}"`
+    ? `${t('views.AdminFeatureFlagsView.org_override_for')} "${overrideDialogFlag.value.name}"`
     : ''
 )
 

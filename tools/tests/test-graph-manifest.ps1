@@ -5,15 +5,16 @@
 #>
 
 BeforeAll {
-    $script:GraphValidatorPath = Join-Path $PSScriptRoot ".." "graph-validate.ps1"
-    $script:ManifestValidatorPath = Join-Path $PSScriptRoot ".." "validate-manifest.ps1"
-    $script:RepoRoot = Resolve-Path (Join-Path $PSScriptRoot ".." "..")
+    $toolsDir = Join-Path $PSScriptRoot ".."
+    $script:GraphValidatorPath = Join-Path $toolsDir "graph-validate.ps1"
+    $script:ManifestValidatorPath = Join-Path $toolsDir "validate-manifest.ps1"
+    $script:RepoRoot = Resolve-Path (Join-Path $toolsDir "..")
 
     $script:TestDir = Join-Path $env:TEMP "modulo-graph-manifest-test-$(Get-Random)"
     New-Item -ItemType Directory -Path $TestDir -Force | Out-Null
 
     # Create a minimal router file
-    $routerDir = Join-Path $TestDir "frontend" "src" "router"
+    $routerDir = Join-Path (Join-Path (Join-Path $TestDir "frontend") "src") "router"
     New-Item -ItemType Directory -Path $routerDir -Force | Out-Null
     Set-Content -Path (Join-Path $routerDir "index.ts") -Value @"
 import { createRouter } from 'vue-router'
@@ -28,7 +29,7 @@ export default router
 "@
 
     # Create locales
-    $localesDir = Join-Path $TestDir "frontend" "src" "locales"
+    $localesDir = Join-Path (Join-Path (Join-Path $TestDir "frontend") "src") "locales"
     New-Item -ItemType Directory -Path $localesDir -Force | Out-Null
     Set-Content -Path (Join-Path $localesDir "en-US.js") -Value @"
 export default {
@@ -44,15 +45,18 @@ export default {
 }
 "@
 
-    # Create product-map directory with entries matching manifest product_map refs
-    $productMapDir = Join-Path $TestDir "docs" "product-map"
+    # Create the minimum graph inputs and entries matching manifest product_map refs.
+    $productMapDir = Join-Path (Join-Path $TestDir "docs") "product-map"
     New-Item -ItemType Directory -Path $productMapDir -Force | Out-Null
-    Set-Content -Path (Join-Path $productMapDir "feat-dashboard.md") -Value "---`nid: feat-dashboard`n---"
-    Set-Content -Path (Join-Path $productMapDir "feat-users.md") -Value "---`nid: feat-users`n---"
-    Set-Content -Path (Join-Path $productMapDir "feat-runs.md") -Value "---`nid: feat-runs`n---"
+    Set-Content -Path (Join-Path $productMapDir "feat-dashboard.md") -Value "---`nid: feat-dashboard`nprd: N/A`nstatus: covered`n---"
+    Set-Content -Path (Join-Path $productMapDir "feat-users.md") -Value "---`nid: feat-users`nprd: N/A`nstatus: covered`n---"
+    Set-Content -Path (Join-Path $productMapDir "feat-runs.md") -Value "---`nid: feat-runs`nprd: N/A`nstatus: covered`n---"
+    Set-Content -Path (Join-Path (Join-Path $TestDir "docs") "prd.md") -Value "# Fixture PRD"
+    $routesDir = Join-Path (Join-Path (Join-Path (Join-Path (Join-Path $TestDir "backend") "src") "modulo") "api") "routes"
+    New-Item -ItemType Directory -Path $routesDir -Force | Out-Null
 
     # Create Vue templates for element testid matching
-    $vueDir = Join-Path $TestDir "frontend" "src" "views"
+    $vueDir = Join-Path (Join-Path (Join-Path $TestDir "frontend") "src") "views"
     New-Item -ItemType Directory -Path $vueDir -Force | Out-Null
     Set-Content -Path (Join-Path $vueDir "DashboardView.vue") -Value @'
 <template>
@@ -79,9 +83,10 @@ export default {
     $originalContent = Get-Content -Raw -LiteralPath $GraphValidatorPath
     $testContent = $originalContent -replace [regex]::Escape('$repoRoot=Resolve-Path (Join-Path $PSScriptRoot "..")'), "`$repoRoot='$TestDir'"
     Set-Content -Path $TestGraphValidator -Value $testContent
+    Copy-Item -LiteralPath (Join-Path $toolsDir "product-map-metadata.ps1") -Destination $TestDir
 
     # Create a temporary copy of validate-manifest.ps1 that uses our TestDir
-    $script:TestManifestValidator = Join-Path $TestDir "validate-manifest-test.ps1"
+    $script:TestManifestValidator = Join-Path $TestDir "validate-manifest.ps1"
     $origManifestContent = Get-Content -Raw -LiteralPath $ManifestValidatorPath
     $testManifestContent = $origManifestContent -replace [regex]::Escape('$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")'), "`$repoRoot='$TestDir'"
     Set-Content -Path $TestManifestValidator -Value $testManifestContent
@@ -89,11 +94,11 @@ export default {
     # Helper to run graph-validate against a fixture manifest
     function Invoke-GraphValidator {
         param([string]$ManifestContent)
-        $manifestPath = Join-Path $TestDir "frontend" "src" "manifest.yaml"
+        $manifestPath = Join-Path (Join-Path (Join-Path $TestDir "frontend") "src") "manifest.yaml"
         $parent = Split-Path -Parent $manifestPath
         if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
         Set-Content -Path $manifestPath -Value $ManifestContent
-        $output = & $TestGraphValidator 2>&1
+        $output = & $TestGraphValidator *>&1
         $exitCode = $LASTEXITCODE
         return @{ Output = $output; ExitCode = $exitCode }
     }
@@ -101,11 +106,11 @@ export default {
     # Helper to run validate-manifest against a fixture manifest
     function Invoke-ManifestValidator {
         param([string]$ManifestContent)
-        $manifestPath = Join-Path $TestDir "frontend" "src" "manifest.yaml"
+        $manifestPath = Join-Path (Join-Path (Join-Path $TestDir "frontend") "src") "manifest.yaml"
         $parent = Split-Path -Parent $manifestPath
         if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
         Set-Content -Path $manifestPath -Value $ManifestContent
-        $output = & $TestManifestValidator 2>&1
+        $output = & $TestManifestValidator *>&1
         $exitCode = $LASTEXITCODE
         return @{ Output = $output; ExitCode = $exitCode }
     }
@@ -187,6 +192,7 @@ routes:
     sidebar_group: core
     sidebar_order: 1
     type: page
+elements: {}
 "@
         $result = Invoke-GraphValidator $badManifest
         $result.Output | Select-String -SimpleMatch "Manifest validation" | Should -Not -Be $null

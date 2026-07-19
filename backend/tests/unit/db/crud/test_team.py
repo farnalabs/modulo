@@ -11,6 +11,7 @@ from modulo.db.crud.base import PageResult
 @pytest.fixture()
 def mock_session() -> AsyncMock:
     session = AsyncMock()
+    session.add = MagicMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

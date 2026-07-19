@@ -108,6 +108,11 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 
 ## QA History
 
+### 2026-07-12 — Round 3 improve-architecture
+- **MAJOR:** Fixed B904 (exception chaining) on all 10 feedback route handlers — `IntegrityError`, `ProgrammingError`, `SQLAlchemyError`, and `Exception` now use `raise ... from exc` pattern
+- **CRITICAL:** Applied the "dismiss→resolved" fix that was documented in index 341 but never merged — changed `dismiss` action from `update_status(record_id, "dismissed")` to `update_status(record_id, "resolved")`; removed "dismissed" from `_VALID_STATUS_TRANSITIONS` and from PATCH `valid_statuses`
+- **MAJOR:** Corrected stale product map claims — the code still had `"dismissed"` status despite index 341 documenting the fix as completed
+
 ### Findings fixed (index 75)
 - Added ProgrammingError→501 catch to all 9 feedback API route handlers
 - Added 9 unit tests for ProgrammingError handling (test_feedback_programming_error.py)
@@ -146,7 +151,7 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - Verified `run_context_overrides` merge can shadow standard keys (e.g. `producing_node_id`) — documented edge case, not fixed (caller responsibility)
 
 ## Known Gaps
-
+- ~~**"dismiss" action used "dismissed" status** — fixed in Round 3 improve-architecture: now uses "resolved" as specified in PRD §8.20~~
 - No BDD feature files for the correction error paths — only happy-path BDD scenarios exist
 - No integration test for full correction lifecycle: reject → spawn → run → eval → resolve
 - Correction run checkpoint pre-seeding is not implemented

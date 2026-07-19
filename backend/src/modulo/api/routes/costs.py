@@ -1,12 +1,13 @@
 """Admin cost management routes — spend limits, cost reports, export, anomalies, scheduled reports."""
 
+import asyncio
 import csv
 import io
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
@@ -14,11 +15,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_log = logging.getLogger(__name__)
-
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cost_controller import get_cost_report
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.scheduled_report import (
@@ -29,7 +29,10 @@ from modulo.db.crud.scheduled_report import (
 from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies
 from modulo.db.crud.team import get_team, list_teams
 from modulo.db.models.daily_run_count import OrgDailyRunCount
+from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.db.rls import set_rls_org
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/costs", tags=["admin", "costs"])
 
@@ -57,7 +60,7 @@ class SetSpendLimitRequest(BaseModel):
     daily_spend_limit: float | None = Field(None, ge=0)
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -65,13 +68,14 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
         )
 
 
+@handle_db_errors("costs.get_costs")
 @router.get("", response_model=CostReportResponse)
 async def get_costs(
     group_by: str = Query("team", pattern=r"^(team|org)$"),
     period: str = Query("month", pattern=r"^(day|week|month|year)$"),
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_breakdown"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostReportResponse:
     _require_admin(current_user)
@@ -91,12 +95,16 @@ async def get_costs(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Costs report failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "Costs report failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in get_costs")
@@ -112,11 +120,12 @@ async def get_costs(
     )
 
 
+@handle_db_errors("costs.get_spend_limits")
 @router.get("/limits", response_model=SpendLimitResponse)
 async def get_spend_limits(
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SpendLimitResponse:
     _require_admin(current_user)
@@ -126,8 +135,6 @@ async def get_spend_limits(
             await set_rls_org(session, current_user.organisation_id)
             org = await get_organisation(session, current_user.organisation_id)
 
-            from modulo.db.crud.team import list_teams
-
             teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
     except ProgrammingError:
         raise HTTPException(
@@ -135,12 +142,16 @@ async def get_spend_limits(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Get spend limits failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "Get spend limits failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in get_spend_limits")
@@ -163,12 +174,13 @@ async def get_spend_limits(
     )
 
 
+@handle_db_errors("costs.set_org_spend_limit")
 @router.put("/limits/org", response_model=dict[str, Any])
 async def set_org_spend_limit(
     req: SetSpendLimitRequest,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     _require_admin(current_user)
@@ -187,12 +199,16 @@ async def set_org_spend_limit(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Set org spend limit failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "Set org spend limit failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in set_org_spend_limit")
@@ -207,13 +223,14 @@ async def set_org_spend_limit(
     }
 
 
+@handle_db_errors("costs.set_team_spend_limit")
 @router.put("/limits/teams/{team_id}", response_model=dict[str, Any])
 async def set_team_spend_limit(
     team_id: uuid.UUID,
     req: SetSpendLimitRequest,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     _require_admin(current_user)
@@ -232,12 +249,14 @@ async def set_team_spend_limit(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Set team spend limit failed with SQLAlchemyError (team_id=%s)", team_id)
+        _log.warning("Set team spend limit failed with SQLAlchemyError (team_id=%s)", team_id, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in set_team_spend_limit")
@@ -255,7 +274,7 @@ async def set_team_spend_limit(
 class CostControlsResponse(BaseModel):
     teams: list[dict[str, object]]
     budget: float | None = None
-    alert_thresholds: list[float] = []
+    alert_thresholds: ClassVar[list[float]] = []
     circuit_breaker_enabled: bool = False
     currency: str = "USD"
     billing_period: str = "monthly"
@@ -269,11 +288,12 @@ class UpdateCostControlsRequest(BaseModel):
     billing_period: str | None = None
 
 
+@handle_db_errors("costs.get_cost_controls")
 @router.get("/controls", response_model=CostControlsResponse)
 async def get_cost_controls(
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
     _require_admin(current_user)
@@ -288,12 +308,16 @@ async def get_cost_controls(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Get cost controls failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "Get cost controls failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in get_cost_controls")
@@ -315,12 +339,13 @@ async def get_cost_controls(
     )
 
 
+@handle_db_errors("costs.update_cost_controls")
 @router.put("/controls", response_model=CostControlsResponse)
 async def update_cost_controls(
     req: UpdateCostControlsRequest,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
     _require_admin(current_user)
@@ -331,7 +356,6 @@ async def update_cost_controls(
                 org = await get_organisation(session, current_user.organisation_id)
                 if org is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-                from decimal import Decimal
 
                 org.daily_spend_limit = Decimal(str(req.budget))
                 await session.flush()
@@ -344,12 +368,16 @@ async def update_cost_controls(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Update cost controls failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "Update cost controls failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in update_cost_controls")
@@ -374,14 +402,15 @@ async def update_cost_controls(
 # ── Export ────────────────────────────────────────────────────────────────────
 
 
+@handle_db_errors("costs.export_costs")
 @router.get("/export")
 async def export_costs(
     period: str = Query("this_month", pattern=r"^(this_month|last_month|7d|30d|90d)$"),
     group_by: str = Query("team", pattern=r"^(team|pipeline|model)$"),
     format: str = Query("csv", pattern=r"^(csv)$"),
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_breakdown"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
     _require_admin(current_user)
@@ -409,12 +438,16 @@ async def export_costs(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Export costs failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "Export costs failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in export_costs")
@@ -442,7 +475,7 @@ async def export_costs(
 
 class CreateReportRequest(BaseModel):
     period: str = Field(pattern=r"^(daily|weekly|monthly)$")
-    group_by: str = Field(pattern=r"^(team|pipeline|model)$")
+    group_by: str = Field(pattern=r"^(team|org)$")
     format: str = Field(default="csv", pattern=r"^(csv|json)$")
     recipients: list[str] = Field(min_length=1)
     schedule_type: str = Field(default="one_time", pattern=r"^(one_time|recurring)$")
@@ -458,12 +491,31 @@ class ReportResponse(BaseModel):
     created_at: str
 
 
+def _report_response(report: ScheduledReport) -> ReportResponse:
+    period = report.period
+    group_by = report.group_by
+    report_format = report.format
+    schedule_type = report.schedule_type
+    if period is None or group_by is None or report_format is None or schedule_type is None:
+        raise ValueError(f"Scheduled cost report {report.id} has invalid configuration")
+    return ReportResponse(
+        id=str(report.id),
+        period=period,
+        group_by=group_by,
+        format=report_format,
+        recipients=report.recipients,
+        schedule_type=schedule_type,
+        created_at=report.created_at.isoformat(),
+    )
+
+
+@handle_db_errors("costs.create_report")
 @router.post("/reports", response_model=ReportResponse, status_code=201)
 async def create_report(
     req: CreateReportRequest,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ReportResponse:
     _require_admin(current_user)
@@ -487,12 +539,16 @@ async def create_report(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Create report failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "Create report failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in create_report")
@@ -501,22 +557,15 @@ async def create_report(
             detail="Internal server error",
         ) from None
 
-    return ReportResponse(
-        id=str(report.id),
-        period=report.period,
-        group_by=report.group_by,
-        format=report.format,
-        recipients=list(report.recipients) if isinstance(report.recipients, list) else [],
-        schedule_type=report.schedule_type,
-        created_at=report.created_at.isoformat(),
-    )
+    return _report_response(report)
 
 
+@handle_db_errors("costs.list_reports")
 @router.get("/reports", response_model=list[ReportResponse])
 async def list_reports(
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ReportResponse]:
     _require_admin(current_user)
@@ -534,12 +583,16 @@ async def list_reports(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("List reports failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "List reports failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in list_reports")
@@ -548,26 +601,16 @@ async def list_reports(
             detail="Internal server error",
         ) from None
 
-    return [
-        ReportResponse(
-            id=str(r.id),
-            period=r.period,
-            group_by=r.group_by,
-            format=r.format,
-            recipients=list(r.recipients) if isinstance(r.recipients, list) else [],
-            schedule_type=r.schedule_type,
-            created_at=r.created_at.isoformat(),
-        )
-        for r in reports
-    ]
+    return [_report_response(report) for report in reports]
 
 
+@handle_db_errors("costs.delete_report")
 @router.delete("/reports/{report_id}", status_code=204)
 async def delete_report(
     report_id: uuid.UUID,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     _require_admin(current_user)
@@ -586,12 +629,16 @@ async def delete_report(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Delete report failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "Delete report failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in delete_report")
@@ -617,11 +664,12 @@ class AnomalyResponse(BaseModel):
     dismissed: bool
 
 
+@handle_db_errors("costs.get_anomalies")
 @router.get("/anomalies", response_model=list[AnomalyResponse])
 async def get_anomalies(
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_breakdown"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[AnomalyResponse]:
     _require_admin(current_user)
@@ -711,12 +759,16 @@ async def get_anomalies(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Get anomalies failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "Get anomalies failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in get_anomalies")
@@ -726,12 +778,13 @@ async def get_anomalies(
         ) from None
 
 
+@handle_db_errors("costs.dismiss_anomaly_endpoint")
 @router.get("/anomalies/dismiss/{anomaly_id}", status_code=204)
 async def dismiss_anomaly_endpoint(
     anomaly_id: uuid.UUID,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_breakdown"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     _require_admin(current_user)
@@ -750,12 +803,16 @@ async def dismiss_anomaly_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Dismiss anomaly failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        _log.warning(
+            "Dismiss anomaly failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in dismiss_anomaly_endpoint")

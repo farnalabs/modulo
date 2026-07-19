@@ -7,6 +7,7 @@ Cards are organised into lists (idList). Status is derived from the
 otherwise it's "open".
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -50,6 +51,8 @@ class TrelloTicketTracker(TicketTrackerBase):
                 )
                 resp.raise_for_status()
                 return HealthResult(ok=True, detail=resp.json().get("name", ""))
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return HealthResult(ok=False, detail=str(e)[:200])
 
@@ -65,12 +68,12 @@ class TrelloTicketTracker(TicketTrackerBase):
                 search=filters.get("search"),
                 limit=filters.get("limit", 20),
                 offset=filters.get("offset", 0),
-            )
+            ),
         )
         return ConnectorResult(records=[t.__dict__ for t in tickets], total=len(tickets))
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        data = payload.data if hasattr(payload, "data") else payload
+        data = payload.data
         ticket = await self.create_ticket(
             title=data.get("title", ""),
             description=data.get("description"),
@@ -79,14 +82,15 @@ class TrelloTicketTracker(TicketTrackerBase):
         )
         return {"ticket_id": ticket.id, "url": ticket.url or ""}
 
-    async def list_tickets(self, filter: TicketFilter | None = None) -> list[Ticket]:
+    async def list_tickets(self, ticket_filter: TicketFilter | None = None) -> list[Ticket]:
+        if ticket_filter and ticket_filter.offset:
+            logger.warning("offset is not supported by Trello's API; ignoring offset=%s", ticket_filter.offset)
+
         async with httpx.AsyncClient() as client:
             params: dict[str, Any] = self._auth()
             params["fields"] = TRELLO_CARD_FIELDS
-            if filter and filter.limit:
-                params["limit"] = str(min(filter.limit, 100))
-            if filter and filter.offset:
-                logger.warning("offset is not supported by Trello's API; ignoring offset=%s", filter.offset)
+            if ticket_filter and ticket_filter.limit:
+                params["limit"] = str(min(ticket_filter.limit, 100))
             try:
                 resp = await client.get(
                     f"{self._base_url}/boards/{self._board_id}/cards",
@@ -100,15 +104,17 @@ class TrelloTicketTracker(TicketTrackerBase):
             except httpx.RequestError as e:
                 raise ValueError(f"Trello network error: {e}") from None
 
-        if filter and filter.search:
+        if ticket_filter and ticket_filter.search:
             raw_cards = [
-                c for c in raw_cards if filter.search.lower() in (c.get("name", "") + (c.get("desc") or "")).lower()
+                c
+                for c in raw_cards
+                if ticket_filter.search.lower() in (c.get("name", "") + (c.get("desc") or "")).lower()
             ]
 
         tickets = [self._to_ticket(c) for c in raw_cards]
 
-        if filter and filter.status:
-            tickets = [t for t in tickets if t.status and t.status.lower() == filter.status.lower()]
+        if ticket_filter and ticket_filter.status:
+            tickets = [t for t in tickets if t.status and t.status.lower() == ticket_filter.status.lower()]
 
         return tickets
 
@@ -176,7 +182,7 @@ class TrelloTicketTracker(TicketTrackerBase):
             except httpx.RequestError as e:
                 raise ValueError(f"Trello network error: {e}") from None
 
-    def _to_ticket(self, raw: dict) -> Ticket:
+    def _to_ticket(self, raw: dict[str, Any]) -> Ticket:
         return Ticket(
             id=raw.get("id", ""),
             title=raw.get("name", ""),

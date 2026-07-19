@@ -1,6 +1,7 @@
 """Step definitions for Model Backend features — backend selection, rate limiting,
 health checks, CRUD, and error handling."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock
 
@@ -12,22 +13,14 @@ from modulo.db.models.model_backend import ModelBackend
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/backend_selection.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/backend_health_check.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/backend_crud.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/backend_error_handling.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------

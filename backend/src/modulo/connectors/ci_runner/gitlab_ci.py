@@ -252,19 +252,19 @@ class _GitLabCITestDouble(GitLabCIRunner):
             status=self._status,
         )
 
-    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
+    async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=self._run_logs)
 
     async def list_runs(
         self,
         pipeline_id: str | None = None,
         status: CIRunStatus | None = None,
-        limit: int = 20,
+        _limit: int = 20,
     ) -> list[CIRun]:
         return [
             CIRun(
                 id="pipeline-1",
                 pipeline_id=pipeline_id or "12345",
                 status=status or CIRunStatus.SUCCESS,
-            )
+            ),
         ]

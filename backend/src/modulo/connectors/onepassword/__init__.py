@@ -1,6 +1,7 @@
 """OnePasswordConnector — async 1Password Connect REST API connector."""
 
-from typing import Any
+import asyncio
+from typing import Any, cast
 
 import httpx
 
@@ -45,6 +46,8 @@ class OnePasswordConnector(ConnectorBase):
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid 1Password Connect API token")
                 return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -174,8 +177,7 @@ class OnePasswordConnector(ConnectorBase):
         }
         resp = await c.post(f"/v1/vaults/{vault_id}/items", json=body)
         resp.raise_for_status()
-        result: dict[str, Any] = resp.json()
-        return result
+        return cast(dict[str, Any], resp.json())
 
     async def _update_item(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         vault_id = data.get("vault_id", "")
@@ -217,8 +219,7 @@ class OnePasswordConnector(ConnectorBase):
             raise ValueError("1Password item_archive write requires 'item_id' in data")
         resp = await c.patch(f"/v1/vaults/{vault_id}/items/{item_id}", json={"state": "archived"})
         if resp.status_code == 200:
-            result = resp.json()
-            return {"status": "archived", "vault_id": vault_id, "item_id": item_id, "result": result}
+            archive_result = resp.json()
+            return {"status": "archived", "vault_id": vault_id, "item_id": item_id, "result": archive_result}
         resp.raise_for_status()
-        result: dict[str, Any] = resp.json()
-        return result
+        return cast(dict[str, Any], resp.json())

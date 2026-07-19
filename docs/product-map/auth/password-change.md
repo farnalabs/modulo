@@ -71,6 +71,13 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 - PUT /api/v1/me/password does not validate that `new_password` differs from `current_password` — no `!=` check between old and new (minor: user can "change" to same password)
 
 ## QA History
+### 2026-07-12 — Round 3 re-QA (improve-architecture auth remaining)
+- Verified `@handle_db_errors` decorator provides complete CancelledError/IntegrityError/ProgrammingError/SQLAlchemyError coverage for all endpoints in me.py
+- Verified all internal ProgrammingError handlers use `from None` (B904)
+- No code changes needed — Round 2 already addressed all B904 and CancelledError issues via the decorator
+- Status: partial
+
 - 2026-07-05: QA-iterate (prodmap auth). Added Error Handling and QA History sections. Fixed status: covered → partial (audit trail gap).
 - 2026-07-06: Cross-cutting QA. Fixed 401 vs 403 status code in behaviours. Added Known Gaps for ProgrammingError, token blacklist isolation, missing website docs. Added ProgrammingError catch and per-family blacklist error isolation to the route handler.
 - 2026-07-08: Cross-cutting QA (index 258). Fixed CRITICAL — added SQLAlchemyError→503 catches to all 11 DB-accessing routes in me.py (get_user_settings, update_user_settings, change_password, 4 remy skills, 3 context sources) — previously only caught ProgrammingError→501, allowing connection/deadlock failures to propagate as 500. Fixed CRITICAL — BDD step definitions in test_change_password.py patched wrong function names (`get_user_by_id`/`list_families_for_user` instead of `get_account_by_id`/`list_families_for_account`) — mocks silently didn't mock the real code path, BDD tests made real DB calls without isolation. Fixed MAJOR — moved lazy `verify_password` import from inside change_password handler to module level. Added 6 new unit tests in test_me_sqlalchemy_error.py (3× ProgrammingError→501, 3× SQLAlchemyError→503). All 14 me password tests pass. Merged to main at v.NEXT. Status: partial.
+- 2026-07-11: Round 2 re-QA (improve-architecture index 389). Fixed B904: added `from None` to all `except ProgrammingError` handlers in me.py (11 handlers across get_user_settings, update_user_settings, change_password, list_user_skills, create_user_skill, update_user_skill, delete_user_skill, get_user_context_sources, set_user_context_source, reset_user_context_sources). Fixed B904: added `asyncio.CancelledError: raise` guard to `except Exception` in blacklist_family handler inside change_password. Fixed systemic `@handle_db_errors` decorator: added `asyncio.CancelledError: raise` guard and `from None` to all exception handlers (IntegrityError, ProgrammingError, SQLAlchemyError, pydantic.ValidationError) — benefits all ~80 routes using this decorator.

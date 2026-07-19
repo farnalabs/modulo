@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from modulo.core.library import DOGFOODING_PIPELINE as IMPORTED_DOGFOODING
 from modulo.core.library.workflows.definitions import DOGFOODING_PIPELINE
 
@@ -70,15 +72,11 @@ def test_tags_include_canonical() -> None:
     assert "issue-to-pr" in tags
 
 
-def test_has_five_steps() -> None:
-    steps = DOGFOODING_PIPELINE["pipeline_steps"]
-    assert len(steps) == 5
-
-
 def test_step_identifiers() -> None:
     steps = DOGFOODING_PIPELINE["pipeline_steps"]
     expected_ids = ["read-issue", "generate-diff", "validate", "review-gate", "create-pr"]
     actual_ids = [s["id"] for s in steps]
+    assert len(actual_ids) == 5
     assert actual_ids == expected_ids
 
 
@@ -87,36 +85,44 @@ def test_each_step_has_description() -> None:
         assert step.get("description"), f"Step '{step['id']}' is missing description"
 
 
-def test_step_read_issue() -> None:
-    step = _step_by_id("read-issue")
-    assert step["agent"] is None
-    assert step["connector_binding"] == {"type": "source_control", "required": True}
-
-
-def test_step_generate_diff() -> None:
-    step = _step_by_id("generate-diff")
-    assert step["agent"] == "correction-proposer"
-    assert step["depends_on"] == ["read-issue"]
-
-
-def test_step_validate() -> None:
-    step = _step_by_id("validate")
-    assert step["agent"] == "test-generator"
-    assert step["depends_on"] == ["generate-diff"]
-    assert step["connector_binding"] == {"type": "ci_runner", "required": False}
-
-
-def test_step_review_gate() -> None:
-    step = _step_by_id("review-gate")
-    assert step["agent"] == "code-reviewer"
-    assert step["depends_on"] == ["validate"]
-
-
-def test_step_create_pr() -> None:
-    step = _step_by_id("create-pr")
-    assert step["agent"] is None
-    assert step["depends_on"] == ["review-gate"]
-    assert step["connector_binding"] == {"type": "source_control", "required": True}
+@pytest.mark.parametrize(
+    "step_id,expected",
+    [
+        (
+            "read-issue",
+            {"agent": None, "depends_on": None, "connector_binding": {"type": "source_control", "required": True}},
+        ),
+        (
+            "generate-diff",
+            {"agent": "correction-proposer", "depends_on": ["read-issue"], "connector_binding": None},
+        ),
+        (
+            "validate",
+            {
+                "agent": "test-generator",
+                "depends_on": ["generate-diff"],
+                "connector_binding": {"type": "ci_runner", "required": False},
+            },
+        ),
+        (
+            "review-gate",
+            {"agent": "code-reviewer", "depends_on": ["validate"], "connector_binding": None},
+        ),
+        (
+            "create-pr",
+            {
+                "agent": None,
+                "depends_on": ["review-gate"],
+                "connector_binding": {"type": "source_control", "required": True},
+            },
+        ),
+    ],
+)
+def test_step_properties(step_id: str, expected: dict[str, Any]) -> None:
+    step = _step_by_id(step_id)
+    assert step.get("agent") == expected["agent"]
+    assert step.get("depends_on") == expected["depends_on"]
+    assert step.get("connector_binding") == expected["connector_binding"]
 
 
 def test_all_agent_refs_are_known() -> None:

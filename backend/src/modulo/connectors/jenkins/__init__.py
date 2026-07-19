@@ -1,5 +1,6 @@
 """Jenkins CI/CD connector — triggers and observes pipeline/Job runs via the Jenkins REST API."""
 
+import asyncio
 import base64
 import logging
 import re
@@ -69,6 +70,8 @@ class JenkinsConnector(ConnectorBase):
                 field = data.get("crumbRequestField", "Jenkins-Crumb")
                 crumb = data.get("crumb", "")
                 return {field: crumb}
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _logger.debug("Failed to fetch Jenkins crumb: %s", exc)
         return {}
@@ -101,7 +104,8 @@ class JenkinsConnector(ConnectorBase):
             return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
         except httpx.HTTPStatusError as exc:
             return HealthResult(
-                ok=False, detail=f"Jenkins API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+                ok=False,
+                detail=f"Jenkins API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Jenkins API timeout")
@@ -111,7 +115,7 @@ class JenkinsConnector(ConnectorBase):
     async def trigger_run(
         self,
         pipeline_id: str,
-        branch: str = "",
+        _branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
         job_name = pipeline_id
@@ -267,19 +271,19 @@ class _JenkinsTestDouble(JenkinsConnector):
             status=CIRunStatus.SUCCESS,
         )
 
-    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
+    async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=["line1", "line2"])
 
     async def list_runs(
         self,
         pipeline_id: str | None = None,
         status: CIRunStatus | None = None,
-        limit: int = 20,
+        _limit: int = 20,
     ) -> list[CIRun]:
         return [
             CIRun(
                 id=f"{self._uuid.uuid4()}",
                 pipeline_id=pipeline_id or "my-job",
                 status=status or CIRunStatus.SUCCESS,
-            )
+            ),
         ]

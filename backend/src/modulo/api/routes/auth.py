@@ -1,16 +1,18 @@
 """Auth routes: login, refresh, logout, me (v1 account management)."""
 
+import asyncio
 import logging
 import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from jose import JWTError
+from jwt import InvalidTokenError as JWTError
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
 from modulo.api.routes.remy import clear_all_session_approvals
@@ -82,6 +84,7 @@ class MeResponse(BaseModel):
     is_system_admin: bool = False
 
 
+@handle_db_errors("auth.login")
 @router.post("/login")
 async def login(
     req: LoginRequest,
@@ -128,19 +131,21 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Account already has an active session. Try again.",
-        )
+        ) from None
     except ProgrammingError:
-        _log.warning("login.programming_error")
+        _log.warning("login.programming_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("login.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service is temporarily unavailable. Please try again.",
-        )
+        ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception:
@@ -179,6 +184,7 @@ async def login(
     return response
 
 
+@handle_db_errors("auth.refresh")
 @router.post("/refresh")
 async def refresh(
     req: RefreshRequest,
@@ -232,19 +238,21 @@ async def refresh(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("refresh.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("refresh.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Token refresh is temporarily unavailable. Please try again.",
-        )
+        ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception:
@@ -263,7 +271,7 @@ async def refresh(
     org_id_val = claims.get("org_id")
     account_id_val = account_id_claim
     org_role_val = claims.get("org_role")
-    if not all(isinstance(v, str) for v in [sub_val, org_id_val, account_id_val]) or (
+    if any(not isinstance(value, str) for value in (sub_val, org_id_val, account_id_val)) or (
         org_id_val is not None and not isinstance(org_id_val, str)
     ):
         raise HTTPException(
@@ -293,6 +301,7 @@ async def refresh(
     return response
 
 
+@handle_db_errors("auth.logout")
 @router.post("/logout")
 async def logout(
     req: RefreshRequest,
@@ -322,19 +331,21 @@ async def logout(
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A resource with this value already exists",
-                )
+                ) from None
             except ProgrammingError:
                 _log.warning("logout.programming_error")
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Feature is not available. Run database migrations to enable it.",
-                )
+                ) from None
             except SQLAlchemyError:
                 _log.warning("logout.sqlalchemy_error")
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Logout is temporarily unavailable. Please try again.",
-                )
+                ) from None
+            except asyncio.CancelledError:
+                raise
             except HTTPException:
                 raise
             except Exception:
@@ -354,6 +365,7 @@ async def logout(
     return response
 
 
+@handle_db_errors("auth.ws_token")
 @router.post("/ws-token", response_model=WsTokenResponse)
 async def ws_token(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -380,7 +392,7 @@ async def ws_token(
                 )
                 return WsTokenResponse(
                     ws_token=token,
-                    token_type="ws-opaque",
+                    token_type="ws-opaque",  # noqa: S106
                     expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
                 )
             except HTTPException:
@@ -401,9 +413,11 @@ async def ws_token(
         )
         return WsTokenResponse(
             ws_token=token,
-            token_type="ws-jwt",
+            token_type="ws-jwt",  # noqa: S106
             expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
         )
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception:
@@ -414,6 +428,7 @@ async def ws_token(
         ) from None
 
 
+@handle_db_errors("auth.me")
 @router.get("/me", response_model=MeResponse)
 async def me(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -422,23 +437,20 @@ async def me(
     try:
         async with session.begin():
             account = await get_account_by_id(session, current_user.account_id)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
     except ProgrammingError:
         _log.warning("me.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("me.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Account service is temporarily unavailable. Please try again.",
-        )
+        ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception:
@@ -464,6 +476,7 @@ class CsrfTokenResponse(BaseModel):
     csrf_token: str
 
 
+@handle_db_errors("auth.csrf_token")
 @router.get("/csrf-token", response_model=CsrfTokenResponse)
 async def csrf_token(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -475,6 +488,8 @@ async def csrf_token(
         response = JSONResponse(content=content)
         _set_csrf_cookie(response, token, settings)
         return response
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception:

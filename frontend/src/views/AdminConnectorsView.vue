@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
 
     <div class="page-narrow">
@@ -24,8 +24,8 @@
         <form @submit.prevent="createConnector">
           <div class="space-y-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">Name</label>
-              <input
+              <label for="adminconnectorsview-field-7" class="mb-1 block text-sm font-medium">Name</label>
+              <input id="adminconnectorsview-field-7"
                 v-model="formData.name"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -34,24 +34,21 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Type</label>
-              <select
-                v-model="formData.connector_type"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                data-testid="admin-connectors-type-select"
-                aria-label="Type"
-              >
-                <option value="postgresql">PostgreSQL</option>
-                <option value="mysql">MySQL</option>
-                <option value="bigquery">BigQuery</option>
-                <option value="snowflake">Snowflake</option>
-                <option value="redshift">Redshift</option>
-                <option value="http">HTTP API</option>
-              </select>
+              <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">Type</label>
+              <Select v-model="formData.connector_type">
+                <SelectTrigger data-testid="admin-connectors-type-select" aria-label="Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                  <SelectValue placeholder="PostgreSQL" />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  <SelectItem v-for="ct in connectorTypes" :key="ct.id" :value="ct.id">
+                    {{ ct.display_name }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Description</label>
-              <input
+              <label for="adminconnectorsview-field-5" class="mb-1 block text-sm font-medium">Description</label>
+              <input id="adminconnectorsview-field-5"
                 v-model="formData.description"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -60,8 +57,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Configuration (JSON)</label>
-              <textarea
+              <label for="adminconnectorsview-field-4" class="mb-1 block text-sm font-medium">Configuration (JSON)</label>
+              <textarea id="adminconnectorsview-field-4"
                 v-model="formData.config_json"
                 rows="6"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -188,8 +185,8 @@
         <form @submit.prevent="updateConnector">
           <div class="space-y-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">Name</label>
-              <input
+              <label for="adminconnectorsview-field-3" class="mb-1 block text-sm font-medium">Name</label>
+              <input id="adminconnectorsview-field-3"
                 v-model="formData.name"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -197,8 +194,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Description</label>
-              <input
+              <label for="adminconnectorsview-field-2" class="mb-1 block text-sm font-medium">Description</label>
+              <input id="adminconnectorsview-field-2"
                 v-model="formData.description"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -206,8 +203,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Configuration (JSON)</label>
-              <textarea
+              <label for="adminconnectorsview-field-1" class="mb-1 block text-sm font-medium">Configuration (JSON)</label>
+              <textarea id="adminconnectorsview-field-1"
                 v-model="formData.config_json"
                 rows="6"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -266,22 +263,26 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { useConfirmDialog } from '../composables/useConfirmDialog'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import TableActions from '../components/shared/TableActions.vue'
 
 const planStore = usePlanStore()
 
-type ConnectorItem = components['schemas']['ConnectorItem'] & {
+interface ConnectorItem {
+  id: string
+  name: string
+  connector_type: string
+  description?: string | null
   enabled?: boolean
   tier?: 'native' | 'preview' | 'in_dev'
 }
@@ -296,7 +297,7 @@ interface ConnectorFormState {
 function emptyForm(): ConnectorFormState {
   return {
     name: '',
-    connector_type: 'postgresql',
+    connector_type: '',
     description: '',
     config_json: '',
   }
@@ -307,7 +308,29 @@ const { loading, error, data, load: loadConnectors } = useDataFetch(
   { immediate: false },
 )
 
-const connectors = computed(() => data.value?.items ?? [])
+const connectors = ref<ConnectorItem[]>([])
+const connectorTypes = ref<{id: string, display_name: string}[]>([])
+
+async function loadConnectorTypes() {
+  // @ts-ignore TS2589 - deep type from openapi-typescript
+  const resp = await api.GET('/api/v1/connectors/types')
+  if (resp.data?.items) {
+    connectorTypes.value = resp.data.items as {id: string, display_name: string}[]
+  }
+
+}
+
+watch(data, response => {
+  const items = (response as { items?: components['schemas']['ConnectorResponse'][] } | null)?.items ?? []
+  connectors.value = items.map(item => ({
+    id: item.id,
+    name: item.name,
+    connector_type: item.connector_type_id,
+    description: typeof item.config_json?.description === 'string' ? item.config_json.description : null,
+    enabled: item.status === 'active',
+    tier: item.tier === 'preview' || item.tier === 'in_dev' ? item.tier : 'native',
+  }))
+}, { immediate: true })
 const nativeConnectors = computed(() => connectors.value.filter(c => (c.tier ?? 'native') !== 'preview' && (c.tier ?? 'native') !== 'in_dev'))
 const previewConnectors = computed(() => connectors.value.filter(c => c.tier === 'preview'))
 
@@ -359,17 +382,20 @@ function closeEditForm() {
 function buildCreateBody() {
   return {
     name: formData.name.trim(),
-    connector_type: formData.connector_type,
-    description: formData.description.trim() || null,
-    config_json: formData.config_json.trim() || null,
+    connector_type_id: formData.connector_type,
+    credentials: formData.config_json,
+    config_json: { description: formData.description.trim() },
+    allowed_operations: [],
+    visibility: 'org',
+    tier: 'native' as const,
   }
 }
 
 function buildUpdateBody() {
   return {
     name: formData.name.trim() || null,
-    description: formData.description.trim() || null,
-    config_json: formData.config_json.trim() || null,
+    credentials: formData.config_json.trim() || null,
+    config_json: { description: formData.description.trim() },
   }
 }
 
@@ -387,8 +413,9 @@ async function createConnector() {
       connectors.value.push({
         id: data.id,
         name: data.name,
-        connector_type: data.connector_type,
-        description: data.description,
+        connector_type: data.connector_type_id,
+        description: typeof data.config_json.description === 'string' ? data.config_json.description : null,
+        enabled: true,
       })
       closeForm()
     }
@@ -404,7 +431,7 @@ async function updateConnector() {
   saving.value = true
   formError.value = null
   try {
-    const { data, error: err } = await api.PUT('/api/v1/connectors/{connector_id}', {
+    const { data, error: err } = await api.PATCH('/api/v1/connectors/{connector_id}', {
       params: { path: { connector_id: editConnectorId.value } },
       body: buildUpdateBody(),
     })
@@ -416,8 +443,9 @@ async function updateConnector() {
         connectors.value[idx] = {
           id: data.id,
           name: data.name,
-          connector_type: data.connector_type,
-          description: data.description,
+          connector_type: data.connector_type_id,
+          description: typeof data.config_json.description === 'string' ? data.config_json.description : null,
+          enabled: true,
         }
       }
       closeEditForm()
@@ -473,5 +501,5 @@ function connectorActions(connector: ConnectorItem) {
   ]
 }
 
-onMounted(() => { planStore.fetchPlan(); loadConnectors() })
+onMounted(() => { planStore.fetchPlan(); loadConnectors(); loadConnectorTypes() })
 </script>

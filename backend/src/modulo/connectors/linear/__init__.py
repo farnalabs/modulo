@@ -2,7 +2,8 @@
 
 import asyncio
 import json
-from typing import Any
+import random
+from typing import Any, cast
 
 import httpx
 
@@ -199,13 +200,23 @@ query($teamId: String!) {
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
-    value = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    value = response.headers.get("Retry-After")
     if value:
         try:
             return float(value)
         except (ValueError, TypeError):
             pass
     return None
+
+
+def _compute_delay(attempt: int, response: httpx.Response | None = None) -> float:
+    """Compute retry delay with exponential backoff, jitter, and optional Retry-After."""
+    if response:
+        retry_after = _parse_retry_after(response)
+        if retry_after is not None:
+            return float(min(retry_after, _MAX_DELAY))
+    jitter = random.uniform(0, 1)  # noqa: S311 — non-crypto jitter for retry backoff
+    return float(min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY))
 
 
 class LinearConnector(ConnectorBase):
@@ -258,38 +269,34 @@ class LinearConnector(ConnectorBase):
                     if r.status_code == 304:
                         raise ValueError("Linear API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                        retry_after = _parse_retry_after(r)
-                        delay = (
-                            min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                        )
+                        delay = _compute_delay(attempt, r)
                         await asyncio.sleep(delay)
                         continue
                     r.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                    retry_after = _parse_retry_after(exc.response)
-                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt, exc.response)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
                 raise ValueError(f"Linear API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
                 raise ValueError("Linear API timeout") from exc
             except httpx.ConnectError as exc:
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
                 raise ValueError("Linear API connection error") from exc
             except httpx.ProtocolError as exc:
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
@@ -300,10 +307,12 @@ class LinearConnector(ConnectorBase):
                 raise ValueError(f"Linear API invalid response: {exc}") from exc
             if "errors" in body:
                 raise ValueError(f"Linear API error: {body['errors']}")
-            data: dict[str, Any] = body.get("data")
-            if data is None:
-                data = {}
-            return data
+            raw_data = body.get("data")
+            if raw_data is None:
+                return {}
+            if not isinstance(raw_data, dict):
+                raise ValueError("Linear API response 'data' must be an object")
+            return cast(dict[str, Any], raw_data)
         raise ValueError("Linear API request failed after retries") from last_exc
 
     async def health_check(self) -> HealthResult:
@@ -314,15 +323,17 @@ class LinearConnector(ConnectorBase):
                 return HealthResult(ok=False, detail="No viewer returned — invalid API key?")
             name = viewer.get("name") or viewer.get("email") or viewer.get("id", "")
             return HealthResult(ok=True, detail=name)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "issue":
-                issue_id = q.filters.get("id")
-                if not issue_id:
+                if "id" not in q.filters:
                     raise ValueError("Linear issue query requires 'id' filter")
+                issue_id = q.filters["id"]
                 data = await self._graphql(_GET_ISSUE_QUERY, {"id": issue_id})
                 issue = data.get("issue")
                 if issue is None:

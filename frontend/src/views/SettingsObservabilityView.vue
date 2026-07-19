@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-narrow">
     <PageHeader :title="$t('views.SettingsObservabilityView.observability')" :subtitle="$t('views.SettingsObservabilityView.configure_opentelemetry_export_and_langsmith_integration')" />
 
@@ -23,8 +23,8 @@
         <div class="rounded-lg border bg-card p-6 shadow-sm">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsObservabilityView.otlp_endpoint') }}</h2>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.endpoint_url') }}</label>
-            <input
+            <label for="settingsobservabilityview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.endpoint_url') }}</label>
+            <input id="settingsobservabilityview-field-3"
               v-model="otlpEndpoint"
               type="url"
               data-testid="settings-observability-otlp-endpoint"
@@ -37,14 +37,15 @@
         <div class="rounded-lg border bg-card p-6 shadow-sm">
           <div class="mb-4 flex items-center justify-between">
             <h2 class="text-base font-semibold">{{ $t('views.SettingsObservabilityView.otlp_headers') }}</h2>
-            <button
+            <Button
+              variant="default"
+              size="sm"
               type="button"
-              class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
               data-testid="settings-observability-add-header"
               @click="addHeader"
             >
               {{ $t('views.SettingsObservabilityView.add_header') }}
-            </button>
+            </Button>
           </div>
           <div v-if="otlpHeaders.length === 0" data-testid="settings-observability-no-headers" class="text-sm text-muted-foreground">
             {{ $t('views.SettingsObservabilityView.no_custom_headers_configured') }}
@@ -82,8 +83,8 @@
         <div class="rounded-lg border bg-card p-6 shadow-sm">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsObservabilityView.export_interval') }}</h2>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.interval_seconds') }}</label>
-            <input
+            <label for="settingsobservabilityview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.interval_seconds') }}</label>
+            <input id="settingsobservabilityview-field-2"
               v-model.number="exportIntervalSeconds"
               type="number"
               min="1"
@@ -119,8 +120,8 @@
               <span class="text-sm font-medium">{{ $t('views.SettingsObservabilityView.enable_langsmith_tracing') }}</span>
             </div>
             <div v-if="langsmithEnabled">
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.api_key') }}</label>
-              <textarea
+              <label for="settingsobservabilityview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.api_key') }}</label>
+              <textarea id="settingsobservabilityview-field-1"
                 v-model="langsmithApiKey"
                 data-testid="settings-observability-langsmith-api-key"
                 rows="3"
@@ -178,14 +179,14 @@
           >
             {{ $t('views.SettingsObservabilityView.reset') }}
           </button>
-          <button
+          <Button
             type="submit"
+            variant="default"
             :disabled="saving"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             data-testid="settings-observability-save"
           >
             {{ saving ? $t('views.SettingsObservabilityView.saving') : $t('views.SettingsObservabilityView.save') }}
-          </button>
+          </Button>
         </div>
       </form>
     </FeatureGate>
@@ -204,6 +205,7 @@ import { formatApiError } from '../lib/api/formatError'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { Button } from '@/components/ui/button'
 
 type OtelSettingsResponse = components['schemas']['OtelSettingsResponse']
 type TestSpanResult = components['schemas']['TestSpanResult']

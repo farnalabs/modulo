@@ -1,9 +1,7 @@
-from __future__ import annotations
-
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import (
     JSON,
@@ -73,7 +71,7 @@ class Run(OrgScoped):
     langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    organisation: Mapped[Organisation] = relationship()
-    pipeline: Mapped[Pipeline] = relationship()
-    snapshot: Mapped[PipelineSnapshot] = relationship()
-    owner_team: Mapped[Team | None] = relationship()
+    organisation: Mapped["Organisation"] = relationship()
+    pipeline: Mapped["Pipeline"] = relationship()
+    snapshot: Mapped["PipelineSnapshot"] = relationship()
+    owner_team: Mapped[Optional["Team"]] = relationship()

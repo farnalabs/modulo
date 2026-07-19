@@ -51,7 +51,9 @@ class RemyConfig(BaseModel):
     rate_limit_window_seconds: int = 60
     allowed_selectors: list[str] = Field(
         default_factory=list,
-        description="If non-empty, Remy can only interact with elements matching these CSS selectors or data-testid prefixes",
+        description=(
+            "If non-empty, Remy can only interact with elements matching these CSS selectors or data-testid prefixes"
+        ),
     )
     allowed_page_patterns: list[str] = Field(
         default_factory=list, description="If non-empty, Remy can only navigate to pages matching these URL patterns"
@@ -147,9 +149,8 @@ class RemyConfigService:
                 key=f"{_CONFIG_KEY_PREFIX}{org_id}",
                 value=config.model_dump(),
             )
-            await self._session.commit()
+            await self._session.flush()
         except SQLAlchemyError:
-            await self._session.rollback()
             logger.exception("Failed to update Remy config for org %s", org_id)
             raise
 
@@ -174,7 +175,7 @@ class RemyConfigService:
         if user_id in allowed_user_ids:
             return True
 
-        if user_role.lower() in (r.lower() for r in access.get("org_roles", [])):
+        if user_role.lower() in (r.lower() for r in (access.get("org_roles") or [])):
             return True
 
         allowed_team_ids = _normalize_uuids(access.get("team_ids", []))

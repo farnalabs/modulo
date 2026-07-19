@@ -1,15 +1,14 @@
-"""BDD step definitions: View as team â€” non-admin rejection."""
+"""BDD step definitions: View as team — non-admin rejection."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/view_as_team_non_admin_rejected.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 

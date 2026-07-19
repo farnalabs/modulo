@@ -339,7 +339,9 @@ using the configured secrets backend (Fernet, Vault, or AWS Secrets Manager).
 
 ### 5.1 Image Vulnerability Scanning
 
-All Modulo Docker images are scanned with Trivy as part of CI:
+All Modulo Docker images are scanned with Trivy as part of CI. The workflow scans
+the exact locally loaded image produced by the cached Buildx build, and only pushes
+that image to GHCR after the critical-vulnerability gate passes:
 
 ```bash
 # Manual scan

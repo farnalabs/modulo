@@ -1,6 +1,8 @@
 ---
 id: feat-auth-team-rbac
-prd: 9.2, 9.3
+prd:
+  - 9.2
+  - 9.3
 delivery-tasks: [task-nv1-team-rbac]
 bdd:
   - backend/tests/bdd/features/auth/rbac.feature
@@ -22,10 +24,9 @@ code:
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/auth/sso.py
   - backend/src/modulo/core/feature_flags.py
-  - backend/src/modulo/db/migrations/versions/0026_team_rbac_cap.py
+  - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
 unit-tests:
   - backend/tests/unit/auth/test_team_rbac.py
-  - backend/tests/unit/db/test_migration_0026.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -51,7 +52,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] A runner org member is capped at runner in any team
 - [x] An operator org member is capped at operator in any team
 - [x] An admin org member can hold any team role including operator (admin is org-only, so the effective max is operator at team scope)
-- [x] The privilege cap is enforced at the database level via a BEFORE INSERT OR UPDATE trigger (migration 0026)
+- [x] The privilege cap is enforced at the database level via a BEFORE INSERT OR UPDATE trigger (migration 0002_v2_teams_library.py)
 - [x] The trigger raises an exception when the team role exceeds the org role
 - [x] The privilege cap is also enforced in application code (REST layer) before the DB trigger fires
 - [x] Unknown roles in the trigger or application code default to a restrictive fallback (viewer)
@@ -204,7 +205,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 ### Concurrency and data integrity
 - [x] Team name uniqueness is enforced at the database level (unique constraint)
 - [x] Team membership uniqueness is enforced at the database level (unique constraint)
-- [x] Privilege cap is enforced at the database level (migration 0026 trigger) — protects against application-level bypass
+- [x] Privilege cap is enforced at the database level (BEFORE INSERT OR UPDATE trigger in migration 0002_v2_teams_library.py) — protects against application-level bypass
 - [x] Role CHECK constraint prevents invalid role values at the column level (`ck_team_memberships_role`)
 - [x] Foreign key on team_id cascades on delete (team deletion removes memberships)
 - [x] Foreign key on user_id cascades on delete (user deletion removes memberships)
@@ -241,6 +242,21 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - No `PATCH /teams/{id}/members/{id}` audit event for role changes (PUT audit events on team create/update/delete only — role changes are not audited)
 
 ## QA History
+
+### 2026-07-11 — Round 2 re-QA (index 359)
+
+**Fixed:**
+- Removed stale migration file `test_migration_0026.py` which referenced non-existent `0026_team_rbac_cap.py` — the privilege cap trigger logic was consolidated into `0002_v2_teams_library.py`
+- Updated product map frontmatter: `code:` path from `0026_team_rbac_cap.py` → `0002_v2_teams_library.py`
+- Updated product map frontmatter: `unit-tests:` removed stale `test_migration_0026.py` ref
+
+**Verified:**
+- Error handling correct: IntegrityError→409 before SQLAlchemyError→503 in all team routes
+- CancelledError guard not needed (Python 3.12+ — CancelledError doesn't inherit from Exception)
+- Frontmatter accurate (migration file path now correct)
+- All 17 known gaps still valid (no regressions)
+
+**Status:** partial
 
 ### 2026-07-04 — Cross-cutting QA (index 127)
 - Fixed CRITICAL: Added ProgrammingError→501 catches to all 8 unprotected routes in teams.py (create, get, update, delete, list_members, add_member, remove_member, change_member_role) — was returning raw 500 on missing DB table. Only list_teams had the catch.

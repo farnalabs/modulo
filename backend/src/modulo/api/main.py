@@ -4,7 +4,9 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
+from typing import Protocol, cast
 
+import anyio
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
@@ -17,6 +19,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.exception_handlers import (
     http_exception_handler,
+    unhandled_exception_handler,
     validation_exception_handler,
 )
 from modulo.api.mcp_server import build_mcp_asgi_app
@@ -32,6 +35,7 @@ from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_email import router as admin_email_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
+from modulo.api.routes.admin_housekeeping import router as admin_housekeeping_router
 from modulo.api.routes.admin_license import router as admin_license_router
 from modulo.api.routes.admin_monitor_config import router as admin_monitor_config_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
@@ -73,11 +77,14 @@ from modulo.api.routes.manifest import router as manifest_router
 from modulo.api.routes.mcp_oauth import router as mcp_oauth_router
 from modulo.api.routes.mcp_setup import router as mcp_setup_router
 from modulo.api.routes.me import router as me_router
+from modulo.api.routes.metrics import router as metrics_router
 from modulo.api.routes.model_backends import router as model_backends_router
 from modulo.api.routes.node_categories import router as node_categories_router
 from modulo.api.routes.notifications import router as notifications_router
 from modulo.api.routes.observability import router as observability_router
 from modulo.api.routes.onboarding import router as onboarding_router
+from modulo.api.routes.parameter_schemas import router as parameter_schemas_router
+from modulo.api.routes.pipeline_folders import router as pipeline_folders_router
 from modulo.api.routes.pipelines import router as pipelines_router
 from modulo.api.routes.plugins import router as plugins_router
 from modulo.api.routes.registry import router as registry_router
@@ -100,15 +107,23 @@ from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
-from modulo.core.in_process_scheduler import dispose_scheduler_engine
+from modulo.core.in_process_scheduler import dispose_scheduler_engine, start_schedulers
 from modulo.core.logging_config import configure_logging
+from modulo.core.seed_data.catalog import FLAGS, TIERS
 from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
 
+# Uptime tracking — set at module import time, read by health endpoints.
 logger = logging.getLogger(__name__)
 
-# Uptime tracking — set at module import time, read by health endpoints.
+
+class _TaskGroupSessionManager(Protocol):
+    """FastMCP session-manager surface used by the application lifespan."""
+
+    _task_group: anyio.abc.TaskGroup | None
+
+
 _START_TIME = datetime.now(UTC)
 
 # Graceful shutdown manager — resources registered during lifespan startup.
@@ -116,11 +131,7 @@ _shutdown_manager = ShutdownManager()
 
 
 async def _verify_db_connectivity(settings: Settings) -> None:
-    """Verify the database is reachable at startup.
-
-    Raises RuntimeError if the DB is unreachable after several retries,
-    preventing the app from starting in a broken state.
-    """
+    """Check database connectivity without preventing application startup."""
     engine = get_or_create_engine(settings)
     for attempt in range(1, 4):
         try:
@@ -132,11 +143,12 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             logger.warning(
                 "startup.db_connectivity_attempt_failed",
                 extra={"attempt": attempt, "error": str(exc)},
+                exc_info=True,
             )
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
     logger.error("startup.db_unreachable")
-    raise RuntimeError("Database is unreachable after 3 retry attempts — cannot start.")
+    logger.warning("startup.continuing_without_db — app will retry connections at runtime")
 
 
 async def _run_migrations(settings: Settings) -> None:
@@ -211,10 +223,11 @@ async def _seed_modulo_users(settings: Settings) -> None:
             existing_account = result.scalar_one_or_none()
             pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
-            if existing_account is not None:
-                if not existing_account.password_hash or not existing_account.password_hash.startswith("$2"):
-                    existing_account.password_hash = pw_hash
-                    logger.info("startup.user_rehashed", extra={"email": email})
+            if existing_account is not None and (
+                not existing_account.password_hash or not existing_account.password_hash.startswith("$2")
+            ):
+                existing_account.password_hash = pw_hash
+                logger.info("startup.user_rehashed", extra={"email": email})
 
                 # Ensure OrgMembership exists and role is correct
                 mem_result = await session.execute(
@@ -241,6 +254,10 @@ async def _seed_modulo_users(settings: Settings) -> None:
                     logger.info("startup.user_membership_created", extra={"email": email})
                 continue
 
+            if existing_account is not None:
+                logger.info("startup.user_exists", extra={"email": email})
+                continue
+
             account = Account(
                 email=email,
                 display_name=email.split("@")[0],
@@ -260,10 +277,11 @@ async def _seed_modulo_users(settings: Settings) -> None:
 
 
 async def _seed_demo_data(settings: Settings) -> None:
-    """Seed demo data when MODULO_DEMO_MODE is enabled.
+    """Seed rich demo data when MODULO_DEMO_MODE is enabled.
 
-    Creates a read-only demo account. Future iterations may seed sample
-    pipelines, agents, schemas, and connectors.
+    Creates a demo account with admin role, sample pipelines,
+    schemas, model backends, connectors, library primitives,
+    stages, and other resources for find-and-fix exploration.
     """
     if not settings.modulo_demo_mode:
         return
@@ -273,8 +291,13 @@ async def _seed_demo_data(settings: Settings) -> None:
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
     from modulo.auth.passwords import hash_password
     from modulo.db.models.account import Account
+    from modulo.db.models.model_backend import ModelBackend
     from modulo.db.models.org_membership import OrgMembership
     from modulo.db.models.organisation import Organisation
+    from modulo.db.models.pipeline import Pipeline
+    from modulo.db.models.schema import Schema, SchemaVersion
+    from modulo.db.models.stage import Stage
+    from modulo.db.rls import set_rls_org
 
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
@@ -286,6 +309,14 @@ async def _seed_demo_data(settings: Settings) -> None:
             logger.warning("startup.demo_no_org")
             return
 
+        org_id = org.id
+
+        # Set org to Team Plan so all team-tier features are active
+        if org.plan_id != "team":
+            org.plan_id = "team"
+            logger.info("startup.demo_org_plan_set_to_team")
+
+        # Seed or update demo account with admin role
         demo_email = "demo"
         result = await session.execute(select(Account).where(Account.email == demo_email))
         demo_account = result.scalar_one_or_none()
@@ -301,11 +332,97 @@ async def _seed_demo_data(settings: Settings) -> None:
 
             membership = OrgMembership(
                 account_id=demo_account.id,
-                organisation_id=org.id,
-                role="viewer",
+                organisation_id=org_id,
+                role="admin",
             )
             session.add(membership)
             logger.info("startup.demo_user_seeded")
+
+        # Ensure admin user also has admin role
+        admin_result = await session.execute(select(Account).where(Account.email == "admin"))
+        admin_account = admin_result.scalar_one_or_none()
+        if admin_account is not None:
+            admin_membership_result = await session.execute(
+                select(OrgMembership).where(
+                    OrgMembership.account_id == admin_account.id,
+                    OrgMembership.organisation_id == org_id,
+                )
+            )
+            admin_membership = admin_membership_result.scalar_one_or_none()
+            if admin_membership is not None and admin_membership.role != "admin":
+                admin_membership.role = "admin"
+                logger.info("startup.admin_role_upgraded")
+
+        await session.flush()
+
+        # Set RLS context for subsequent queries
+        await set_rls_org(session, org_id)
+
+        # Seed a sample pipeline
+        existing_pipelines = await session.execute(select(Pipeline).where(Pipeline.organisation_id == org_id).limit(1))
+        if existing_pipelines.scalar_one_or_none() is None:
+            pipeline = Pipeline(
+                organisation_id=org_id,
+                account_id=demo_account.id,
+                name="Demo Pipeline",
+                description="A sample pipeline for exploration",
+                graph_nodes_json=[{"id": "node-1", "type": "input", "label": "Start"}],
+            )
+            session.add(pipeline)
+            logger.info("startup.demo_pipeline_seeded")
+
+        # Seed a sample schema + version
+        existing_schemas = await session.execute(select(Schema).where(Schema.organisation_id == org_id).limit(1))
+        if existing_schemas.scalar_one_or_none() is None:
+            schema = Schema(
+                organisation_id=org_id,
+                account_id=demo_account.id,
+                name="Demo Schema",
+                description="A sample schema for exploration",
+            )
+            session.add(schema)
+            await session.flush()
+
+            schema_version = SchemaVersion(
+                organisation_id=org_id,
+                account_id=demo_account.id,
+                schema_id=schema.id,
+                version="v1",
+                version_number=1,
+                definition_json={"type": "object", "properties": {}},
+            )
+            session.add(schema_version)
+            logger.info("startup.demo_schema_seeded")
+
+        # Seed a sample model backend
+        existing_mbs = await session.execute(
+            select(ModelBackend).where(ModelBackend.organisation_id == org_id).limit(1)
+        )
+        if existing_mbs.scalar_one_or_none() is None:
+            mb = ModelBackend(
+                organisation_id=org_id,
+                account_id=demo_account.id,
+                name="Stub Model (Demo)",
+                display_name="Stub Model (Demo)",
+                provider="stub",
+                model_id="demo-model",
+                credentials_ciphertext=b"demo-encrypted",
+            )
+            session.add(mb)
+            logger.info("startup.demo_model_backend_seeded")
+
+        # Seed a sample stage
+        existing_stages = await session.execute(select(Stage).where(Stage.organisation_id == org_id).limit(1))
+        if existing_stages.scalar_one_or_none() is None:
+            stage = Stage(
+                organisation_id=org_id,
+                account_id=demo_account.id,
+                name="Development",
+                description="Development stage for testing pipelines",
+                position=0,
+            )
+            session.add(stage)
+            logger.info("startup.demo_stage_seeded")
 
         logger.info("startup.demo_data_ready")
 
@@ -323,6 +440,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
     from sqlalchemy import select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.auth.secret_storage import encrypt_stored_secret
     from modulo.db.models.sso_provider import SsoProvider
 
     engine = get_or_create_engine(settings)
@@ -339,8 +457,9 @@ async def _seed_sso_providers(settings: Settings) -> None:
             logger.warning("startup.sso_providers_invalid_json")
             return
 
+        required_fields = ("provider_id", "client_id", "client_secret", "discovery_url")
         for entry in entries:
-            if not all(k in entry for k in ("provider_id", "client_id", "client_secret", "discovery_url")):
+            if not isinstance(entry, dict) or any(key not in entry for key in required_fields):
                 logger.warning("startup.sso_provider_skipped", extra={"entry": str(entry)})
                 continue
 
@@ -348,7 +467,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
                 provider_type="oidc",
                 name=entry.get("provider_id", entry.get("name", "Imported OIDC Provider")),
                 client_id=entry["client_id"],
-                client_secret=entry["client_secret"],
+                client_secret=encrypt_stored_secret(entry["client_secret"], settings.fernet_key),
                 discovery_url=entry["discovery_url"],
                 scopes=json.dumps(["openid", "profile", "email"]),
                 enabled=True,
@@ -481,7 +600,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("startup.default_license_key_in_use")
     from modulo.core.license import check_production_public_key
 
-    check_production_public_key(settings)
+    try:
+        check_production_public_key(settings)
+    except Exception:
+        logger.warning("startup.production_public_key_check_failed", exc_info=True)
 
     if settings.modulo_db.lower() == "sqlite":
         logger.warning("startup.sqlite_mode")
@@ -492,7 +614,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             "caching, and session state. Provision Upstash Redis and set REDIS_URL in fly.toml."
         )
     logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
-    _scheduler_tasks: list[asyncio.Task] = []
+    _scheduler_tasks = await start_schedulers(engine=db_engine)
 
     setup_otel(
         service_name=settings.modulo_otel_service_name,
@@ -524,31 +646,80 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _run_migrations(settings)
 
     # Ensure at least one organisation exists before seeding users.
-    await _ensure_default_org(settings)
+    # Non-fatal: if the organisations table doesn't exist (migration state
+    # mismatch), the app starts without an org and retries on next restart.
+    try:
+        await _ensure_default_org(settings)
+    except Exception:
+        logger.warning("startup.default_org_failed", exc_info=True)
 
     # Seed MODULO_USERS env var entries into the user table (idempotent).
-    await _seed_modulo_users(settings)
+    # Non-fatal: if tables are missing, seeding is retried on next restart.
+    try:
+        await _seed_modulo_users(settings)
+    except Exception:
+        logger.warning("startup.user_seed_failed", exc_info=True)
 
     # Seed demo data if MODULO_DEMO_MODE is enabled.
-    await _seed_demo_data(settings)
+    try:
+        await _seed_demo_data(settings)
+    except Exception:
+        logger.warning("startup.demo_seed_failed", exc_info=True)
 
     # Seed SSO providers from deprecated env vars into the DB table (idempotent).
-    await _seed_sso_providers(settings)
+    try:
+        await _seed_sso_providers(settings)
+    except Exception:
+        logger.warning("startup.sso_providers_seed_failed", exc_info=True)
 
     # Seed the default modulo-dev EnvironmentProfile for the dogfood pipeline.
-    await _seed_environment_profiles(settings)
+    try:
+        await _seed_environment_profiles(settings)
+    except Exception:
+        logger.warning("startup.env_profile_seed_failed", exc_info=True)
+
+    # Seed the tier catalog and feature flag definitions (idempotent).
+    try:
+        await _seed_tier_catalog(settings)
+    except Exception:
+        logger.warning("startup.tier_catalog_seed_failed", exc_info=True)
 
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
-    await _init_checkpointer(
-        pg_connection_string(settings.database_url),
-        settings.fernet_key,
-        fernet_key_old=settings.fernet_key_old,
-    )
+    try:
+        await _init_checkpointer(
+            pg_connection_string(settings.database_url),
+            settings.fernet_key,
+            fernet_key_old=settings.fernet_key_old,
+        )
+    except Exception:
+        logger.warning("startup.checkpointer_init_failed_during_lifespan", exc_info=True)
 
     # Initialise the runtime-config store so it captures env-var state at boot.
     from modulo.core.runtime_config.store import get_runtime_config_store
 
     get_runtime_config_store()
+
+    # Start the background pipeline worker (after migrations and checkpointer init).
+    try:
+        from modulo.api.mcp_server import set_background_worker as set_mcp_bg_worker
+        from modulo.api.routes.runs import set_background_worker as set_runs_bg_worker
+        from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
+
+        _bg_worker = BackgroundPipelineWorker(
+            database_url=str(settings.database_url),
+            checkpointer_conn_string=pg_connection_string(settings.database_url),
+        )
+        await _bg_worker.start()
+        set_runs_bg_worker(_bg_worker)
+        set_mcp_bg_worker(_bg_worker)
+        from modulo.api.routes.health import set_worker_ref as set_health_bg_worker
+
+        set_health_bg_worker(_bg_worker)
+        from modulo.core.in_process_scheduler import set_bg_worker as set_scheduler_bg_worker
+
+        set_scheduler_bg_worker(_bg_worker)
+    except Exception:
+        logger.warning("startup.background_worker_init_failed", exc_info=True)
 
     # Initialise the graceful shutdown manager with the configured timeout.
     # Two session factories exist:
@@ -557,12 +728,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Both point to the same DB URL but have separate connection pools.  They
     # are intentionally decoupled — the entrypoint runs before FastAPI is
     # initialised and can't use DI.  Dispose both so no connections leak.
-    _di_engine = get_or_create_engine(settings)
-    _shutdown_manager.register("otel", shutdown_otel)
-    _shutdown_manager.register("db_engine", db_engine.dispose)
-    _shutdown_manager.register("di_engine", _di_engine.dispose)
-    _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
-    _shutdown_manager.register("scheduler_engine", dispose_scheduler_engine)
+    try:
+        _di_engine = get_or_create_engine(settings)
+
+        async def shutdown_otel_async() -> None:
+            shutdown_otel()
+
+        _shutdown_manager.register("otel", shutdown_otel_async)
+        _shutdown_manager.register("db_engine", db_engine.dispose)
+        _shutdown_manager.register("di_engine", _di_engine.dispose)
+        _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
+        _shutdown_manager.register("scheduler_engine", dispose_scheduler_engine)
+    except Exception:
+        logger.warning("startup.shutdown_manager_init_failed", exc_info=True)
 
     # Start the run retention background loop.
     retention_task = asyncio.create_task(_run_retention_loop())
@@ -583,12 +761,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _claim_expiry_job.start()
 
     # Start MCP task group so FastMCP's _handle_stateless_request can use tg.start().
-    import anyio
-
     from modulo.api.mcp_server import mcp
 
     _mcp_tg = await anyio.create_task_group().__aenter__()
-    mcp.session_manager._task_group = _mcp_tg
+    # FastMCP annotates this private integration slot as None despite assigning a TaskGroup at runtime.
+    session_manager = cast(_TaskGroupSessionManager, mcp.session_manager)
+    session_manager._task_group = _mcp_tg
 
     yield
 
@@ -604,7 +782,36 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await st
     except asyncio.CancelledError:
         pass
+    await dispose_scheduler_engine()
+    with suppress(NameError):
+        await _bg_worker.stop()
     await _shutdown_manager.shutdown()
+
+
+async def _seed_tier_catalog(settings: object) -> None:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from modulo.db.session import engine as db_engine
+
+    async with AsyncSession(db_engine, autobegin=False) as session, session.begin():
+        for tier in TIERS:
+            await session.execute(
+                text("""
+                        INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description)
+                        VALUES (:tier_id, :label, :rank, :requires_license, :description)
+                        ON CONFLICT (tier_id) DO NOTHING
+                    """),
+                tier,
+            )
+        for flag in FLAGS:
+            await session.execute(
+                text("""
+                        INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active)
+                        VALUES (:name, :description, :tier_id, :depends_on, true)
+                        ON CONFLICT (name) DO NOTHING
+                    """),
+                flag,
+            )
 
 
 app = FastAPI(
@@ -643,7 +850,7 @@ DeprecationHeaderMiddleware.deprecate(
 )
 app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
-app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)  # type: ignore[arg-type]
+app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)
 app.add_middleware(RequestTimeoutMiddleware, timeout_seconds=120, overrides={"/healthz": 5, "/healthz/ready": 15})
 
 app.include_router(health_router)
@@ -657,6 +864,7 @@ app.include_router(admin_sso_router)
 app.include_router(admin_system_config_router)
 app.include_router(admin_tiers_router)
 app.include_router(admin_triggers_router)
+app.include_router(admin_housekeeping_router)
 app.include_router(auth_router)
 app.include_router(changelog_router)
 app.include_router(sso_router)
@@ -665,7 +873,9 @@ app.include_router(deployment_router)
 app.include_router(costs_router)
 app.include_router(teams_router)
 app.include_router(pipelines_router)
+app.include_router(pipeline_folders_router)
 app.include_router(agents_router)
+app.include_router(parameter_schemas_router)
 app.include_router(hitl_router)
 app.include_router(schemas_router)
 app.include_router(model_backends_router)
@@ -714,6 +924,13 @@ app.include_router(errors_router)
 app.include_router(events_router)
 app.include_router(remy_router)
 app.include_router(manifest_router)
+app.include_router(metrics_router)
+
+# Strip router lifespan contexts — none of the 68+ routers register
+# on_startup/on_shutdown handlers, so every _DefaultLifespan is a no-op.
+# Keeping the deeply nested _merge_lifespan_context chain causes infinite
+# recursion in Docker builds (FastAPI 0.139.0, Python 3.12, Linux).
+app.router.lifespan_context = _lifespan
 
 # Remote MCP server — mounted as a Starlette sub-app at /mcp.
 # Auth is enforced by McpAuthMiddleware inside the sub-app.
@@ -721,3 +938,4 @@ app.mount("/mcp", build_mcp_asgi_app())
 
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(Exception, unhandled_exception_handler)

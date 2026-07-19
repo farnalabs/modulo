@@ -99,16 +99,6 @@ async def set_rls_user_context(session: AsyncSession, user_id: uuid.UUID, org_ro
         session.info["org_role"] = org_role
 
 
-async def set_rls_org_for_admin(session: AsyncSession, target_org_id: uuid.UUID) -> None:
-    """Set RLS context to a specific org for system admin operations.
-
-    System admins may operate on orgs other than their own. This helper
-    scopes the current transaction to *target_org_id* so that all subsequent
-    queries within the transaction are tenant-filtered to that org.
-    """
-    await set_rls_org(session, target_org_id)
-
-
 def register_rls_reset_hook(engine: AsyncEngine) -> None:
     """Register a pool-checkout listener that clears stale org context.
 
@@ -153,6 +143,8 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
                 "rls_reset_hook: sync cursor API not available on this driver",
                 exc_info=True,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.warning(
                 "rls_reset_hook: failed to clear RLS session context on checkout",

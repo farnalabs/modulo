@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """Notification endpoint CRUD routes.
 
 Endpoints are org-scoped and managed via standard REST operations.
 Secrets are Fernet-encrypted at rest and never exposed in responses.
 """
 
+from __future__ import annotations
 
 import contextlib
 import json
@@ -18,14 +17,17 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
 
@@ -73,10 +75,11 @@ class NotificationEndpointResponse(BaseModel):
     team_id: str | None = None
 
 
+@handle_db_errors("notifications.list_endpoints")
 @router.get("", response_model=list[NotificationEndpointResponse])
 async def list_endpoints(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[NotificationEndpointResponse]:
     try:
         async with session.begin():
@@ -109,11 +112,12 @@ async def list_endpoints(
     return [_ep_to_response(ep) for ep in endpoints]
 
 
+@handle_db_errors("notifications.create_endpoint")
 @router.post("", response_model=NotificationEndpointResponse, status_code=status.HTTP_201_CREATED)
 async def create_endpoint(
     req: NotificationEndpointCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -142,7 +146,7 @@ async def create_endpoint(
                 organisation_id=principal.organisation_id,
                 url=req.url,
                 secret_ciphertext=secret_ciphertext,
-                events=json.dumps(req.events),
+                events=req.events,
                 description=req.description,
                 account_id=principal.account_id,
                 team_id=team_id,
@@ -173,11 +177,12 @@ async def create_endpoint(
     return _ep_to_response(ep)
 
 
+@handle_db_errors("notifications.get_endpoint")
 @router.get("/{endpoint_id}", response_model=NotificationEndpointResponse)
 async def get_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NotificationEndpointResponse:
     try:
         async with session.begin():
@@ -209,12 +214,13 @@ async def get_endpoint(
     return _ep_to_response(ep)
 
 
+@handle_db_errors("notifications.update_endpoint")
 @router.put("/{endpoint_id}", response_model=NotificationEndpointResponse)
 async def update_endpoint(
     endpoint_id: uuid.UUID,
     req: NotificationEndpointUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -239,7 +245,7 @@ async def update_endpoint(
                 fernet = Fernet(settings.fernet_key.encode())
                 ep.secret_ciphertext = fernet.encrypt(req.secret.encode())
             if req.events is not None:
-                ep.events = json.dumps(req.events)
+                ep.events = req.events
             if req.description is not None:
                 ep.description = req.description
             if req.team_id is not None:
@@ -270,11 +276,12 @@ async def update_endpoint(
     return _ep_to_response(ep)
 
 
+@handle_db_errors("notifications.delete_endpoint")
 @router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -307,9 +314,21 @@ async def delete_endpoint(
 
 
 def _ep_to_response(ep: NotificationEndpoint) -> NotificationEndpointResponse:
+    raw_events: object = ep.events
     events: list[str] = []
-    with contextlib.suppress(json.JSONDecodeError, TypeError):
-        events = json.loads(ep.events) if ep.events else []
+    if isinstance(raw_events, list):
+        if not raw_events:
+            events = []
+        elif not any(not isinstance(event, str) for event in raw_events):
+            events = raw_events
+    if isinstance(raw_events, str):
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            parsed = json.loads(raw_events)
+            if isinstance(parsed, list):
+                if not parsed:
+                    events = []
+                elif not any(not isinstance(event, str) for event in parsed):
+                    events = parsed
     return NotificationEndpointResponse(
         id=ep.id,
         url=ep.url,

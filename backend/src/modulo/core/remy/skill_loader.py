@@ -80,8 +80,13 @@ class SkillLoader:
             )
             result = await self._session.execute(stmt)
             return [self._to_entry(s) for s in result.scalars().all()]
+        except asyncio.CancelledError:
+            raise
         except SQLAlchemyError:
             logger.exception("Failed to query skills with filters %s", filters)
+            return []
+        except Exception:
+            logger.exception("Unexpected error querying skills with filters %s", filters)
             return []
 
     async def get_org_skills(self, org_id: uuid.UUID) -> list[SkillEntry]:
@@ -125,8 +130,13 @@ class SkillLoader:
                 if org.plan_id:
                     lines.append(f"- **Plan:** {org.plan_id}")
             return "\n".join(lines)
+        except asyncio.CancelledError:
+            raise
         except SQLAlchemyError:
             logger.exception("Failed to build user profile for user %s", user_id)
+            return None
+        except Exception:
+            logger.exception("Unexpected error building user profile for user %s", user_id)
             return None
 
     def _build_knowledge_tools_section(self, skills: list[SkillEntry], ctx_sources: dict[str, str]) -> str | None:

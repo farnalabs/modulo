@@ -10,9 +10,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.environment_profile import (
     create_environment_profile,
     delete_environment_profile,
@@ -109,12 +110,13 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
     )
 
 
+@handle_db_errors("environment_profiles.list_profiles")
 @router.get("", response_model=ProfileListResponse)
 async def list_profiles(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileListResponse:
     try:
         async with session.begin():
@@ -147,11 +149,12 @@ async def list_profiles(
     )
 
 
+@handle_db_errors("environment_profiles.create_profile")
 @router.post("", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
 async def create_profile(
     req: ProfileCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileResponse:
     try:
         async with session.begin():
@@ -200,11 +203,12 @@ async def create_profile(
     return _to_response(profile)
 
 
+@handle_db_errors("environment_profiles.get_profile")
 @router.get("/{profile_id}", response_model=ProfileResponse)
 async def get_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileResponse:
     try:
         async with session.begin():
@@ -232,12 +236,13 @@ async def get_profile(
     return _to_response(profile)
 
 
+@handle_db_errors("environment_profiles.update_profile")
 @router.put("/{profile_id}", response_model=ProfileResponse)
 async def update_profile(
     profile_id: uuid.UUID,
     req: ProfileUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileResponse:
     updates = req.model_dump(exclude_unset=True)
     if "capabilities" in updates:
@@ -277,11 +282,12 @@ async def update_profile(
     return _to_response(profile)
 
 
+@handle_db_errors("environment_profiles.delete_profile")
 @router.delete("/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():

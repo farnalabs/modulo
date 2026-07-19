@@ -2,11 +2,12 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock
 
+import jwt as pyjwt
 import pytest
-from jose import JWTError
-from jose import jwt as jose_jwt
+from jwt import InvalidTokenError as JWTError
 
 from modulo.auth.oauth import (
     InvalidClientError,
@@ -42,7 +43,7 @@ def _make_session_mock() -> AsyncMock:
     """Create an AsyncMock session with begin() returning an async context manager."""
 
     class _AsyncSessionContextManager:
-        async def __aenter__(self) -> "_AsyncSessionContextManager":
+        async def __aenter__(self) -> Self:
             return self
 
         async def __aexit__(
@@ -447,90 +448,35 @@ class TestOAuthAccessToken:
         with pytest.raises(JWTError):
             decode_oauth_access_token(token, "x" * 32)
 
-    def test_decode_wrong_purpose_raises(self) -> None:
-        claims = {
-            "sub": "c",
-            "org_id": str(_ORG_ID),
-            "scopes": "",
-            "purpose": "access",
-            "token_family": "f",
-            "token_sequence": 0,
-            "iat": datetime.now(UTC),
-            "exp": datetime.now(UTC) + timedelta(hours=1),
-        }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
-        with pytest.raises(JWTError, match="purpose"):
-            decode_oauth_access_token(token, _SECRET_KEY)
-
-    def test_decode_missing_sub_raises(self) -> None:
-        claims = {
-            "org_id": str(_ORG_ID),
-            "scopes": "",
-            "purpose": "oauth_access",
-            "token_family": "f",
-            "token_sequence": 0,
-            "iat": datetime.now(UTC),
-            "exp": datetime.now(UTC) + timedelta(hours=1),
-        }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
-        with pytest.raises(JWTError, match="sub"):
-            decode_oauth_access_token(token, _SECRET_KEY)
-
-    def test_decode_missing_org_id_raises(self) -> None:
-        claims = {
-            "sub": "c",
-            "scopes": "",
-            "purpose": "oauth_access",
-            "token_family": "f",
-            "token_sequence": 0,
-            "iat": datetime.now(UTC),
-            "exp": datetime.now(UTC) + timedelta(hours=1),
-        }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
-        with pytest.raises(JWTError, match="org_id"):
-            decode_oauth_access_token(token, _SECRET_KEY)
-
-    def test_decode_missing_token_family_raises(self) -> None:
-        claims = {
-            "sub": "c",
-            "org_id": str(_ORG_ID),
-            "scopes": "",
-            "purpose": "oauth_access",
-            "token_sequence": 0,
-            "iat": datetime.now(UTC),
-            "exp": datetime.now(UTC) + timedelta(hours=1),
-        }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
-        with pytest.raises(JWTError, match="token_family"):
-            decode_oauth_access_token(token, _SECRET_KEY)
-
-    def test_decode_missing_token_sequence_raises(self) -> None:
-        claims = {
+    @pytest.mark.parametrize(
+        ("claims_overrides", "match"),
+        [
+            ({"purpose": "access"}, "purpose"),
+            ({"sub": None}, "sub"),
+            ({"org_id": None}, "org_id"),
+            ({"token_family": None}, "token_family"),
+            ({"token_sequence": None}, "token_sequence"),
+            ({"org_id": "not-a-uuid"}, "org_id"),
+        ],
+    )
+    def test_decode_rejects_missing_or_invalid_claims(self, claims_overrides: dict, match: str) -> None:
+        base_claims: dict = {
             "sub": "c",
             "org_id": str(_ORG_ID),
             "scopes": "",
             "purpose": "oauth_access",
             "token_family": "f",
-            "iat": datetime.now(UTC),
-            "exp": datetime.now(UTC) + timedelta(hours=1),
-        }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
-        with pytest.raises(JWTError, match="token_sequence"):
-            decode_oauth_access_token(token, _SECRET_KEY)
-
-    def test_decode_malformed_org_id_raises(self) -> None:
-        claims = {
-            "sub": "c",
-            "org_id": "not-a-uuid",
-            "scopes": "",
-            "purpose": "oauth_access",
-            "token_family": "f",
             "token_sequence": 0,
             "iat": datetime.now(UTC),
             "exp": datetime.now(UTC) + timedelta(hours=1),
         }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
-        with pytest.raises(JWTError, match="org_id"):
+        for k, v in claims_overrides.items():
+            if v is None:
+                base_claims.pop(k, None)
+            else:
+                base_claims[k] = v
+        token = pyjwt.encode(base_claims, _SECRET_KEY, algorithm="HS256")
+        with pytest.raises(JWTError, match=match):
             decode_oauth_access_token(token, _SECRET_KEY)
 
     def test_decode_expired_token_raises(self) -> None:
@@ -544,7 +490,7 @@ class TestOAuthAccessToken:
             "iat": datetime.now(UTC) - timedelta(hours=2),
             "exp": datetime.now(UTC) - timedelta(hours=1),
         }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
+        token = pyjwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError):
             decode_oauth_access_token(token, _SECRET_KEY)
 

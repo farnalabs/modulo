@@ -4,8 +4,9 @@ Tests the ViewModel-level scope checks independently of the middleware,
 and verifies integration through the MCP tool handlers.
 """
 
+import uuid
 from collections.abc import Generator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -29,6 +30,18 @@ class TestCheckToolScope:
             ("runner", "cancel_run"),
             ("runner", "list_pending_hitl"),
             ("runner", "copy_library_primitive"),
+            ("runner", "list_housekeeping"),
+            ("admin", "perform_housekeeping"),
+            ("operator", "create_connector"),
+            ("admin", "create_connector"),
+            ("operator", "create_trigger"),
+            ("admin", "create_trigger"),
+            ("operator", "delete_pipeline"),
+            ("admin", "delete_pipeline"),
+            ("operator", "create_agent"),
+            ("admin", "create_agent"),
+            ("operator", "infer_schema"),
+            ("admin", "infer_schema"),
             ("operator", "review_hitl"),
             ("admin", "review_hitl"),
         ],
@@ -44,7 +57,20 @@ class TestCheckToolScope:
             ("viewer", "list_pending_hitl"),
             ("viewer", "copy_library_primitive"),
             ("viewer", "review_hitl"),
+            ("viewer", "list_housekeeping"),
             ("runner", "review_hitl"),
+            ("runner", "perform_housekeeping"),
+            ("operator", "perform_housekeeping"),
+            ("viewer", "create_connector"),
+            ("runner", "create_connector"),
+            ("viewer", "create_trigger"),
+            ("runner", "create_trigger"),
+            ("viewer", "delete_pipeline"),
+            ("runner", "delete_pipeline"),
+            ("viewer", "create_agent"),
+            ("runner", "create_agent"),
+            ("viewer", "infer_schema"),
+            ("runner", "infer_schema"),
         ],
     )
     def test_unauthorized_role_raises(self, role: str, tool: str) -> None:
@@ -185,6 +211,18 @@ class TestConstants:
             "create_pipeline",
             "update_pipeline_graph",
             "create_model_backend",
+            "list_runs",
+            "get_run_evals",
+            "list_eval_definitions",
+            "bind_connector_to_node",
+            "list_triggers",
+            "list_housekeeping",
+            "perform_housekeeping",
+            "create_connector",
+            "create_trigger",
+            "delete_pipeline",
+            "create_agent",
+            "infer_schema",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 
@@ -216,9 +254,13 @@ class TestToolHandlerScopeErrorFormat:
 
     @pytest.fixture(autouse=True)
     def _patch_auth(self) -> Generator[None, None, None]:
-        """Mock ``validate_current_auth`` to return True so scope checks are reached."""
+        """Mock ``validate_current_auth`` and set auth context so scope checks are reached."""
+        from modulo.api.mcp_server import _ctx_org_id
+
+        token = _ctx_org_id.set(uuid.UUID(_FAKE_ID))
         with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
             yield
+        _ctx_org_id.reset(token)
 
     @pytest.mark.parametrize(
         ("handler_name", "kwargs"),
@@ -279,21 +321,30 @@ class TestToolHandlerScopeErrorFormat:
         from modulo.api.mcp_server import review_hitl as _rh
 
         _role.set("runner")
-        with patch("modulo.api.mcp_server._session") as mock_session:
+        gate = MagicMock(claim_token="claim-token", expires_at=None)
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.HITLManager") as manager_class,
+        ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
+            manager_class.return_value.claim = AsyncMock(return_value=gate)
             result = await _rh(
                 run_id=_FAKE_ID,
                 gate_id="gate-1",
                 action="claim",
             )
-            assert result["error"] != "insufficient_scope"
+            assert result.get("error") != "insufficient_scope"
 
     async def test_list_pipelines_no_scope_check(self) -> None:
         from modulo.api.mcp_server import _ctx_role as _role
         from modulo.api.mcp_server import list_pipelines_tool as _lpt
 
         _role.set(None)
-        with patch("modulo.api.mcp_server._session"):
+        page = MagicMock(items=[], total=0, next_cursor=None, has_more=False)
+        with (
+            patch("modulo.api.mcp_server._session"),
+            patch("modulo.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=page)),
+        ):
             result = await _lpt()
         assert "insufficient_scope" not in result
 
@@ -302,6 +353,9 @@ class TestToolHandlerScopeErrorFormat:
         from modulo.api.mcp_server import get_run_status as _grs
 
         _role.set(None)
-        with patch("modulo.api.mcp_server._session"):
+        with (
+            patch("modulo.api.mcp_server._session"),
+            patch("modulo.api.mcp_server.get_run", new=AsyncMock(return_value=None)),
+        ):
             result = await _grs(run_id=_FAKE_ID)
         assert "insufficient_scope" not in result

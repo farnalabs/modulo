@@ -1,6 +1,6 @@
-"""Polling trigger — connector-driven condition evaluation and run creation.
+"""Polling trigger -- connector-driven condition evaluation and run creation.
 
-Fire logic lives in ``fire_polling_trigger()`` — used by both Celery beat
+Fire logic lives in ``fire_polling_trigger()`` -- used by both Celery beat
 (``PollingFireTask`` / ``DatabasePollingScheduler``) and the in-process
 scheduler (``InProcessPollingScheduler`` in ``modulo.core.in_process_scheduler``).
 """
@@ -59,13 +59,6 @@ def _get_engine() -> Any:
                     connect_timeout=10,
                 )
     return _engine
-
-
-async def _dispose_engine() -> None:
-    global _engine
-    if _engine is not None:
-        await _engine.dispose()
-        _engine = None
 
 
 # ---------------------------------------------------------------------------
@@ -154,12 +147,6 @@ def evaluate_condition(
 # ---------------------------------------------------------------------------
 
 
-def get_celery_app() -> Celery:
-    from modulo.celery_app import get_celery_app as _get_celery_app
-
-    return _get_celery_app()
-
-
 class PollingFireTask(Task):  # type: ignore[misc]
     """Task that fires a single polling trigger.
 
@@ -210,7 +197,7 @@ async def fire_polling_trigger(
     and async contexts.
     """
     settings = get_settings()
-    factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
+    factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
 
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
@@ -271,8 +258,12 @@ async def fire_polling_trigger(
                 connector_instance.config_json,
                 creds,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            _log.warning("Failed to initialise connector for polling trigger %s: %s", trigger_id, str(exc)[:200])
+            _log.warning(
+                "Failed to initialise connector for polling trigger %s: %s", trigger_id, str(exc)[:200], exc_info=True
+            )
             await _log_poll_event(
                 session,
                 trigger=trigger,
@@ -288,7 +279,7 @@ async def fire_polling_trigger(
             query = ConnectorQuery(resource=poll_query)
             query_result = await asyncio.wait_for(connector.query(query), timeout=60)
         except TimeoutError:
-            _log.warning("Poll query timed out for trigger %s", trigger_id)
+            _log.warning("Poll query timed out for trigger %s", trigger_id, exc_info=True)
             await _log_poll_event(
                 session,
                 trigger=trigger,
@@ -298,8 +289,10 @@ async def fire_polling_trigger(
             )
             await _update_next_fire_no_last(session, trigger)
             return {"status": "error", "reason": "query_timeout"}
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            _log.warning("Poll query failed for trigger %s: %s", trigger_id, str(exc)[:200])
+            _log.warning("Poll query failed for trigger %s: %s", trigger_id, str(exc)[:200], exc_info=True)
             await _log_poll_event(
                 session,
                 trigger=trigger,
@@ -313,8 +306,10 @@ async def fire_polling_trigger(
         # Evaluate condition
         try:
             condition_met = evaluate_condition(query_result, condition_expression)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            _log.warning("Condition evaluation failed for trigger %s: %s", trigger_id, exc)
+            _log.warning("Condition evaluation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
             await _log_poll_event(
                 session,
                 trigger=trigger,
@@ -351,7 +346,7 @@ async def fire_polling_trigger(
             snapshot_id = uuid.UUID(int=0)
 
         if snapshot_id == uuid.UUID(int=0):
-            _log.warning("Polling trigger %s has no valid snapshot_id in config", trigger_id)
+            _log.warning("Polling trigger %s has no valid snapshot_id in config", trigger_id, exc_info=True)
 
         # Build input payload from query result
         input_payload: dict[str, Any] = {
@@ -384,7 +379,7 @@ async def fire_polling_trigger(
         await _update_next_fire(session, trigger)
 
         _log.info(
-            "Polling trigger %s fired → run %s (condition met)",
+            "Polling trigger %s fired -> run %s (condition met)",
             trigger_id,
             run.id,
         )
@@ -416,26 +411,6 @@ async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> 
     now = datetime.datetime.now(datetime.UTC)
     next_fire = now + datetime.timedelta(seconds=interval)
     await session.execute(update(Trigger).where(Trigger.id == trigger.id).values(next_fire_at=next_fire))
-
-
-def _validate_poll_config(config: dict[str, Any]) -> None:
-    """Validate polling trigger configuration.
-    Raises ValueError on invalid config."""
-    interval = config.get("poll_interval_seconds")
-    if interval is not None:
-        if not isinstance(interval, (int, float)) or interval < 1:
-            raise ValueError(f"poll_interval_seconds must be >= 1, got {interval!r}")
-
-    ci_id = config.get("connector_instance_id")
-    if ci_id is not None:
-        try:
-            uuid.UUID(ci_id)
-        except (ValueError, TypeError):
-            raise ValueError(f"connector_instance_id must be a valid UUID, got {ci_id!r}")
-
-    poll_query = config.get("poll_query")
-    if poll_query is not None and not isinstance(poll_query, str):
-        raise ValueError(f"poll_query must be a string, got {poll_query!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -520,7 +495,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
 
     def __init__(self, app: Celery, **kwargs: Any) -> None:
         # _schedule must exist before super().__init__ because it calls
-        # setup_schedule() → _sync_with_db() which accesses self._schedule.
+        # setup_schedule() -> _sync_with_db() which accesses self._schedule.
         self._schedule: dict[str, DatabasePollingEntry] = {}
         super().__init__(app, **kwargs)
         # Re-set max_interval after super().__init__ since Celery's base
@@ -570,7 +545,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
     async def _fetch_due_triggers(self) -> list[dict[str, Any]]:
         """Async query for polling triggers due to fire."""
         try:
-            factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
+            factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
 
             async with factory() as session, session.begin():
                 now = datetime.datetime.now(datetime.UTC)
@@ -598,7 +573,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                     except (ValueError, TypeError):
                         connector_instance_id = None
                     if connector_instance_id is None:
-                        _log.warning("Polling trigger %s has no connector_instance_id", row.id)
+                        _log.warning("Polling trigger %s has no connector_instance_id", row.id, exc_info=True)
                         event = TriggerEvent(
                             organisation_id=row.organisation_id,
                             trigger_id=row.id,
@@ -628,6 +603,8 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                         }
                     )
                 return triggers
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to fetch polling triggers from database")
             return []

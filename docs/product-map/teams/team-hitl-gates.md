@@ -9,6 +9,7 @@ code:
   - backend/src/modulo/db/models/hitl_claim.py
   - backend/src/modulo/db/migrations/versions/0027_hitl_claim_team.py
   - backend/src/modulo/api/routes/pipelines.py
+  - backend/src/modulo/api/routes/hitl.py
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/core/pipeline_engine/node_runner.py
   - backend/src/modulo/core/pipeline_engine/graph_cache.py

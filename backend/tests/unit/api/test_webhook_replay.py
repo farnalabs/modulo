@@ -12,8 +12,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -44,7 +44,9 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     trigger_mock = MagicMock()
+    trigger_mock.id = uuid.uuid4()
     trigger_mock.pipeline_id = uuid.uuid4()
+    trigger_mock.max_concurrent_runs = 999
     execute_result = MagicMock()
     execute_result.scalar_one_or_none.return_value = trigger_mock
     session.execute = AsyncMock(return_value=execute_result)
@@ -74,6 +76,9 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
         username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
     mock_plan = MagicMock()
@@ -119,13 +124,21 @@ def test_replay_webhook_not_found_returns_404(client: TestClient) -> None:
     assert resp.json()["detail"] == "Trigger event not found"
 
 
-def test_replay_webhook_unauthenticated_returns_4xx(client: TestClient) -> None:
+def test_replay_webhook_unauthenticated_succeeds(client: TestClient) -> None:
+    """Webhook replay endpoint resolves org from the pipeline when no auth credentials are present."""
     event_id = uuid.uuid4()
+    run_mock = _make_mock_run()
     client.app.dependency_overrides.pop(get_current_user, None)
-    resp = client.post(
-        f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
-    )
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.PipelineExecutor"),
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.return_value = (run_mock, None, {})
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+        )
     client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 202

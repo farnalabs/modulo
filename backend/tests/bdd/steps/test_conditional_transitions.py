@@ -1,5 +1,6 @@
 """Step definitions for Conditional Transitions BDD features."""
 
+import contextlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,10 +12,8 @@ from modulo.core.pipeline_engine.graph_cache import (
     build_graph_from_json,
 )
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/pipelines/conditional_transitions.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @pytest.fixture

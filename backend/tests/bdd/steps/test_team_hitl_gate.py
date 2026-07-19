@@ -1,5 +1,6 @@
 """Step definitions for Team-Scoped HITL Gate features."""
 
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,10 +10,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/team_hitl_gate.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -73,7 +72,8 @@ def run_awaiting_with_team(run_name: str, gate_id: str, team_name: str, ctx):
 
 @given(
     parsers.parse(
-        'a run "{run_name}" is awaiting human at gate "{gate_id}" with required_team_id "{team_name}" and human_only true'
+        'a run "{run_name}" is awaiting human at gate "{gate_id}"'
+        ' with required_team_id "{team_name}" and human_only true'
     )
 )
 def run_awaiting_with_team_and_human_only(run_name: str, gate_id: str, team_name: str, ctx):

@@ -10,7 +10,7 @@ code:
   - backend/src/modulo/api/routes/variants.py
   - backend/src/modulo/db/crud/variant_group.py
   - backend/src/modulo/db/models/variant_group.py
-  - Website/modulo-website/src/docs/variants/variant-execution.md
+  - Website/modulo-website/src/docs/variants/variant-compare-ui.md
 unit-tests:
   - backend/tests/unit/api/test_variants.py
   - backend/tests/unit/db/crud/test_variant_group.py
@@ -143,11 +143,10 @@ Side-by-side eval scores, token costs, and output diffs across A/B test variants
 - **No "Run as variant" entry point from pipeline detail page**: PRD 8.19 specifies creating variant groups from the pipeline detail page; the current UI requires navigating to /variants/compare directly.
 - **BDD coverage is thin**: `run_variants.feature` has 5 scenarios (1 @awaiting-implementation); `variant_groups.feature` has 7 scenarios (6 @awaiting-implementation for batch, sequential, comparison, coverage signal, cost breakdown, quota batch). Only the zero-weight and basic CRUD/run/404/429 scenarios are wired.
 - **No frontend Playwright E2E tests**: No end-to-end test for the comparison view interaction.
-- **i18n violations**: Fixed in this iteration — all user-facing strings now use `$t()`/`t()` wrappers.
 
 ## QA History
 
 - 2026-07-05 (improve-architecture index 137): Cross-cutting QA pass 1. Marked 32 behaviour checkboxes [ ]→[x] after verifying against code (all comparison table, run variants, output diff, error state, pass rate, and variant group selection behaviours were implemented but not checked). Fixed i18n violations: replaced ~30 hardcoded strings in VariantCompareView.vue with `$t()`/`t()` wrappers. Added 32 i18n keys to `en-US.js` under `views.variantCompare`. Added Error Handling section (7 behaviour checkboxes). Refined Known Gaps: removed stale "BDD placeholder" gap (replaced with accurate gap count), added HITL hardcoded-to-zero gap, added no-comparison-endpoint gap, added i18n-fixed note. Updated frontmatter: added frontend smoke test to unit-tests. 1/1 frontend smoke test passes. Status: partial.
 - 2026-07-06 (Cross-cutting QA): Fixed `JSON.stringify(err)` → `formatApiError(err)` in 3 error handlers. Removed unused `VariantCompareView` locale keys from en-US.js. Created website docs stub at `evals/variant-compare-ui.md`. Added docs path to product map `code` field. Status: partial.
 - 2026-07-06: qa-iterate — Fixed MAJOR: removed `docs:` path from `unit-tests:` frontmatter field (moved to `code:`). Added `feat-variants-variant-groups` to `depends-on`. Status: partial.
-- 2026-07-07: Cross-cutting QA (index 327): Fixed MAJOR — replaced `e instanceof Error ? e.message : String(e)` with `formatApiError(e)` in 3 catch blocks for richer error detail. Fixed MAJOR — removed duplicate `@pytest.mark.asyncio` decorator in `test_variant_group.py`. Confirmed 70/70 variant tests pass (4 skipped = pre-existing batch/sequential/compare/coverage-signal gaps). Status: partial.
+- 2026-07-07: Cross-cutting QA (index 327): Fixed MAJOR — replaced `e instanceof Error ? e.message : String(e)` with `formatApiError(e)` in 3 catch blocks for richer error detail. Fixed MAJOR — removed duplicate `@pytest.mark.asyncio` decorator in `test_variant_group.py`. Confirmed 70/70 variant tests pass (4 skipped = pre-existing batch/sequential/compare/coverage-signal gaps). Fixed minor — moved i18n-fixed note from Known Gaps to QA History. Status: partial.

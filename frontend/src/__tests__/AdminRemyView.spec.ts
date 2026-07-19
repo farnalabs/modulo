@@ -4,6 +4,10 @@ import { nextTick } from 'vue'
 import { setActivePinia, createPinia } from 'pinia'
 import AdminRemyView from '../views/AdminRemyView.vue'
 
+vi.mock('../components/FeatureGate.vue', () => ({
+  default: { template: '<div><slot /></div>' },
+}))
+
 const mockRemyConfig = {
   access_list: { user_ids: [], team_ids: [], org_roles: ['admin'] },
   default_provider: 'anthropic',

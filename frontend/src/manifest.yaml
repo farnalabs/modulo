@@ -51,7 +51,7 @@ routes:
     /pipelines:
         name: pipeline-list
         breadcrumb: Pipelines
-        parent: /library
+        parent: /
         product_map:
         sidebar_group: core
         sidebar_order: 3
@@ -76,8 +76,8 @@ routes:
         breadcrumb: Copy Pipeline
         parent: /library
         product_map:
-        sidebar_group: core
-        sidebar_order: 6
+        sidebar_group:
+        sidebar_order:
         type: form_page
         <<: *community
         deprecated: false
@@ -92,6 +92,18 @@ routes:
         type: page
         <<: *community
         deprecated: false
+
+    /runs:
+        name: runs-list
+        breadcrumb: Runs
+        parent: /
+        product_map:
+        sidebar_group: core
+        sidebar_order: 5
+        type: list_page
+        <<: *community
+        deprecated: false
+        exact: true
 
     /runs/diff:
         name: runs-diff
@@ -121,7 +133,7 @@ routes:
     /runs/:id:
         name: run-detail
         breadcrumb: Run Detail
-        parent: /
+        parent: /runs
         product_map:
         sidebar_group: core
         sidebar_order: 8
@@ -456,8 +468,8 @@ routes:
         breadcrumb: Connectors
         parent: /
         product_map:
-        sidebar_group: system
-        sidebar_order: 1
+        sidebar_group: core
+        sidebar_order: 6
         type: list_page
         <<: *team
         deprecated: false
@@ -495,6 +507,17 @@ routes:
         <<: *team
         deprecated: false
 
+    /admin/housekeeping:
+        name: admin-housekeeping
+        breadcrumb: Housekeeping
+        parent: /
+        product_map:
+        sidebar_group: monitoring
+        sidebar_order: 3
+        type: page
+        <<: *community
+        deprecated: false
+
     /admin/environments:
         name: admin-environments
         breadcrumb: Environments
@@ -502,6 +525,17 @@ routes:
         product_map:
         sidebar_group:
         sidebar_order: 5
+        type: list_page
+        <<: *team
+        deprecated: false
+
+    /admin/parameter-schemas:
+        name: admin-parameter-schemas
+        breadcrumb: Parameter Schemas
+        parent: /
+        product_map:
+        sidebar_group: schemas
+        sidebar_order: 4
         type: list_page
         <<: *team
         deprecated: false
@@ -642,6 +676,9 @@ routes:
         sidebar_group:
         sidebar_order:
         type: detail_page
+        pattern: /lifecycle-maps/:id
+        dynamic_params:
+        -   id
         <<: *community
         deprecated: false
 

@@ -1,0 +1,159 @@
+{
+  "version": 2,
+  "description": "Common JSON output schemas for pipeline agent_command scripts.",
+  "schemas": {
+    "basic_result": {
+      "description": "Minimal output shared by all pipelines with cost tracking.",
+      "type": "object",
+      "required": ["status", "summary"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["completed", "failed", "skipped", "partial_failure", "issues_found"],
+          "description": "Overall pipeline outcome."
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Human-readable one-line summary of what happened."
+        },
+        "wall_clock_ms": {
+          "type": "integer",
+          "description": "Wall-clock time of the opencode call in milliseconds."
+        },
+        "cost_estimate_usd": {
+          "type": "number",
+          "description": "Estimated cost based on ~100 tokens/sec at DeepSeek V4 Flash pricing."
+        },
+        "usage": {
+          "type": "object",
+          "properties": {
+            "model": {"type": "string"},
+            "wall_clock_ms": {"type": "integer"},
+            "cost_estimate_usd": {"type": "number"}
+          },
+          "description": "Model usage summary."
+        },
+        "output_json": {
+          "type": "object",
+          "description": "Extended output data specific to each pipeline."
+        }
+      }
+    },
+
+    "pull_request_ref": {
+      "description": "References a pull request. Used as an extension to basic_result.",
+      "type": "object",
+      "properties": {
+        "pull_request_url": { "type": "string", "format": "uri" },
+        "pr_number": { "type": "integer" },
+        "branch": { "type": "string" },
+        "commit_sha": { "type": "string", "pattern": "^[a-f0-9]{40}$" }
+      }
+    },
+
+    "review_output": {
+      "description": "Output from PR Reviewer pipeline.",
+      "allOf": [
+        { "$ref": "#/schemas/basic_result" },
+        {
+          "type": "object",
+          "properties": {
+            "changed_files_count": { "type": "integer", "minimum": 0 },
+            "review_comment_url": { "type": "string", "format": "uri" },
+            "files": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "List of changed file paths reviewed."
+            }
+          }
+        }
+      ]
+    },
+
+    "fix_agent_output": {
+      "description": "Output from PR Fix Agent pipeline.",
+      "allOf": [
+        { "$ref": "#/schemas/basic_result" },
+        { "$ref": "#/schemas/pull_request_ref" },
+        {
+          "type": "object",
+          "properties": {
+            "comment_url": { "type": "string", "format": "uri" }
+          }
+        }
+      ]
+    },
+
+    "merge_fixer_output": {
+      "description": "Output from Merge Fixer pipeline.",
+      "allOf": [
+        { "$ref": "#/schemas/basic_result" },
+        { "$ref": "#/schemas/pull_request_ref" },
+        {
+          "type": "object",
+          "properties": {
+            "conflict_files": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Files that had merge conflicts and were resolved."
+            }
+          }
+        }
+      ]
+    },
+
+    "merge_queue_output": {
+      "description": "Output from Merge Queue pipeline.",
+      "allOf": [
+        { "$ref": "#/schemas/basic_result" },
+        {
+          "type": "object",
+          "properties": {
+            "batch_size": { "type": "integer", "minimum": 0 },
+            "results": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "pr_number": { "type": "integer" },
+                  "branch": { "type": "string" },
+                  "status": { "type": "string", "enum": ["merged", "failed"] },
+                  "error": { "type": "string" }
+                },
+                "required": ["pr_number", "branch", "status"]
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "triage_output": {
+      "description": "Output from Issue Triage pipeline.",
+      "allOf": [
+        { "$ref": "#/schemas/basic_result" },
+        {
+          "type": "object",
+          "properties": {
+            "issue_number": { "type": "integer" },
+            "issue_title": { "type": "string" },
+            "category": {
+              "type": "string",
+              "enum": ["bug", "feature", "docs", "infrastructure", "question", "security"]
+            },
+            "priority": {
+              "type": "string",
+              "enum": ["critical", "high", "medium", "low"]
+            },
+            "labels_applied": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "confidence": { "type": ["number", "string"] }
+          }
+        }
+      ]
+    }
+  }
+}

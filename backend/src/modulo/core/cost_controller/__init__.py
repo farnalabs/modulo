@@ -4,6 +4,7 @@ All functions assume an active transaction with RLS org context set by the calle
 Spend limit checks use SELECT FOR UPDATE for atomicity.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -71,6 +72,8 @@ async def get_or_create_daily_count(
         session.add(row)
         await session.flush()
         return row
+    except asyncio.CancelledError:
+        raise
     except IntegrityError:
         await savepoint.rollback()
         result = await session.execute(q)
@@ -84,7 +87,7 @@ async def check_and_record_spend(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
-    cost_usd: Decimal,
+    cost_usd: Decimal | None,
     team_id: uuid.UUID | None = None,
 ) -> tuple[bool, str | None]:
     """Check spend limits atomically and record the spend.
@@ -95,10 +98,10 @@ async def check_and_record_spend(
     """
     if cost_usd is None:
         return False, "Cost must not be None"
-    if cost_usd < 0:
-        return False, "Cost must be non-negative"
     if cost_usd.is_nan() or cost_usd.is_infinite():
         return False, "Cost must be a finite non-negative number"
+    if cost_usd < 0:
+        return False, "Cost must be non-negative"
 
     today = datetime.now(UTC).date()
 
@@ -206,7 +209,7 @@ async def get_cost_report(
         result = await session.execute(q)
         rows = result.all()
 
-        team_ids = [row.team_id for row in rows]
+        team_ids = [row.team_id for row in rows if row.team_id is not None]
         teams_result = await session.execute(select(Team).where(Team.id.in_(team_ids)))
         teams_map = {t.id: t for t in teams_result.scalars().all()}
 

@@ -137,14 +137,20 @@ class TestDownloadTracking:
         source.content_json = {}
         source.id = org_id
 
+        create_primitive = AsyncMock()
+
         with (
             patch(
                 "modulo.core.library_service.get_primitive",
                 AsyncMock(return_value=source),
             ),
             patch(
+                "modulo.core.library_service.get_library_primitive",
+                AsyncMock(return_value=source),
+            ),
+            patch(
                 "modulo.core.library_service.create_library_primitive",
-                AsyncMock(),
+                create_primitive,
             ),
             patch(
                 "modulo.core.library_service.set_rls_org",
@@ -161,4 +167,6 @@ class TestDownloadTracking:
                 primitive_id=primitive_id,
             )
 
-            assert session.execute.await_count >= 1
+            statements = [str(call.args[0]) for call in session.execute.await_args_list]
+            assert any("UPDATE library_primitives" in stmt and "download_count" in stmt for stmt in statements)
+            create_primitive.assert_awaited_once()

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from datetime import datetime
 
 from sqlalchemy import JSON, Boolean, DateTime, String, UniqueConstraint

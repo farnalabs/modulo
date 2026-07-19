@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """VaultSecretsBackend — HashiCorp Vault KV v2 backend.
 
 Requires the *hvac* package (optional dependency). If *hvac* is not installed
@@ -14,6 +12,7 @@ Configured via environment variables:
 - ``VAULT_PATH_PREFIX`` — path prefix (default ``"modulo/secrets"``).
 """
 
+from __future__ import annotations
 
 import asyncio
 import os
@@ -89,7 +88,7 @@ class VaultSecretsBackend(SecretsBackend):
                         client.auth.approle.login,
                         role_id=self._role_id,
                         secret_id=self._secret_id,
-                        timeout=_TIMEOUT,
+                        timeout_seconds=_TIMEOUT,
                     )
                 else:
                     raise RuntimeError(
@@ -119,7 +118,7 @@ class VaultSecretsBackend(SecretsBackend):
                 client.secrets.kv.v2.read_secret_version,
                 path=path,
                 mount_point=self._mount_point,
-                timeout=_TIMEOUT,
+                timeout_seconds=_TIMEOUT,
             )
         except _hvac.exceptions.InvalidPath:
             raise KeyError(key) from None
@@ -161,7 +160,7 @@ class VaultSecretsBackend(SecretsBackend):
                 path=path,
                 secret={"value": value},
                 mount_point=self._mount_point,
-                timeout=_TIMEOUT,
+                timeout_seconds=_TIMEOUT,
             )
         except TimeoutError:
             logger.error("VaultSecretsBackend: timeout writing secret %s", key)
@@ -188,7 +187,7 @@ class VaultSecretsBackend(SecretsBackend):
                 client.secrets.kv.v2.delete_metadata_and_all_versions,
                 path=path,
                 mount_point=self._mount_point,
-                timeout=_TIMEOUT,
+                timeout_seconds=_TIMEOUT,
             )
         except _hvac.exceptions.InvalidPath:
             pass

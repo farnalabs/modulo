@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed } from "vue";
 import type { ParameterPort } from "../../../types/pipeline";
 
@@ -14,7 +14,7 @@ const emit = defineEmits<{
 const localValue = computed({
   get: () =>
     props.modelValue ??
-    props.port.default ??
+    props.port.default_value ??
     (props.port.type === "boolean"
       ? false
       : props.port.type === "number"
@@ -46,7 +46,7 @@ function onBooleanChange(event: Event) {
 
 <template>
   <div class="space-y-1.5">
-    <label class="flex items-center gap-1 text-sm font-medium">
+    <label for="parameterportform-field-2" class="flex items-center gap-1 text-sm font-medium">
       {{ port.label }}
       <span v-if="port.required" class="text-destructive">*</span>
     </label>
@@ -55,7 +55,7 @@ function onBooleanChange(event: Event) {
     </p>
 
     <template v-if="port.type === 'string' && port.multiline">
-      <textarea
+      <textarea id="parameterportform-field-2"
         :value="localValue as string"
         class="min-h-[80px] w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
         :placeholder="$t('components.pipeline.composite.ParameterPortForm.portdefault_as_string')"
@@ -67,24 +67,24 @@ function onBooleanChange(event: Event) {
       v-else-if="port.type === 'string'"
       :value="localValue as string"
       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-      :placeholder="(port.default as string) ?? ''"
+      :placeholder="(port.default_value as string) ?? ''"
       @change="onStringChange"
     />
 
-    <input
+    <input aria-label="port.default_value != null ? String(port.default_value) : "
       v-else-if="port.type === 'number'"
       :value="localValue as number"
       type="number"
       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-      :placeholder="port.default != null ? String(port.default) : ''"
+      :placeholder="port.default_value != null ? String(port.default_value) : ''"
       @change="onNumberChange"
     />
 
-    <label
+    <label for="parameterportform-field-1"
       v-else-if="port.type === 'boolean'"
       class="inline-flex cursor-pointer items-center gap-2"
     >
-      <input
+      <input id="parameterportform-field-1"
         :checked="!!localValue"
         type="checkbox"
         class="rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"

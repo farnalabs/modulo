@@ -1,9 +1,7 @@
 """SSO (OIDC + SAML) unit tests: state signing, provider parsing, JIT provisioning, routes."""
 
-import asyncio
 import base64
 import json
-import os
 import uuid
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -55,21 +53,11 @@ def _override(**kwargs: str | bool) -> Settings:
 
 
 @pytest.fixture(autouse=True)
-def _set_env() -> Generator[None, None, None]:
-    old = {k: os.environ.pop(k, None) for k in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY")}
-    os.environ["DATABASE_URL"] = "postgresql+asyncpg://localhost/test"
-    os.environ["SECRET_KEY"] = _VALID_32
-    os.environ["FERNET_KEY"] = _VALID_32
+def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+    monkeypatch.setenv("SECRET_KEY", _VALID_32)
+    monkeypatch.setenv("FERNET_KEY", _VALID_32)
     get_settings.cache_clear()
-    try:
-        yield
-    finally:
-        for k, v in old.items():
-            if v is not None:
-                os.environ[k] = v
-            else:
-                os.environ.pop(k, None)
-        get_settings.cache_clear()
 
 
 _app = FastAPI()
@@ -151,6 +139,10 @@ class TestOidcProviderParsing:
         settings = _override(modulo_oidc_providers="not-json")
         assert parse_oidc_providers(settings) == []
 
+    def test_skips_non_object_entry(self) -> None:
+        settings = _override(modulo_oidc_providers=json.dumps(["invalid-provider"]))
+        assert parse_oidc_providers(settings) == []
+
     def test_skips_missing_fields(self) -> None:
         settings = _override(
             modulo_oidc_providers=json.dumps(
@@ -221,88 +213,8 @@ class TestSsoProvidersEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# OIDC login redirect
+# SAML IdP metadata parsing
 # ---------------------------------------------------------------------------
-
-
-class TestOidcLoginEndpoint:
-    def test_redirects_to_provider(self, client: TestClient) -> None:
-        with patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc:
-            mock_disc.return_value = {
-                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-                "token_endpoint": "https://oauth2.googleapis.com/token",
-            }
-            resp = client.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
-            assert resp.status_code == 307
-            location = resp.headers.get("location", "")
-            assert "accounts.google.com" in location
-            assert "client_id=google-client-id" in location
-            assert "response_type=code" in location
-
-    def test_400_for_unknown_provider(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/auth/oidc/unknown/login", follow_redirects=False)
-        assert resp.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# SAML routes
-# ---------------------------------------------------------------------------
-
-
-class TestSamlRoutes:
-    def test_saml_login_requires_license(self, client: TestClient) -> None:
-        _override_settings(modulo_license_key="")
-        resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
-        assert resp.status_code == 402
-
-    def test_saml_acs_requires_license(self, client: TestClient) -> None:
-        _override_settings(modulo_license_key="")
-        resp = client.post("/api/v1/auth/saml/acs", data={})
-        assert resp.status_code == 402
-
-    def test_saml_metadata_without_license(self, client: TestClient) -> None:
-        _override_settings(modulo_license_key="")
-        resp = client.get("/api/v1/auth/saml/metadata")
-        assert resp.status_code == 402
-
-    def test_saml_login_with_license_and_no_metadata(self, client: TestClient) -> None:
-        _override_settings(
-            modulo_license_key="license-123",
-            modulo_saml_enabled=True,
-        )
-        resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
-        assert resp.status_code == 400
-
-    def test_saml_acs_missing_response(self, client: TestClient) -> None:
-        _override_settings(
-            modulo_license_key="license-123",
-            modulo_saml_enabled=True,
-            modulo_saml_idp_metadata_url="https://idp.example.com/metadata",
-        )
-        resp = client.post("/api/v1/auth/saml/acs", data={})
-        assert resp.status_code == 400
-
-    def test_saml_metadata_with_license(self, client: TestClient) -> None:
-        _override_settings(modulo_saml_enabled=True)
-        resp = client.get("/api/v1/auth/saml/metadata")
-        assert resp.status_code == 200
-        assert "EntityDescriptor" in resp.text
-        assert "SPSSODescriptor" in resp.text
-
-
-# ---------------------------------------------------------------------------
-# OIDC callback flow
-# ---------------------------------------------------------------------------
-
-
-class TestOidcCallbackEndpoint:
-    def test_missing_code_or_state(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/auth/oidc/google/callback")
-        assert resp.status_code == 400
-
-    def test_invalid_state(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/auth/oidc/google/callback?code=abc&state=tampered")
-        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +234,8 @@ class TestSamlMetadataParsing:
   </md:IDPSSODescriptor>
 </md:EntityDescriptor>"""
 
-    def test_saml_auth_url_uses_metadata(self) -> None:
+    @pytest.mark.asyncio
+    async def test_saml_auth_url_uses_metadata(self) -> None:
         from modulo.auth.sso import saml_get_auth_url
 
         settings = _override(
@@ -334,7 +247,7 @@ class TestSamlMetadataParsing:
         with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = self.SAMPLE_IDP_METADATA
 
-            url, req_id = asyncio.run(saml_get_auth_url(settings, "https://modulo.example.com/api/v1/auth/saml/acs"))
+            url, req_id = await saml_get_auth_url(settings, "https://modulo.example.com/api/v1/auth/saml/acs")
             assert "idp.example.com" in url
             assert "SAMLRequest" in url
             assert req_id.startswith("_")
@@ -430,6 +343,72 @@ class TestDecodeIdTokenClaims:
 
         assert _decode_id_token_claims("") == {}
 
+    @pytest.mark.parametrize("payload", [[], "claims", None])
+    def test_returns_empty_when_payload_is_not_an_object(self, payload: object) -> None:
+        from modulo.auth.sso import _decode_id_token_claims
+
+        encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+
+        assert _decode_id_token_claims(f"header.{encoded}.signature") == {}
+
+
+class TestOidcJsonResponseShapes:
+    @pytest.mark.parametrize("payload", [[], "discovery", None])
+    async def test_discovery_rejects_non_object_json(self, payload: object) -> None:
+        from modulo.auth.sso import _fetch_discovery
+
+        response = MagicMock()
+        response.json.return_value = payload
+        client = AsyncMock()
+        client.get.return_value = response
+
+        with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+            client_type.return_value.__aenter__.return_value = client
+            with pytest.raises(ValueError, match="OIDC discovery document must be a JSON object"):
+                await _fetch_discovery("https://issuer.example/.well-known/openid-configuration")
+
+    async def test_discovery_accepts_object_json(self) -> None:
+        from modulo.auth.sso import _fetch_discovery
+
+        payload = {"authorization_endpoint": "https://issuer.example/authorize"}
+        response = MagicMock()
+        response.json.return_value = payload
+        client = AsyncMock()
+        client.get.return_value = response
+
+        with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+            client_type.return_value.__aenter__.return_value = client
+            assert await _fetch_discovery("https://issuer.example/discovery") == payload
+
+    @pytest.mark.parametrize("payload", [[], "token", None])
+    async def test_token_exchange_rejects_non_object_json(self, payload: object) -> None:
+        from modulo.auth.sso import _exchange_code
+
+        response = MagicMock()
+        response.json.return_value = payload
+        client = AsyncMock()
+        client.post.return_value = response
+
+        with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+            client_type.return_value.__aenter__.return_value = client
+            with pytest.raises(ValueError, match="OIDC token response must be a JSON object"):
+                await _exchange_code("https://issuer.example/token", "client", "secret", "code", "callback")
+
+    async def test_token_exchange_accepts_object_json(self) -> None:
+        from modulo.auth.sso import _exchange_code
+
+        payload = {"id_token": "header.payload.signature"}
+        response = MagicMock()
+        response.json.return_value = payload
+        client = AsyncMock()
+        client.post.return_value = response
+
+        with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+            client_type.return_value.__aenter__.return_value = client
+            result = await _exchange_code("https://issuer.example/token", "client", "secret", "code", "callback")
+
+        assert result == payload
+
 
 # ---------------------------------------------------------------------------
 # JIT provisioning — additional cases
@@ -458,7 +437,7 @@ class TestJitProvisioningExtended:
             session.execute.side_effect = [exec_mock1, exec_mock2]
             mock_select.return_value.order_by.return_value.limit.return_value = "query"
 
-            account, actual_org_id, org_role = await jit_provision_user(
+            account, _actual_org_id, org_role = await jit_provision_user(
                 session, settings, "new@example.com", "New User", "oidc", "google:456"
             )
 

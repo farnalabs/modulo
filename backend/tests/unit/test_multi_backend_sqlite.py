@@ -7,6 +7,7 @@ without any Postgres-specific features (RLS, advisory locks, etc.).
 import os
 import uuid
 
+import anyio
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -34,21 +35,28 @@ def _engine():
 
 @pytest.fixture(scope="module")
 async def _tables(_engine):
+    # SQLite does not support ARRAY type - skip tables that use it
+    from sqlalchemy import ARRAY
+
+    tables_to_create = [t for t in Base.metadata.sorted_tables if not any(isinstance(c.type, ARRAY) for c in t.columns)]
     async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(lambda conn: Base.metadata.create_all(conn, tables=tables_to_create))
     yield
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await _engine.dispose()
-    if os.path.exists(_DB_PATH):
-        os.remove(_DB_PATH)
+    if await anyio.to_thread.run_sync(os.path.exists, _DB_PATH):
+        await anyio.to_thread.run_sync(os.remove, _DB_PATH)
 
 
 @pytest.fixture(autouse=True)
 async def _clear_data(_engine, _tables):
+    from sqlalchemy import ARRAY
+
     async with _engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
-            await conn.execute(table.delete())
+            if not any(isinstance(c.type, ARRAY) for c in table.columns):
+                await conn.execute(table.delete())
     yield
 
 

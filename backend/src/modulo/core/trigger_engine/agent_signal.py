@@ -1,5 +1,3 @@
-import asyncio
-
 """Agent signal trigger — cross-pipeline signal on node completion.
 
 When a source pipeline's designated node completes execution, fires a child
@@ -14,6 +12,7 @@ Trigger config_json structure::
     }
 """
 
+import asyncio
 import hashlib
 import logging
 import uuid
@@ -131,7 +130,7 @@ async def fire_agent_signal(
                 )
                 continue
         else:
-            snapshot_id = uuid.uuid4()
+            snapshot_id = uuid.UUID(int=0)
 
         # Create child run linked to source via parent_run_id.
         try:

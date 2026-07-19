@@ -19,6 +19,8 @@ from modulo.core.hitl_manager import (
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.team_membership import TeamMembership
 
+from .conftest import _session_decide
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -73,47 +75,6 @@ def _session_get(return_value: Any = None) -> AsyncMock:
     return session
 
 
-def _session_decide(
-    *,
-    update_returns_id: uuid.UUID | None = None,
-    diagnosis_gate: HitlClaim | None = None,
-    session_get_gate: HitlClaim | None = None,
-) -> AsyncMock:
-    """Session mock for HITLManager._decide().
-
-    Call sequence in _decide():
-      1. UPDATE … RETURNING id  → scalar_one_or_none() returns update_returns_id (or None)
-      2. If None: _get() SELECT → scalar_one_or_none() returns diagnosis_gate
-      If update_returns_id is not None: session.get() returns session_get_gate
-    """
-    session = AsyncMock()
-    session.add = MagicMock()
-    session.flush = AsyncMock()
-
-    update_result = MagicMock()
-    update_result.scalar_one_or_none.return_value = update_returns_id
-
-    diag_result = MagicMock()
-    diag_result.scalar_one_or_none.return_value = diagnosis_gate
-
-    call_count = 0
-
-    async def _execute(stmt: Any) -> Any:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return update_result
-        return diag_result
-
-    session.execute = _execute
-    session.get = AsyncMock(return_value=session_get_gate)
-    begin_nested_cm = AsyncMock()
-    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin_nested = MagicMock(return_value=begin_nested_cm)
-    return session
-
-
 def _session_update(
     *,
     rows_returned: int = 1,
@@ -135,8 +96,8 @@ def _session_update(
     # For the claim() UPDATE RETURNING id
     update_result.scalar_one_or_none.return_value = uuid.uuid4() if rows_returned > 0 else None
     # For expire_stale() UPDATE RETURNING run_id, gate_id
-    Row = type("Row", (), {"run_id": _RUN, "gate_id": _GATE})
-    update_result.all.return_value = [Row()] * rows_returned
+    row = type("Row", (), {"run_id": _RUN, "gate_id": _GATE})
+    update_result.all.return_value = [row()] * rows_returned
 
     get_result = MagicMock()
     get_result.scalar_one_or_none.return_value = gate
@@ -273,10 +234,10 @@ async def test_claim_team_member_can_claim():
     session.flush = AsyncMock()
 
     call_no = 0
-    team_check_hit = False
+    team_check_count = 0
 
     async def _execute(stmt: Any) -> Any:
-        nonlocal call_no, team_check_hit
+        nonlocal call_no, team_check_count
         call_no += 1
         if call_no == 1:
             # Pre-check SELECT
@@ -289,8 +250,8 @@ async def test_claim_team_member_can_claim():
             r.scalar_one_or_none.return_value = unclaimed
             return r
         if call_no == 3:
-            # Team membership check
-            team_check_hit = True
+            # Team membership check before claiming
+            team_check_count += 1
             r = MagicMock()
             r.scalar_one_or_none.return_value = membership
             return r
@@ -299,6 +260,12 @@ async def test_claim_team_member_can_claim():
             r = MagicMock()
             r.scalar_one_or_none.return_value = uuid.uuid4()
             return r
+        if call_no == 5:
+            # Re-check membership after claiming to close the TOCTOU window
+            team_check_count += 1
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = membership
+            return r
         raise AssertionError(f"Unexpected execute call #{call_no}")
 
     session.execute = _execute
@@ -306,7 +273,7 @@ async def test_claim_team_member_can_claim():
     mgr = HITLManager()
     result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed
-    assert team_check_hit, "Team membership check was not performed"
+    assert team_check_count == 2
 
 
 async def test_claim_non_team_member_raises():
@@ -695,9 +662,9 @@ async def test_deliver_manual_null_expires_at_raises_expired():
 async def test_expire_stale_returns_expired_gates():
     session = AsyncMock()
     expired_result = MagicMock()
-    Row = type("Row", (), {"run_id": _RUN, "gate_id": "gate-a"})
-    Row2 = type("Row", (), {"run_id": _RUN, "gate_id": "gate-b"})
-    expired_result.all.return_value = [Row(), Row2()]
+    row = type("Row", (), {"run_id": _RUN, "gate_id": "gate-a"})
+    row2 = type("Row", (), {"run_id": _RUN, "gate_id": "gate-b"})
+    expired_result.all.return_value = [row(), row2()]
     session.execute = AsyncMock(return_value=expired_result)
 
     mgr = HITLManager()
@@ -805,7 +772,7 @@ async def test_count_overdue_returns_zero():
 
 
 # ---------------------------------------------------------------------------
-# Executor integration — NodeInterrupt handling
+# Executor integration — GraphInterrupt handling
 # ---------------------------------------------------------------------------
 
 
@@ -826,10 +793,11 @@ async def _bypass_capacity(
 
 
 async def test_executor_sets_awaiting_human_on_node_interrupt():
-    """When astream_events raises NodeInterrupt, the executor transitions run to awaiting_human."""
+    """When astream_events raises GraphInterrupt, the executor transitions run to awaiting_human."""
     from contextlib import asynccontextmanager
 
-    from langgraph.errors import NodeInterrupt
+    from langgraph.errors import GraphInterrupt
+    from langgraph.types import Interrupt
 
     from modulo.core.pipeline_engine.executor import PipelineExecutor
 
@@ -862,7 +830,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     session_factory = MagicMock(side_effect=lambda: _ctx())
 
     async def _failing_stream(*args: Any, **kwargs: Any) -> Any:
-        raise NodeInterrupt({"gate_id": "step-1"})
+        raise GraphInterrupt((Interrupt(value={"gate_id": "step-1"}),))
         yield  # pragma: no cover
 
     compiled = MagicMock()

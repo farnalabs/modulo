@@ -1,22 +1,17 @@
 """BDD step definitions: Model backend configure, rotation, health check."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/model_backends/configure.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/model_backends/rotation.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/model_backends/health_check.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given(parsers.parse('I configure an OpenAI model backend with model "{model}" and API key "{key}"'))

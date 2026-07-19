@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="p-6 max-w-2xl mx-auto space-y-6">
     <PageHeader :title="$t('views.MyProfileView.my_profile')" :subtitle="$t('views.MyProfileView.manage_your_account_settings_and_password')" />
 
@@ -23,8 +23,8 @@
       <h2 class="text-base font-semibold mb-4">{{ $t('views.MyProfileView.change_password') }}</h2>
       <form @submit.prevent="changePassword" class="space-y-4">
         <div>
-          <label class="block text-sm font-medium mb-1">{{ $t('views.MyProfileView.current_password') }}</label>
-          <input
+          <label for="myprofileview-field-3" class="block text-sm font-medium mb-1">{{ $t('views.MyProfileView.current_password') }}</label>
+          <input id="myprofileview-field-3"
             v-model="currentPassword"
             type="password"
             class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm"
@@ -33,8 +33,8 @@
           />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1">{{ $t('views.MyProfileView.new_password') }}</label>
-          <input
+          <label for="myprofileview-field-2" class="block text-sm font-medium mb-1">{{ $t('views.MyProfileView.new_password') }}</label>
+          <input id="myprofileview-field-2"
             v-model="newPassword"
             type="password"
             class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm"
@@ -44,8 +44,8 @@
           />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1">{{ $t('views.MyProfileView.confirm_new_password') }}</label>
-          <input
+          <label for="myprofileview-field-1" class="block text-sm font-medium mb-1">{{ $t('views.MyProfileView.confirm_new_password') }}</label>
+          <input id="myprofileview-field-1"
             v-model="confirmPassword"
             type="password"
             class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm"

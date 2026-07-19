@@ -1,3 +1,5 @@
+import { getAutoLoginConfig } from '../../config/runtime'
+
 const TOKEN_KEY = 'modulo_access_token'
 const REFRESH_TOKEN_KEY = 'modulo_refresh_token'
 
@@ -6,7 +8,8 @@ let _refreshingPromise: Promise<boolean> | null = null
 
 function notifyListeners(): void {
   const token = localStorage.getItem(TOKEN_KEY)
-  for (const fn of _authListeners) {
+  const listeners = _authListeners.slice()
+  for (const fn of listeners) {
     fn(token)
   }
 }
@@ -64,7 +67,8 @@ export async function attemptTokenRefresh(): Promise<boolean> {
       setAccessToken(data.access_token)
       if (data.refresh_token) setRefreshToken(data.refresh_token)
       return true
-    } catch {
+    } catch (err) {
+      console.warn('[auth] Token refresh failed:', err)
       return false
     }
   })()
@@ -85,6 +89,12 @@ export function getAuthHeaders(): Record<string, string> {
 }
 
 export function redirectToLogin(): void {
+  // If auto-login is configured, the login attempt may still be in
+  // progress — skip the hard redirect and let auto-login complete.
+  if (getAutoLoginConfig()) {
+    return
+  }
+
   if (!window.location.pathname.startsWith('/login')) {
     window.location.href = '/login'
   }

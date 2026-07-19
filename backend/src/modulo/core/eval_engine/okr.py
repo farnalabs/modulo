@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """OKR-aligned eval suite progress tracking.
 
 Tracks pass rate trends for eval suites against configurable thresholds,
 providing breach detection and trend analysis for OKR alignment.
 """
 
+from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
@@ -27,9 +26,9 @@ class OkrSuite(BaseModel):
 
     id: str
     name: str
-    pass_threshold: float = Field(ge=0.0, le=1.0)  # 0.0-1.0
+    pass_threshold: float = Field(ge=0.0, le=1.0)
     eval_definition_ids: list[UUID]
-    target_date: str | None = None  # ISO 8601 date e.g. "2026-09-30"
+    target_date: str | None = None
     owner: str | None = None
 
 
@@ -162,14 +161,21 @@ async def track_okr_progress(
                     AS total_7d,
                 SUM(CASE WHEN er.evaluated_at >= :window_7 AND er.passed THEN 1 ELSE 0 END)
                     AS passed_7d,
-                SUM(CASE WHEN er.evaluated_at >= :window_14 AND er.evaluated_at < :window_7 THEN 1 ELSE 0 END)
-                    AS total_14d,
-                SUM(CASE WHEN er.evaluated_at >= :window_14 AND er.evaluated_at < :window_7 AND er.passed THEN 1 ELSE 0 END)
-                    AS passed_14d,
+                SUM(
+                    CASE WHEN er.evaluated_at >= :window_14 AND er.evaluated_at < :window_7 THEN 1 ELSE 0 END
+                ) AS total_14d,
+                SUM(
+                    CASE
+                        WHEN er.evaluated_at >= :window_14 AND er.evaluated_at < :window_7 AND er.passed THEN 1 ELSE 0
+                    END
+                ) AS passed_14d,
                 SUM(CASE WHEN er.evaluated_at >= :window_30 AND er.evaluated_at < :window_14 THEN 1 ELSE 0 END)
                     AS total_30d,
-                SUM(CASE WHEN er.evaluated_at >= :window_30 AND er.evaluated_at < :window_14 AND er.passed THEN 1 ELSE 0 END)
-                    AS passed_30d,
+                SUM(
+                    CASE
+                        WHEN er.evaluated_at >= :window_30 AND er.evaluated_at < :window_14 AND er.passed THEN 1 ELSE 0
+                    END
+                ) AS passed_30d,
                 COUNT(*) AS total_all,
                 SUM(CASE WHEN er.passed THEN 1 ELSE 0 END) AS passed_all
             FROM eval_results er

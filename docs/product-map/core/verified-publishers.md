@@ -5,7 +5,7 @@ delivery-tasks: [task-nv8-verified-publishers]
 code:
   - backend/src/modulo/db/models/publisher.py
   - backend/src/modulo/db/crud/publisher.py
-  - backend/src/modulo/db/migrations/versions/0032_publishers.py
+  - backend/src/modulo/db/migrations/versions/0005_v2_features_system.py
   - backend/src/modulo/db/models/library_primitive.py
   - backend/src/modulo/api/routes/admin.py
   - backend/src/modulo/api/routes/registry.py
@@ -99,6 +99,7 @@ Trust tiers for community registry primitives: green (verified publisher) and am
 
 - 2026-07-03: Cross-cutting QA (index 93): Marked 25 stale [ ]→[x] implemented behaviours across Admin CRUD, Registry Verify, Error States, and Edge Cases. Added Error Handling section with 4 ProgrammingError→501 catches. Updated Known Gaps. Created unit tests for ProgrammingError handling. Created website docs stub.
 - 2026-07-05: Cross-cutting QA (index 94): Added 2 missing ProgrammingError catches in registry.py (verify v2 + download endpoints). Added Resilience section with TOCTOU and download-count drift gaps. Moved self-match name/key edge cases from unchecked to checked (code handles them via `existing.id != publisher_id`). Updated Known Gaps.
+- 2026-07-12: Round 3 QA (improve-architecture batch 3): Fixed MINOR — added `exc_info=True` to `_log.warning()` in registry.py `except SQLAlchemyError` blocks for download and verify endpoints. Fixed MINOR — added `from None` to 8 `except` blocks across admin.py publisher CRUD routes (`IntegrityError` and `ProgrammingError` handlers in `admin_list_publishers`, `admin_create_publisher`, `admin_update_publisher`, `admin_delete_publisher`). B904 audit: registry.py was already compliant (used `from e` or `from None` consistently). CancelledError guard: not applicable (Python 3.12+). No stale frontmatter or resolved gaps found.
 
 ## Known Gaps
 - No BDD feature file — no `.feature` file exists specifically for verified publishers (only direct unit tests covering CRUD, registry verify, and in-memory trust model)

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_mock_session
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -42,6 +43,7 @@ def _make_settings() -> Settings:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -49,7 +51,7 @@ def _make_mock_session() -> AsyncMock:
     session.execute = AsyncMock()
     bind_mock = MagicMock()
     bind_mock.dialect.name = "postgresql"
-    session.get_bind = AsyncMock(return_value=bind_mock)
+    session.get_bind = MagicMock(return_value=bind_mock)
     return session
 
 

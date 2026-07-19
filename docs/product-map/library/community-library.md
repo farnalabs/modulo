@@ -9,7 +9,7 @@ bdd:
   - backend/tests/bdd/features/library/ratings.feature
   - backend/tests/bdd/features/library/auto_update.feature
 code:
-  - backend/src/modulo/db/migrations/versions/0063_library_community_source.py
+  - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
   - backend/src/modulo/core/library_service/__init__.py
   - backend/src/modulo/api/routes/library.py
   - frontend/src/views/LibraryView.vue
@@ -32,7 +32,7 @@ See ADR 010 §2.
 
 ### Schema
 
-- [x] `library_primitives.source` CHECK constraint widened from `local`/`registry`/`modulo` to also allow `community` via migration `0063_library_community_source`
+- [x] `library_primitives.source` CHECK constraint widened from `local`/`registry`/`modulo` to also allow `community` via migration `0002_v2_teams_library`
 - [x] `ck_library_primitives_source_fields` constraint updated with a `community` branch requiring `source_url`, `checksum`, `download_count`, `average_rating`, `review_count` all NULL (community items are not registry-verified entries)
 - [x] Migration does not backfill any rows — `community` rows are created via the in-memory seed mechanism, not a data migration
 
@@ -102,6 +102,17 @@ See ADR 010 §2.
 - **Community DB publish does not backfill the in-memory cache on restart** — items published while the server is running are cached in `_COMMUNITY_PRIMITIVES`, but after a restart, only `_fetch_published_community_from_db` retrieves them (best-effort, no RLS bypass for warm-start). Published items do not survive a full server restart as in-memory primitives.
 
 ## QA History
+
+### 2026-07-12 — R2 docs QA
+
+**CRITICAL — Fixed stale migration file reference:**
+The `code:` field and behaviour description referenced `0063_library_community_source.py` which never existed. The community source CHECK constraint (`source IN ('local', 'registry', 'modulo', 'community')`) and `ck_library_primitives_source_fields` constraint with community branch were implemented as part of `0002_v2_teams_library.py`, not a standalone `0063` migration. Updated both references to point to `0002_v2_teams_library.py`.
+
+**Product map updated:**
+- Fixed migration file path in `code:` frontmatter
+- Fixed migration reference in Schema behaviour description
+
+**Status:** partial (same 4 known gaps remain).
 
 ### 2026-07-08 — cross-cutting QA (index 253)
 

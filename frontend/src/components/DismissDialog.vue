@@ -1,18 +1,18 @@
-﻿<template>
-  <div class="inline-flex items-center rounded-lg border bg-background p-4 shadow-sm min-w-[300px] max-w-[400px]">
+<template>
+  <div class="inline-flex flex-col rounded-lg border bg-background p-4 shadow-sm min-w-[300px] max-w-[400px]">
     <div class="flex-1">
       <p class="text-sm font-medium">{{ $t('components.DismissDialog.dismiss_this_notification') }}</p>
       <p class="mt-1 text-xs text-muted-foreground">
-        Choose whether to dismiss for yourself or for everyone who can see this notification.
+        {{ $t('components.DismissDialog.dismiss_choice_description') }}
       </p>
     </div>
     <div class="mt-3 flex flex-col gap-2">
-      <label class="flex items-center gap-2 text-sm">
-        <input type="radio" v-model="selectedScope" value="self" />
-        Dismiss for me
+      <label for="dismissdialog-field-2" class="flex items-center gap-2 text-sm">
+        <input id="dismissdialog-field-2" type="radio" v-model="selectedScope" value="self" />
+        {{ $t('components.DismissDialog.dismiss_for_me') }}
       </label>
-      <label v-if="canDismissAtScope" class="flex items-center gap-2 text-sm">
-        <input type="radio" v-model="selectedScope" value="scope" />
+      <label for="dismissdialog-field-1" v-if="canDismissAtScope" class="flex items-center gap-2 text-sm">
+        <input id="dismissdialog-field-1" type="radio" v-model="selectedScope" value="scope" />
         {{ scopeLabel }}
       </label>
     </div>
@@ -22,14 +22,14 @@
         class="rounded-md border px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors"
         @click="$emit('cancel')"
       >
-        Cancel
+        {{ $t('common.cancel') }}
       </button>
       <Button
         type="button"
         variant="default"
         @click="$emit('confirm', selectedScope)"
       >
-        Dismiss
+        {{ $t('components.DismissDialog.dismiss') }}
       </Button>
     </div>
   </div>
@@ -37,7 +37,10 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { Button } from '@/components/ui/button'
+
+const { t } = useI18n();
 
 const props = defineProps<{
   notification: { scope: string; dismiss_strategy: string; dismissible_at_scope: boolean };
@@ -56,10 +59,10 @@ const canDismissAtScope = computed(() => {
 
 const scopeLabel = computed(() => {
   const labels: Record<string, string> = {
-    org: "Dismiss for all org members",
-    admin: "Dismiss for all admins",
-    user: "Dismiss for everyone",
+    org: t('components.DismissDialog.dismiss_for_all_org_members'),
+    admin: t('components.DismissDialog.dismiss_for_all_admins'),
+    user: t('components.DismissDialog.dismiss_for_everyone'),
   };
-  return labels[props.notification.scope] || "Dismiss for everyone";
+  return labels[props.notification.scope] || t('components.DismissDialog.dismiss_for_everyone');
 });
 </script>

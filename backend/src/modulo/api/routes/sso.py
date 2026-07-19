@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.sso import (
     oidc_get_authorize_url,
@@ -46,9 +47,10 @@ class SsoProvidersResponse(BaseModel):
     saml: bool
 
 
+@handle_db_errors("sso.sso_providers")
 @router.get("/sso/providers", response_model=SsoProvidersResponse)
 async def sso_providers(
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> SsoProvidersResponse:
     """List configured SSO providers (OIDC) and whether SAML is enabled."""
@@ -78,11 +80,12 @@ async def sso_providers(
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("sso.oidc_login")
 @router.get("/oidc/{provider}/login")
 async def oidc_login(
     provider: str,
     request: Request,
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> Any:
     """Redirect the user to the OIDC provider's authorization page."""
@@ -105,11 +108,12 @@ async def oidc_login(
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
 
+@handle_db_errors("sso.oidc_callback")
 @router.get("/oidc/{provider}/callback")
 async def oidc_callback(
     provider: str,
     request: Request,
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> RedirectResponse:
@@ -132,19 +136,19 @@ async def oidc_callback(
     try:
         tokens = await oidc_process_callback(code, state, settings, session, redirect_uri)
     except ValueError as exc:
-        _log.warning("OIDC callback failed for provider %s: %s", provider, exc)
+        _log.warning("OIDC callback failed for provider %s: %s", provider, exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
         ) from None
     except ProgrammingError as exc:
-        _log.warning("OIDC callback failed — DB table missing: %s", exc)
+        _log.warning("OIDC callback failed — DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("OIDC callback DB error: %s", exc)
+        _log.warning("OIDC callback DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -167,10 +171,11 @@ async def oidc_callback(
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("sso.saml_login")
 @router.get("/saml/login")
 async def saml_login(
     request: Request,
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> Any:
@@ -184,13 +189,13 @@ async def saml_login(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
     except ProgrammingError as exc:
-        _log.warning("SAML login failed — DB table missing: %s", exc)
+        _log.warning("SAML login failed — DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SAML login DB error: %s", exc)
+        _log.warning("SAML login DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -207,10 +212,11 @@ async def saml_login(
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
 
+@handle_db_errors("sso.saml_acs")
 @router.post("/saml/acs")
 async def saml_acs(
     request: Request,
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> RedirectResponse:
@@ -231,19 +237,19 @@ async def saml_acs(
     try:
         tokens = await saml_process_response(raw_saml, settings, session)
     except ValueError as exc:
-        _log.warning("SAML ACS failed: %s", exc)
+        _log.warning("SAML ACS failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
         ) from None
     except ProgrammingError as exc:
-        _log.warning("SAML ACS failed — DB table missing: %s", exc)
+        _log.warning("SAML ACS failed — DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SAML ACS DB error: %s", exc)
+        _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -261,10 +267,11 @@ async def saml_acs(
     return _redirect_to_frontend(tokens, settings)
 
 
+@handle_db_errors("sso.saml_metadata")
 @router.get("/saml/metadata", response_class=PlainTextResponse)
 async def saml_metadata(
     request: Request,
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> str:
     """Return SP metadata XML for SAML IdP configuration."""

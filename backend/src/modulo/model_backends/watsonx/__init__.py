@@ -71,7 +71,7 @@ class WatsonXBackend(ModelBackendBase):
     def stream(
         self,
         messages: list[BaseMessage],
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, tools=tools, **kwargs)

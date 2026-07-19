@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """modulo backup/restore: CLI for self-hosted backup and disaster recovery.
 
 Usage:
@@ -7,6 +5,7 @@ Usage:
   modulo restore <backup-dir> [--db-url <url>] [--yes] [--previous-fernet-key <key>]
 """
 
+from __future__ import annotations
 
 import hashlib
 import json
@@ -20,14 +19,9 @@ from pathlib import Path
 from typing import Any
 
 import click
+import psycopg
 from cryptography.fernet import Fernet, InvalidToken
-
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:
-    psycopg = None
-    dict_row = None
+from psycopg.rows import dict_row
 
 from modulo.settings import get_settings
 
@@ -68,6 +62,29 @@ def _serialise_for_json(obj: Any) -> Any:
     if isinstance(obj, datetime):
         return obj.isoformat()
     return obj
+
+
+def _serialise_export_row(row: dict[str, Any]) -> dict[str, Any]:
+    serialised: dict[str, Any] = {}
+    for key, val in row.items():
+        if isinstance(val, uuid.UUID):
+            serialised[key] = str(val)
+        elif isinstance(val, bytes | memoryview):
+            serialised[key] = bytes(val).hex()
+        elif isinstance(val, datetime):
+            serialised[key] = val.isoformat()
+        else:
+            serialised[key] = val
+    return serialised
+
+
+def _parse_org_id(raw: str | None) -> uuid.UUID | None:
+    if raw:
+        try:
+            return uuid.UUID(raw)
+        except (ValueError, TypeError):
+            raise RuntimeError(f"Invalid organisation_id: {raw!r}") from None
+    return None
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -167,11 +184,8 @@ def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
             "SELECT * FROM checkpoint_blobs ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version"
         )
         for row in cur:
-            org_id = row.get("organisation_id")
-            row["organisation_id"] = str(org_id) if org_id is not None else None
-            if isinstance(row.get("blob"), (bytes, memoryview)):
-                row["blob"] = bytes(row["blob"]).hex()
-            rows.append(row)
+            serialised = _serialise_export_row(row)
+            rows.append(serialised)
     return rows
 
 
@@ -182,17 +196,7 @@ def _export_checkpoints_sync(raw_url: str) -> list[dict[str, Any]]:
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM checkpoints ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id")
         for row in cur:
-            serialised: dict[str, Any] = {}
-            for key, val in row.items():
-                if isinstance(val, uuid.UUID):
-                    serialised[key] = str(val)
-                elif isinstance(val, (bytes, memoryview)):
-                    serialised[key] = bytes(val).hex()
-                elif isinstance(val, datetime):
-                    serialised[key] = val.isoformat()
-                else:
-                    serialised[key] = val
-            rows.append(serialised)
+            rows.append(_serialise_export_row(row))
     return rows
 
 
@@ -206,17 +210,7 @@ def _export_checkpoint_writes_sync(raw_url: str) -> list[dict[str, Any]]:
             "ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx"
         )
         for row in cur:
-            serialised: dict[str, Any] = {}
-            for key, val in row.items():
-                if isinstance(val, uuid.UUID):
-                    serialised[key] = str(val)
-                elif isinstance(val, (bytes, memoryview)):
-                    serialised[key] = bytes(val).hex()
-                elif isinstance(val, datetime):
-                    serialised[key] = val.isoformat()
-                else:
-                    serialised[key] = val
-            rows.append(serialised)
+            rows.append(_serialise_export_row(row))
     return rows
 
 
@@ -231,15 +225,13 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
         for table in _CREDENTIALS_TABLES:
             rows: list[dict[str, Any]] = []
             with conn.cursor() as cur:
-                if table not in _CREDENTIALS_TABLES:
-                    raise RuntimeError(f"Unexpected credentials table: {table}")
-                sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608 — guarded by whitelist check above
+                sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # nosec B608  # noqa: S608 -- table comes from a fixed whitelist
                 cur.execute(sql)
                 for row in cur:
                     org_id = row.get("organisation_id")
                     row["id"] = str(row["id"])
                     row["organisation_id"] = str(org_id) if org_id is not None else None
-                    if isinstance(row.get("credentials_ciphertext"), (bytes, memoryview)):
+                    if isinstance(row.get("credentials_ciphertext"), bytes | memoryview):
                         ct = bytes(row["credentials_ciphertext"])
                         row["credentials_ciphertext"] = ct.hex()  # nosemgrep: credential-not-in-state
                     rows.append(row)
@@ -258,14 +250,7 @@ def _restore_checkpoint_blobs_sync(raw_url: str, blobs: list[dict[str, Any]]) ->
                 raw_blob = row.get("blob")
                 if raw_blob is not None:
                     blob = bytes.fromhex(raw_blob) if raw_blob else b""
-                org_id_raw = row.get("organisation_id")
-                if org_id_raw:
-                    try:
-                        org_uuid = uuid.UUID(org_id_raw)
-                    except (ValueError, TypeError) as exc:
-                        raise RuntimeError(f"Invalid organisation_id in checkpoint_blobs: {org_id_raw!r}") from exc
-                else:
-                    org_uuid = None
+                org_uuid = _parse_org_id(row.get("organisation_id"))
                 cur.execute(
                     "INSERT INTO checkpoint_blobs "
                     "(organisation_id, thread_id, checkpoint_ns, channel, version, type, blob) "
@@ -291,14 +276,7 @@ def _restore_checkpoints_sync(raw_url: str, checkpoints: list[dict[str, Any]]) -
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE checkpoints CASCADE")
             for row in checkpoints:
-                org_id_raw = row.get("organisation_id")
-                if org_id_raw:
-                    try:
-                        org_uuid = uuid.UUID(org_id_raw)
-                    except (ValueError, TypeError) as exc:
-                        raise RuntimeError(f"Invalid organisation_id in checkpoints: {org_id_raw!r}") from exc
-                else:
-                    org_uuid = None
+                org_uuid = _parse_org_id(row.get("organisation_id"))
                 cur.execute(
                     "INSERT INTO checkpoints "
                     "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
@@ -329,14 +307,7 @@ def _restore_checkpoint_writes_sync(raw_url: str, writes: list[dict[str, Any]]) 
                 raw_blob = row.get("blob")
                 if raw_blob is not None:
                     blob = bytes.fromhex(raw_blob) if raw_blob else b""
-                org_id_raw = row.get("organisation_id")
-                if org_id_raw:
-                    try:
-                        org_uuid = uuid.UUID(org_id_raw)
-                    except (ValueError, TypeError) as exc:
-                        raise RuntimeError(f"Invalid organisation_id in checkpoint_writes: {org_id_raw!r}") from exc
-                else:
-                    org_uuid = None
+                org_uuid = _parse_org_id(row.get("organisation_id"))
                 cur.execute(
                     "INSERT INTO checkpoint_writes "
                     "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
@@ -394,10 +365,8 @@ def _re_encrypt_credentials_sync(
                     except (ValueError, TypeError):
                         _log.warning("Invalid UUID in credentials row: %s", row.get("id", "?"))
                         continue
-                    if table not in _CREDENTIALS_TABLES:
-                        raise RuntimeError(f"Unexpected credentials table: {table}")
                     cur.execute(
-                        f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # noqa: S608 — guarded by whitelist assertion
+                        f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # nosec B608  # noqa: S608 -- table is whitelist-validated
                         (new_ct, row_id),
                     )
                     rekeyed += 1
@@ -412,7 +381,7 @@ def _re_encrypt_credentials_sync(
 def _print_size(backup_dir: Path) -> None:
     try:
         total = sum(f.stat().st_size for f in backup_dir.rglob("*") if f.is_file())
-    except (OSError, PermissionError) as exc:
+    except OSError as exc:
         _log.warning("Could not compute backup size: %s", exc)
         return
     click.echo(f"Total size: {_human_size(total)}")
@@ -461,7 +430,9 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
     if output_dir is not None:
         backup_dir = output_dir
         backup_dir.mkdir(parents=True, exist_ok=True)
+        user_specified = True
     else:
+        user_specified = False
         suffix = random.randint(1000, 9999)  # noqa: S311 — not crypto, just avoiding directory collision
         backup_dir = Path(f"./modulo-backup-{ts}-{suffix}")
         while backup_dir.exists():
@@ -520,7 +491,7 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
 
     except Exception as exc:
         _log.exception("Backup failed")
-        if backup_dir.exists():
+        if not user_specified and backup_dir.exists():
             shutil.rmtree(backup_dir, ignore_errors=True)
             click.echo(f"Cleaned up partial backup directory: {backup_dir}", err=True)
         click.echo(f"Backup failed: {exc}", err=True)

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
@@ -36,7 +36,7 @@
           <h2 class="text-lg font-medium text-foreground mb-1">{{ $t('views.CopyPipelineWizard.select_source_pipeline') }}</h2>
           <p class="text-sm text-muted-foreground mb-4">{{ $t('views.CopyPipelineWizard.choose_the_pipeline_you_want_to_copy_and_adapt') }}</p>
 
-          <FilterBar
+          <FilterBar class="mb-4"
             :search="{ placeholder: $t('views.CopyPipelineWizard.search_pipelines_by_name') }"
             :search-value="searchQuery"
             @update:search="searchQuery = $event"
@@ -113,8 +113,8 @@
 
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-foreground mb-1">New Pipeline Name</label>
-              <input
+              <label for="copypipelinewizard-field-6" class="block text-sm font-medium text-foreground mb-1">New Pipeline Name</label>
+              <input id="copypipelinewizard-field-6"
                 v-model="pipelineName"
                 type="text"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -124,7 +124,7 @@
             </div>
 
             <div>
-              <label class="block text-sm font-medium text-foreground mb-1">Target Ownership</label>
+              <span class="block text-sm font-medium text-foreground mb-1">Target Ownership</span>
               <p class="text-xs text-muted-foreground mb-2">Choose who the copied pipeline belongs to.</p>
               <OwnershipPicker v-model="ownership" :label="$t('views.LibraryPipelineWizard.owner')" />
             </div>
@@ -133,8 +133,8 @@
               <h3 class="text-sm font-medium text-foreground mb-3">What to Copy</h3>
 
               <div class="space-y-3">
-                <label class="flex items-start gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
-                  <input
+                <label for="copypipelinewizard-field-5" class="flex items-start gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
+                  <input id="copypipelinewizard-field-5"
                     v-model="copyScope"
                     type="radio"
                     value="all"
@@ -147,8 +147,8 @@
                   </div>
                 </label>
 
-                <label class="flex items-start gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
-                  <input
+                <label for="copypipelinewizard-field-4" class="flex items-start gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
+                  <input id="copypipelinewizard-field-4"
                     v-model="copyScope"
                     type="radio"
                     value="selected"
@@ -166,24 +166,24 @@
             <div class="border-t border-border pt-4 space-y-3">
               <h3 class="text-sm font-medium text-foreground mb-3">Additional Options</h3>
 
-              <label class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
-                <input v-model="keepEvalConfigs" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-keep-evals" />
+              <label for="copypipelinewizard-field-3" class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
+                <input id="copypipelinewizard-field-3" v-model="keepEvalConfigs" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-keep-evals" />
                 <div>
                   <p class="text-sm font-medium text-foreground">Keep eval configurations</p>
                   <p class="text-xs text-muted-foreground">Preserve eval configs, scoring criteria, and threshold settings from the source pipeline.</p>
                 </div>
               </label>
 
-              <label class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
-                <input v-model="keepTriggers" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-keep-triggers" />
+              <label for="copypipelinewizard-field-2" class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
+                <input id="copypipelinewizard-field-2" v-model="keepTriggers" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-keep-triggers" />
                 <div>
                   <p class="text-sm font-medium text-foreground">Keep triggers</p>
                   <p class="text-xs text-muted-foreground">Copy trigger configurations (schedules, webhooks, events) to the new pipeline.</p>
                 </div>
               </label>
 
-              <label class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
-                <input v-model="shareConnectors" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-share-connectors" />
+              <label for="copypipelinewizard-field-1" class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
+                <input id="copypipelinewizard-field-1" v-model="shareConnectors" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-share-connectors" />
                 <div>
                   <p class="text-sm font-medium text-foreground">Share connector bindings</p>
                   <p class="text-xs text-muted-foreground">Keep connector bindings pointing to the same instances. Uncheck to create unbound copies.</p>

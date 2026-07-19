@@ -1,15 +1,14 @@
 """Step definitions for community registry features — browse, publish, pull, verify, publishers."""
 
+import contextlib
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/library/community_registry.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _SLUG = "modulo/prd-input-schema"
 
@@ -240,7 +239,7 @@ def _each_entry_matches_search(ctx: dict[str, Any], term: str) -> None:
     items = ctx["response"].json()["items"]
     term_lower = term.lower()
     for item in items:
-        entry = item["entry"] if "entry" in item else item
+        entry = item.get("entry", item)
         match = (
             term_lower in (entry.get("name", "") or "").lower()
             or term_lower in (entry.get("description", "") or "").lower()

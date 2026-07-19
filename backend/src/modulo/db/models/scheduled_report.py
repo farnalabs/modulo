@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import uuid
 from datetime import datetime
 
@@ -23,3 +21,38 @@ class ScheduledReport(OrgScoped):
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
     )
+
+    @property
+    def period(self) -> str | None:
+        return self._cost_config_string("period")
+
+    @property
+    def group_by(self) -> str | None:
+        return self._cost_config_string("group_by")
+
+    @property
+    def format(self) -> str | None:
+        return self._cost_config_string("format")
+
+    @property
+    def schedule_type(self) -> str | None:
+        return self._cost_config_string("schedule_type")
+
+    @property
+    def recipients(self) -> list[str]:
+        if self.report_type != "cost":
+            return []
+        value = (self.recipient_config or {}).get("emails", [])
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, str)]
+
+    @property
+    def next_run_at(self) -> datetime | None:
+        return self.next_send_at
+
+    def _cost_config_string(self, key: str) -> str | None:
+        if self.report_type != "cost":
+            return None
+        value = (self.config_json or {}).get(key)
+        return value if isinstance(value, str) else None

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.AdminRunRetentionView.run_retention')" :subtitle="$t('views.AdminRunRetentionView.configure_run_retention_policies_and_manual_purge')" />
 
@@ -17,8 +17,8 @@
           <CardContent>
             <div class="flex items-end gap-3">
               <div class="flex-1">
-                <label class="mb-1.5 block text-xs font-medium text-muted-foreground">Retention period (days)</label>
-                <Input
+                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">Retention period (days)</span>
+                <Input aria-label="Form control"
                   :model-value="retentionDays ?? undefined"
                   @update:model-value="(v: any) => retentionDays = v === '' ? null : Number(v)"
                   type="number"
@@ -44,8 +44,8 @@
           <CardContent>
             <div class="flex items-end gap-3">
               <div class="flex-1">
-                <label class="mb-1.5 block text-xs font-medium text-muted-foreground">Purge runs older than (days)</label>
-                <Input
+                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">Purge runs older than (days)</span>
+                <Input aria-label="Form control"
                   :model-value="purgeAge ?? undefined"
                   @update:model-value="(v: any) => purgeAge = v === '' ? null : Number(v)"
                   type="number"

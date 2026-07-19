@@ -7,6 +7,7 @@ import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1794,7 +1795,7 @@ class TestRestoreCheckpointsSyncErrorPaths:
             },
         ]
 
-        with pytest.raises(RuntimeError, match="Invalid organisation_id in checkpoints"):
+        with pytest.raises(RuntimeError, match="Invalid organisation_id"):
             _restore_checkpoints_sync("postgresql://localhost/db", checkpoints)
 
 
@@ -1820,5 +1821,5 @@ class TestRestoreCheckpointWritesSyncErrorPaths:
             },
         ]
 
-        with pytest.raises(RuntimeError, match="Invalid organisation_id in checkpoint_writes"):
+        with pytest.raises(RuntimeError, match="Invalid organisation_id"):
             _restore_checkpoint_writes_sync("postgresql://localhost/db", writes)

@@ -1,5 +1,9 @@
-# MariaDB override — replaces Postgres with MariaDB 11.4 LTS.
-# Usage: docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
+# DEPRECATED 2026-07-11 — MariaDB override. MariaDB support was added as premature
+# generality (see architecture critique 2026-07-09). Production and demo run on Postgres
+# (Supabase). This file is preserved for backward compatibility but is not actively tested
+# or maintained.
+#
+# Original usage: docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
 # The backend env vars below are set automatically; no .env changes needed.
 
 services:
@@ -22,7 +26,7 @@ services:
 
   backend:
     environment:
-      DATABASE_URL: mysql+asyncmy://modulo:modulo@db:3306/modulo
+      DATABASE_URL: mysql+aiomysql://modulo:modulo@db:3306/modulo
       MODULO_DB: mariadb
 
 volumes:

@@ -17,33 +17,34 @@ def connector():
     return GitHubConnector(token=TOKEN)
 
 
+# ---------------------------------------------------------------------------
+# Health check — parametrized across success, scope, error, non-JSON, API error
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "status,json_body,text,headers,expected_ok,expected_detail",
+    [
+        (200, {"login": "octocat"}, None, {"X-OAuth-Scopes": "repo, read:org"}, True, "octocat"),
+        (200, {"login": "octocat"}, None, {"X-OAuth-Scopes": "repo"}, False, "Missing scopes"),
+        (401, None, "Unauthorized", {}, False, "401"),
+        (200, None, "not-json", {"X-OAuth-Scopes": "repo, read:org"}, False, "invalid JSON"),
+        (503, None, "Service Unavailable", {}, False, "503"),
+    ],
+)
 @respx.mock
-async def test_health_check_ok(connector):
+async def test_health_check(connector, status, json_body, text, headers, expected_ok, expected_detail):
     respx.get("https://api.github.com/user").mock(
-        return_value=httpx.Response(200, json={"login": "octocat"}, headers={"X-OAuth-Scopes": "repo, read:org"}),
+        return_value=httpx.Response(status, json=json_body, text=text, headers=headers),
     )
     result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "octocat"
+    assert result.ok is expected_ok
+    assert expected_detail in result.detail
 
 
-@respx.mock
-async def test_health_check_missing_scopes(connector):
-    respx.get("https://api.github.com/user").mock(
-        return_value=httpx.Response(200, json={"login": "octocat"}, headers={"X-OAuth-Scopes": "repo"}),
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Missing scopes" in result.detail
-    assert "read:org" in result.detail
-
-
-@respx.mock
-async def test_health_check_fail(connector):
-    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "401" in result.detail
+# ---------------------------------------------------------------------------
+# Query resources
+# ---------------------------------------------------------------------------
 
 
 @respx.mock
@@ -134,68 +135,108 @@ async def test_query_issues(connector):
 async def test_query_single_issue(connector):
     issue = {"number": 42, "title": "Critical bug", "state": "open"}
     respx.get("https://api.github.com/repos/owner/repo/issues/42").mock(return_value=httpx.Response(200, json=issue))
-    result = await connector.query(ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": 42}))
+    result = await connector.query(
+        ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "42"})
+    )
     assert result.records[0]["number"] == 42
 
 
+@pytest.mark.parametrize(
+    "resource,data,http_method,url,response_json,assert_key,assert_value",
+    [
+        (
+            "issue",
+            {"repo": "owner/repo", "title": "New feature", "body": "Details here"},
+            "post",
+            "https://api.github.com/repos/owner/repo/issues",
+            {"number": 100},
+            "number",
+            100,
+        ),
+        (
+            "issue_comment",
+            {"repo": "owner/repo", "issue_number": "42", "body": "Looking into this"},
+            "post",
+            "https://api.github.com/repos/owner/repo/issues/42/comments",
+            {"id": 1},
+            "id",
+            1,
+        ),
+        (
+            "issue_update",
+            {"repo": "owner/repo", "issue_number": "42", "state": "closed"},
+            "patch",
+            "https://api.github.com/repos/owner/repo/issues/42",
+            {"number": 42},
+            "number",
+            42,
+        ),
+        (
+            "issue_label",
+            {"repo": "owner/repo", "issue_number": "42", "labels": ["bug"]},
+            "post",
+            "https://api.github.com/repos/owner/repo/issues/42/labels",
+            [{"id": 1, "name": "bug"}],
+            "[0].name",
+            "bug",
+        ),
+    ],
+)
 @respx.mock
-async def test_write_issue(connector):
-    created = {"number": 100, "title": "New feature", "html_url": "https://github.com/owner/repo/issues/100"}
-    respx.post("https://api.github.com/repos/owner/repo/issues").mock(return_value=httpx.Response(201, json=created))
-    result = await connector.write(
-        ConnectorPayload(resource="issue", data={"repo": "owner/repo", "title": "New feature", "body": "Details here"})
+async def test_write_issue_operations(
+    connector,
+    resource,
+    data,
+    http_method,
+    url,
+    response_json,
+    assert_key,
+    assert_value,
+):
+    getattr(respx, http_method)(url).mock(
+        return_value=httpx.Response(201 if http_method == "post" else 200, json=response_json),
     )
-    assert result["number"] == 100
+    result = await connector.write(ConnectorPayload(resource=resource, data=data))
+    keys = assert_key.split(".")
+    val = result
+    for k in keys:
+        k = int(k.strip("[]")) if k.strip("[]").isdigit() else k
+        val = val[k]
+    assert val == assert_value
 
 
-@respx.mock
-async def test_write_issue_comment(connector):
-    comment = {"id": 1, "body": "Looking into this"}
-    respx.post("https://api.github.com/repos/owner/repo/issues/42/comments").mock(
-        return_value=httpx.Response(201, json=comment)
-    )
-    result = await connector.write(
-        ConnectorPayload(
-            resource="issue_comment", data={"repo": "owner/repo", "issue_number": 42, "body": "Looking into this"}
-        )
-    )
-    assert result["id"] == 1
+# ---------------------------------------------------------------------------
+# Missing filter/data validation — parametrized
+# ---------------------------------------------------------------------------
 
 
-@respx.mock
-async def test_write_issue_update(connector):
-    updated = {"number": 42, "state": "closed", "title": "Fixed bug"}
-    respx.patch("https://api.github.com/repos/owner/repo/issues/42").mock(
-        return_value=httpx.Response(200, json=updated)
-    )
-    result = await connector.write(
-        ConnectorPayload(resource="issue_update", data={"repo": "owner/repo", "issue_number": 42, "state": "closed"})
-    )
-    assert result["number"] == 42
+@pytest.mark.parametrize(
+    "resource,filters,match_text",
+    [
+        ("issues", {}, "requires 'repo' filter"),
+        ("file", {"repo": "owner/repo"}, "requires 'path' filter"),
+        ("pulls", {}, "requires 'repo' filter"),
+        ("pr_commits", {"repo": "owner/repo"}, "requires 'pull_number' filter"),
+    ],
+)
+async def test_query_missing_filters(connector, resource, filters, match_text):
+    with pytest.raises(ValueError, match=match_text):
+        await connector.query(ConnectorQuery(resource=resource, filters=filters))
 
 
-@respx.mock
-async def test_write_issue_label(connector):
-    label_result = [{"id": 1, "name": "bug", "color": "d73a4a"}]
-    respx.post("https://api.github.com/repos/owner/repo/issues/42/labels").mock(
-        return_value=httpx.Response(200, json=label_result)
-    )
-    result = await connector.write(
-        ConnectorPayload(resource="issue_label", data={"repo": "owner/repo", "issue_number": 42, "labels": ["bug"]})
-    )
-    assert result[0]["name"] == "bug"
-
-
-@respx.mock
-async def test_query_issues_missing_repo_filter(connector):
-    with pytest.raises(ValueError, match="requires 'repo' filter"):
-        await connector.query(ConnectorQuery(resource="issues"))
-
-
-@respx.mock
-async def test_write_issue_missing_title(connector):
-    with pytest.raises(ValueError, match="requires 'title' in data"):
-        await connector.write(ConnectorPayload(resource="issue", data={"repo": "owner/repo"}))
+@pytest.mark.parametrize(
+    "resource,data,match_text",
+    [
+        ("issue", {"repo": "owner/repo"}, "requires 'title' in data"),
+        ("file", {"repo": "owner/repo", "path": "x"}, "requires 'content' in data"),
+        ("pr", {"repo": "owner/repo", "title": "PR", "head": "fix"}, "requires 'base' in data"),
+        ("pr", {"repo": "owner/repo", "title": "No head"}, "requires 'head' in data"),
+        ("pr_comment", {"repo": "owner/repo", "pull_number": "1"}, "requires 'body' in data"),
+    ],
+)
+async def test_write_missing_data(connector, resource, data, match_text):
+    with pytest.raises(ValueError, match=match_text):
+        await connector.write(ConnectorPayload(resource=resource, data=data))
 
 
 # ---------------------------------------------------------------------------
@@ -203,79 +244,38 @@ async def test_write_issue_missing_title(connector):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "resource,filters,data,url_method,url_pattern,status_code",
+    [
+        ("repos", {}, None, "get", "https://api.github.com/user/repos", 403),
+        (
+            "file",
+            {"repo": "owner/repo", "path": "missing.py"},
+            None,
+            "get",
+            "https://api.github.com/repos/owner/repo/contents/missing.py",
+            404,
+        ),
+        ("pulls", {"repo": "owner/repo"}, None, "get", "https://api.github.com/repos/owner/repo/pulls", 500),
+        (
+            "file",
+            None,
+            {"repo": "owner/repo", "path": "bad.txt", "content": "data"},
+            "put",
+            "https://api.github.com/repos/owner/repo/contents/bad.txt",
+            422,
+        ),
+    ],
+)
 @respx.mock
-async def test_query_repos_http_error(connector):
-    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(403, text="Forbidden"))
-    with pytest.raises(ValueError, match="403"):
-        await connector.query(ConnectorQuery(resource="repos"))
-
-
-@respx.mock
-async def test_query_file_http_error(connector):
-    respx.get("https://api.github.com/repos/owner/repo/contents/missing.py").mock(
-        return_value=httpx.Response(404, text="Not Found")
-    )
-    with pytest.raises(ValueError, match="404"):
-        await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "missing.py"}))
-
-
-@respx.mock
-async def test_query_pulls_http_error(connector):
-    respx.get("https://api.github.com/repos/owner/repo/pulls").mock(
-        return_value=httpx.Response(500, text="Server Error")
-    )
-    with pytest.raises(ValueError, match="500"):
-        await connector.query(ConnectorQuery(resource="pulls", filters={"repo": "owner/repo"}))
-
-
-@respx.mock
-async def test_write_file_http_error(connector):
-    respx.put("https://api.github.com/repos/owner/repo/contents/bad.txt").mock(
-        return_value=httpx.Response(422, text="Unprocessable")
-    )
-    with pytest.raises(ValueError, match="422"):
-        await connector.write(
-            ConnectorPayload(
-                resource="file",
-                data={"repo": "owner/repo", "path": "bad.txt", "content": "data"},
-            )
-        )
-
-
-@respx.mock
-async def test_query_file_missing_filters(connector):
-    with pytest.raises(ValueError, match="requires 'path' filter"):
-        await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo"}))
-
-
-@respx.mock
-async def test_query_pulls_missing_repo_filter(connector):
-    with pytest.raises(ValueError, match="requires 'repo' filter"):
-        await connector.query(ConnectorQuery(resource="pulls"))
-
-
-@respx.mock
-async def test_write_file_missing_content(connector):
-    with pytest.raises(ValueError, match="requires 'content' in data"):
-        await connector.write(ConnectorPayload(resource="file", data={"repo": "owner/repo", "path": "x"}))
-
-
-@respx.mock
-async def test_health_check_non_json_response(connector):
-    respx.get("https://api.github.com/user").mock(
-        return_value=httpx.Response(200, text="not-json", headers={"X-OAuth-Scopes": "repo, read:org"})
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "invalid JSON" in result.detail
-
-
-@respx.mock
-async def test_health_check_api_error(connector):
-    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(503, text="Service Unavailable"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "503" in result.detail
+async def test_http_error(connector, resource, filters, data, url_method, url_pattern, status_code):
+    getattr(respx, url_method)(url_pattern).mock(return_value=httpx.Response(status_code, text="Error"))
+    if data:
+        with pytest.raises(ValueError, match=str(status_code)):
+            await connector.write(ConnectorPayload(resource=resource, data=data))
+    else:
+        with pytest.raises(ValueError, match=str(status_code)):
+            await connector.query(ConnectorQuery(resource=resource, filters=filters))
 
 
 @respx.mock
@@ -290,16 +290,12 @@ async def test_query_repos_passes_limit(connector):
 # ---------------------------------------------------------------------------
 
 
-@respx.mock
-async def test_write_create_pr(connector):
-    created = {"number": 1, "title": "My PR", "state": "open", "html_url": "https://github.com/owner/repo/pull/1"}
-    route = respx.post("https://api.github.com/repos/owner/repo/pulls").mock(
-        return_value=httpx.Response(201, json=created)
-    )
-    result = await connector.write(
-        ConnectorPayload(
-            resource="pr",
-            data={
+@pytest.mark.parametrize(
+    "resource,data,http_method,url,response_json,assert_key,assert_value,sent_checks",
+    [
+        (
+            "pr",
+            {
                 "repo": "owner/repo",
                 "title": "My PR",
                 "head": "feature-branch",
@@ -307,75 +303,72 @@ async def test_write_create_pr(connector):
                 "body": "Description here",
                 "draft": True,
             },
-        )
-    )
-    assert result["number"] == 1
-    sent = json.loads(route.calls.last.request.content)
-    assert sent["head"] == "feature-branch"
-    assert sent["base"] == "main"
-
-
+            "post",
+            "https://api.github.com/repos/owner/repo/pulls",
+            {"number": 1},
+            "number",
+            1,
+            [("head", "feature-branch"), ("base", "main")],
+        ),
+        (
+            "pr",
+            {"repo": "owner/repo", "title": "Minimal PR", "head": "fix", "base": "main"},
+            "post",
+            "https://api.github.com/repos/owner/repo/pulls",
+            {"number": 2},
+            "number",
+            2,
+            [("draft", None)],
+        ),
+        (
+            "pr_comment",
+            {"repo": "owner/repo", "pull_number": "1", "body": "Good catch"},
+            "post",
+            "https://api.github.com/repos/owner/repo/pulls/1/comments",
+            {"id": 1},
+            "id",
+            1,
+            [("body", "Good catch")],
+        ),
+        (
+            "pr_update",
+            {"repo": "owner/repo", "pull_number": "1", "state": "closed", "title": "Updated PR"},
+            "patch",
+            "https://api.github.com/repos/owner/repo/pulls/1",
+            {"number": 1, "state": "closed", "title": "Updated PR"},
+            "state",
+            "closed",
+            [("state", "closed"), ("title", "Updated PR")],
+        ),
+    ],
+)
 @respx.mock
-async def test_write_create_pr_minimal(connector):
-    created = {"number": 2, "title": "Minimal PR", "state": "open"}
-    route = respx.post("https://api.github.com/repos/owner/repo/pulls").mock(
-        return_value=httpx.Response(201, json=created)
+async def test_write_pr_operations(
+    connector,
+    resource,
+    data,
+    http_method,
+    url,
+    response_json,
+    assert_key,
+    assert_value,
+    sent_checks,
+):
+    route = getattr(respx, http_method)(url).mock(
+        return_value=httpx.Response(201 if http_method == "post" else 200, json=response_json),
     )
-    result = await connector.write(
-        ConnectorPayload(
-            resource="pr",
-            data={"repo": "owner/repo", "title": "Minimal PR", "head": "fix", "base": "main"},
-        )
-    )
-    assert result["number"] == 2
+    result = await connector.write(ConnectorPayload(resource=resource, data=data))
+    keys = assert_key.split(".")
+    val = result
+    for k in keys:
+        val = val[k]
+    assert val == assert_value
     sent = json.loads(route.calls.last.request.content)
-    assert "draft" not in sent
-
-
-@respx.mock
-async def test_write_pr_comment(connector):
-    comment = {"id": 1, "body": "Good catch", "path": "file.py", "position": 42}
-    route = respx.post("https://api.github.com/repos/owner/repo/pulls/1/comments").mock(
-        return_value=httpx.Response(201, json=comment)
-    )
-    result = await connector.write(
-        ConnectorPayload(
-            resource="pr_comment",
-            data={"repo": "owner/repo", "pull_number": 1, "body": "Good catch"},
-        )
-    )
-    assert result["id"] == 1
-    sent = json.loads(route.calls.last.request.content)
-    assert sent["body"] == "Good catch"
-
-
-@respx.mock
-async def test_write_pr_update(connector):
-    updated = {"number": 1, "title": "Updated PR", "state": "closed"}
-    route = respx.patch("https://api.github.com/repos/owner/repo/pulls/1").mock(
-        return_value=httpx.Response(200, json=updated)
-    )
-    result = await connector.write(
-        ConnectorPayload(
-            resource="pr_update",
-            data={"repo": "owner/repo", "pull_number": 1, "state": "closed", "title": "Updated PR"},
-        )
-    )
-    assert result["state"] == "closed"
-    sent = json.loads(route.calls.last.request.content)
-    assert sent["state"] == "closed"
-    assert sent["title"] == "Updated PR"
-
-
-@respx.mock
-async def test_write_pr_missing_head(connector):
-    with pytest.raises(ValueError, match="requires 'head' in data"):
-        await connector.write(
-            ConnectorPayload(
-                resource="pr",
-                data={"repo": "owner/repo", "title": "No head"},
-            )
-        )
+    for key, expected in sent_checks:
+        if expected is None:
+            assert key not in sent
+        else:
+            assert sent[key] == expected
 
 
 @respx.mock
@@ -404,7 +397,7 @@ async def test_query_pr_commits(connector):
         return_value=httpx.Response(200, json=commits)
     )
     result = await connector.query(
-        ConnectorQuery(resource="pr_commits", filters={"repo": "owner/repo", "pull_number": 1})
+        ConnectorQuery(resource="pr_commits", filters={"repo": "owner/repo", "pull_number": "1"})
     )
     assert len(result.records) == 1
     assert result.records[0]["sha"] == "abc123"
@@ -417,7 +410,7 @@ async def test_query_pr_files(connector):
         return_value=httpx.Response(200, json=files)
     )
     result = await connector.query(
-        ConnectorQuery(resource="pr_files", filters={"repo": "owner/repo", "pull_number": 1})
+        ConnectorQuery(resource="pr_files", filters={"repo": "owner/repo", "pull_number": "1"})
     )
     assert len(result.records) == 1
     assert result.records[0]["filename"] == "README.md"
@@ -447,7 +440,10 @@ async def test_custom_base_url():
 @respx.mock
 async def test_query_repos_pagination_cursor(connector):
     repos = [{"id": 1, "name": "repo-a"}]
-    link_header = '<https://api.github.com/user/repos?page=2&per_page=5>; rel="next", <https://api.github.com/user/repos?page=1&per_page=5>; rel="first"'
+    link_header = (
+        '<https://api.github.com/user/repos?page=2&per_page=5>; rel="next", '
+        '<https://api.github.com/user/repos?page=1&per_page=5>; rel="first"'
+    )
     respx.get("https://api.github.com/user/repos?per_page=5").mock(
         return_value=httpx.Response(200, json=repos, headers={"Link": link_header})
     )
@@ -466,36 +462,3 @@ async def test_query_pulls_pagination_cursor(connector):
     result = await connector.query(ConnectorQuery(resource="pulls", filters={"repo": "owner/repo"}, limit=10))
     assert result.next_cursor is not None
     assert "page=2" in result.next_cursor
-
-
-# ---------------------------------------------------------------------------
-# Missing filter error paths for new operations
-# ---------------------------------------------------------------------------
-
-
-@respx.mock
-async def test_query_pr_commits_missing_pull_number(connector):
-    with pytest.raises(ValueError, match="requires 'pull_number' filter"):
-        await connector.query(ConnectorQuery(resource="pr_commits", filters={"repo": "owner/repo"}))
-
-
-@respx.mock
-async def test_write_pr_missing_base(connector):
-    with pytest.raises(ValueError, match="requires 'base' in data"):
-        await connector.write(
-            ConnectorPayload(
-                resource="pr",
-                data={"repo": "owner/repo", "title": "PR", "head": "fix"},
-            )
-        )
-
-
-@respx.mock
-async def test_write_pr_comment_missing_body(connector):
-    with pytest.raises(ValueError, match="requires 'body' in data"):
-        await connector.write(
-            ConnectorPayload(
-                resource="pr_comment",
-                data={"repo": "owner/repo", "pull_number": 1},
-            )
-        )

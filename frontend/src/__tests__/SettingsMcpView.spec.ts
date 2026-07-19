@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick } from 'vue'
+import { nextTick as vueNextTick } from 'vue'
+
+async function nextTick() {
+  await vueNextTick()
+  await flushPromises()
+}
 
 const mockMcpConfig = {
   mcp_url: 'https://mcp.modulo.run',

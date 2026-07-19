@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """SSE endpoint for real-time event streaming.
 
 Latency: sub-second for all normal event delivery.
 Zombie cleanup: 2s keepalive heartbeat detects dead clients within 2s.
 """
 
+from __future__ import annotations
 
 import asyncio
 import json
@@ -16,14 +15,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette import status
 
-from modulo.auth.dependencies import get_current_user
+from modulo.api.db_error_handling import handle_db_errors
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.core.events.event_bus import get_event_bus
 from modulo.settings import Settings, get_settings
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from modulo.auth.jwt import AuthenticatedPrincipal
+    from modulo.auth.jwt import TenantPrincipal
 
 _log = logging.getLogger(__name__)
 
@@ -81,9 +81,15 @@ async def _untrack_connection(org_id: str, queue: asyncio.Queue[dict[str, Any]])
     operation_id="stream_events",
     summary="Subscribe to org-scoped real-time resource-change events via SSE.",
 )
+@handle_db_errors("events.sse_event_stream")
+@router.get(
+    "/api/v1/events",
+    operation_id="stream_events",
+    summary="Subscribe to org-scoped real-time resource-change events via SSE.",
+)
 async def sse_event_stream(
     request: Request,
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     """SSE endpoint: streams resource-changed events for the current org.

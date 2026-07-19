@@ -1,6 +1,6 @@
 ---
 id: feat-observability-error-forwarders
-prd: 8
+prd: 8.25
 code:
   - backend/src/modulo/api/routes/error_forwarder_config.py
 bdd:
@@ -8,7 +8,7 @@ bdd:
 unit-tests:
   - backend/tests/unit/api/test_error_forwarder_config.py
 depends-on:
-  - feat-error-tracking-core
+  - feat-observability-error-tracking
 status: partial
 ---
 

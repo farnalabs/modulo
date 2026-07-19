@@ -1,15 +1,14 @@
 """BDD step definitions: Schema Migration (dry-run, plan, apply)."""
 
+import contextlib
 import json
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/schemas/schema_migration.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _SCHEMA_DEFS: dict[str, dict] = {}

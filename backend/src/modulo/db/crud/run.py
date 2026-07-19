@@ -14,9 +14,11 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 
 
@@ -42,7 +44,7 @@ async def create_run(
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"
     max_rn = await session.execute(
-        select(func.coalesce(func.max(Run.run_number), 0)).where(Run.organisation_id == org_id).with_for_update()
+        select(func.coalesce(func.max(Run.run_number), 0)).where(Run.organisation_id == org_id)
     )
     next_run_number = max_rn.scalar_one() + 1
 
@@ -107,18 +109,27 @@ async def list_runs(
     *,
     pipeline_id: uuid.UUID | None = None,
     status: str | None = None,
+    trigger_type: str | None = None,
+    search: str | None = None,
     page: int = 1,
     page_size: int = 20,
     cursor: str | None = None,
 ) -> PageResult[Run]:
-    q = select(Run)
-    count_q = select(func.count()).select_from(Run)
+    q = select(Run).options(selectinload(Run.pipeline)).join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
+    count_q = select(func.count()).select_from(Run).join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
     if pipeline_id is not None:
         q = q.where(Run.pipeline_id == pipeline_id)
         count_q = count_q.where(Run.pipeline_id == pipeline_id)
     if status is not None:
         q = q.where(Run.status == status)
         count_q = count_q.where(Run.status == status)
+    if trigger_type is not None:
+        q = q.where(Run.trigger_type == trigger_type)
+        count_q = count_q.where(Run.trigger_type == trigger_type)
+    if search is not None:
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        q = q.where(Pipeline.name.ilike(f"%{escaped}%", escape="\\"))
+        count_q = count_q.where(Pipeline.name.ilike(f"%{escaped}%", escape="\\"))
 
     if cursor is not None:
         paginator = CursorPaginator()
@@ -158,6 +169,7 @@ async def update_run_status(
     total_tokens: int | None = None,
     total_cost_usd: Decimal | None = None,
     node_token_usage: dict[str, Any] | None = None,
+    outputs_json: dict[str, Any] | None = None,
 ) -> Run | None:
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
     run = result.scalar_one_or_none()
@@ -178,6 +190,8 @@ async def update_run_status(
         run.total_cost_usd = total_cost_usd
     if node_token_usage is not None:
         run.node_token_usage = node_token_usage
+    if outputs_json is not None:
+        run.outputs_json = outputs_json
     await session.flush()
     return run
 
@@ -188,6 +202,8 @@ async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run 
     if run is None:
         return None
     run.cancellation_requested = True
+    run.status = "cancelled"
+    run.completed_at = datetime.now(UTC)
     await session.flush()
     return run
 
@@ -326,7 +342,7 @@ async def batch_delete_old_terminal_runs(
 ) -> int:
     """Delete terminal runs older than *max_age_days* in batches.
 
-    Only affects runs with status in (complete, failed, cancelled).
+    Only affects runs with status in (complete, failed, eval_failed, cancelled).
     Returns total deleted count.
     """
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
@@ -337,8 +353,8 @@ async def batch_delete_old_terminal_runs(
                 await session.execute(
                     select(Run.id)
                     .where(
-                        Run.status.in_(["complete", "failed", "cancelled"]),
-                        Run.completed_at < cutoff,
+                        Run.status.in_(["complete", "failed", "eval_failed", "cancelled"]),
+                        Run.created_at < cutoff,
                     )
                     .limit(batch_size)
                 )
@@ -377,7 +393,7 @@ async def purge_runs(
                 await session.execute(
                     select(Run.id)
                     .where(
-                        Run.status.in_(["complete", "failed", "cancelled"]),
+                        Run.status.in_(["complete", "failed", "eval_failed", "cancelled"]),
                         Run.completed_at < cutoff,
                     )
                     .limit(batch_size)

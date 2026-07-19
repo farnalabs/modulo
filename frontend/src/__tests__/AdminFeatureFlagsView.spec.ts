@@ -44,7 +44,7 @@ function setupDefaultMock() {
       return Promise.resolve({ data: mockTiersData, error: undefined })
     }
     return Promise.resolve({ data: null, error: undefined })
-  })
+  }) as unknown as typeof api.GET
 }
 
 async function mountView() {
@@ -155,7 +155,7 @@ describe('AdminFeatureFlagsView', () => {
     for (let i = 0; i < 5; i++) {
       await flushPromises()
     }
-    expect(wrapper.text()).toContain('Failed to load feature flags')
+    expect(wrapper.text()).toContain('Network failure')
   })
 
   it('shows empty state when search yields no results', async () => {
@@ -189,7 +189,7 @@ describe('AdminFeatureFlagsView', () => {
         return Promise.resolve({ data: mockTiersData, error: undefined })
       }
       return Promise.resolve({ data: null, error: undefined })
-    })
+    }) as unknown as typeof api.GET
     const pinia = createPinia()
     setActivePinia(pinia)
     const wrapper = mount(AdminFeatureFlagsView, {
@@ -198,8 +198,8 @@ describe('AdminFeatureFlagsView', () => {
     for (let i = 0; i < 10; i++) {
       await flushPromises()
     }
-    expect(wrapper.text()).toContain('common.next')
-    expect(wrapper.text()).toContain('common.previous')
+    expect(wrapper.text()).toContain('Next')
+    expect(wrapper.text()).toContain('Previous')
   })
 
   it('shows tooltip trigger elements', async () => {

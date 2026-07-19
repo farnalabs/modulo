@@ -44,7 +44,7 @@ export const useLocaleStore = defineStore('locale', () => {
     if (!getAccessToken()) return
     try {
       await withTimeout(
-        api.PUT('/api/v1/me/settings', { locale: code }),
+        api.PUT('/api/v1/me/settings', { body: { locale: code } }),
         10000,
         'Locale sync request',
       )
@@ -60,21 +60,22 @@ export const useLocaleStore = defineStore('locale', () => {
     initPromise = (async () => {
       let detected: SupportedLocale = DEFAULT_LOCALE
 
-      // 1. Try backend preferences (returns flat account.preferences dict)
-      try {
-        const res = await withTimeout(
-          api.GET('/api/v1/me/settings'),
-          10000,
-          'Locale fetch request',
-        )
-        if (res.data) {
-          const backendLocale = (res.data as Record<string, unknown>).locale as string | undefined
-          if (backendLocale && isSupportedLocale(backendLocale)) {
-            detected = backendLocale
+      // 1. Try backend preferences — skip if not authenticated to avoid
+      //    401 race on initial page load before auto-login completes.
+      if (getAccessToken()) {
+        try {
+          const res = await withTimeout(
+            api.GET('/api/v1/me/settings'),
+            10000,
+            'Locale fetch request',
+          )
+          const settingsData = res.data as { locale?: string } | undefined
+          if (settingsData?.locale && isSupportedLocale(settingsData.locale)) {
+            detected = settingsData.locale
           }
+        } catch (err) {
+          console.warn('[locale] Failed to fetch locale from backend', err)
         }
-      } catch (err) {
-        console.warn('[locale] Failed to fetch locale from backend', err)
       }
 
       // 2. Try localStorage

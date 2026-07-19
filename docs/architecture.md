@@ -53,7 +53,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. This doc
 | **ORM** | SQLAlchemy 2.0 (async) | Database access |
 | **Migrations** | Alembic | Schema versioning |
 | **Task queue** | Celery + Redis | Async task processing (optional) |
-| **Auth** | python-jose, authlib (v1) | JWT, OAuth 2.0 |
+| **Auth** | PyJWT[crypto], authlib (v1) | JWT, OAuth 2.0 |
 | **LLM SDKs** | anthropic, openai | Model backend integrations |
 | **Observability** | OpenTelemetry | Tracing, metrics |
 | **Frontend** | Vue 3 + TypeScript | SPA |
@@ -307,7 +307,7 @@ Three compose files:
 - `docker-compose.yml` — dev mode (builds from source, Postgres 16, Redis 7)
 - `docker-compose.local.yml` — with observability profile (otel-collector, Prometheus, Grafana)
 - `docker-compose.test.yml` — CI test environment
-- `docker-compose.mariadb.yml` — MariaDB alternative (experimental multi-backend)
+- `docker-compose.mariadb.yml` — MariaDB alternative (experimental multi-backend — **deprecated 2026-07-11**, not actively tested or maintained)
 
 ### Kubernetes (Helm)
 
@@ -337,8 +337,9 @@ Without Redis: in-process asyncio scheduler, in-memory rate limiting, in-memory 
 ### CI/CD Pipeline
 
 Self-hosted GitHub Actions runner on Windows. Workflows:
-- Lint + type-check + test on every push
-- Docker image build + push on tag (ghcr.io)
+- Lint, type-check, unit test, frontend build, audit, and WCAG contrast test on every push
+- Each backend/frontend container is built once, scanned with Trivy, and published to ghcr.io only from `main` or a version tag
+- Staging smoke, WCAG, and regression suites share one dependency/browser setup while retaining separate result artifacts
 - Release workflow (tag-driven, semver)
 
 ### Observability

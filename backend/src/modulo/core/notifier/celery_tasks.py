@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Celery task for notification dispatch with retry and dead-letter tracking.
 
 This module defines the ``DispatchNotificationTask`` and a convenience
@@ -13,6 +11,7 @@ Usage
     await enqueue_dispatch(org_id, event_type, payload, run_id=run_id)
 """
 
+from __future__ import annotations
 
 import asyncio
 import json
@@ -26,20 +25,32 @@ from modulo.core.notifier import MAX_ATTEMPTS, Notifier
 from modulo.settings import get_settings
 
 try:
-    from celery import Celery, Task  # type: ignore[import-untyped]
+    from celery import Celery, Task
 except ImportError:
     import typing
 
     if typing.TYPE_CHECKING:
-        from celery import Celery, Task  # type: ignore[import-untyped]
-    Celery = None  # type: ignore[misc]
-    Task = object  # type: ignore[misc]
+        from celery import Celery, Task
+    Celery = None
+    Task = object
 
 __all__ = [
     "DispatchNotificationTask",
     "enqueue_dispatch",
     "get_celery_app",
 ]
+
+
+def _get_engine() -> Any:
+    """Return an async engine from settings.
+
+    A fresh engine is created per call because the caller disposes
+    it after use — caching here would race with dispose in the
+    fallback path.
+    """
+    settings = get_settings()
+    return create_async_engine(settings.database_url)
+
 
 _log = logging.getLogger(__name__)
 
@@ -155,11 +166,42 @@ async def enqueue_dispatch(
     """Enqueue a notification dispatch to Celery.
 
     This is the entry point called by ``Notifier.dispatch_event()`` when
-    Celery mode is enabled. The caller handles fallback to inline dispatch.
+    Celery mode is enabled. Falls back to inline dispatch if Celery is
+    unavailable.
     """
-    app = get_celery_app()
+    try:
+        app = get_celery_app()
+    except ImportError:
+        app = None
     if app is None:
-        raise RuntimeError("Celery is not available")
+        _log.info(
+            "notifier.celery_unavailable_fallback",
+            extra={"event_type": event_type, "org_id": str(org_id)},
+        )
+        engine = _get_engine()
+        notifier = Notifier(engine, get_settings().fernet_key)
+        try:
+            results = await notifier.dispatch_event(
+                org_id,
+                event_type,
+                payload,
+                run_id=run_id,
+                retain_payload=retain_payload,
+                team_id=team_id,
+            )
+        finally:
+            await notifier.close()
+            await engine.dispose()
+        return [
+            {
+                "endpoint_id": str(r.endpoint_id),
+                "status": r.status,
+                "attempt_count": r.attempt_count,
+                "response_code": r.response_code,
+                "last_error": r.last_error,
+            }
+            for r in results
+        ]
     app.send_task(
         "modulo.notifier.dispatch",
         args=[

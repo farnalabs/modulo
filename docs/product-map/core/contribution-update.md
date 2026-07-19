@@ -92,3 +92,7 @@ Submitting new versions of published community contributions, listing version hi
 - Added Error Handling section with 6 checkboxes (all [x])
 - Added Edge Cases section with 8 checkboxes documenting boundary behaviour
 - Updated Known Gaps to reflect current state — test coverage gap remains for BDD and integration tests
+
+### 2026-07-12 — R2 improve-architecture
+- Verified B904 compliance (all re-raises use `from None`/`raise` correctly), no CancelledError concerns (Python 3.12+), frontmatter clean (`prd: 8.14`, `status: covered`), known gaps genuine, no dead code found in any code path.
+- All ruff checks pass.

@@ -6,18 +6,19 @@ import logging
 import uuid
 from copy import deepcopy
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
-from jsonschema.exceptions import SchemaError as JsSchemaError
+from jsonschema.exceptions import SchemaError as JsSchemaError  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.connector_hub import ConnectorHub
 from modulo.core.model_backend_hub import ModelBackendHub
@@ -44,10 +45,13 @@ from modulo.db.crud.schema import (
     list_schemas,
     update_schema,
 )
+from modulo.db.models.schema import SchemaVersion as SchemaVersionModel
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/schemas", tags=["schemas"])
 
@@ -130,22 +134,23 @@ class SchemaVersionListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("schemas.list_schemas_endpoint")
 @router.get("", response_model=SchemaListResponse)
 async def list_schemas_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaListResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result = await list_schemas(session, page=page, page_size=page_size)
+            result = await list_schemas(session, cursor=None, limit=page_size)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.table_missing")
         raise HTTPException(
@@ -159,6 +164,8 @@ async def list_schemas_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.list_schemas")
@@ -174,11 +181,12 @@ async def list_schemas_endpoint(
     )
 
 
+@handle_db_errors("schemas.create_schema_endpoint")
 @router.post("", response_model=SchemaResponse, status_code=status.HTTP_201_CREATED)
 async def create_schema_endpoint(
     req: SchemaCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -191,6 +199,15 @@ async def create_schema_endpoint(
                 description=req.description,
                 abstract_name=req.abstract_name,
             )
+            sv = SchemaVersionModel(
+                organisation_id=principal.organisation_id,
+                schema_id=schema.id,
+                version="latest",
+                version_number=0,
+                definition_json={"type": "object", "properties": {}, "additionalProperties": True},
+                account_id=principal.account_id,
+            )
+            session.add(sv)
     except IntegrityError:
         logger.exception("schemas.create.conflict")
         raise HTTPException(
@@ -211,6 +228,8 @@ async def create_schema_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.create_schema")
         raise HTTPException(
@@ -220,11 +239,12 @@ async def create_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
+@handle_db_errors("schemas.get_schema_endpoint")
 @router.get("/{schema_id}", response_model=SchemaResponse)
 async def get_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -234,7 +254,7 @@ async def get_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.get")
         raise HTTPException(
@@ -249,6 +269,8 @@ async def get_schema_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.get_schema")
         raise HTTPException(
@@ -260,12 +282,13 @@ async def get_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
+@handle_db_errors("schemas.update_schema_endpoint")
 @router.patch("/{schema_id}", response_model=SchemaResponse)
 async def update_schema_endpoint(
     schema_id: uuid.UUID,
     req: SchemaUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -273,21 +296,16 @@ async def update_schema_endpoint(
             await set_rls_org(session, principal.organisation_id)
             schema = await update_schema(session, schema_id, updates)
     except IntegrityError:
+        logger.exception("schemas.update_integrity")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
+            detail="A schema with this name already exists in your organisation.",
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.update")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
-        ) from None
-    except IntegrityError:
-        logger.exception("schemas.update_integrity")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A schema with this name already exists in your organisation.",
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.update_schema")
@@ -296,6 +314,8 @@ async def update_schema_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.update_schema")
@@ -308,11 +328,12 @@ async def update_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
+@handle_db_errors("schemas.deprecate_schema_endpoint")
 @router.patch("/{schema_id}/deprecate", response_model=SchemaResponse)
 async def deprecate_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaResponse:
     """Mark a schema as deprecated."""
     try:
@@ -323,7 +344,7 @@ async def deprecate_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.deprecate")
         raise HTTPException(
@@ -338,6 +359,8 @@ async def deprecate_schema_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.deprecate_schema")
         raise HTTPException(
@@ -349,12 +372,13 @@ async def deprecate_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
+@handle_db_errors("schemas.delete_schema_endpoint")
 @router.delete("/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_schema_endpoint(
     schema_id: uuid.UUID,
     force: bool = Query(False),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         try:
@@ -370,7 +394,7 @@ async def delete_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.delete")
         raise HTTPException(
@@ -384,6 +408,8 @@ async def delete_schema_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.delete_schema")
@@ -410,7 +436,7 @@ async def list_schema_versions_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaVersionListResponse:
     try:
         async with session.begin():
@@ -423,7 +449,7 @@ async def list_schema_versions_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.list_versions")
         raise HTTPException(
@@ -437,6 +463,8 @@ async def list_schema_versions_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.list_schema_versions")
@@ -462,7 +490,7 @@ async def create_schema_version_endpoint(
     schema_id: uuid.UUID,
     req: SchemaVersionCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaVersionResponse:
     try:
         async with session.begin():
@@ -500,6 +528,8 @@ async def create_schema_version_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.create_schema_version")
         raise HTTPException(
@@ -518,7 +548,7 @@ async def get_schema_version_endpoint(
     schema_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaVersionResponse:
     try:
         async with session.begin():
@@ -528,7 +558,7 @@ async def get_schema_version_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.get_version")
         raise HTTPException(
@@ -542,6 +572,8 @@ async def get_schema_version_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.get_schema_version")
@@ -572,11 +604,12 @@ class SchemaFieldListResponse(BaseModel):
     fields: list[SchemaFieldResponse]
 
 
+@handle_db_errors("schemas.list_schema_fields_endpoint")
 @router.get("/{schema_id}/fields", response_model=SchemaFieldListResponse)
 async def list_schema_fields_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaFieldListResponse:
     """Return the field list for the latest version of a schema.
 
@@ -597,7 +630,7 @@ async def list_schema_fields_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.list_fields")
         raise HTTPException(
@@ -611,6 +644,8 @@ async def list_schema_fields_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.list_schema_fields")
@@ -648,7 +683,7 @@ async def list_schema_fields_endpoint(
 
 class SchemaSampleQuery(BaseModel):
     resource: str = Field(min_length=1)
-    filters: dict[str, Any] = {}
+    filters: ClassVar[dict[str, Any]] = {}
     limit: int = Field(default=10, ge=1, le=100)
 
 
@@ -664,11 +699,12 @@ class SchemaInferResponse(BaseModel):
     suggestion_description: str | None = None
 
 
+@handle_db_errors("schemas.infer_schema_endpoint")
 @router.post("/infer", response_model=SchemaInferResponse)
 async def infer_schema_endpoint(
     req: SchemaInferRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> SchemaInferResponse:
     """Sample data from a connector and infer a JSON Schema via LLM.
@@ -689,7 +725,7 @@ async def infer_schema_endpoint(
                 )
 
             # Connector-types currently supported for schema inference
-            _SUPPORTED_INFERENCE_TYPES = frozenset(
+            supported_inference_types = frozenset(
                 {
                     "github",
                     "gitlab",
@@ -700,14 +736,14 @@ async def infer_schema_endpoint(
                     "confluence",
                 }
             )
-            if ci.connector_type_id not in _SUPPORTED_INFERENCE_TYPES:
+            if ci.connector_type_id not in supported_inference_types:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Connector type '{ci.connector_type_id}' does not support schema inference. "
-                    f"Supported types: {', '.join(sorted(_SUPPORTED_INFERENCE_TYPES))}",
+                    f"Supported types: {', '.join(sorted(supported_inference_types))}",
                 )
 
-            mbs = await list_model_backends(session, page_size=1)
+            mbs = await list_model_backends(session, org_id=principal.organisation_id, page_size=1)
             if not mbs.items:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -717,7 +753,7 @@ async def infer_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.infer.table_missing")
         raise HTTPException(
@@ -732,6 +768,8 @@ async def infer_schema_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.infer.unexpected")
         raise HTTPException(
@@ -741,6 +779,8 @@ async def infer_schema_endpoint(
 
     try:
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.infer.secrets_backend")
         raise HTTPException(
@@ -751,6 +791,8 @@ async def infer_schema_endpoint(
     async with ConnectorHub(secrets_backend=secrets_backend) as ch:
         try:
             await ch.initialise([ci])
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("schemas.infer.connector_init_failed")
             raise HTTPException(
@@ -780,6 +822,8 @@ async def infer_schema_endpoint(
     async with ModelBackendHub() as mh:
         try:
             await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("schemas.infer.backend_init_failed")
             raise HTTPException(
@@ -794,6 +838,8 @@ async def infer_schema_endpoint(
         first_backend_id = next(iter(mh.backend_ids))
         try:
             backend = await mh.get(first_backend_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("schemas.infer.backend_get_failed")
             raise HTTPException(
@@ -833,13 +879,12 @@ async def infer_schema_endpoint(
                     },
                 )
         except ProgrammingError:
-            logger.exception("routes.schemas")
+            logger.warning("Audit event not recorded — schema inference table missing")
 
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="This feature is not available. Run database migrations to enable it.",
-            )
-
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.infer.audit_failed")
 
@@ -858,18 +903,19 @@ async def infer_schema_endpoint(
 
 class SchemaGenerateRequest(BaseModel):
     description: str = Field(min_length=1)
-    examples: list[dict[str, Any]] = []
+    examples: ClassVar[list[dict[str, Any]]] = []
 
 
 class SchemaGenerateResponse(BaseModel):
     definition_json: dict[str, Any]
 
 
+@handle_db_errors("schemas.generate_schema_endpoint")
 @router.post("/generate", response_model=SchemaGenerateResponse)
 async def generate_schema_endpoint(
     req: SchemaGenerateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> SchemaGenerateResponse:
     """Generate a JSON Schema from a natural language description and optional
@@ -881,7 +927,7 @@ async def generate_schema_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            mbs = await list_model_backends(session, page_size=1)
+            mbs = await list_model_backends(session, org_id=principal.organisation_id, page_size=1)
             if not mbs.items:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -891,7 +937,7 @@ async def generate_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.generate")
         raise HTTPException(
@@ -906,6 +952,8 @@ async def generate_schema_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.generate.unexpected")
         raise HTTPException(
@@ -915,6 +963,8 @@ async def generate_schema_endpoint(
 
     try:
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.generate.secrets_backend")
         raise HTTPException(
@@ -925,6 +975,8 @@ async def generate_schema_endpoint(
     async with ModelBackendHub() as mh:
         try:
             await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("schemas.generate.backend_init_failed")
             raise HTTPException(
@@ -939,6 +991,8 @@ async def generate_schema_endpoint(
         first_backend_id = next(iter(mh.backend_ids))
         try:
             backend = await mh.get(first_backend_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("schemas.generate.backend_get_failed")
             raise HTTPException(
@@ -968,7 +1022,7 @@ async def generate_schema_endpoint(
                     event_type="schema_generation_completed",
                     actor_user_id=principal.account_id,
                     resource_type="schema",
-                    resource_id="generate",
+                    resource_id=None,
                     payload_json={
                         "description_length": len(req.description),
                         "example_count": len(req.examples),
@@ -976,14 +1030,11 @@ async def generate_schema_endpoint(
                     },
                 )
         except ProgrammingError:
-            logger.exception("routes.schemas")
-
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="This feature is not available. Run database migrations to enable it.",
-            )
+            logger.warning("Audit event not recorded — schema generation table missing")
 
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.generate.audit_failed")
@@ -1012,11 +1063,12 @@ class SchemaMigrationPlanRequest(BaseModel):
     to_definition: dict[str, Any]
 
 
+@handle_db_errors("schemas.migrate_data_endpoint")
 @router.post("/migrate", response_model=SchemaMigrationResponse)
 async def migrate_data_endpoint(
     req: SchemaMigrationRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     dry_run: bool = Query(False, description="If true, preview the migration plan without applying it"),
 ) -> SchemaMigrationResponse:
     """Migrate data from one schema version to another.
@@ -1048,7 +1100,7 @@ async def migrate_data_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.migrate")
         raise HTTPException(
@@ -1063,6 +1115,8 @@ async def migrate_data_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.migrate_data")
         raise HTTPException(
@@ -1072,6 +1126,10 @@ async def migrate_data_endpoint(
 
     try:
         plan = create_migration(from_sv.definition_json, to_sv.definition_json)
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.migrate_create_plan")
         raise HTTPException(
@@ -1079,7 +1137,7 @@ async def migrate_data_endpoint(
             detail="Failed to compute migration plan.",
         ) from None
 
-    plan_dict = {
+    plan_dict: dict[str, Any] = {
         "field_additions": plan.field_additions,
         "field_removals": plan.field_removals,
         "type_changes": {k: {"old_type": v.old_type, "new_type": v.new_type} for k, v in plan.type_changes.items()},
@@ -1095,6 +1153,10 @@ async def migrate_data_endpoint(
 
     try:
         migrated = apply_migration(req.data, plan)
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.migrate_apply")
         raise HTTPException(
@@ -1108,6 +1170,7 @@ async def migrate_data_endpoint(
     )
 
 
+@handle_db_errors("schemas.migration_plan_endpoint")
 @router.post("/migrate/plan", response_model=dict[str, Any])
 async def migration_plan_endpoint(
     req: SchemaMigrationPlanRequest,
@@ -1116,6 +1179,8 @@ async def migration_plan_endpoint(
     try:
         plan = create_migration(req.from_definition, req.to_definition)
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.migration_plan")
@@ -1143,7 +1208,7 @@ async def _get_latest_version(session: AsyncSession, schema_id: uuid.UUID) -> An
 
 
 class SchemaValidateRequest(BaseModel):
-    definition: dict[str, Any] = Field(alias="definition")
+    definition: dict[str, Any]
 
 
 class SchemaValidationError(BaseModel):
@@ -1191,6 +1256,7 @@ def _find_json_location(raw: str, instance: dict[str, Any], error_path: str) -> 
     return None, None
 
 
+@handle_db_errors("schemas.validate_schema_endpoint")
 @router.post("/validate", response_model=SchemaValidateResponse)
 async def validate_schema_endpoint(
     req: SchemaValidateRequest,
@@ -1244,6 +1310,7 @@ class SchemaImportResponse(BaseModel):
     fields: list[SchemaImportField]
 
 
+@handle_db_errors("schemas.import_schema_endpoint")
 @router.post("/import", response_model=SchemaImportResponse)
 async def import_schema_endpoint(
     req: SchemaImportRequest,
@@ -1271,7 +1338,7 @@ async def import_schema_endpoint(
         Draft202012Validator.check_schema(schema)
     except (ValidationError, JsSchemaError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Invalid JSON Schema: {exc.message}",
         ) from exc
 

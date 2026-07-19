@@ -1,5 +1,6 @@
 """Step definitions for cost controls feature: token budget, spend limits, circuit breaker."""
 
+import contextlib
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -8,10 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/costs/cost_controls.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")

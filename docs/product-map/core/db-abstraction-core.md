@@ -27,9 +27,8 @@ unit-tests:
   - backend/tests/unit/db/test_repositories_locks.py
   - backend/tests/unit/db/test_rls.py
   - backend/tests/unit/db/test_rls_multibackend.py
-  - backend/tests/unit/db/test_migration_0025.py
-  - backend/tests/unit/db/test_migration_0026.py
-  - backend/tests/unit/db/test_migration_0049.py
+  - backend/tests/unit/db/test_migration_remy_tables.py
+  - backend/tests/unit/db/test_migration_team_visibility_rls.py
   - backend/tests/unit/test_engine_pool_config.py
   - backend/tests/integration/conftest.py
   - backend/tests/integration/crud/conftest.py
@@ -105,7 +104,7 @@ PRD §6.1 (Layered Architecture), §6.2 (SaaS-First Multi-Tenant).
 ### Migration Framework
 
 - [x] Alembic config at `backend/alembic.ini`
-- [x] `env.py` converts async URLs to sync (`+asyncpg` → `+psycopg2`, `+asyncmy` → `+pymysql`)
+- [x] `env.py` converts async URLs to sync (`+asyncpg` → `+psycopg`, `+aiomysql` → `+pymysql`)
 - [x] `env.py` supports `DATABASE_URL` env var override
 - [x] Batch mode (`render_as_batch=True`) enabled for SQLite migrations
 - [x] 69 migrations from 0001 (initial schema) through 0059 (feedback annotation)
@@ -216,3 +215,8 @@ PRD §6.1 (Layered Architecture), §6.2 (SaaS-First Multi-Tenant).
 - Fixed MAJOR — added missing `except SQLAlchemyError → 503` to `determination.py` (connection/deadlock failures fell through to 500)
 - Fixed MAJOR — created `test_dependencies.py` with 9 unit tests covering engine creation, session management, and pg_connection_string
 - Fixed MINOR — corrected stale `connect_args` claim in product map (session.py has MORE connect_args than dependencies.py, not fewer)
+
+### 2026-07-12 — R2 improve-architecture
+- Fixed B904: added `from None` to 2 `raise HTTPException` in `except ProgrammingError` blocks in `dependencies.py` (lines 123, 154).
+- Verified no CancelledError concerns (Python 3.12+), frontmatter clean (`prd: 6.1, 6.2`, `status: partial`), known gaps genuine, no dead code found.
+- All ruff checks pass.

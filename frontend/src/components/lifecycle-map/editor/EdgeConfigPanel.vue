@@ -1,20 +1,22 @@
 <template>
   <div class="space-y-4">
     <div>
-      <label class="mb-1 block text-sm font-medium">Trigger Type</label>
-      <select
-        v-model="form.trigger_type"
-        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <option v-for="opt in triggerOptions" :key="opt.value" :value="opt.value">
-          {{ opt.label }}
-        </option>
-      </select>
+      <label for="edgeconfigpanel-field-5" class="mb-1 block text-sm font-medium">Trigger Type</label>
+      <Select v-model="form.trigger_type">
+        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Trigger Type">
+          <SelectValue placeholder="Select trigger type" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem v-for="opt in triggerOptions" :key="opt.value" :value="opt.value">
+            {{ opt.label }}
+          </SelectItem>
+        </SelectContent>
+      </Select>
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Description</label>
-      <textarea
+      <label for="edgeconfigpanel-field-4" class="mb-1 block text-sm font-medium">Description</label>
+      <textarea id="edgeconfigpanel-field-4"
         v-model="form.description"
         rows="2"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -23,8 +25,8 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
-      <input
+      <label for="edgeconfigpanel-field-3" class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
+      <input id="edgeconfigpanel-field-3"
         v-model="form.condition_expression"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         placeholder="e.g. result.status == 'success'"
@@ -32,22 +34,23 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Estimated Frequency</label>
-      <select
-        v-model="form.estimated_frequency"
-        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <option :value="null">Not specified</option>
-        <option value="daily">Daily</option>
-        <option value="per-pr">Per PR</option>
-        <option value="hourly">Hourly</option>
-        <option value="custom">Custom</option>
-      </select>
+      <label for="edgeconfigpanel-field-2" class="mb-1 block text-sm font-medium">Estimated Frequency</label>
+      <Select v-model="form.estimated_frequency">
+        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Estimated Frequency">
+          <SelectValue placeholder="Not specified" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="daily">Daily</SelectItem>
+          <SelectItem value="per-pr">Per PR</SelectItem>
+          <SelectItem value="hourly">Hourly</SelectItem>
+          <SelectItem value="custom">Custom</SelectItem>
+        </SelectContent>
+      </Select>
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Trigger Link (optional)</label>
-      <input
+      <label for="edgeconfigpanel-field-1" class="mb-1 block text-sm font-medium">Trigger Link (optional)</label>
+      <input id="edgeconfigpanel-field-1"
         v-model="form.trigger_link"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         placeholder="Link to Modulo trigger config"
@@ -58,6 +61,7 @@
 
 <script setup lang="ts">
 import { reactive, watch } from 'vue'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import type { TriggerType, EstimatedFrequency } from '../../../types/lifecycleMap'
 
 interface FormModel {

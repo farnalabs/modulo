@@ -1,0 +1,333 @@
+name: Merge Queue
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: merge-queue
+  cancel-in-progress: false
+
+env:
+  SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+  FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+
+jobs:
+  queue:
+    name: Merge queue → main
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Configure git
+        run: |
+          git config user.name "modulo-merge-bot"
+          git config user.email "bot@modulo.run"
+
+      - name: Create merge-queue branch from main
+        run: |
+          git branch -D merge-queue 2>/dev/null || true
+          git checkout -b merge-queue
+          echo "merge-queue branch reset to main"
+
+      - name: Collect open PRs (oldest first, approved only)
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Fetching open PRs sorted by age..."
+          gh pr list --state open --json number,title,headRefName,createdAt --limit 50 2>&1 | \
+            jq 'sort_by(.createdAt)' > /tmp/all_prs.json
+          ALL_COUNT=$(jq 'length' /tmp/all_prs.json)
+          echo "Found $ALL_COUNT open PR(s)"
+
+          # Filter to only PRs approved by farnalabs or modulo-reviewbot
+          APPROVED_COUNT=0
+          echo "[]" > /tmp/prs.json
+
+          jq -c '.[]' /tmp/all_prs.json | while IFS= read -r pr; do
+            NUM=$(echo "$pr" | jq -r '.number')
+            TITLE=$(echo "$pr" | jq -r '.title')
+
+            echo -n "  PR #$NUM ($TITLE) — "
+
+            # Check for approval reviews
+            APPROVERS=$(gh pr view "$NUM" --json reviews --jq '.reviews[]? | select(.state == "APPROVED") | .author.login' 2>/dev/null | sort -u)
+
+            if echo "$APPROVERS" | grep -qE '^(farnalabs|modulo-reviewbot)$'; then
+              echo "approved by $APPROVERS"
+              echo "$pr" >> /tmp/approved_prs.json
+              APPROVED_COUNT=$((APPROVED_COUNT + 1))
+            else
+              echo "not approved yet — skipping"
+            fi
+          done
+
+          # Combine approved PRs into the prs.json file
+          if [ -f /tmp/approved_prs.json ]; then
+            jq -s '.' /tmp/approved_prs.json > /tmp/prs.json
+          fi
+
+          PR_COUNT=$(jq 'length' /tmp/prs.json)
+          echo "Approved PRs ready for queue: $PR_COUNT"
+          echo "pr_count=$PR_COUNT" >> "$GITHUB_OUTPUT"
+          echo "all_count=$ALL_COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Exit early if no approved PRs
+        if: steps.collect.outputs.pr_count == '0'
+        run: |
+          echo "No approved PRs to process."
+          echo "Total open: ${{ steps.collect.outputs.all_count }}, approved: 0"
+          echo "PRs need an APPROVED review from farnalabs or modulo-reviewbot."
+          exit 0
+
+      - name: Merge PRs into merge-queue (oldest first)
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          merged_prs=""
+          conflict_prs=""
+
+          while IFS= read -r pr; do
+            NUM=$(echo "$pr" | jq -r '.number')
+            TITLE=$(echo "$pr" | jq -r '.title')
+            REF=$(echo "$pr" | jq -r '.headRefName')
+
+            # Skip already-closed
+            PR_STATE=$(gh pr view "$NUM" --json state,closed 2>/dev/null) || true
+            if echo "$PR_STATE" | jq -e '.state == "CLOSED" or .closed == true' > /dev/null 2>&1; then
+              continue
+            fi
+
+            echo ""
+            echo "=== PR #$NUM: $TITLE ==="
+
+            # Ensure clean working tree
+            git reset --hard HEAD 2>/dev/null || true
+            git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" 2>&1
+
+            echo "Attempting squash-merge into merge-queue..."
+            if git merge --squash "pr-$NUM" 2>&1; then
+              git commit -m "squash! Merge PR #$NUM: $TITLE" 2>/dev/null || true
+              echo "PR #$NUM merged successfully."
+              merged_prs="$merged_prs $NUM"
+            else
+              git merge --abort 2>/dev/null || true
+              echo "MERGE CONFLICT in PR #$NUM — skipping."
+              conflict_prs="$conflict_prs $NUM"
+            fi
+          done < <(jq -c '.[]' /tmp/prs.json)
+
+          merged_prs=$(echo "$merged_prs" | xargs)
+          conflict_prs=$(echo "$conflict_prs" | xargs)
+
+          # Store PR numbers in files for later steps
+          echo "$merged_prs" > /tmp/merged_prs.txt
+          echo "$conflict_prs" > /tmp/conflict_prs.txt
+
+          echo "merged_prs=$merged_prs" >> "$GITHUB_OUTPUT"
+          echo "conflict_prs=$conflict_prs" >> "$GITHUB_OUTPUT"
+          echo "merged_count=$(echo "$merged_prs" | wc -w)" >> "$GITHUB_OUTPUT"
+          echo "conflict_count=$(echo "$conflict_prs" | wc -w)" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "=== Results ==="
+          echo "Merged: $merged_prs"
+          echo "Conflicts: $conflict_prs"
+
+      - name: Exit if nothing to merge
+        if: steps.merge.outputs.merged_count == '0'
+        run: |
+          echo "No PRs could be merged into queue. Exiting."
+          exit 0
+
+      - name: Push merge-queue branch (for reference)
+        if: steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          git push origin merge-queue:refs/heads/merge-queue/active-$TIMESTAMP 2>&1
+          echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
+
+      - name: Initialize failure tracking
+        if: steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          echo "" > /tmp/failure_description.txt
+
+      - name: Install backend deps
+        if: steps.merge.outputs.merged_count != '0'
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Backend lint + tests (parallel)
+        if: steps.merge.outputs.merged_count != '0'
+        working-directory: backend
+        shell: bash
+        run: |
+          # Run lint tools in background, tests in foreground
+          uv run --no-sync ruff check . &
+          RUFF_PID=$!
+          uv run --no-sync mypy src/modulo/ &
+          MYPY_PID=$!
+          uv run --no-sync bandit -r src/modulo/ -ll &
+          BANDIT_PID=$!
+
+          uv run --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+          TEST_EXIT=$?
+
+          # Collect lint results
+          LINT_FAIL=0
+          wait $RUFF_PID || LINT_FAIL=1
+          wait $MYPY_PID || LINT_FAIL=1
+          wait $BANDIT_PID || LINT_FAIL=1
+
+          # Report failures
+          if [ $LINT_FAIL -ne 0 ]; then
+            echo "Backend lint failed" >> /tmp/failure_description.txt
+          fi
+          if [ $TEST_EXIT -ne 0 ]; then
+            echo "Backend unit tests failed" >> /tmp/failure_description.txt
+          fi
+          if [ $LINT_FAIL -ne 0 ] || [ $TEST_EXIT -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Frontend checks
+        if: steps.merge.outputs.merged_count != '0'
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint -- --quiet
+          npm run type-check
+          npm run test:unit
+          npm run build
+
+      - name: Capture frontend failures
+        if: failure() && steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          echo "Frontend checks failed" >> /tmp/failure_description.txt
+
+      # If CI passed — merge source PRs
+      - name: Merge source PRs via gh pr merge
+        if: success() && steps.merge.outputs.merged_count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # Extract PR numbers from squash commits on merge-queue (oldest first)
+          PR_NUMS=$(git log main..merge-queue --oneline | grep -oP 'PR #\K\d+' | tac)
+          echo "Merging source PRs (in oldest-first order):"
+          echo "$PR_NUMS"
+
+          FAILED=""
+          for NUM in $PR_NUMS; do
+            echo "  Merging PR #$NUM..."
+            if gh pr merge --squash "$NUM" 2>&1; then
+              echo "    PR #$NUM merged ✔"
+            else
+              echo "    PR #$NUM failed to merge via gh — will close with comment"
+              FAILED="$FAILED $NUM"
+            fi
+          done
+
+          # For any PRs that couldn't be merged via gh, close with a reference
+          for NUM in $FAILED; do
+            gh pr close "$NUM" --comment "Merged via merge queue (commit on main)." 2>/dev/null || true
+          done
+
+          echo "failed_gh_merge=$(echo "$FAILED" | xargs)" >> "$GITHUB_OUTPUT"
+
+      - name: Clean up remote merge-queue branch
+        if: success() && steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          git push origin --delete "refs/heads/${{ env.branch_ref }}" 2>/dev/null || true
+          echo "Cleaned up merge-queue remote branch."
+
+      # If CI failed or conflicts — preserve for fixer
+      - name: Preserve merge-queue branch on CI failure
+        if: failure() && steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          git push origin merge-queue:refs/heads/merge-queue/failed-$TIMESTAMP 2>&1
+          echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
+          echo "Preserved merge-queue branch at merge-queue/failed-$TIMESTAMP"
+
+      - name: Notify branch-fixer on CI failure
+        if: failure() && steps.merge.outputs.merged_count != '0'
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured — skipping notification"; exit 0; fi
+          MERGED=$(cat /tmp/merged_prs.txt 2>/dev/null || echo "")
+          CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
+          FAILURE_DESC=$(cat /tmp/failure_description.txt 2>/dev/null || echo "CI check failed")
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg phase "ci-failure" \
+            --arg branchName "${{ env.branch_ref }}" \
+            --arg merged_prs "$MERGED" \
+            --arg conflict_prs "$CONFLICTS" \
+            --arg failure_description "$FAILURE_DESC" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{repository: $repo, phase: $phase, branchName: $branchName, mergedPrs: $merged_prs, conflictPrs: $conflict_prs, failureDescription: $failure_description, runUrl: $run_url}')
+          PAYLOAD="${TIMESTAMP}.${BODY}"
+          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "$BODY"
+          echo "Fixer notified of CI failure"
+
+      - name: Notify fixer of conflicts
+        if: success() && steps.merge.outputs.conflict_count != '0' && steps.merge.outputs.conflict_count != ''
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured — skipping notification"; exit 0; fi
+          CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg phase "merge-conflict" \
+            --arg conflictPrs "$CONFLICTS" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{repository: $repo, phase: $phase, conflictPrs: $conflictPrs, runUrl: $run_url}')
+          PAYLOAD="${TIMESTAMP}.${BODY}"
+          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "$BODY"
+          echo "Fixer notified of conflicts in PRs: $CONFLICTS"

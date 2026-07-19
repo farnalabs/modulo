@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """Cryptographic audit chaining — SHA-256 linked events per organisation.
 
 Each AuditEvent records the SHA-256 hash of the canonical JSON of the
 prior event in the same org, forming a tamper-evident chain.
 """
 
+from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -208,6 +207,7 @@ async def append_audit_event(
                 APPEND_MAX_RETRIES,
                 org_id,
                 event_type,
+                exc_info=True,
             )
             if attempt == APPEND_MAX_RETRIES - 1:
                 _log.error(
@@ -256,7 +256,6 @@ def _make_verify_result(
     first_tampered_id: str | None = None,
     chain_head_match: bool | None = None,
     chain_count_mismatch: bool | None = None,
-    detail: str | None = None,
 ) -> dict[str, Any]:
     return {
         "valid": valid,
@@ -333,7 +332,7 @@ async def verify_chain(
         created_at=events[-1].created_at.isoformat() if events[-1].created_at else "",
     )
 
-    head = await get_chain_head(session, org_id)
+    head = await _get_chain_head_locked(session, org_id)
 
     if head:
         chain_head_match = head.last_event_hash == expected_prev
@@ -486,6 +485,7 @@ async def list_audit_events(
             _log.warning(
                 "list_audit_events: failed to decode cursor %r — falling back to first page",
                 cursor,
+                exc_info=True,
             )
 
     query = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(resolved_limit + 1)

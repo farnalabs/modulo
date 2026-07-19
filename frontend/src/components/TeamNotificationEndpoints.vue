@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div>
     <div v-if="loading" class="flex items-center justify-center py-4">
       <div
@@ -188,8 +188,8 @@
         >
           <h4 class="text-sm font-medium">Edit Webhook</h4>
           <div>
-            <label class="mb-1 block text-xs font-medium">URL</label>
-            <input
+            <label for="teamnotificationendpoints-field-6" class="mb-1 block text-xs font-medium">URL</label>
+            <input id="teamnotificationendpoints-field-6"
               v-model="editForm.url"
               type="url"
               data-testid="team-notif-edit-url"
@@ -198,13 +198,13 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-xs font-medium"
+            <label for="teamnotificationendpoints-field-5" class="mb-1 block text-xs font-medium"
               >Secret
               <span class="text-muted-foreground"
                 >(leave blank to keep existing)</span
               ></label
             >
-            <input
+            <input id="teamnotificationendpoints-field-5"
               v-model="editForm.secret"
               type="password"
               data-testid="team-notif-edit-secret"
@@ -212,7 +212,7 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-xs font-medium">Events</label>
+            <span class="mb-1 block text-xs font-medium">Events</span>
             <div class="flex flex-wrap gap-3">
               <label
                 v-for="evt in availableEvents"
@@ -230,8 +230,8 @@
             </div>
           </div>
           <div>
-            <label class="mb-1 block text-xs font-medium">Description</label>
-            <input
+            <label for="teamnotificationendpoints-field-4" class="mb-1 block text-xs font-medium">Description</label>
+            <input id="teamnotificationendpoints-field-4"
               v-model="editForm.description"
               type="text"
               data-testid="team-notif-edit-description"
@@ -267,8 +267,8 @@
       >
         <h4 class="text-sm font-medium">New Webhook</h4>
         <div>
-          <label class="mb-1 block text-xs font-medium">URL</label>
-          <input
+          <label for="teamnotificationendpoints-field-3" class="mb-1 block text-xs font-medium">URL</label>
+          <input id="teamnotificationendpoints-field-3"
             v-model="addForm.url"
             type="url"
             data-testid="team-notif-add-url"
@@ -277,10 +277,10 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium"
+          <label for="teamnotificationendpoints-field-2" class="mb-1 block text-xs font-medium"
             >Secret <span class="text-muted-foreground">(optional)</span></label
           >
-          <input
+          <input id="teamnotificationendpoints-field-2"
             v-model="addForm.secret"
             type="password"
             data-testid="team-notif-add-secret"
@@ -288,7 +288,7 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium">Events</label>
+          <span class="mb-1 block text-xs font-medium">Events</span>
           <div class="flex flex-wrap gap-3">
             <label
               v-for="evt in availableEvents"
@@ -306,8 +306,8 @@
           </div>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium">Description</label>
-          <input
+          <label for="teamnotificationendpoints-field-1" class="mb-1 block text-xs font-medium">Description</label>
+          <input id="teamnotificationendpoints-field-1"
             v-model="addForm.description"
             type="text"
             data-testid="team-notif-add-description"
@@ -587,4 +587,3 @@ async function test(ep: NotificationEndpointResponse) {
 
 onMounted(() => loadEndpoints());
 </script>
-

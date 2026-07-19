@@ -85,7 +85,7 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-actor"
           />
-          <input
+          <input aria-label="date"
             v-model="filterDateFrom"
             type="date"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -93,8 +93,8 @@
           />
         </template>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.to') }}</label>
-          <input
+          <label for="adminauditview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.to') }}</label>
+          <input id="adminauditview-field-2"
             v-model="filterDateTo"
             type="date"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -102,23 +102,23 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</label>
-          <select
-            v-model="filterTargetType"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            data-testid="admin-audit-target-type"
-            aria-label="Target Type"
-          >
-            <option value="">{{ $t('views.AdminAuditView.all_targets') }}</option>
-            <option value="pipeline">{{ $t('views.AdminAuditView.optgroup_pipeline') }}</option>
-            <option value="run">{{ $t('views.AdminAuditView.optgroup_run') }}</option>
-            <option value="user">{{ $t('views.AdminAuditView.optgroup_user') }}</option>
-            <option value="team">{{ $t('views.AdminAuditView.optgroup_team') }}</option>
-            <option value="schema">{{ $t('views.AdminAuditView.optgroup_schema') }}</option>
-            <option value="connector">{{ $t('views.AdminAuditView.optgroup_connector') }}</option>
-            <option value="model_backend">{{ $t('views.AdminAuditView.optgroup_model_backend') }}</option>
-            <option value="sso_provider">{{ $t('views.AdminAuditView.optgroup_sso_provider') }}</option>
-          </select>
+          <label for="adminauditview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</label>
+          <Select v-model="filterTargetType">
+            <SelectTrigger data-testid="admin-audit-target-type" aria-label="Target Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+              <SelectValue :placeholder="$t('views.AdminAuditView.all_targets')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{{ $t('views.AdminAuditView.all_targets') }}</SelectItem>
+              <SelectItem value="pipeline">{{ $t('views.AdminAuditView.optgroup_pipeline') }}</SelectItem>
+              <SelectItem value="run">{{ $t('views.AdminAuditView.optgroup_run') }}</SelectItem>
+              <SelectItem value="user">{{ $t('views.AdminAuditView.optgroup_user') }}</SelectItem>
+              <SelectItem value="team">{{ $t('views.AdminAuditView.optgroup_team') }}</SelectItem>
+              <SelectItem value="schema">{{ $t('views.AdminAuditView.optgroup_schema') }}</SelectItem>
+              <SelectItem value="connector">{{ $t('views.AdminAuditView.optgroup_connector') }}</SelectItem>
+              <SelectItem value="model_backend">{{ $t('views.AdminAuditView.optgroup_model_backend') }}</SelectItem>
+              <SelectItem value="sso_provider">{{ $t('views.AdminAuditView.optgroup_sso_provider') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </FilterBar>
       <div class="mt-3 flex items-center gap-2">
@@ -295,15 +295,17 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import { formatError } from '../lib/utils'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 import { formatDateFilename } from '../lib/formatDate'
+import { shortId } from '../utils/format'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const { t } = useI18n()
 import {
@@ -314,7 +316,23 @@ import {
 
 const planStore = usePlanStore()
 
-type AuditEvent = components['schemas']['AuditEventResponse']
+interface AuditEvent {
+  id: string
+  event_type: string
+  actor_user_id: string | null
+  created_at: string | null
+  resource_type: string | null
+  resource_id: string | null
+  payload_json: Record<string, unknown> | null
+  request_id: string | null
+  previous_hash: string | null
+}
+interface AuditPage {
+  items: AuditEvent[]
+  total: number
+  next_cursor: string | null
+  prev_cursor: string | null
+}
 
 const cursor = ref<string | null>(null)
 const currentPage = ref(1)
@@ -324,16 +342,17 @@ const { data: auditData, loading, error, load: loadEvents } = useDataFetch(
   { initialValue: { items: [] as AuditEvent[], total: 0, next_cursor: null as string | null, prev_cursor: null as string | null } }
 )
 
-const events = computed(() => auditData.value?.items ?? [])
-const total = computed(() => auditData.value?.total ?? 0)
-const nextCursor = computed(() => auditData.value?.next_cursor ?? null)
-const prevCursor = computed(() => auditData.value?.prev_cursor ?? null)
+const auditPage = computed(() => auditData.value as unknown as AuditPage)
+const events = computed(() => auditPage.value.items ?? [])
+const total = computed(() => auditPage.value.total ?? 0)
+const nextCursor = computed(() => auditPage.value.next_cursor ?? null)
+const prevCursor = computed(() => auditPage.value.prev_cursor ?? null)
 
 const filterEventType = ref('')
 const filterActor = ref('')
 const filterDateFrom = ref('')
 const filterDateTo = ref('')
-const filterTargetType = ref('')
+const filterTargetType = ref('__all__')
 
 const expandedId = ref<string | null>(null)
 const expandedEvent = ref<AuditEvent | null>(null)
@@ -384,7 +403,7 @@ function summarize(event: AuditEvent): string {
   const p = event.payload_json ?? {}
   const name = (p as Record<string, unknown>).name ?? (p as Record<string, unknown>).display_name ?? null
 
-  let parts = [action.charAt(0).toUpperCase() + action.slice(1), resource]
+  const parts = [action.charAt(0).toUpperCase() + action.slice(1), resource]
   if (name) parts.push(`"${name}"`)
   return parts.join(' ')
 }
@@ -406,7 +425,7 @@ function buildQuery() {
   if (filterActor.value) q.user_id = filterActor.value
   if (filterDateFrom.value) q.from_date = filterDateFrom.value
   if (filterDateTo.value) q.to_date = filterDateTo.value
-  if (filterTargetType.value) q.entity_type = filterTargetType.value
+  if (filterTargetType.value !== '__all__') q.entity_type = filterTargetType.value
   return q
 }
 
@@ -430,7 +449,7 @@ function resetFilters() {
   filterActor.value = ''
   filterDateFrom.value = ''
   filterDateTo.value = ''
-  filterTargetType.value = ''
+  filterTargetType.value = '__all__'
   currentPage.value = 1
   cursor.value = null
   loadEvents()
@@ -463,8 +482,9 @@ async function exportCsv() {
         return
       }
       if (!data) break
-      allEvents.push(...data.items)
-      totalPages = Math.ceil(data.total / pageSize)
+      const exportPage = data as unknown as AuditPage
+      allEvents.push(...exportPage.items)
+      totalPages = Math.ceil(exportPage.total / pageSize)
       page++
     }
 
@@ -549,8 +569,9 @@ async function exportJsonl() {
         return
       }
       if (!data) break
-      allEvents.push(...data.items)
-      totalPages = Math.ceil(data.total / pageSize)
+      const exportPage = data as unknown as AuditPage
+      allEvents.push(...exportPage.items)
+      totalPages = Math.ceil(exportPage.total / pageSize)
       page++
     }
 

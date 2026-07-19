@@ -14,9 +14,11 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.error_forwarder_config import _is_configured
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_UUID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -35,7 +37,7 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -151,6 +153,15 @@ def _make_mock_config(forwarder_type: str = "sentry", **overrides) -> MagicMock:
     return cfg
 
 
+def test_is_configured_rejects_unknown_forwarder_type() -> None:
+    assert _is_configured("unknown", {"unexpected": "secret"}) is False
+
+
+def test_is_configured_requires_known_forwarder_credentials() -> None:
+    assert _is_configured("sentry", {"dsn": "https://key@sentry.io/1"}) is True
+    assert _is_configured("sentry", {"dsn": ""}) is False
+
+
 # ── GET /api/v1/errors/forwarders ──────────────────────────────────────────
 
 
@@ -256,10 +267,10 @@ class TestListForwarders:
 
         assert resp.status_code == 500
 
-    def test_list_returns_400_when_no_org(self, no_org_client: TestClient) -> None:
+    def test_list_returns_403_when_no_org(self, no_org_client: TestClient) -> None:
         resp = no_org_client.get("/api/v1/errors/forwarders")
-        assert resp.status_code == 400
-        assert "organisation" in resp.json()["detail"].lower()
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Organisation membership required"
 
     def test_list_returns_402_when_gated(self, gated_client: TestClient) -> None:
         resp = gated_client.get("/api/v1/errors/forwarders")
@@ -368,12 +379,13 @@ class TestConfigureForwarder:
 
         assert resp.status_code == 503
 
-    def test_configure_returns_400_when_no_org(self, no_org_client: TestClient) -> None:
+    def test_configure_returns_403_when_no_org(self, no_org_client: TestClient) -> None:
         resp = no_org_client.put(
             "/api/v1/errors/forwarders/sentry",
             json={"config_json": {"dsn": "https://key@sentry.io/1"}},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Organisation membership required"
 
     def test_configure_returns_402_when_gated(self, gated_client: TestClient) -> None:
         resp = gated_client.put(
@@ -584,12 +596,13 @@ class TestTestForwarder:
         assert resp.status_code == 501
         assert "migration" in resp.json()["detail"].lower()
 
-    def test_test_returns_400_when_no_org(self, no_org_client: TestClient) -> None:
+    def test_test_returns_403_when_no_org(self, no_org_client: TestClient) -> None:
         resp = no_org_client.post(
             "/api/v1/errors/forwarders/sentry/test",
             json={"config_json": {"dsn": "https://key@sentry.io/1"}},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Organisation membership required"
 
     def test_test_returns_402_when_gated(self, gated_client: TestClient) -> None:
         resp = gated_client.post(

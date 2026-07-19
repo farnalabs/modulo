@@ -1,8 +1,49 @@
 <template>
+  <FeatureGate feature-name="remy" required-tier="team" show-disabled>
   <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.AdminRemyView.remy_configuration')" :subtitle="$t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills')" />
 
-    <LoadingSpinner v-if="loading" />
+    <template v-if="loading">
+      <div class="rounded-xl border border-border bg-card p-6 space-y-4">
+        <div class="h-5 w-48 animate-pulse rounded bg-muted" />
+        <div class="h-3 w-96 animate-pulse rounded bg-muted" />
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 mt-4">
+          <div v-for="n in 5" :key="n" class="flex flex-col items-center gap-2 rounded-lg border border-border p-4">
+            <div class="h-10 w-10 animate-pulse rounded-full bg-muted" />
+            <div class="h-4 w-20 animate-pulse rounded bg-muted" />
+            <div class="h-3 w-16 animate-pulse rounded bg-muted" />
+          </div>
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
+        <div class="h-5 w-40 animate-pulse rounded bg-muted" />
+        <div class="h-3 w-80 animate-pulse rounded bg-muted" />
+        <div class="h-24 w-full animate-pulse rounded bg-muted mt-4" />
+      </div>
+
+      <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
+        <div class="h-5 w-36 animate-pulse rounded bg-muted" />
+        <div class="h-3 w-72 animate-pulse rounded bg-muted" />
+        <div class="space-y-3 mt-4">
+          <div v-for="n in 3" :key="n" class="h-12 w-full animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
+        <div class="h-5 w-36 animate-pulse rounded bg-muted" />
+        <div class="h-3 w-64 animate-pulse rounded bg-muted" />
+        <div class="h-32 w-full animate-pulse rounded bg-muted mt-4" />
+      </div>
+
+      <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
+        <div class="h-5 w-28 animate-pulse rounded bg-muted" />
+        <div class="h-3 w-56 animate-pulse rounded bg-muted" />
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-4">
+          <div v-for="n in 6" :key="n" class="h-20 w-full animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+    </template>
     <template v-else>
       <TooltipProvider>
       <!-- Configured Providers -->
@@ -30,7 +71,8 @@
                   class="flex h-10 w-10 items-center justify-center rounded-full text-lg font-bold"
                   :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
                 >
-                  {{ p.configured ? '?' : '?' }}
+                  <svg v-if="p.configured" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </span>
                 <span class="text-sm font-medium">{{ p.label }}</span>
                 <span class="text-xs" :class="p.configured ? 'text-success' : 'text-muted-foreground'">
@@ -78,7 +120,8 @@
                 class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold"
                 :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
               >
-                {{ p.configured ? '?' : '?' }}
+                  <svg v-if="p.configured" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </span>
               <span class="text-sm font-medium">{{ p.label }}</span>
             </div>
@@ -106,7 +149,7 @@
         <div class="space-y-6">
           <!-- Users -->
           <div>
-            <label class="mb-2 block text-sm font-medium">{{ $t('views.AdminRemyView.users') }}</label>
+            <span class="mb-2 block text-sm font-medium">{{ $t('views.AdminRemyView.users') }}</span>
             <AccessEntitySelector
               v-model="accessList.userIds"
               :entities="users"
@@ -121,7 +164,7 @@
 
           <!-- Teams -->
           <div>
-            <label class="mb-2 block text-sm font-medium">{{ $t('views.AdminRemyView.teams') }}</label>
+            <span class="mb-2 block text-sm font-medium">{{ $t('views.AdminRemyView.teams') }}</span>
             <AccessEntitySelector
               v-model="accessList.teamIds"
               :entities="teams"
@@ -138,7 +181,7 @@
           <div>
             <Tooltip :delay-duration="300">
               <TooltipTrigger as-child>
-                <label class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.org_roles') }}</label>
+                <span class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.org_roles') }}</span>
               </TooltipTrigger>
               <TooltipContent side="right" class="max-w-xs">
                 <p>Users with the selected organisation roles will have access to Remy.</p>
@@ -147,8 +190,8 @@
             <div class="flex flex-wrap gap-4">
               <Tooltip v-for="role in orgRoles" :key="role" :delay-duration="300">
                 <TooltipTrigger as-child>
-                  <label class="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
+                  <label for="adminremyview-field-13" class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input id="adminremyview-field-13"
                       type="checkbox"
                       :value="role"
                       :checked="accessList.selectedRoles.includes(role)"
@@ -159,7 +202,7 @@
                   </label>
                 </TooltipTrigger>
                 <TooltipContent side="top" class="max-w-xs">
-                  <p>{{ role === 'admin' ? 'Full access to all settings and Remy configuration.' : role === 'operator' ? 'Can create and manage pipelines, use Remy.' : role === 'runner' ? 'Can execute pipeline runs, use Remy.' : 'Read-only access � can view but not edit, use Remy.' }}</p>
+                  <p>{{ role === 'admin' ? 'Full access to all settings and Remy configuration.' : role === 'operator' ? 'Can create and manage pipelines, use Remy.' : role === 'runner' ? 'Can execute pipeline runs, use Remy.' : 'Read-only access - can view but not edit, use Remy.' }}</p>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -191,19 +234,19 @@
       >
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
-            <select
-              v-model="modelConfig.defaultProvider"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              data-testid="remy-model-provider"
-              aria-label="Default Provider"
-            >
-              <option v-for="p in availableProviders.native" :key="p.id" :value="p.id">{{ p.label }}</option>
-            </select>
+            <label for="adminremyview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
+            <Select v-model="modelConfig.defaultProvider">
+              <SelectTrigger id="adminremyview-field-12" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Default Provider" data-testid="remy-model-provider">
+                <SelectValue placeholder="Select provider" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="p in availableProviders.native" :key="p.id" :value="p.id">{{ p.label }}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_model') }}</label>
-            <input
+            <label for="adminremyview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_model') }}</label>
+            <input id="adminremyview-field-11"
               v-model="modelConfig.defaultModel"
               type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -212,8 +255,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_context_window_size') }}</label>
-            <input
+            <label for="adminremyview-field-10" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_context_window_size') }}</label>
+            <input id="adminremyview-field-10"
               v-model.number="modelConfig.contextWindow"
               type="number"
               min="1024"
@@ -224,7 +267,7 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.allowed_providers') }}</label>
+            <span class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.allowed_providers') }}</span>
             <div class="flex flex-wrap gap-2" data-testid="remy-allowed-providers">
               <button
                 v-for="provider in allProviders"
@@ -239,8 +282,8 @@
             </div>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.allowed_models') }}</label>
-            <input
+            <label for="adminremyview-field-9" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.allowed_models') }}</label>
+            <input id="adminremyview-field-9"
               v-model="modelConfig.allowedModels"
               type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -339,13 +382,18 @@
       <!-- Tool Permissions -->
       <SectionCard title="Tool Permissions" description="Control which UI actions Remy can perform and whether approval is required.">
         <div class="mb-6">
-          <label class="mb-1 block text-sm font-medium">Permission Mode</label>
-          <select v-model="toolPermMode" aria-label="Permission Mode" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" @change="applyModePreset">
-            <option value="safe">Safe � read ops auto-allowed, destructive actions require approval (recommended)</option>
-            <option value="full_auto">Full Auto � all actions auto-allowed (with destructive override)</option>
-            <option value="locked_down">Locked Down � all write actions require approval</option>
-            <option value="custom">Custom � manual per-tool configuration</option>
-          </select>
+          <label for="adminremyview-field-13" class="mb-1 block text-sm font-medium">Permission Mode</label>
+          <Select v-model="toolPermMode" @update:model-value="applyModePreset">
+            <SelectTrigger id="adminremyview-field-13" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Permission Mode">
+              <SelectValue placeholder="Select mode" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="safe">Safe – read ops auto-allowed, destructive actions require approval (recommended)</SelectItem>
+              <SelectItem value="full_auto">Full Auto – all actions auto-allowed (with destructive override)</SelectItem>
+              <SelectItem value="locked_down">Locked Down – all write actions require approval</SelectItem>
+              <SelectItem value="custom">Custom – manual per-tool configuration</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div class="table-wrapper">
@@ -362,11 +410,16 @@
                 <td class="table-cell font-mono text-xs">{{ toolName }}</td>
                 <td class="table-cell text-muted-foreground text-xs">{{ info.description }}</td>
                 <td class="table-cell">
-                  <select v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'" aria-label="Tool permission" class="rounded border border-input bg-background px-2 py-1 text-xs">
-                    <option value="always_allowed">Auto-allow</option>
-                    <option value="requires_approval">Requires approval</option>
-                    <option value="disabled">Disabled</option>
-                  </select>
+                  <Select v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'">
+                    <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Tool permission">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="always_allowed">Auto-allow</SelectItem>
+                      <SelectItem value="requires_approval">Requires approval</SelectItem>
+                      <SelectItem value="disabled">Disabled</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </td>
               </tr>
             </tbody>
@@ -383,9 +436,9 @@
       <SectionCard title="Safety &amp; Limits" description="Configure rate limits, auto-execution thresholds, and no-go patterns for Remy's browser automation.">
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Max actions per minute</label>
+            <label for="adminremyview-field-7" class="mb-1 block text-sm font-medium">Max actions per minute</label>
             <p class="mb-2 text-xs text-muted-foreground">Maximum number of UI actions Remy can perform in a one-minute window.</p>
-            <input
+            <input id="adminremyview-field-7"
               v-model.number="safetyConfig.rateLimitMaxActions"
               type="number"
               min="1"
@@ -396,9 +449,9 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Rate limit window (seconds)</label>
+            <label for="adminremyview-field-6" class="mb-1 block text-sm font-medium">Rate limit window (seconds)</label>
             <p class="mb-2 text-xs text-muted-foreground">The sliding window duration for rate limit calculations.</p>
-            <input
+            <input id="adminremyview-field-6"
               v-model.number="safetyConfig.rateLimitWindowSeconds"
               type="number"
               min="1"
@@ -409,10 +462,10 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Auto-execute confidence threshold</label>
+            <label for="adminremyview-field-5" class="mb-1 block text-sm font-medium">Auto-execute confidence threshold</label>
             <p class="mb-2 text-xs text-muted-foreground">Minimum confidence score (0.0�1.0) required for Remy to auto-execute an action without approval.</p>
             <div class="flex items-center gap-3">
-              <input
+              <input id="adminremyview-field-5"
                 v-model.number="safetyConfig.autoExecuteThreshold"
                 type="range"
                 min="0"
@@ -426,9 +479,9 @@
             </div>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">No-go page patterns</label>
+            <label for="adminremyview-field-4" class="mb-1 block text-sm font-medium">No-go page patterns</label>
             <p class="mb-2 text-xs text-muted-foreground">URL patterns (comma-separated) that Remy must never navigate to. Supports wildcards.</p>
-            <textarea
+            <textarea id="adminremyview-field-4"
               v-model="safetyConfig.nogoPagePatterns"
               rows="2"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -437,9 +490,9 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">No-go selector patterns</label>
+            <label for="adminremyview-field-3" class="mb-1 block text-sm font-medium">No-go selector patterns</label>
             <p class="mb-2 text-xs text-muted-foreground">CSS selector patterns (comma-separated) for elements Remy must never interact with.</p>
-            <textarea
+            <textarea id="adminremyview-field-3"
               v-model="safetyConfig.nogoSelectorPatterns"
               rows="2"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -448,9 +501,9 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Allowed CSS Selectors</label>
+            <label for="adminremyview-field-2" class="mb-1 block text-sm font-medium">Allowed CSS Selectors</label>
             <p class="mb-2 text-xs text-muted-foreground">When set, Remy can ONLY interact with elements matching these CSS selectors or data-testid prefixes. Leave empty to allow all.</p>
-            <textarea
+            <textarea id="adminremyview-field-2"
               v-model="safetyConfig.allowedSelectors"
               rows="2"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -459,9 +512,9 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Allowed Page URL Patterns</label>
+            <label for="adminremyview-field-1" class="mb-1 block text-sm font-medium">Allowed Page URL Patterns</label>
             <p class="mb-2 text-xs text-muted-foreground">When set, Remy can ONLY navigate to pages matching these URL patterns. Leave empty to allow all.</p>
-            <textarea
+            <textarea id="adminremyview-field-1"
               v-model="safetyConfig.allowedPagePatterns"
               rows="2"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -525,10 +578,10 @@
                 <td class="table-cell text-muted-foreground max-w-xs truncate">
                   <Tooltip :delay-duration="300">
                     <TooltipTrigger as-child>
-                      <span>{{ skill.description || '�' }}</span>
+                      <span>{{ skill.description || '-' }}</span>
                     </TooltipTrigger>
                     <TooltipContent side="top" class="max-w-xs">
-                      <p>{{ skill.description || '�' }}</p>
+                      <p>{{ skill.description || '-' }}</p>
                     </TooltipContent>
                   </Tooltip>
                 </td>
@@ -541,7 +594,7 @@
                     >
                       {{ trigger }}
                     </span>
-                    <span v-if="!skill.triggers?.length" class="text-xs text-muted-foreground">�</span>
+                    <span v-if="!skill.triggers?.length" class="text-xs text-muted-foreground">—</span>
                   </div>
                 </td>
                 <td class="table-cell">
@@ -625,17 +678,16 @@
                   </Tooltip>
                 </td>
                 <td class="table-cell">
-                  <select
-                    v-model="contextSources[src.key]"
-                    class="rounded border border-input bg-background px-2 py-1 text-xs"
-                    aria-label="Context source mode"
-                    :disabled="contextSaving"
-                    @change="saveContextSource(src.key)"
-                  >
-                    <option value="always_on">{{ $t('views.AdminRemyView.always_on') }}</option>
-                    <option value="tool">{{ $t('views.AdminRemyView.tool') }}</option>
-                    <option value="off">{{ $t('views.AdminRemyView.off') }}</option>
-                  </select>
+                  <Select v-model="contextSources[src.key]" :disabled="contextSaving" @update:model-value="saveContextSource(src.key)">
+                    <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Context source mode">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="always_on">{{ $t('views.AdminRemyView.always_on') }}</SelectItem>
+                      <SelectItem value="tool">{{ $t('views.AdminRemyView.tool') }}</SelectItem>
+                      <SelectItem value="off">{{ $t('views.AdminRemyView.off') }}</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </td>
                 <td class="table-cell table-cell-numeric text-xs text-muted-foreground">
                   <span v-if="src.tokens">{{ src.tokens }}</span>
@@ -666,17 +718,16 @@
               <tr v-for="skill in skills" :key="skill.id" class="hover:bg-muted/30 transition-colors">
                 <td class="table-cell font-medium">{{ skill.name }}</td>
                 <td class="table-cell">
-                  <select
-                    v-model="skillModes[skill.id]"
-                    class="rounded border border-input bg-background px-2 py-1 text-xs"
-                    aria-label="Skill knowledge mode"
-                    :disabled="skillModeSaving[skill.id]"
-                    @change="saveSkillSourceMode(skill)"
-                  >
-                    <option value="always_on">{{ $t('views.AdminRemyView.always_on') }}</option>
-                    <option value="tool">{{ $t('views.AdminRemyView.tool') }}</option>
-                    <option value="off">{{ $t('views.AdminRemyView.off') }}</option>
-                  </select>
+                  <Select v-model="skillModes[skill.id]" :disabled="skillModeSaving[skill.id]" @update:model-value="saveSkillSourceMode(skill)">
+                    <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Skill knowledge mode">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="always_on">{{ $t('views.AdminRemyView.always_on') }}</SelectItem>
+                      <SelectItem value="tool">{{ $t('views.AdminRemyView.tool') }}</SelectItem>
+                      <SelectItem value="off">{{ $t('views.AdminRemyView.off') }}</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </td>
               </tr>
             </tbody>
@@ -704,6 +755,7 @@
       </TooltipProvider>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -713,7 +765,7 @@ import { ref, reactive, computed, watch, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
 import AccessEntitySelector from '../components/remy/AccessEntitySelector.vue'
 import {
@@ -723,6 +775,13 @@ import {
   TooltipContent,
 } from '../components/ui/tooltip'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 import type { SkillItem } from '../types/remy'
 
 interface ProviderStatus {
@@ -745,7 +804,7 @@ const availableProviders = ref<{ native: ProviderInfo[]; customTypes: ProviderIn
   customTypes: [],
 })
 
-const { data: configData, loading: configLoading, error: configError, load: loadConfig } = useDataFetch(
+const { data: configData, loading: configLoading, load: loadConfig } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/remy/config'),
   { immediate: false }
 )
@@ -790,13 +849,13 @@ const { data: contextSourcesData, loading: contextSourcesLoading, load: loadCont
 
 watch(() => contextSourcesData.value, (data) => {
   if (data) {
-    contextSources.value = data as Record<string, string>
-    const modes = contextSources.value
+    const modes = { ...(data as Record<string, string>) }
     for (const src of contextSourceDefs) {
       if (!modes[src.key]) {
         modes[src.key] = 'always_on'
       }
     }
+    contextSources.value = modes
   }
   contextLoading.value = false
 })
@@ -835,7 +894,7 @@ function toggleRole(role: string) {
 
 async function putConfig(body: Record<string, unknown>): Promise<string | null> {
   try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', { body })
+    const { error: err } = await (api.PUT as (...args: unknown[]) => Promise<{ error?: unknown }>)('/api/v1/admin/remy/config', { body })
     return err ? formatApiError(err) : null
   } catch (e: unknown) {
     return formatApiError(e)

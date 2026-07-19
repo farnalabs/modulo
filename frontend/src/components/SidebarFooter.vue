@@ -3,7 +3,7 @@
     <button
       type="button"
       @click="$emit('logout')"
-      class="w-full text-xs text-muted-foreground hover:text-foreground transition-colors text-left flex items-center gap-2"
+      class="w-full text-sm text-muted-foreground hover:text-foreground transition-colors text-center justify-center flex items-center gap-2"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"

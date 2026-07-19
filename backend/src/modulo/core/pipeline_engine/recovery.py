@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """Recovery handler for failed manual-input nodes.
 
 Provides the core logic to replay or skip a manual node that failed or
 is awaiting human input.  Used by the ``POST /recover`` API endpoint.
 """
 
+from __future__ import annotations
 
 import logging
 import uuid
@@ -19,7 +18,6 @@ from modulo.db.crud.run import get_run
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
-from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
 
@@ -90,8 +88,6 @@ async def recover_node(
         NodeAlreadyCompletedError — node has already been completed.
         ConcurrentRecoveryError — another recovery won the race.
     """
-    await set_rls_org(session, org_id)
-
     # Serialise on the pipeline row to prevent concurrent recovery attempts
     # for runs on the same pipeline.
     run = await get_run(session, run_id)

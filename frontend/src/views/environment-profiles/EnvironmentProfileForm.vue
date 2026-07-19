@@ -18,8 +18,8 @@
 
     <form @submit.prevent="handleSubmit" class="card p-6 space-y-5">
       <div>
-        <label class="mb-1 block text-sm font-medium">Name <span class="text-destructive">*</span></label>
-        <input
+        <label for="environmentprofileform-field-7" class="mb-1 block text-sm font-medium">Name <span class="text-destructive">*</span></label>
+        <input id="environmentprofileform-field-7"
           v-model="form.name"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -31,8 +31,8 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Description</label>
-        <textarea
+        <label for="environmentprofileform-field-6" class="mb-1 block text-sm font-medium">Description</label>
+        <textarea id="environmentprofileform-field-6"
           v-model="form.description"
           rows="3"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -42,23 +42,22 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Provider Type <span class="text-destructive">*</span></label>
-        <select
-          v-model="form.provider_type"
-          aria-label="Provider type"
-          class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          data-testid="envprofile-form-provider"
-          :class="{ 'border-destructive': submitted && !form.provider_type }"
-        >
-          <option value="local_docker">Local Docker</option>
-          <option value="e2b">E2B (Sandboxed Cloud)</option>
-        </select>
+        <label for="environmentprofileform-field-5" class="mb-1 block text-sm font-medium">Provider Type <span class="text-destructive">*</span></label>
+        <Select v-model="form.provider_type">
+          <SelectTrigger aria-label="Provider type" data-testid="envprofile-form-provider" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" :class="{ 'border-destructive': submitted && !form.provider_type }">
+            <SelectValue placeholder="Select provider type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="local_docker">Local Docker</SelectItem>
+            <SelectItem value="e2b">E2B (Sandboxed Cloud)</SelectItem>
+          </SelectContent>
+        </Select>
         <p v-if="submitted && !form.provider_type" class="mt-1 text-xs text-destructive">Provider type is required</p>
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Image Reference</label>
-        <input
+        <label for="environmentprofileform-field-4" class="mb-1 block text-sm font-medium">Image Reference</label>
+        <input id="environmentprofileform-field-4"
           v-model="form.image_ref"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -68,7 +67,7 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Capabilities</label>
+        <span class="mb-1 block text-sm font-medium">Capabilities</span>
         <div class="flex flex-wrap gap-2">
           <label
             v-for="cap in availableCapabilities"
@@ -89,45 +88,45 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Network Policy</label>
-        <select
-          v-model="form.network_policy"
-          aria-label="Network policy"
-          class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          data-testid="envprofile-form-network"
-        >
-          <option value="outbound">Outbound (full egress)</option>
-          <option value="none">None (isolated)</option>
-          <option value="selected">Selected domains only</option>
-        </select>
+        <label for="environmentprofileform-field-3" class="mb-1 block text-sm font-medium">Network Policy</label>
+        <Select v-model="form.network_policy">
+          <SelectTrigger aria-label="Network policy" data-testid="envprofile-form-network" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+            <SelectValue placeholder="Select network policy" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="outbound">Outbound (full egress)</SelectItem>
+            <SelectItem value="none">None (isolated)</SelectItem>
+            <SelectItem value="selected">Selected domains only</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Initialisation Strategy</label>
-        <select
-          v-model="form.initialisation_strategy"
-          aria-label="Initialisation strategy"
-          class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          data-testid="envprofile-form-init"
-        >
-          <option value="git_clone">Git Clone</option>
-          <option value="blank">Blank (empty workspace)</option>
-          <option value="worktree">Git Worktree</option>
-        </select>
+        <label for="environmentprofileform-field-2" class="mb-1 block text-sm font-medium">Initialisation Strategy</label>
+        <Select v-model="form.initialisation_strategy">
+          <SelectTrigger aria-label="Initialisation strategy" data-testid="envprofile-form-init" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+            <SelectValue placeholder="Select strategy" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="git_clone">Git Clone</SelectItem>
+            <SelectItem value="blank">Blank (empty workspace)</SelectItem>
+            <SelectItem value="worktree">Git Worktree</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Persistence Policy</label>
-        <select
-          v-model="form.persistence_policy"
-          aria-label="Persistence policy"
-          class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          data-testid="envprofile-form-persistence"
-        >
-          <option value="ephemeral">Ephemeral (destroyed after run)</option>
-          <option value="retained">Retained (available for inspection)</option>
-          <option value="cache">Cache (reusable between runs)</option>
-        </select>
+        <label for="environmentprofileform-field-1" class="mb-1 block text-sm font-medium">Persistence Policy</label>
+        <Select v-model="form.persistence_policy">
+          <SelectTrigger aria-label="Persistence policy" data-testid="envprofile-form-persistence" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+            <SelectValue placeholder="Select policy" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ephemeral">Ephemeral (destroyed after run)</SelectItem>
+            <SelectItem value="retained">Retained (available for inspection)</SelectItem>
+            <SelectItem value="cache">Cache (reusable between runs)</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div v-if="store.error" class="text-sm text-destructive">{{ store.error }}</div>
@@ -161,6 +160,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useEnvironmentProfilesStore } from '../../stores/environmentProfiles'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const props = defineProps<{
   profileId?: string

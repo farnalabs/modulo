@@ -20,10 +20,12 @@ def _get_hub_connector_types() -> set[str]:
 
     hub_types: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.match_case):
-            if isinstance(node.pattern, ast.MatchValue):
-                if isinstance(node.pattern.value, ast.Constant):
-                    hub_types.add(node.pattern.value.value)
+        if (
+            isinstance(node, ast.match_case)
+            and isinstance(node.pattern, ast.MatchValue)
+            and isinstance(node.pattern.value, ast.Constant)
+        ):
+            hub_types.add(node.pattern.value.value)
     return hub_types
 
 
@@ -69,6 +71,7 @@ def test_all_connector_types_have_polling_parity():
         "microsoft_teams": "not yet implemented in _build_polling_connector",
         "n8n": "not yet implemented in _build_polling_connector",
         "bitbucket": "not yet implemented in _build_polling_connector",
+        "ticket-tracker": "not yet implemented in _build_polling_connector",
     }
 
     hub_types = _get_hub_connector_types()

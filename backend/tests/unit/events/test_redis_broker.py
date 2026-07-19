@@ -69,7 +69,6 @@ async def test_publish_sends_json_to_correct_channel(broker, mock_redis):
 async def test_publish_auto_connects_when_already_connected():
     broker = RedisEventBroker("redis://test:6379/0")
     broker._pub = AsyncMock()
-    broker._pub.publish = AsyncMock()
     broker._sub = MagicMock()
 
     with patch.object(RedisEventBroker, "connect", new_callable=AsyncMock) as mock_connect:
@@ -153,18 +152,14 @@ async def test_close_is_idempotent():
 async def test_publish_error_closes_old_connection(broker, mock_redis):
     """When pub.publish() raises, the old connection must be closed before clearing _pub."""
     mock_redis.publish.side_effect = ConnectionError("Redis connection lost")
-    mock_redis.close = AsyncMock()
 
     await broker.publish("run:abc", {"event": "test"})
-
     mock_redis.close.assert_awaited_once_with(close_connection_pool=True)
     assert broker._pub is None
 
 
 async def test_publish_error_on_serialization_does_not_close_connection(broker, mock_redis):
     """A json.dumps TypeError should not close the connection or clear _pub."""
-    mock_redis.close = AsyncMock()
-
     await broker.publish("run:abc", {"event": object()})  # non-serializable
 
     mock_redis.close.assert_not_called()
@@ -176,7 +171,6 @@ async def test_subscribe_error_closes_old_connection(broker, mock_redis):
     mock_pubsub = MagicMock()
     mock_pubsub.subscribe = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
     mock_redis.pubsub.return_value = mock_pubsub
-    mock_redis.close = AsyncMock()
 
     with pytest.raises(ConnectionError):
         await broker.subscribe("run:xyz")

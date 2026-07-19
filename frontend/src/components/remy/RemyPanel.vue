@@ -5,7 +5,7 @@
     :class="panelClasses"
     :style="panelStyle"
   >
-    <div class="remy-titlebar" @mousedown="startDrag">
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="remy-titlebar" @mousedown="startDrag">
       <div class="flex items-center gap-2 flex-1 min-w-0">
         <template v-if="editingName && store.activeSession">
           <input
@@ -20,7 +20,7 @@
           />
         </template>
         <template v-else>
-          <span
+          <span role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
             class="text-sm font-semibold truncate cursor-pointer hover:opacity-80"
             :title="$t('components.remy.RemyPanel.click_to_rename')"
             @click.stop="startEditName"
@@ -43,7 +43,7 @@
           class="remy-titlebar-btn"
           @click="exportTranscript"
           title="Export Transcript"
-          :aria-label="$t('remy.export_transcript')"
+          :aria-label="$t('components.remy.export_transcript')"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -56,7 +56,7 @@
           class="remy-titlebar-btn"
           @click="store.resetSessionPermissions()"
           title="Reset Permissions"
-          :aria-label="$t('remy.reset_permissions')"
+          :aria-label="$t('components.remy.reset_permissions')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -75,7 +75,7 @@
           class="remy-titlebar-btn"
           @click="store.setPanelState('docked')"
           title="Dock"
-          :aria-label="$t('remy.dock_panel')"
+          :aria-label="$t('components.remy.dock_panel')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -95,7 +95,7 @@
           class="remy-titlebar-btn"
           @click="store.setPanelState('floating')"
           title="Undock"
-          :aria-label="$t('remy.undock_panel')"
+          :aria-label="$t('components.remy.undock_panel')"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -107,8 +107,8 @@
           v-if="planStore.featureEnabled('remy_ui_driving')"
           class="remy-titlebar-btn text-xs font-medium px-1.5"
           @click="cycleSpeed"
-          :title="`UI Navigation Speed — ${currentSpeedLabel} — ${speedDescriptions[currentSpeed.value] ?? ''}`"
-          :aria-label="`Speed: ${currentSpeedLabel} — ${speedDescriptions[currentSpeed.value] ?? ''}`"
+          :title="`UI Navigation Speed — ${currentSpeedLabel} — ${speedDescriptions[currentSpeed] ?? ''}`"
+          :aria-label="`Speed: ${currentSpeedLabel} — ${speedDescriptions[currentSpeed] ?? ''}`"
         >
           <span>{{ speedIcon }}</span><span class="ml-0.5 text-[10px] uppercase tracking-wider">{{ currentSpeedLabel }}</span>
         </button>
@@ -117,7 +117,7 @@
           class="remy-titlebar-btn"
           @click="store.setPanelState('maximised')"
           title="Maximise"
-          :aria-label="$t('remy.maximise')"
+          :aria-label="$t('components.remy.maximise')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -136,7 +136,7 @@
           class="remy-titlebar-btn"
           @click="store.setPanelState('docked')"
           title="Minimise"
-          :aria-label="$t('remy.minimise')"
+          :aria-label="$t('components.remy.minimise')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -155,7 +155,7 @@
           class="remy-titlebar-btn"
           @click="store.setPanelState('closed')"
           title="Close"
-          :aria-label="$t('remy.close_panel')"
+          :aria-label="$t('components.remy.close_panel')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -190,7 +190,7 @@
         class="shrink-0 ml-2 hover:opacity-80"
         :class="isRateLimitError ? 'text-orange-600' : 'text-destructive'"
         @click="store.error = null"
-        :aria-label="$t('remy.dismiss_error')"
+        :aria-label="$t('components.remy.dismiss_error')"
       >
         &times;
       </button>
@@ -249,7 +249,7 @@
       </div>
     </div>
 
-    <div
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
       v-if="store.panelState === 'floating' || store.panelState === 'docked'"
       class="remy-resize-handle"
       @mousedown="startResize"
@@ -261,7 +261,7 @@
     class="remy-floating-btn"
     @click="store.setPanelState('floating')"
     title="Open Remy"
-    :aria-label="$t('remy.open_remy')"
+    :aria-label="$t('components.remy.open_remy')"
   >
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -296,7 +296,7 @@ const { pageContext } = useRemyContext();
 watch(
   pageContext,
   (ctx) => {
-    store.setPageContext(ctx);
+    store.setPageContext({ ...ctx, entities: [...ctx.entities] });
   },
   { immediate: true },
 );
@@ -503,7 +503,9 @@ async function handleNewSession() {
   try {
     const session = await store.createSession();
     if (session) {
-      store.setPanelState("floating");
+      if (store.panelState !== 'closed') {
+        store.setPanelState("floating");
+      }
       activeTab.value = "chat";
     }
   } catch (e) {
@@ -544,7 +546,7 @@ onUnmounted(() => {
 
 <style scoped>
 .remy-panel {
-  @apply fixed z-50 flex flex-col border rounded-lg shadow-2xl overflow-hidden;
+  @apply fixed z-40 flex flex-col border rounded-lg shadow-2xl overflow-hidden;
   background-color: hsl(var(--background));
   border-color: hsl(var(--border));
   transition:

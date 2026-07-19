@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -44,4 +42,4 @@ class WorkspaceLease(OrgScoped):
     output_artifact_refs_json: Mapped[list[str] | None] = mapped_column(JSON)
     error_message: Mapped[str | None] = mapped_column(Text)
 
-    environment_profile: Mapped[EnvironmentProfile] = relationship()
+    environment_profile: Mapped["EnvironmentProfile"] = relationship()

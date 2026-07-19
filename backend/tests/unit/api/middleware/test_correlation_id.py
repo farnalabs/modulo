@@ -5,12 +5,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
-from modulo.api.middleware.correlation_id import REQUEST_ID_HEADER, CorrelationIdMiddleware
-from modulo.core.logging_config import correlation_id_var
-
 
 @pytest.fixture
 def app() -> FastAPI:
+    from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
+
     app = FastAPI()
 
     @app.get("/test")
@@ -44,6 +43,8 @@ async def test_correlation_id_set_on_request_state(app: FastAPI) -> None:
 
 @pytest.mark.anyio
 async def test_correlation_id_in_response_header(app: FastAPI) -> None:
+    from modulo.api.middleware.correlation_id import REQUEST_ID_HEADER
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test")
@@ -55,6 +56,8 @@ async def test_correlation_id_in_response_header(app: FastAPI) -> None:
 
 @pytest.mark.anyio
 async def test_correlation_id_consistent(app: FastAPI) -> None:
+    from modulo.api.middleware.correlation_id import REQUEST_ID_HEADER
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test")
@@ -65,6 +68,8 @@ async def test_correlation_id_consistent(app: FastAPI) -> None:
 
 @pytest.mark.anyio
 async def test_correlation_id_contextvar_propagated(app: FastAPI) -> None:
+    from modulo.core.logging_config import correlation_id_var
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test")
@@ -85,6 +90,8 @@ async def test_unique_per_request(app: FastAPI) -> None:
 
 @pytest.mark.anyio
 async def test_correlation_id_on_no_state_route(app: FastAPI) -> None:
+    from modulo.api.middleware.correlation_id import REQUEST_ID_HEADER
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/no-state")

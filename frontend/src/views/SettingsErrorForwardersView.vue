@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-narrow">
     <PageHeader :title="$t('views.SettingsErrorForwardersView.error_forwarders')" :subtitle="$t('views.SettingsErrorForwardersView.configure_external_error_tracking_and_alerting_integrations')" />
 
@@ -61,8 +61,8 @@
             <!-- Sentry -->
             <template v-if="fwd.forwarder_type === 'sentry'">
               <div>
-                <label class="mb-1 block text-sm font-medium">DSN</label>
-                <input
+                <label for="settingserrorforwardersview-field-13" class="mb-1 block text-sm font-medium">DSN</label>
+                <input id="settingserrorforwardersview-field-13"
                   v-model="configs.sentry.dsn"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -70,8 +70,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Org Slug</label>
-                <input
+                <label for="settingserrorforwardersview-field-12" class="mb-1 block text-sm font-medium">Org Slug</label>
+                <input id="settingserrorforwardersview-field-12"
                   v-model="configs.sentry.org_slug"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -79,8 +79,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Project Slug</label>
-                <input
+                <label for="settingserrorforwardersview-field-11" class="mb-1 block text-sm font-medium">Project Slug</label>
+                <input id="settingserrorforwardersview-field-11"
                   v-model="configs.sentry.project_slug"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -92,8 +92,8 @@
             <!-- DataDog -->
             <template v-if="fwd.forwarder_type === 'datadog'">
               <div>
-                <label class="mb-1 block text-sm font-medium">API Key</label>
-                <input
+                <label for="settingserrorforwardersview-field-10" class="mb-1 block text-sm font-medium">API Key</label>
+                <input id="settingserrorforwardersview-field-10"
                   v-model="configs.datadog.api_key"
                   type="password"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -101,26 +101,27 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Site</label>
-                <select
-                  v-model="configs.datadog.site"
-                  aria-label="Site"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <option value="datadoghq.com">US (datadoghq.com)</option>
-                  <option value="datadoghq.eu">EU (datadoghq.eu)</option>
-                  <option value="us3.datadoghq.com">US3 (us3.datadoghq.com)</option>
-                  <option value="us5.datadoghq.com">US5 (us5.datadoghq.com)</option>
-                  <option value="ddog-gov.com">Gov (ddog-gov.com)</option>
-                </select>
+                <label for="settingserrorforwardersview-datadog-site" class="mb-1 block text-sm font-medium">Site</label>
+                <Select v-model="configs.datadog.site" aria-label="Site">
+                  <SelectTrigger id="settingserrorforwardersview-datadog-site" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Site">
+                    <SelectValue placeholder="Select site" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="datadoghq.com">US (datadoghq.com)</SelectItem>
+                    <SelectItem value="datadoghq.eu">EU (datadoghq.eu)</SelectItem>
+                    <SelectItem value="us3.datadoghq.com">US3 (us3.datadoghq.com)</SelectItem>
+                    <SelectItem value="us5.datadoghq.com">US5 (us5.datadoghq.com)</SelectItem>
+                    <SelectItem value="ddog-gov.com">Gov (ddog-gov.com)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </template>
 
             <!-- PagerDuty -->
             <template v-if="fwd.forwarder_type === 'pagerduty'">
               <div>
-                <label class="mb-1 block text-sm font-medium">Routing Key</label>
-                <input
+                <label for="settingserrorforwardersview-field-8" class="mb-1 block text-sm font-medium">Routing Key</label>
+                <input id="settingserrorforwardersview-field-8"
                   v-model="configs.pagerduty.routing_key"
                   type="password"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -132,8 +133,8 @@
             <!-- Rollbar -->
             <template v-if="fwd.forwarder_type === 'rollbar'">
               <div>
-                <label class="mb-1 block text-sm font-medium">Access Token</label>
-                <input
+                <label for="settingserrorforwardersview-field-7" class="mb-1 block text-sm font-medium">Access Token</label>
+                <input id="settingserrorforwardersview-field-7"
                   v-model="configs.rollbar.access_token"
                   type="password"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -141,8 +142,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Environment</label>
-                <input
+                <label for="settingserrorforwardersview-field-6" class="mb-1 block text-sm font-medium">Environment</label>
+                <input id="settingserrorforwardersview-field-6"
                   v-model="configs.rollbar.environment"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -154,8 +155,8 @@
             <!-- OpsGenie -->
             <template v-if="fwd.forwarder_type === 'opsgenie'">
               <div>
-                <label class="mb-1 block text-sm font-medium">API Key</label>
-                <input
+                <label for="settingserrorforwardersview-field-5" class="mb-1 block text-sm font-medium">API Key</label>
+                <input id="settingserrorforwardersview-field-5"
                   v-model="configs.opsgenie.api_key"
                   type="password"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -163,8 +164,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Team</label>
-                <input
+                <label for="settingserrorforwardersview-field-4" class="mb-1 block text-sm font-medium">Team</label>
+                <input id="settingserrorforwardersview-field-4"
                   v-model="configs.opsgenie.team"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -176,8 +177,8 @@
             <!-- Loki -->
             <template v-if="fwd.forwarder_type === 'loki'">
               <div>
-                <label class="mb-1 block text-sm font-medium">Push URL</label>
-                <input
+                <label for="settingserrorforwardersview-field-3" class="mb-1 block text-sm font-medium">Push URL</label>
+                <input id="settingserrorforwardersview-field-3"
                   v-model="configs.loki.push_url"
                   type="url"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -185,8 +186,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Tenant ID</label>
-                <input
+                <label for="settingserrorforwardersview-field-2" class="mb-1 block text-sm font-medium">Tenant ID</label>
+                <input id="settingserrorforwardersview-field-2"
                   v-model="configs.loki.tenant_id"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -194,8 +195,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Labels</label>
-                <input
+                <label for="settingserrorforwardersview-field-1" class="mb-1 block text-sm font-medium">Labels</label>
+                <input id="settingserrorforwardersview-field-1"
                   v-model="configs.loki.labels"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -214,14 +215,14 @@
               >
                 {{ testing[fwd.forwarder_type] ? 'Testing...' : 'Test Connection' }}
               </button>
-              <button
+              <Button
                 type="button"
+                variant="default"
                 :disabled="saving[fwd.forwarder_type]"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 @click="saveConfig(fwd)"
               >
                 {{ saving[fwd.forwarder_type] ? 'Saving...' : 'Save' }}
-              </button>
+              </Button>
             </div>
 
             <div
@@ -262,6 +263,14 @@ import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 interface ForwarderItem {
   forwarder_type: string

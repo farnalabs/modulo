@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Overdue HITL claim warning system.
 
 Finds pending (undecided) HITL claims whose creation time exceeds a
@@ -7,6 +5,7 @@ configurable warning threshold.  Optionally escalates claims that exceed
 a longer escalation threshold.
 """
 
+from __future__ import annotations
 
 import logging
 import uuid
@@ -14,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.hitl_claim import HitlClaim
@@ -59,7 +57,7 @@ async def get_overdue_claims(
                 HitlClaim.claimed_at < warning_cutoff,
             )
         )
-    except SQLAlchemyError:
+    except Exception:
         _log.exception("Failed to query overdue claims for org %s", org_id)
         return []
 
@@ -75,4 +73,5 @@ async def get_overdue_claims(
             "status": "escalated" if claim.claimed_at < escalation_cutoff else "warning",
         }
         for claim in claims
+        if claim.claimed_at is not None
     ]

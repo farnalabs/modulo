@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick } from 'vue'
+import { nextTick as vueNextTick } from 'vue'
+
+async function nextTick() {
+  await vueNextTick()
+  await flushPromises()
+}
 
 vi.mock('../lib/api/client', () => ({
   api: {
@@ -43,8 +48,8 @@ describe('SettingsObservabilityView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    vi.mocked(api.GET).mockResolvedValue(DEFAULT_GET_RESPONSE)
-    vi.mocked(api.PUT).mockResolvedValue({ data: null, error: undefined })
+    vi.mocked(api.GET as unknown as () => Promise<unknown>).mockResolvedValue(DEFAULT_GET_RESPONSE)
+    vi.mocked(api.PUT).mockResolvedValue({ data: null, error: undefined } as never)
     vi.mocked(api.POST).mockResolvedValue({ data: null, error: undefined })
   })
 
@@ -58,7 +63,7 @@ describe('SettingsObservabilityView', () => {
   })
 
   it('shows loading spinner while fetching settings', async () => {
-    vi.mocked(api.GET).mockReturnValue(new Promise(() => {}))
+    vi.mocked(api.GET as unknown as () => Promise<unknown>).mockReturnValue(new Promise(() => {}))
 
     const wrapper = mount(SettingsObservabilityView, {
       global: {
@@ -72,7 +77,7 @@ describe('SettingsObservabilityView', () => {
   })
 
   it('shows error alert when settings load fails', async () => {
-    vi.mocked(api.GET).mockResolvedValue({ data: undefined, error: 'Network error' })
+    vi.mocked(api.GET as unknown as () => Promise<unknown>).mockResolvedValue({ data: undefined, error: 'Network error' })
 
     const wrapper = mount(SettingsObservabilityView, {
       global: {
@@ -84,7 +89,7 @@ describe('SettingsObservabilityView', () => {
     await nextTick()
 
     expect(wrapper.find('[data-testid="settings-observability-loading"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('Failed to load settings')
+    expect(wrapper.text()).toContain('Network error')
   })
 
   it('shows locked message when observability is disabled by plan', async () => {
@@ -113,7 +118,7 @@ describe('SettingsObservabilityView', () => {
 
 
   it('shows env override banner when env_override_active is true', async () => {
-    vi.mocked(api.GET).mockResolvedValue({
+    vi.mocked(api.GET as unknown as () => Promise<unknown>).mockResolvedValue({
       data: {
         otlp_endpoint: '',
         otlp_headers: {},
@@ -150,7 +155,7 @@ describe('SettingsObservabilityView', () => {
         effective_otlp_endpoint: 'http://e:4318',
       },
       error: undefined,
-    })
+    } as never)
 
     const wrapper = mount(SettingsObservabilityView, {
       global: {

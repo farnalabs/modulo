@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Celery beat scheduler for scheduled reports.
 
 Architecture
@@ -19,16 +17,18 @@ a ``ReportFireTask`` that:
 Report generators are registered via ``register_report_type()``.
 """
 
+from __future__ import annotations
 
 import asyncio
 import datetime
 import logging
+import threading
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
-from croniter import croniter  # type: ignore[import-untyped]
+from croniter import croniter
 from sqlalchemy import select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -37,23 +37,24 @@ from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.settings import get_settings
 
 try:
-    from celery import Celery, Task  # type: ignore[import-untyped]
-    from celery.beat import ScheduleEntry, Scheduler  # type: ignore[import-untyped]
+    from celery import Celery, Task
+    from celery.beat import ScheduleEntry, Scheduler
 except ImportError:
     import typing
 
     if typing.TYPE_CHECKING:
-        from celery import Celery, Task  # type: ignore[import-untyped]
-        from celery.beat import ScheduleEntry, Scheduler  # type: ignore[import-untyped]
-    Celery = None  # type: ignore[misc]
-    Task = object  # type: ignore[misc]
-    ScheduleEntry = object  # type: ignore[misc]
-    Scheduler = object  # type: ignore[misc]
+        from celery import Celery, Task
+        from celery.beat import ScheduleEntry, Scheduler
+    Celery = None
+    Task = object
+    ScheduleEntry = object
+    Scheduler = object
 
 
 _log = logging.getLogger(__name__)
 
 _ENGINE: AsyncEngine | None = None
+_ENGINE_LOCK: threading.Lock = threading.Lock()
 
 _TEST_ENGINE: AsyncEngine | None = None
 
@@ -118,7 +119,9 @@ def _get_engine() -> AsyncEngine:
         return _TEST_ENGINE
     global _ENGINE
     if _ENGINE is None:
-        _ENGINE = create_async_engine(get_settings().database_url)
+        with _ENGINE_LOCK:
+            if _ENGINE is None:
+                _ENGINE = create_async_engine(get_settings().database_url)
     return _ENGINE
 
 
@@ -158,18 +161,21 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 # ---------------------------------------------------------------------------
 
 celery_app_global: Any = None
+_CELERY_LOCK: threading.Lock = threading.Lock()
 
 
 def get_celery_app() -> Any:
     global celery_app_global
     if celery_app_global is None:
-        from modulo.celery_app import get_celery_app as _get_celery_app
+        with _CELERY_LOCK:
+            if celery_app_global is None:
+                from modulo.celery_app import get_celery_app as _get_celery_app
 
-        celery_app_global = _get_celery_app()
+                celery_app_global = _get_celery_app()
     return celery_app_global
 
 
-class ReportFireTask(Task):
+class ReportFireTask(Task):  # type: ignore[misc]  # Celery does not publish typed base classes
     """Task that fires a single scheduled report — generates and delivers."""
 
     name = "modulo.reports.fire_report"
@@ -193,7 +199,7 @@ async def _fire_scheduled_report(
 ) -> dict[str, Any]:
     """Core fire logic — runs inside asyncio.run() inside the Celery task."""
     engine = _get_engine()
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
@@ -239,36 +245,47 @@ async def _fire_scheduled_report(
             _log.exception("Report %s (%s) generation or delivery failed", report_id, report.report_type)
             return {"status": "failed", "reason": "generation_or_delivery_failed"}
 
-        try:
-            next_send = compute_next_send(report.cron_expression, after=now)
-        except (ValueError, TypeError, KeyError) as exc:
-            _log.error(
-                "Invalid cron expression '%s' for report %s: %s",
-                report.cron_expression,
-                report_id,
-                exc,
-            )
-            await session.execute(update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False))
-            return {"status": "failed", "reason": f"invalid_cron: {exc}"}
+        schedule_type = config.get("schedule_type")
+        if schedule_type == "one_time":
+            next_send = None
+        else:
+            try:
+                next_send = compute_next_send(report.cron_expression, after=now)
+            except (ValueError, TypeError, KeyError) as exc:
+                _log.error(
+                    "Invalid cron expression '%s' for report %s: %s",
+                    report.cron_expression,
+                    report_id,
+                    exc,
+                    exc_info=True,
+                )
+                await session.execute(
+                    update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False)
+                )
+                return {"status": "failed", "reason": f"invalid_cron: {exc}"}
 
         await session.execute(
             update(ScheduledReport)
             .where(ScheduledReport.id == report_id)
-            .values(last_sent_at=now, next_send_at=next_send)
+            .values(
+                last_sent_at=now,
+                next_send_at=next_send,
+                active=schedule_type != "one_time",
+            )
         )
 
         _log.info(
             "Report %s (%s) sent. Next send: %s",
             report_id,
             report.report_type,
-            next_send.isoformat(),
+            next_send.isoformat() if next_send is not None else "none (one-time report completed)",
         )
 
         return {
             "status": "sent",
             "report_id": str(report_id),
             "report_type": report.report_type,
-            "next_send_at": next_send.isoformat(),
+            "next_send_at": next_send.isoformat() if next_send is not None else None,
             "delivery_results": delivery_results,
         }
 
@@ -358,6 +375,7 @@ async def _deliver_to_urls(
                         exc,
                         attempt + 1,
                         _REPORT_MAX_RETRIES,
+                        exc_info=True,
                     )
                     last_resp_or_exc = exc
                     if attempt < _REPORT_MAX_RETRIES - 1:
@@ -407,7 +425,7 @@ async def _deliver_webhook(payload: Any, recipient_config: dict[str, Any]) -> li
 # ---------------------------------------------------------------------------
 
 
-class DatabaseReportEntry(ScheduleEntry):
+class DatabaseReportEntry(ScheduleEntry):  # type: ignore[misc]  # Celery does not publish typed base classes
     """A single schedule entry representing one scheduled report row."""
 
     def __init__(
@@ -457,7 +475,7 @@ class DatabaseReportEntry(ScheduleEntry):
         return f"<DatabaseReportEntry report={self._report_id} next={self._next_send_at.isoformat()}>"
 
 
-class DatabaseReportScheduler(Scheduler):
+class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does not publish typed base classes
     """Celery beat scheduler that reads scheduled reports from the database.
 
     On each tick (default every 60 s via ``max_interval``), the scheduler
@@ -511,22 +529,23 @@ class DatabaseReportScheduler(Scheduler):
     async def _fetch_due_reports(self) -> list[dict[str, Any]]:
         """Async query for scheduled reports due to fire."""
         try:
-            factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
+            factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
 
             async with factory() as session:
-                now = datetime.datetime.now(datetime.UTC)
-                result = await session.execute(
-                    select(
-                        ScheduledReport.id,
-                        ScheduledReport.organisation_id,
-                        ScheduledReport.cron_expression,
-                        ScheduledReport.next_send_at,
-                    ).where(
-                        ScheduledReport.active == True,  # noqa: E712
-                        ScheduledReport.next_send_at <= now,
+                async with session.begin():
+                    now = datetime.datetime.now(datetime.UTC)
+                    result = await session.execute(
+                        select(
+                            ScheduledReport.id,
+                            ScheduledReport.organisation_id,
+                            ScheduledReport.cron_expression,
+                            ScheduledReport.next_send_at,
+                        ).where(
+                            ScheduledReport.active == True,  # noqa: E712
+                            ScheduledReport.next_send_at <= now,
+                        )
                     )
-                )
-                rows = result.all()
+                    rows = result.all()
 
                 reports: list[dict[str, Any]] = []
                 for row in rows:

@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Process-global singleton for runtime configuration with provenance tracking."""
 
+from __future__ import annotations
 
 import logging
 import os
@@ -60,21 +59,10 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
     "MODULO_SCIM_DEFAULT_ORG_ID": _KeyConfig(default="", hot_reloadable=True),
 }
 
-KNOWN_KEYS: list[str] = list(_KEY_CONFIG.keys())
+KNOWN_KEYS: tuple[str, ...] = tuple(_KEY_CONFIG.keys())
 HOT_RELOADABLE_KEYS: frozenset[str] = frozenset(k for k, v in _KEY_CONFIG.items() if v.hot_reloadable)
-DEFAULT_VALUES: dict[str, str] = {k: v.default for k, v in _KEY_CONFIG.items() if v.default is not None}  # nosec B105 — empty-string placeholders, not hardcoded secrets
-
-
-def _validate_key_registries() -> None:
-    orphans = HOT_RELOADABLE_KEYS - set(KNOWN_KEYS)
-    if orphans:
-        _log.warning("HOT_RELOADABLE_KEYS contains keys not in KNOWN_KEYS: %s", orphans)
-    missing_defaults = set(KNOWN_KEYS) - set(DEFAULT_VALUES) - _NO_DEFAULT_KEYS
-    if missing_defaults:
-        _log.warning("KNOWN_KEYS has entries missing from DEFAULT_VALUES: %s", missing_defaults)
-
-
 _NO_DEFAULT_KEYS: frozenset[str] = frozenset(k for k, v in _KEY_CONFIG.items() if v.default is None)
+DEFAULT_VALUES: dict[str, str] = {k: v.default for k, v in _KEY_CONFIG.items() if v.default is not None}
 
 
 @dataclass
@@ -104,8 +92,6 @@ class RuntimeConfigStore:
             self._defaults[key] = DEFAULT_VALUES.get(key)
         self._refresh_env_values()
 
-        _validate_key_registries()
-
     @classmethod
     def reset(cls) -> None:
         """Reset the module-level singleton (for test isolation)."""
@@ -117,25 +103,22 @@ class RuntimeConfigStore:
         """Resolve effective value and provenance for a key.
 
         Returns (value, provenance) with override > env > default priority.
-
-        Caller must hold self._lock. Uses RLock so this is safe even
-        when called from a method that already holds the lock.
         """
-        override_val = self._overrides.get(key)
-        if override_val is not None:
-            return override_val, "override"
-        env_val = self._env_values.get(key)
-        if env_val is not None:
-            return env_val, "environment"
-        return self._defaults.get(key), "default"
+        with self._lock:
+            override_val = self._overrides.get(key)
+            if override_val is not None:
+                return override_val, "override"
+            env_val = self._env_values.get(key)
+            if env_val is not None:
+                return env_val, "environment"
+            return self._defaults.get(key), "default"
 
     def get(self, key: str) -> str | None:
         """Return the effective value: override > env > default."""
         if not key:
             return None
-        with self._lock:
-            value, _ = self._resolve(key)
-            return value
+        value, _ = self._resolve(key)
+        return value
 
     def set_override(self, key: str, value: str) -> None:
         """Set a runtime override that stays in memory until cleared or reloaded."""
@@ -146,22 +129,25 @@ class RuntimeConfigStore:
             _log.warning("Runtime config override set for unknown key: %s", key)
         with self._lock:
             self._overrides[key] = value
-        _log.info("Runtime config override set: %s", key)
+            _log.info("Runtime config override set: %s", key)
 
     def clear_override(self, key: str) -> None:
         """Remove a runtime override for a single key."""
+        if not key or key.strip() != key:
+            _log.warning("Runtime config override clear rejected: invalid key %r", key)
+            return
         with self._lock:
             removed = self._overrides.pop(key, None)
-        if removed is not None:
-            _log.info("Runtime config override cleared: %s", key)
-        else:
-            _log.debug("Runtime config override not found (no-op): %s", key)
+            if removed is not None:
+                _log.info("Runtime config override cleared: %s", key)
+            else:
+                _log.debug("Runtime config override not found (no-op): %s", key)
 
     def clear_all_overrides(self) -> None:
         """Remove all runtime overrides."""
         with self._lock:
             self._overrides.clear()
-        _log.info("Runtime config all overrides cleared")
+            _log.info("Runtime config all overrides cleared")
 
     def _refresh_env_values(self) -> None:
         """Read all known keys from the process environment."""
@@ -172,7 +158,6 @@ class RuntimeConfigStore:
         """Re-read os.environ to detect drift for all known keys."""
         with self._lock:
             self._refresh_env_values()
-        _validate_key_registries()
         _log.info("Runtime config reloaded from environment")
 
     def get_all(self) -> list[ConfigEntry]:

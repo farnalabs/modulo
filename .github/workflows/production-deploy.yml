@@ -20,7 +20,7 @@ jobs:
   deploy:
     name: Deploy ${{ matrix.env.name }}
     environment: ${{ matrix.env.name }}
-    runs-on: [self-hosted, windows, docker]
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         env:
@@ -28,20 +28,16 @@ jobs:
             fly-app: app-modulo
             fly-config: fly.toml
             host: app.modulo.run
-          - name: demo
-            fly-app: demo-modulo
-            fly-config: fly.demo.toml
-            host: demo.modulo.run
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - # flyctl installed inline below
 
       - name: Log deploy reason
-        shell: powershell
-        run: Write-Host "Production deploy reason: ${{ inputs.reason }}"
+        shell: bash
+        run: 'Write-Host "Production deploy reason: ${{ inputs.reason }}"'
 
       - name: Capture git metadata
         id: git
@@ -49,7 +45,7 @@ jobs:
 
       - id: deploy
         name: Deploy to ${{ matrix.env.name }}.modulo.run
-        shell: powershell
+        shell: bash
         run: |
           fly deploy --app ${{ matrix.env.fly-app }} --config ${{ matrix.env.fly-config }} `
             --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
@@ -65,7 +61,7 @@ jobs:
 
       - name: Rollback on verification failure
         if: failure() && steps.deploy.outcome == 'success'
-        shell: powershell
+        shell: bash
         run: |
           Write-Host "Deploy succeeded but verification failed - rolling back ${{ matrix.env.fly-app }}"
           fly rollback --app ${{ matrix.env.fly-app }}
@@ -73,20 +69,20 @@ jobs:
   consistency:
     name: Cross-environment check
     needs: deploy
-    runs-on: [self-hosted, windows, docker]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Verify deployed SHAs
-        shell: powershell
+        shell: bash
         run: |
           $expectedSha = git rev-parse HEAD
           $expectedSha7 = $expectedSha.Substring(0, 7)
           $allOk = $true
-          foreach ($url in @("https://app.modulo.run", "https://demo.modulo.run")) {
-            $info = curl.exe -s -m 10 "$url/api/v1/deployment" 2>$null
+          foreach ($url in @("https://app.modulo.run")) {
+            $info = curl -s -m 10 "$url/api/v1/deployment" 2>$null
             if ($info) {
               $deployInfo = $info | ConvertFrom-Json
               $deployedSha = if ($deployInfo.git_sha -and $deployInfo.git_sha.Length -ge 7) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }

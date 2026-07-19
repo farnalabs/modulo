@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Alert dispatch — routes triggered alerts to in_app, email, or webhook."""
 
+from __future__ import annotations
 
 import asyncio
 import json
@@ -52,7 +51,7 @@ async def dispatch_alert(
     if alert.action_type == "in_app":
         await _dispatch_in_app(org_id, alert, sample_message, admin_url, session)
     elif alert.action_type == "email":
-        await _dispatch_email(org_id, alert, sample_message, admin_url)
+        await _dispatch_email(org_id, alert, sample_message, admin_url, session)
     elif alert.action_type == "webhook":
         await _dispatch_webhook(alert, sample_message, admin_url)
     else:
@@ -92,22 +91,15 @@ async def _dispatch_email(
     alert: TriggeredAlert,
     sample_message: str,
     admin_url: str,
+    session: AsyncSession,
 ) -> None:
     """Send alert notification email to org admins via the configured SMTP provider."""
-    from types import SimpleNamespace
-
-    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
     from modulo.db.models.organisation import Organisation
 
     settings = get_settings()
 
-    engine = get_or_create_engine(settings)
-    factory = get_or_create_session_factory(engine)
-
     try:
-        # Fetch org for per-org SMTP config
-        async with factory() as session:
-            org = await session.get(Organisation, org_id)
+        org = await session.get(Organisation, org_id)
 
         if org:
             email_cfg = (org.settings_json or {}).get("email", {})
@@ -121,12 +113,14 @@ async def _dispatch_email(
             _log.warning("alert.email_disabled_no_smtp_host", extra={"rule": alert.rule_name, "org_id": str(org_id)})
             return
 
-        effective_settings = SimpleNamespace(
-            smtp_host=effective_smtp_host,
-            smtp_port=email_cfg.get("smtp_port", settings.smtp_port),
-            smtp_username=email_cfg.get("smtp_username", settings.smtp_username),
-            smtp_password=email_cfg.get("smtp_password", settings.smtp_password),
-            email_from=email_cfg.get("email_from", settings.email_from),
+        effective_settings = settings.model_copy(
+            update={
+                "smtp_host": effective_smtp_host,
+                "smtp_port": email_cfg.get("smtp_port", settings.smtp_port),
+                "smtp_username": email_cfg.get("smtp_username", settings.smtp_username),
+                "smtp_password": email_cfg.get("smtp_password", settings.smtp_password),
+                "email_from": email_cfg.get("email_from", settings.email_from),
+            }
         )
 
         _log.info(
@@ -139,15 +133,14 @@ async def _dispatch_email(
             },
         )
 
-        async with factory() as session:
-            result = await session.execute(
-                select(OrgMembership).where(
-                    OrgMembership.organisation_id == org_id,
-                    OrgMembership.role.in_(["admin", "owner"]),
-                    OrgMembership.deactivated_at.is_(None),
-                )
+        result = await session.execute(
+            select(OrgMembership).where(
+                OrgMembership.organisation_id == org_id,
+                OrgMembership.role.in_(["admin", "owner"]),
+                OrgMembership.deactivated_at.is_(None),
             )
-            memberships = list(result.scalars().all())
+        )
+        memberships = list(result.scalars().all())
 
         if not memberships:
             _log.warning("alert.email_no_admins", extra={"org_id": str(org_id), "rule": alert.rule_name})
@@ -155,9 +148,10 @@ async def _dispatch_email(
 
         account_ids = [m.account_id for m in memberships]
 
-        async with factory() as session:
-            result = await session.execute(select(Account).where(Account.id.in_(account_ids), Account.active.is_(True)))
-            admin_accounts = list(result.scalars().all())
+        account_result = await session.execute(
+            select(Account).where(Account.id.in_(account_ids), Account.active.is_(True))
+        )
+        admin_accounts = list(account_result.scalars().all())
 
         if not admin_accounts:
             _log.warning("alert.email_no_active_admins", extra={"org_id": str(org_id), "rule": alert.rule_name})

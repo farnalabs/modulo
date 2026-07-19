@@ -634,6 +634,7 @@ def get_admin_remy_config(request, ctx) -> None:
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
         mock_get_db.return_value = mock_session_inst
 
+        from modulo.api.main import app
         from modulo.auth.dependencies import get_current_user
         from modulo.auth.jwt import AuthenticatedPrincipal
 
@@ -716,6 +717,7 @@ def _update_remy_config(request: Any, ctx: dict, updates: dict) -> None:
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
         mock_get_db.return_value = mock_session_inst
 
+        from modulo.api.main import app
         from modulo.auth.dependencies import get_current_user
         from modulo.auth.jwt import AuthenticatedPrincipal
 
@@ -1140,6 +1142,8 @@ def get_available_providers(request, ctx) -> None:
         request.node._resp = resp
         return
 
+    from modulo.api.main import app
+
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=ORG_ID,
@@ -1329,6 +1333,8 @@ def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value:
         mock_session_inst.begin.return_value = begin_cm
         mock_get_db.return_value = mock_session_inst
 
+        from modulo.api.main import app
+
         viewer_auth = getattr(request.node, "_viewer_auth", False)
         if viewer_auth:
             from modulo.auth.dependencies import get_current_user
@@ -1341,15 +1347,13 @@ def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value:
                 org_role="viewer",
             )
 
-        client = _make_client()
-
         req_id = str(uuid.uuid4())
         ctx["last_request_id"] = req_id
         ctx["last_tool_call"] = {"name": tool_name, "args": args}
 
         # Store the pending permission so we can respond to it later
         if (
-            tool_name in ("click",)
+            tool_name == "click"
             and selector
             and any(p in selector.lower() for p in ["delete", "remove", "destroy", "archive"])
         ):
@@ -1384,7 +1388,6 @@ def llm_emits_sequence(request, ctx) -> None:
 def user_approves_action(request, ctx) -> None:
     ses = ctx.get("sessions", {}).get("ui-session")
     req_id = ctx.get("last_request_id", str(uuid.uuid4()))
-    tool_name = ctx.get("last_tool_call", {}).get("name", "click")
 
     from modulo.api.routes.remy import (
         _pending_permissions,

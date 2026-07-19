@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <Dialog :open="dialogOpen" @update:open="closeForm">
     <DialogContent class="sm:max-w-lg">
       <DialogHeader>
@@ -10,10 +10,10 @@
 
       <form @submit.prevent="save" class="space-y-4">
         <div>
-          <label class="mb-1 block text-sm font-medium"
+          <label for="remyskilldialog-field-5" class="mb-1 block text-sm font-medium"
             >Name <span class="text-destructive">*</span></label
           >
-          <input
+          <input id="remyskilldialog-field-5"
             v-model="form.name"
             type="text"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -23,8 +23,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Description</label>
-          <textarea
+          <label for="remyskilldialog-field-4" class="mb-1 block text-sm font-medium">Description</label>
+          <textarea id="remyskilldialog-field-4"
             v-model="form.description"
             rows="2"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -33,8 +33,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Triggers</label>
-          <input
+          <label for="remyskilldialog-field-3" class="mb-1 block text-sm font-medium">Triggers</label>
+          <input id="remyskilldialog-field-3"
             v-model="form.triggersInput"
             type="text"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -46,8 +46,8 @@
           </p>
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">{{ $t('components.remy.RemySkillDialog.body_markdown') }}</label>
-          <textarea
+          <label for="remyskilldialog-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.remy.RemySkillDialog.body_markdown') }}</label>
+          <textarea id="remyskilldialog-field-2"
             v-model="form.body"
             rows="6"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -56,8 +56,8 @@
           />
         </div>
         <div class="flex items-center gap-2">
-          <label class="flex items-center gap-2 text-sm cursor-pointer">
-            <input
+          <label for="remyskilldialog-field-1" class="flex items-center gap-2 text-sm cursor-pointer">
+            <input id="remyskilldialog-field-1"
               v-model="form.active"
               type="checkbox"
               class="rounded border-input"
@@ -140,8 +140,8 @@ import {
 export interface SkillFormItem {
   id: string;
   name: string;
-  description?: string;
-  triggers?: string[];
+  description?: string | null;
+  triggers?: string[] | null;
   body?: string;
   active: boolean;
 }

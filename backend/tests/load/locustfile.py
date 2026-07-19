@@ -27,6 +27,7 @@ from typing import Any
 
 import websocket
 from locust import HttpUser, between, events, task
+from websocket import WebSocket
 
 from tests.load.conftest import (
     DEFAULT_ADMIN_EMAIL,
@@ -58,7 +59,11 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD)
 
 
 def _fire_event(
-    request_type: str, name: str, start: float, exception: Exception | None = None, length: int = 0
+    request_type: str,
+    name: str,
+    start: float,
+    exception: Exception | None = None,
+    length: int = 0,
 ) -> None:
     elapsed = int((time.time() - start) * 1000)
     if exception is None:
@@ -157,7 +162,10 @@ class HitlReviewUser(BaseLoadUser):
             time.sleep(2)
             return
 
-        run_id = _run_waitlist.popleft()
+        try:
+            run_id = _run_waitlist.popleft()
+        except IndexError:
+            return
         start = time.time()
         try:
             gates = get_pending_hitl(self.client, self.token, run_id, base_url=BASE_URL)
@@ -193,7 +201,7 @@ class WebSocketUser(BaseLoadUser):
 
     def on_start(self) -> None:
         super().on_start()
-        self._ws = None
+        self._ws: WebSocket | None = None
 
     def on_stop(self) -> None:
         _close_ws(self._ws)
@@ -204,7 +212,10 @@ class WebSocketUser(BaseLoadUser):
             time.sleep(2)
             return
 
-        run_id = _run_waitlist[-1]
+        try:
+            run_id = _run_waitlist[-1]
+        except IndexError:
+            return
         start = time.time()
         try:
             ws_token = get_ws_token(self.client, self.token, base_url=BASE_URL)

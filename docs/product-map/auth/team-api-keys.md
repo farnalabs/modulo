@@ -8,7 +8,7 @@ code:
   - backend/src/modulo/db/models/api_key.py
   - backend/src/modulo/auth/api_key.py
   - backend/src/modulo/api/routes/api_keys.py
-  - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
+  - backend/src/modulo/db/migrations/versions/0001_v2_identity_org.py
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/db/rls.py
 unit-tests:
@@ -167,7 +167,6 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - **BDD coverage is incomplete.** Feature file at `backend/tests/bdd/features/auth/api_keys.feature` has 5 real scenarios (happy path, create, list, revoke, invalid, reject) but is missing scenarios for: admin role rejection, team-scoped key creation, MCP auth validation, role-scope enforcement, MCP config endpoint, not-found handling, unauthenticated access, soft-delete revocation.
 - **No team-scoped enforcement unit tests.** `test_api_key.py` does not test validation of team-scoped keys — no tests verify that a team-scoped key cannot access resources outside its team boundary.
 - **No RLS policy on `org_api_keys` table for team isolation.** When querying API keys via MCP, a team-scoped key could theoretically enumerate org-wide keys via the list endpoint — the list endpoint filters by `organisation_id` only, not by the requesting key's `team_id`.
-- **`update_api_key` endpoint now supports `expires_at` on update** but lacks test coverage for this path.
 
 ## QA History
 
@@ -179,6 +178,13 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 
 ### 2026-07-05 — QA-iterate (prodmap auth)
 - Moved `_validate_team_key_role` fix note from Known Gaps to QA History
+
+### 2026-07-11 — Round 2 re-QA (feat-auth-team-api-keys, index 360)
+- Fixed: removed unnecessary `IntegrityError` catch from `list_api_keys_endpoint` (read-only endpoint cannot produce IntegrityError)
+- Fixed: removed misleading `test_validate_api_key_revoked_raises` — it tested hash mismatch, not revocation (revocation is handled by SQL WHERE filter, tested by `test_validate_api_key_not_found_raises`)
+- Fixed: product map Known Gap #5 outdated — `expires_at` update now has both unit and endpoint test coverage
+- Verified: remaining 4 major Known Gaps still valid (MCP team_id propagation, BDD coverage, team-scoped enforcement tests, RLS team isolation)
+- Verified: all 13 unchecked edge cases remain unchecked and correctly documented as gaps
 
 ### 2026-07-05 — Cross-cutting QA (feat-auth-team-api-keys)
 - Added Error Handling, Resilience, and Edge Cases sections to product map

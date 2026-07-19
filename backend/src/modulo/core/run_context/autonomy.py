@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Autonomy levels for pipeline execution.
 
 Each pipeline can be configured with a default autonomy level that controls
@@ -16,6 +14,7 @@ The autonomy recommendation can be set at pipeline level
 context-setter agent (via autonomy_recommendation in run_context).
 """
 
+from __future__ import annotations
 
 import enum
 import logging

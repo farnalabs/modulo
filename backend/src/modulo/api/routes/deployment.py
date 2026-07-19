@@ -1,12 +1,16 @@
 """Deployment info endpoint — returns build and runtime metadata."""
 
+import logging
 import os
 import time
 from datetime import UTC, datetime
 
 from fastapi import APIRouter
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.version import get_version
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/deployment", tags=["deployment"])
 
@@ -15,7 +19,8 @@ _started_at = datetime.now(UTC)
 
 
 @router.get("")
-async def deployment_info():
+@handle_db_errors("deployment.deployment_info")
+async def deployment_info() -> dict[str, object]:
     """Return deployment metadata for operational visibility.
 
     Build-time values (git_sha, git_branch, build_timestamp, etc.) are injected

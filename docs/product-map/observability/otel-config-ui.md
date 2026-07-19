@@ -159,4 +159,3 @@ Settings page at `/settings/observability`.
 
 - **BDD step definitions are mock-only:** `otel_traces.feature` has 4 real scenarios and matching step definitions, but they use mock/patch rather than real DB or OTel exporter integration
 - **No website docs:** No observability/otel page exists under `Website/modulo-website/src/docs/`
-- **`testConnection()` had `formatApiError` gap (resolved):** Both error-formatting paths (line 374 `String(err)`, line 381 `e instanceof Error ? e.message : String(e)`) now use `formatApiError()` — fixed at improve-architecture index 307

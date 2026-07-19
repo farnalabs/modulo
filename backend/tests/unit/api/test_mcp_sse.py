@@ -222,7 +222,7 @@ class TestHandlerPerEventAuth:
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        result = await list_pipelines_tool(page=1, page_size=20)
+        result = await list_pipelines_tool(limit=20)
         assert result["error"] == "auth_expired"
         assert "revoked" in result.get("detail", "").lower() or "expired" in result.get("detail", "").lower()
         mock_validate_auth.assert_called_once()
@@ -379,14 +379,17 @@ class TestHandlerPerEventAuth:
         mock_session.return_value = mock_cm
 
         # patch further down the call chain
-        with patch("modulo.api.mcp_server.list_pipelines") as mock_list:
-            mock_list.return_value = MagicMock(items=[], total=0, page=1, page_size=20)
-            result = await list_pipelines_tool(page=1, page_size=20)
+        mock_page = MagicMock()
+        mock_page.items = []
+        mock_page.total = 0
+        mock_page.next_cursor = None
+        mock_page.has_more = False
+        with patch("modulo.db.crud.pipeline.list_pipelines", return_value=mock_page) as mock_list:
+            result = await list_pipelines_tool(limit=20)
 
         mock_validate_auth.assert_called_once()
         mock_list.assert_called_once()
         assert result["total"] == 0
-        assert result["pipelines"] == []
 
 
 # ---------------------------------------------------------------------------

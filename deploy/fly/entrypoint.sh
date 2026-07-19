@@ -1,6 +1,35 @@
 #!/bin/sh
 set -e
 
+echo "=== Writing frontend runtime configuration ==="
+.venv/bin/python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+config = {}
+
+monitor_config = os.environ.get("MODULO_MONITOR_CONFIG")
+if monitor_config:
+    try:
+        config["monitor"] = json.loads(monitor_config)
+    except json.JSONDecodeError as exc:
+        print(f"Ignoring invalid MODULO_MONITOR_CONFIG: {exc}")
+
+username = os.environ.get("MODULO_AUTO_LOGIN_USERNAME")
+password = os.environ.get("MODULO_AUTO_LOGIN_PASSWORD")
+if username and password:
+    config["autoLogin"] = {"username": username, "password": password}
+
+payload = json.dumps(config, separators=(",", ":"), ensure_ascii=True)
+Path("/usr/share/nginx/html/runtime-config.js").write_text(
+    "window.__MODULO_CONFIG__ = Object.assign(window.__MODULO_CONFIG__ || {}, "
+    + payload
+    + ");\n",
+    encoding="utf-8",
+)
+PY
+
 echo "=== Starting nginx ==="
 nginx -g "daemon off;" &
 
@@ -14,46 +43,24 @@ if [ -f /tmp/database_url.env ]; then
   echo "DATABASE_URL fixed: $(echo $DATABASE_URL | cut -c1-80)..."
 fi
 
-echo "=== Running DB migrations ==="
-# Clean orphaned alembic_version entries from restructured migration branches.
-# When orphans are present (now or historically), the revision chain diverges
-# from the codebase — stamp head instead of upgrading, since the schema is
-# already at the latest state (proven by the previous working deployment).
-OUTPUT=$(.venv/bin/python3 /app/deploy/fly/cleanup_orphan_migrations.py 2>&1)
-echo "$OUTPUT"
-if echo "$OUTPUT" | grep -q "ACTION: stamp head"; then
-  .venv/bin/alembic stamp head
-  echo "  Stamped head (orphans were present)"
-elif echo "$OUTPUT" | grep -q "ACTION: upgrade heads"; then
-  .venv/bin/alembic upgrade heads && echo "  Upgrade complete" || {
-    echo "  Upgrade failed — stamping head as fallback (schema presumed current)"
-    .venv/bin/alembic stamp head
-  }
+# Read the fixed admin URL for migration connections
+if [ -f /tmp/database_admin_url.env ]; then
+  ADMIN_URL=$(cat /tmp/database_admin_url.env)
+  export DATABASE_ADMIN_URL="$ADMIN_URL"
+  echo "DATABASE_ADMIN_URL fixed: $(echo $DATABASE_ADMIN_URL | cut -c1-80)..."
 fi
 
-echo "=== Applying schema patches (columns missing from base migrations) ==="
-.venv/bin/python3 -c "
-import os
-os.environ['DATABASE_URL'] = os.environ.get('DATABASE_URL', '')
-from modulo.db.session import AsyncSessionLocal
-from sqlalchemy import text
-import asyncio
-async def fix():
-    async with AsyncSessionLocal() as s:
-        async with s.begin():
-            await s.execute(text(\"ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS default_autonomy_level VARCHAR(30) DEFAULT 'manual_approval'\"))
-            await s.execute(text(\"ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_input_length INTEGER\"))
-            await s.execute(text(\"ALTER TABLE agents ADD COLUMN IF NOT EXISTS token_budget INTEGER\"))
-            await s.execute(text(\"ALTER TABLE agents ADD COLUMN IF NOT EXISTS library_id UUID\"))
-            print('Schema patches applied')
-asyncio.run(fix())
-" 2>&1
+echo "=== Bootstrapping modulo_app role ==="
+.venv/bin/python3 -m modulo.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
+
+echo "=== Running DB migrations ==="
+.venv/bin/alembic upgrade head && echo "  Migrations complete" || echo "  WARNING: migrations failed (will retry in lifespan)"
 
 echo "=== Admin user seeding handled by backend lifespan startup (_seed_modulo_users) ==="
 
 echo "=== Starting uvicorn ==="
 exec .venv/bin/uvicorn modulo.api.main:app \
-    --host 0.0.0.0 --port 8000 \
+    --host 0.0.0.0 --port ${PORT:-8000} \
     --proxy-headers \
     --timeout-keep-alive 30 \
     --timeout-graceful-shutdown 30 \

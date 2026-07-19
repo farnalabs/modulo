@@ -304,8 +304,8 @@ class TestFilterCombinations:
         _, kwargs = mock_list.call_args
         assert kwargs.get("event_type") == "pipeline.run"
         assert kwargs.get("actor_user_id") == _USER_ID
-        assert kwargs.get("from_date") == "2025-01-01T00:00:00Z"
-        assert kwargs.get("to_date") == "2025-12-31T23:59:59Z"
+        assert kwargs.get("from_date") == datetime(2025, 1, 1, tzinfo=UTC)
+        assert kwargs.get("to_date") == datetime(2025, 12, 31, 23, 59, 59, tzinfo=UTC)
         assert kwargs.get("resource_type") == "pipeline"
 
     def test_filter_only_from_date(self, client: TestClient) -> None:
@@ -317,7 +317,7 @@ class TestFilterCombinations:
             resp = client.get(f"{LIST_URL}?from_date=2025-06-01T00:00:00Z")
         assert resp.status_code == 200
         _, kwargs = mock_list.call_args
-        assert kwargs.get("from_date") == "2025-06-01T00:00:00Z"
+        assert kwargs.get("from_date") == datetime(2025, 6, 1, tzinfo=UTC)
         assert kwargs.get("to_date") is None
 
 

@@ -1,5 +1,6 @@
 """Step definitions for DOM sensitive data masking and reveal (PRD §6.17)."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,10 +15,8 @@ from modulo.api.middleware.sensitive_mask import (
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/security/dom_sensitive_data.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants

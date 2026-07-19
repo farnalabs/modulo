@@ -1,10 +1,9 @@
-from __future__ import annotations
-
 """Fernet key rotation service — re-encrypts all encrypted data stores with a new key.
 
 No-downtime: during rotation, reads fall back to the old key if the new key fails.
 """
 
+from __future__ import annotations
 
 import json
 import logging

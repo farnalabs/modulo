@@ -1,10 +1,9 @@
-from __future__ import annotations
-
 """Schema migration — detect changes between schema versions and transform data."""
 
+from __future__ import annotations
 
+import asyncio
 import logging
-import threading
 from collections import deque
 from collections.abc import Callable
 from copy import deepcopy
@@ -184,17 +183,17 @@ class MigrationRegistry:
 
     def __init__(self) -> None:
         self._migrations: dict[tuple[str, str], SchemaMigration] = {}
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
-    def register(
+    async def register(
         self,
         source_version: str,
         target_version: str,
         func: Callable[[dict[str, Any]], dict[str, Any]],
         description: str = "",
     ) -> SchemaMigration:
-        key = (source_version, target_version)
-        with self._lock:
+        async with self._lock:
+            key = (source_version, target_version)
             if key in self._migrations:
                 raise ValueError(f"Migration from {source_version} to {target_version} already registered")
             m = SchemaMigration(
@@ -204,17 +203,16 @@ class MigrationRegistry:
                 description=description,
             )
             self._migrations[key] = m
-        return m
+            return m
 
     def get_migration(self, source_version: str, target_version: str) -> SchemaMigration | None:
-        with self._lock:
-            return self._migrations.get((source_version, target_version))
+        return self._migrations.get((source_version, target_version))
 
-    def get_migration_chain(self, source_version: str, target_version: str) -> list[SchemaMigration]:
+    async def get_migration_chain(self, source_version: str, target_version: str) -> list[SchemaMigration]:
         if source_version == target_version:
             return []
 
-        with self._lock:
+        async with self._lock:
             adj: dict[str, list[SchemaMigration]] = {}
             for mf in self._migrations.values():
                 adj.setdefault(mf.source_version, []).append(mf)
@@ -236,15 +234,15 @@ class MigrationRegistry:
 
         raise MissingMigrationError(f"No migration path from {source_version} to {target_version}")
 
-    def validate_chain(self, source_version: str, target_version: str) -> list[str]:
+    async def validate_chain(self, source_version: str, target_version: str) -> list[str]:
         """Return list of gap descriptions, empty if chain is complete."""
         try:
-            self.get_migration_chain(source_version, target_version)
+            await self.get_migration_chain(source_version, target_version)
             return []
         except MissingMigrationError:
             pass
 
-        with self._lock:
+        async with self._lock:
             migrations_copy = dict(self._migrations)
 
         reachable: set[str] = set()
@@ -288,22 +286,22 @@ class MigrationRegistry:
             f"Missing migration from {last} towards {target_version}",
         ]
 
-    def apply(
+    async def apply(
         self,
         data: dict[str, Any],
         source_version: str,
         target_version: str,
     ) -> dict[str, Any]:
         """Apply the full migration chain, transforming data in order."""
-        chain = self.get_migration_chain(source_version, target_version)
+        chain = await self.get_migration_chain(source_version, target_version)
         result = deepcopy(data)
         for mf in chain:
             result = mf.func(result)
         return result
 
-    def describe_chain(self, source_version: str, target_version: str) -> list[dict[str, str]]:
+    async def describe_chain(self, source_version: str, target_version: str) -> list[dict[str, str]]:
         """Return descriptions of each step in a migration chain without running it."""
-        chain = self.get_migration_chain(source_version, target_version)
+        chain = await self.get_migration_chain(source_version, target_version)
         return [
             {
                 "source_version": m.source_version,
@@ -313,7 +311,7 @@ class MigrationRegistry:
             for m in chain
         ]
 
-    def dry_run(
+    async def dry_run(
         self,
         data: dict[str, Any],
         source_version: str,
@@ -329,7 +327,7 @@ class MigrationRegistry:
 
         The original data is never modified.
         """
-        chain = self.get_migration_chain(source_version, target_version)
+        chain = await self.get_migration_chain(source_version, target_version)
         steps: list[dict[str, Any]] = []
         current = deepcopy(data)
         for mf in chain:
@@ -354,16 +352,13 @@ class MigrationRegistry:
         return steps
 
     def clear(self) -> None:
-        with self._lock:
-            self._migrations.clear()
+        self._migrations.clear()
 
     def list_migrations(self) -> list[SchemaMigration]:
-        with self._lock:
-            return list(self._migrations.values())
+        return list(self._migrations.values())
 
     def __len__(self) -> int:
-        with self._lock:
-            return len(self._migrations)
+        return len(self._migrations)
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.remy.config_service import RemyConfig
 from modulo.db.models.remy_context_source import RemyContextSource
 
-_VALID_SOURCE_MODES = {"always_on", "tool", "opt_in", "disabled"}
+_VALID_SOURCE_MODES = {"always_on", "tool", "off"}
 
 _BUILTIN_DEFAULTS: dict[str, str] = {
     "page_context": "always_on",

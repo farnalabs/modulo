@@ -9,6 +9,7 @@ bdd: []
 depends-on: [feat-core-db-abstraction-core]
 unit-tests:
   - backend/tests/unit/cli/test_migrate.py
+  - backend/tests/unit/cli/test_migrate_org.py
 status: partial
 ---
 
@@ -89,7 +90,6 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 
 ## Known Gaps
 
-- [x] migrate_org.py unit tests now exist (10 tests in test_migrate_org.py) — migrate.py has 30+ tests
 - No BDD feature files for migration/export behaviour
 - modulo-migrate requires auth token or admin secret — no interactive login
 - modulo (argparse) has no auth — runs with direct DB access

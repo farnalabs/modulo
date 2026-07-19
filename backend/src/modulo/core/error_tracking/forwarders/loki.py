@@ -1,5 +1,8 @@
+"""Loki error forwarder."""
+
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -90,6 +93,8 @@ class LokiErrorForwarder(BaseForwarder):
                     extra={"status": resp.status_code, "org_id": str(org_id)},
                 )
                 return False
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("loki_forwarder.request_failed")
             return False

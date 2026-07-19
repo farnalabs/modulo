@@ -94,6 +94,9 @@ Discovered from 1 completed delivery task.
 
 ## QA History
 
+### 2026-07-12 — Round 3 improve-architecture
+- **MAJOR:** Fixed B904 (exception chaining) on all feedback route handlers — `IntegrityError`, `ProgrammingError`, `SQLAlchemyError`, and `Exception` now use `raise ... from exc` pattern
+
 ### 2026-07-06 — Cross-cutting QA (improve-architecture index 228)
 - Fixed CRITICAL — `list_eval_proposals` node name resolution queries ran outside `session.begin()` and try/except — now inside the same transaction with ProgrammingError + SQLAlchemyError guards
 - Fixed CRITICAL — all 10 feedback routes added `except SQLAlchemyError → 503` (previously only caught ProgrammingError, allowing connection/deadlock failures to propagate as 500)

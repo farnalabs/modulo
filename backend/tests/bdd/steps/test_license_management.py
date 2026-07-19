@@ -1,6 +1,7 @@
 """Step definitions for license management: upload, inspect, and verify license keys."""
 
 import base64
+import contextlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -8,10 +9,8 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/licensing/license_management.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 from modulo.core.license import (
     clear_license,

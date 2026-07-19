@@ -1,23 +1,21 @@
 <template>
   <div class="space-y-3">
-    <label class="mb-1 block text-sm font-medium">Environment Profile</label>
+    <label for="environmentprofilepicker-field-1" class="mb-1 block text-sm font-medium">Environment Profile</label>
 
-    <select
-      v-model="selectedId"
-      aria-label="Environment profile"
-      class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-      data-testid="envprofile-picker-select"
-      @change="emitChange"
-    >
-      <option value="">None (no sandbox environment)</option>
-      <option
-        v-for="profile in activeProfiles"
-        :key="profile.id"
-        :value="profile.id"
-      >
-        {{ profile.name }} ({{ profile.provider_type }})
-      </option>
-    </select>
+    <Select v-model="selectedId" @update:model-value="emitChange">
+      <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Environment profile" data-testid="envprofile-picker-select">
+        <SelectValue placeholder="None (no sandbox environment)" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem
+          v-for="profile in activeProfiles"
+          :key="profile.id"
+          :value="profile.id"
+        >
+          {{ profile.name }} ({{ profile.provider_type }})
+        </SelectItem>
+      </SelectContent>
+    </Select>
 
     <div v-if="selectedProfile" class="rounded-lg border bg-muted/30 p-3 space-y-2 text-sm">
       <div class="flex items-center gap-2">
@@ -57,6 +55,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import { useEnvironmentProfilesStore, type EnvironmentProfileSummary } from '../../stores/environmentProfiles'
 
 const props = defineProps<{
@@ -93,7 +92,7 @@ watch(
 
 onMounted(() => {
   if (store.profiles.length === 0) {
-    store.fetchProfiles()
+    store.fetchProfiles().catch(() => {})
   }
 })
 </script>

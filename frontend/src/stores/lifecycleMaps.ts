@@ -94,11 +94,11 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
   const detailError = ref<string | null>(null)
 
   const graduatedCount = computed(() =>
-    currentMap.value?.stages.filter((s) => s.graduated).length ?? 0
+    (currentMap.value?.stages ?? []).filter((s) => s.graduated).length
   )
 
   const manualCount = computed(() =>
-    currentMap.value?.stages.filter((s) => s.type === 'manual').length ?? 0
+    (currentMap.value?.stages ?? []).filter((s) => s.type === 'manual').length
   )
 
   const saving = ref(false)
@@ -109,8 +109,14 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     isLoading.value = true
     error.value = null
     try {
-      const data = await get<LifecycleMapSummary[]>('/api/v1/lifecycle-maps')
-      maps.value = Array.isArray(data) ? data : []
+      const data = await get<LifecycleMapSummary[] | { items?: LifecycleMapSummary[] }>('/api/v1/lifecycle-maps')
+      if (Array.isArray(data)) {
+        maps.value = data
+      } else if (data && Array.isArray((data as any).items)) {
+        maps.value = (data as any).items as LifecycleMapSummary[]
+      } else {
+        maps.value = []
+      }
     } catch (e: unknown) {
       error.value = formatApiError(e)
       maps.value = []
@@ -124,8 +130,13 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     detailError.value = null
     try {
       const data = await get<LifecycleMap>(`/api/v1/lifecycle-maps/${id}`)
+      if (!data) {
+        detailError.value = 'Lifecycle map not found'
+        currentMap.value = null
+        return
+      }
       currentMap.value = data
-      currentMapVersion.value = data.current_version
+      currentMapVersion.value = data.current_version ?? null
     } catch (e: unknown) {
       detailError.value = formatApiError(e)
       currentMap.value = null
@@ -139,10 +150,16 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     detailError.value = null
     try {
       const data = await get<LifecycleMap>(`/api/v1/lifecycle-maps/${id}/versions/${version}`)
+      if (!data) {
+        detailError.value = 'Lifecycle map version not found'
+        currentMap.value = null
+        return
+      }
       currentMap.value = data
-      currentMapVersion.value = data.current_version
+      currentMapVersion.value = version
     } catch (e: unknown) {
       detailError.value = formatApiError(e)
+      currentMap.value = null
     } finally {
       isLoadingDetail.value = false
     }
@@ -157,7 +174,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
       })
       return data
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : 'Failed to save version'
+      error.value = formatApiError(e)
       throw e
     } finally {
       saving.value = false
@@ -173,7 +190,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
       })
       return data
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : 'Failed to update version'
+      error.value = formatApiError(e)
       throw e
     } finally {
       saving.value = false
@@ -190,7 +207,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
       )
       return data
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : 'Failed to graduate stage'
+      error.value = formatApiError(e)
       throw e
     } finally {
       saving.value = false
@@ -198,12 +215,13 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
   }
 
   async function fetchPipelines() {
+    error.value = null
     try {
       const data = await get<{ items: PipelineSummary[] }>('/api/v1/pipelines?limit=200')
       pipelines.value = data.items || []
     } catch (e: unknown) {
       pipelines.value = []
-      console.warn('Failed to fetch pipelines:', e)
+      error.value = formatApiError(e)
     }
   }
 

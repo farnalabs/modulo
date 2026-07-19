@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <FeatureGate feature-name="environment_profiles" required-tier="team" show-disabled>
 
@@ -24,8 +24,8 @@
           <form @submit.prevent="formMode === 'add' ? createProfile() : updateProfile()">
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">Name</label>
-                <input
+                <label for="adminenvironmentprofilesview-field-8" class="mb-1 block text-sm font-medium">Name</label>
+                <input id="adminenvironmentprofilesview-field-8"
                   v-model="formData.name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -34,8 +34,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Description</label>
-                <input
+                <label for="adminenvironmentprofilesview-field-7" class="mb-1 block text-sm font-medium">Description</label>
+                <input id="adminenvironmentprofilesview-field-7"
                   v-model="formData.description"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -44,21 +44,21 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Provider Type</label>
-                <select
-                  v-model="formData.provider_type"
-                  aria-label="Provider type"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  data-testid="admin-envprofiles-provider-select"
-                >
-                  <option value="e2b">E2B</option>
-                  <option value="docker">Docker</option>
-                  <option value="custom">Custom / None</option>
-                </select>
+                <label for="adminenvironmentprofilesview-field-6" class="mb-1 block text-sm font-medium">Provider Type</label>
+                <Select v-model="formData.provider_type">
+                  <SelectTrigger data-testid="admin-envprofiles-provider-select" aria-label="Provider type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                    <SelectValue placeholder="E2B" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="e2b">E2B</SelectItem>
+                    <SelectItem value="docker">Docker</SelectItem>
+                    <SelectItem value="custom">Custom / None</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div v-if="formData.provider_type === 'custom'">
-                <label class="mb-1 block text-sm font-medium">Image Reference</label>
-                <input
+                <label for="adminenvironmentprofilesview-field-5" class="mb-1 block text-sm font-medium">Image Reference</label>
+                <input id="adminenvironmentprofilesview-field-5"
                   v-model="formData.image_ref"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -67,8 +67,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Timeout (seconds)</label>
-                <input
+                <label for="adminenvironmentprofilesview-field-4" class="mb-1 block text-sm font-medium">Timeout (seconds)</label>
+                <input id="adminenvironmentprofilesview-field-4"
                   v-model.number="formData.timeout_seconds"
                   type="number"
                   min="60"
@@ -79,8 +79,8 @@
               </div>
               <div class="grid grid-cols-2 gap-4">
                 <div>
-                  <label class="mb-1 block text-sm font-medium">Memory Limit (MB)</label>
-                  <input
+                  <label for="adminenvironmentprofilesview-field-3" class="mb-1 block text-sm font-medium">Memory Limit (MB)</label>
+                  <input id="adminenvironmentprofilesview-field-3"
                     v-model.number="formData.memory_mb"
                     type="number"
                     min="128"
@@ -89,8 +89,8 @@
                   />
                 </div>
                 <div>
-                  <label class="mb-1 block text-sm font-medium">CPU Cores</label>
-                  <input
+                  <label for="adminenvironmentprofilesview-field-2" class="mb-1 block text-sm font-medium">CPU Cores</label>
+                  <input id="adminenvironmentprofilesview-field-2"
                     v-model.number="formData.cpu_cores"
                     type="number"
                     min="0.25"
@@ -102,7 +102,7 @@
               </div>
               <div>
                 <div class="mb-1 flex items-center justify-between">
-                  <label class="block text-sm font-medium">Environment Variables</label>
+                  <label for="adminenvironmentprofilesview-field-1" class="block text-sm font-medium">Environment Variables</label>
                   <button
                     type="button"
                     class="text-xs text-primary hover:underline"
@@ -117,14 +117,14 @@
                     :key="idx"
                     class="flex items-center gap-2"
                   >
-                    <input
+                    <input id="adminenvironmentprofilesview-field-1"
                       v-model="env.key"
                       type="text"
                       class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
                       placeholder="KEY"
                       :data-testid="`admin-envprofiles-env-key-${idx}`"
                     />
-                    <input
+                    <input aria-label="value"
                       v-model="env.value"
                       type="text"
                       class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
@@ -200,7 +200,7 @@
                   {{ providerLabel(profile) }}
                 </span>
               </td>
-              <td class="table-cell table-cell-numeric text-muted-foreground">{{ formatTimeout(profile.timeout_seconds) }}</td>
+              <td class="table-cell table-cell-numeric text-muted-foreground">{{ formatTimeout(profile.timeout_seconds ?? 0) }}</td>
               <td class="table-cell">
                 <span
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
@@ -292,10 +292,16 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import TableActions from '../components/shared/TableActions.vue'
 import { formatDateShort } from '../lib/formatDate'
 
-type ProfileItem = components['schemas']['ProfileResponse']
+type ProfileItem = components['schemas']['modulo__api__routes__environment_profiles__ProfileResponse'] & {
+  timeout_seconds?: number
+  is_active?: boolean
+  resource_limits?: { memory_mb?: number; cpu_cores?: number }
+  env_vars?: Record<string, string>
+}
 
 interface EnvVar {
   key: string
@@ -334,7 +340,7 @@ function emptyForm(): ProfileFormState {
 
 const { data: profilesData, loading, error, load: loadProfiles } = useDataFetch(
   () => api.GET('/api/v1/environments') as Promise<{ data?: { items?: ProfileItem[] }; error?: { detail?: string } }>,
-  { initialValue: [] as ProfileItem[] }
+  { initialValue: { items: [] as ProfileItem[] } }
 )
 
 const profiles = computed(() => {
@@ -400,7 +406,7 @@ function openEditForm(profile: ProfileItem) {
   const provider = providerLabel(profile).toLowerCase()
   const memMb = profile.resource_limits?.memory_mb ?? 512
   const cpu = profile.resource_limits?.cpu_cores ?? 1
-  const persistence = profile.persistence_policy ?? {}
+  const persistence = (profile as any).persistence ?? (profile as any).persistence_policy ?? {}
   const envVars: EnvVar[] = persistence.env_vars
     ? Object.entries(persistence.env_vars as Record<string, string>).map(([k, v]) => ({ key: k, value: v }))
     : []
@@ -551,8 +557,8 @@ async function deleteProfile() {
     if (err) {
       deleteError.value = String(err)
     } else if (response.status === 204 || response.ok) {
-      profiles.value = profiles.value.filter(p => p.id !== deleteConfirmProfileId.value)
       deleteConfirmProfileId.value = null
+      await loadProfiles()
     }
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)

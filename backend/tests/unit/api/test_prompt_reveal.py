@@ -84,6 +84,8 @@ def _make_agent(*, prompt_template: str = "You are a helpful assistant.") -> Mag
     a = MagicMock()
     a.id = _AGENT_ID
     a.prompt_template = prompt_template
+    a.template_id = None
+    a.agent_command = None
     return a
 
 
@@ -323,11 +325,10 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=_mock_execute)
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run):
-            with patch("modulo.api.routes.runs.set_rls_org"):
-                resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/nonexistent-node/prompt/reveal",
-                )
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/nonexistent-node/prompt/reveal",
+            )
 
         assert resp.status_code == 404
         assert "not found" in resp.json()["detail"].lower()
@@ -338,11 +339,10 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, None))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run):
-            with patch("modulo.api.routes.runs.set_rls_org"):
-                resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 404
         assert "Snapshot" in resp.json()["detail"]
@@ -360,11 +360,10 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=None))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run):
-            with patch("modulo.api.routes.runs.set_rls_org"):
-                resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 404
         assert "Agent" in resp.json()["detail"]
@@ -404,11 +403,10 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run):
-            with patch("modulo.api.routes.runs.set_rls_org"):
-                resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 200
         body = resp.json()
@@ -433,11 +431,10 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run):
-            with patch("modulo.api.routes.runs.set_rls_org"):
-                resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 200
         body = resp.json()
@@ -465,11 +462,10 @@ class TestRevealNodePrompt:
             side_effect=self._make_mock_execute(run, snapshot, agent=agent, checkpoint_row=checkpoint_row)
         )
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run):
-            with patch("modulo.api.routes.runs.set_rls_org"):
-                resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 200
         body = resp.json()
@@ -484,11 +480,10 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run):
-            with patch("modulo.api.routes.runs.set_rls_org"):
-                resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 200
         body = resp.json()
@@ -505,14 +500,13 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run):
-            with patch("modulo.api.routes.runs.set_rls_org"):
-                resp1 = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
-                resp2 = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp1 = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
+            resp2 = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp1.status_code == 200
         assert resp2.status_code == 200
@@ -542,11 +536,10 @@ class TestRevealNodePrompt:
             side_effect=self._make_mock_execute(run, snapshot, agent=agent, checkpoint_row=checkpoint_row)
         )
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run):
-            with patch("modulo.api.routes.runs.set_rls_org"):
-                resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 200
         messages = resp.json()["messages"]

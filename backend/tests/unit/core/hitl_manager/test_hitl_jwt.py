@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import jwt as pyjwt
 import pytest
-from jose import jwt as jose_jwt
 
 from modulo.auth.jwt import _ALGORITHM, create_claim_token
 from modulo.core.hitl_manager import (
@@ -174,7 +174,7 @@ async def test_claim_succeeds_with_jwt_secret_key() -> None:
 def test_create_claim_token_roundtrip_unittest() -> None:
     """create_claim_token generates a valid JWT with correct scope."""
     token = create_claim_token(**_make_jwt_kwargs())
-    payload = jose_jwt.decode(token, _KEY, algorithms=[_ALGORITHM])
+    payload = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
     assert payload["purpose"] == "claim_token"
     assert payload["run_id"] == str(_RUN)
     assert payload["gate_id"] == _GATE
@@ -185,7 +185,7 @@ def test_create_claim_token_roundtrip_unittest() -> None:
 def test_create_claim_token_default_expiry_15_minutes() -> None:
     """create_claim_token defaults to 15-minute TTL."""
     token = create_claim_token(**_make_jwt_kwargs())
-    payload = jose_jwt.decode(token, _KEY, algorithms=[_ALGORITHM])
+    payload = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
     exp_ts: float = payload["exp"]
     iat_ts: float = payload["iat"]
     assert 14 <= (exp_ts - iat_ts) / 60 <= 15
@@ -194,7 +194,7 @@ def test_create_claim_token_default_expiry_15_minutes() -> None:
 def test_create_claim_token_custom_expiry() -> None:
     """create_claim_token respects custom expiry_minutes."""
     token = create_claim_token(**_make_jwt_kwargs(expiry_minutes=60))
-    payload = jose_jwt.decode(token, _KEY, algorithms=[_ALGORITHM])
+    payload = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
     exp_ts: float = payload["exp"]
     iat_ts: float = payload["iat"]
     assert 59 <= (exp_ts - iat_ts) / 60 <= 60

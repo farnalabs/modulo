@@ -14,8 +14,8 @@
         </div>
 
         <div>
-          <label class="mb-2 flex items-center gap-2 text-sm font-medium">
-            <input
+          <label for="graduationdialog-field-2" class="mb-2 flex items-center gap-2 text-sm font-medium">
+            <input id="graduationdialog-field-2"
               v-model="mode"
               type="radio"
               value="existing"
@@ -23,19 +23,19 @@
             />
             Link to existing pipeline
           </label>
-          <select
-            v-if="mode === 'existing'"
-            v-model="selectedPipelineId"
-            class="ml-6 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option :value="null">Select a pipeline...</option>
-            <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
+          <Select v-if="mode === 'existing'" v-model="selectedPipelineId">
+            <SelectTrigger class="ml-6 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Select pipeline">
+              <SelectValue placeholder="Select a pipeline..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div>
-          <label class="mb-2 flex items-center gap-2 text-sm font-medium">
-            <input
+          <label for="graduationdialog-field-1" class="mb-2 flex items-center gap-2 text-sm font-medium">
+            <input id="graduationdialog-field-1"
               v-model="mode"
               type="radio"
               value="new"
@@ -43,16 +43,16 @@
             />
             Create new pipeline from template
           </label>
-          <select
-            v-if="mode === 'new'"
-            v-model="selectedTemplateId"
-            class="ml-6 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option :value="null">Select a template...</option>
-            <option value="simple-sequential">Simple Sequential</option>
-            <option value="hierarchical">Hierarchical Agent</option>
-            <option value="parallel">Parallel Processing</option>
-          </select>
+          <Select v-if="mode === 'new'" v-model="selectedTemplateId">
+            <SelectTrigger class="ml-6 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Select template">
+              <SelectValue placeholder="Select a template..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="simple-sequential">Simple Sequential</SelectItem>
+              <SelectItem value="hierarchical">Hierarchical Agent</SelectItem>
+              <SelectItem value="parallel">Parallel Processing</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -73,6 +73,7 @@
 import { ref, computed } from 'vue'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import type { PipelineSummary } from '../../../types/lifecycleMap'
 
 const props = defineProps<{

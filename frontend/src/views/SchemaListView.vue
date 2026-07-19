@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Browse', to: '/schemas' },
     { label: 'Editor', to: '/schemas/editor' },
@@ -25,7 +25,7 @@
             <tr>
               <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.name') }}</th>
               <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.description') }}</th>
-              <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.status') }}</th>
+              <th class="px-4 py-3 font-medium capitalize">{{ $t('views.SchemaListView.status') }}</th>
               <th class="px-4 py-3 font-medium text-right">{{ $t('views.SchemaListView.actions') }}</th>
             </tr>
           </thead>
@@ -105,10 +105,9 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -116,9 +115,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 
-const { t } = useI18n()
-
-type SchemaItem = components['schemas']['SchemaItem']
+type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse']
 
 interface SchemaListResponse {
   items: SchemaItem[]
@@ -127,7 +124,7 @@ interface SchemaListResponse {
   page_size: number
 }
 
-const { loading, error, data: schemasResp, load: loadSchemas } = useDataFetch<SchemaListResponse>(
+const { loading, error, data: schemasResp } = useDataFetch<SchemaListResponse>(
   () => api.GET('/api/v1/schemas', {
     params: { query: { page: 1, page_size: 100 } },
   }),
@@ -161,7 +158,12 @@ async function deprecateSchema() {
       const idx = schemas.value.findIndex(s => s.id === deprecateConfirmId.value)
       if (idx >= 0) {
         const s = schemasResp.value
-        if (s) s.items[idx] = data
+        if (s) {
+          schemasResp.value = {
+            ...s,
+            items: s.items.map((item, itemIdx) => itemIdx === idx ? data : item),
+          }
+        }
       }
       deprecateConfirmId.value = null
     }

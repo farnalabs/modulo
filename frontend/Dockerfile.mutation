@@ -1,0 +1,27 @@
+# One-shot mutation testing container for the frontend
+# Build from repo root: docker build -t modulo-stryker -f frontend/Dockerfile.mutation .
+# Run: docker run --rm modulo-stryker
+
+FROM node:20-slim
+
+WORKDIR /app
+
+# Copy dependency manifests
+COPY frontend/package.json frontend/package-lock.json ./
+
+# Install dependencies (ci is strict but fast — will fail if lockfile mismatch)
+RUN npm ci
+
+# Copy source code and config
+COPY frontend/src/ src/
+COPY frontend/vite.config.ts ./
+COPY frontend/tsconfig.json ./
+COPY frontend/tsconfig.app.json ./
+COPY frontend/stryker.config.json ./
+COPY frontend/index.html ./
+COPY frontend/env.d.ts ./
+COPY frontend/postcss.config.js ./
+COPY frontend/tailwind.config.cjs ./
+
+# Default: mutate stores (fastest meaningful subset)
+CMD ["npx", "stryker", "run", "--mutate", "src/stores/**/*.ts"]

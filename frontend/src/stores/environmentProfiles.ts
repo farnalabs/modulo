@@ -23,6 +23,8 @@ export interface EnvironmentProfileSummary {
   name: string
   description: string | null
   provider_type: string
+  image_ref: string | null
+  capabilities: string[]
   status: string
   created_at: string
 }
@@ -52,6 +54,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
   }
 
   async function fetchProfile(id: string): Promise<void> {
+    if (isLoading.value) return
     isLoading.value = true
     error.value = null
     try {
@@ -75,6 +78,8 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
         name: created.name,
         description: created.description,
         provider_type: created.provider_type,
+        image_ref: created.image_ref,
+        capabilities: created.capabilities,
         status: created.status,
         created_at: created.created_at,
       })
@@ -98,6 +103,8 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
           name: updated.name,
           description: updated.description,
           provider_type: updated.provider_type,
+          image_ref: updated.image_ref,
+          capabilities: updated.capabilities,
           status: updated.status,
           created_at: updated.created_at,
         }

@@ -141,7 +141,9 @@ The closest alternatives in each layer, and why Modulo makes a different bet:
 
 | Term | Definition |
 |---|---|
-| **Agent** | An atomic unit of work. Takes a defined input, applies a sandboxed prompt against a model backend, produces a defined output. |
+| **Agent** | An atomic unit of work. Dispatches to an external agent runtime (e.g. Claude Code in an E2B sandbox) with a prompt and context, receives structured output, and evaluates against the output contract. Modulo owns dispatch, auth, audit, cost tracking, and eval — the external agent runtime owns the tool-using execution loop. |
+| **Sandbox Agent** | A pipeline node type that creates an isolated E2B sandbox, runs an external AI agent (e.g. Claude Code) with a task prompt, collects structured output, and tears down the sandbox. All observable metrics (wall-clock time, exit code, output validity) are captured natively by Modulo — no follow-up step required. |
+| **Output Contract** | The expected structured JSON return value from a sandbox agent execution. Always includes: status, summary, changed_files, wall_clock_time_ms, exit_code. May include additional fields defined by the node's output schema. |
 | **Schema** | A versioned, reusable data structure definition. The schema is the "remainder" the user controls. |
 | **ModelBackend** | A configured, authenticated binding to a specific AI model provider (Claude, GPT-4o, Bedrock, Ollama, etc.). Per-org. Fernet-encrypted credentials. |
 | **ConnectorType** | Abstract capability category (e.g. `git-host`, `issue-tracker`). Defines the operations interface. |
@@ -615,6 +617,39 @@ OTel env var configuration follows the OTel specification:
 
 Every LLM call, every connector operation, and every trigger event emits a span.
 
+### 6.20 Agent Dispatch Model
+
+Modulo dispatches work to external agent runtimes in sandboxes, then evaluates the output. Modulo is the SDLC orchestration layer — it owns dispatch, auth, audit, cost tracking, eval gates, and HITL — not the agent loop itself.
+
+#### Sandbox templates vs agent runtimes
+
+Each E2B sandbox template (e.g. `claude-code-v1`, `opencode-v1`, `generic-python`) defines the agent runtime environment. The template pre-installs a specific agent CLI (Claude Code, opencode, etc.) plus supporting tools (git, GitHub/Jira CLIs). Modulo references templates by ID — it does not manage the runtime environment beyond provisioning and teardown.
+
+#### Output contract pattern
+
+Every sandbox agent execution returns structured JSON from a well-known path (`/home/user/output.json`):
+
+```json
+{
+  "status": "completed" | "failed",
+  "summary": "Description of what was done",
+  "changed_files": ["path/to/file1.py"],
+  "pr_url": "https://github.com/org/repo/pull/123",
+  "exit_code": 0,
+  "wall_clock_time_ms": 45000
+}
+```
+
+The output contract is validated at the pipeline level, not inside the sandbox. All observable metrics are captured natively by Modulo — no follow-up step required.
+
+#### Observability
+
+Wall-clock time and exit code are captured on every dispatch natively by the `sandbox_agent` node type. This requires no additional instrumentation — the node records `time.monotonic()` before sandbox creation and after output collection, always returning `wall_clock_time_ms` even on failure.
+
+#### Post-hoc eval as separate concern
+
+The agent's output is evaluated by a separate Modulo pipeline (code review, test coverage check, security scan). This keeps evaluation separate from execution and allows different evaluators to be composed independently.
+
 ---
 
 ## 7. Security
@@ -816,6 +851,11 @@ Left-to-right kanban of user-defined Stages. Each card: name, active run count, 
 
 **Stage board controls**: search by pipeline name, filter by status (`running`, `awaiting_human`, `failed`, `idle`), sort by last run (default) / name / status. Filter by team added in v1 when team management ships. The `awaiting_human` filter is surfaced prominently — time-sensitive items should be easy to reach.
 
+#### Pipeline Folders
+The pipeline library supports organisation-scoped, nested folders for grouping pipelines. Users can create, rename, reorder, and delete folders, filter the pipeline list by folder, and move a pipeline into a folder or back to the unfiled list. Folder access uses the same organisation RLS context as pipeline access.
+
+Deleting a folder does not delete pipelines: pipelines directly assigned to it become unfiled, and direct child folders become top-level folders. Folder ordering is represented by a non-negative `sort_order`; names are required and limited to 255 characters. The folder API returns `501 Not Implemented` when the required database migration has not been applied.
+
 #### Agent Picker
 Adding a node to the pipeline canvas opens a slide-out agent picker panel: searchable by name and tag; shows agent description, input schema name, output schema name, and last-modified date; lists org agents and accessible library agents in separate tabs; "Add to pipeline" closes the panel and places the node. Schema compatibility is indicated: if the selected agent's input schema is incompatible with the previous node's output schema, a warning badge is shown (does not block selection — user may resolve in agent config).
 
@@ -900,6 +940,8 @@ Errors shown inline on canvas with user-readable messages.
 - `cron` (v1): `{schedule: cron-string, timezone: IANA-tz, input_template: JSON-object}`
 - `polling` (v1): `{connector_instance_id, poll_query, condition_expression, poll_interval_seconds}`
 - `agent_signal` (v1): `{source_pipeline_id, source_node_id, signal_schema_id}`
+
+Cron expressions are evaluated as wall-clock schedules in their named IANA timezone, while `next_fire_at` is persisted in UTC. Across daylight-saving transitions, a nonexistent local time advances to the first valid instant and an ambiguous local time uses its first occurrence, matching `croniter` with `zoneinfo`.
 
 **Cardinality**: one trigger belongs to exactly one pipeline. One pipeline may have multiple triggers. When a trigger is deleted: in-flight runs continue against their snapshot to completion; no new runs initiated. Trigger record cascade-deleted; run records retained.
 
@@ -1343,6 +1385,25 @@ Missing ConnectorType instance: creates placeholder connector entry (`status: un
 
 #### Workflow Updates
 No automatic updates. V2 registry: "check for updates" compares local checksum to registry. Manual re-import with re-binding. Local customisations are not merged automatically.
+
+#### V2 Format (YAML)
+
+The v2 bundle format moves from ZIP+JSON to a single YAML file with expanded capabilities. The full specification is documented in ADR 015 (`docs/adr/015-bundle-format-v2.md`).
+
+**What's new in v2:**
+- **YAML instead of ZIP+JSON** — single file, human-readable, diffable in PRs
+- **Triggers** — bundles ship pre-configured webhook, cron, polling, and agent_signal triggers
+- **Team ownership** — `owner_team` field resolved by team name on import
+- **Visibility** — `org`, `team`, or `private` (defaults to `org` on import)
+- **Lifecycle map reference** — bundles declare which lifecycle stage they participate in
+- **Composite template refs** — multi-template workflow references
+- **Partial bundles** — incomplete pipelines (status: `partial: true`) for assembly
+- **Agent runtime config** — `template_id` and `agent_command` travel with agent definitions
+- **Ed25519 signature envelope** — optional publisher verification for community library
+
+**Migration path:** v1 ZIP+JSON bundles remain importable. Detection is by file extension (`.zip` → v1, `.yaml`/`.yml` → v2). A conversion script is provided at `docs/ops/bundle-migration-v1-to-v2.md`. v1 import emits a deprecation warning from v2.1 and is removed in v3.0.
+
+**Validation:** v2 bundles are validated against JSON Schema at `docs/schemas/bundle-v2-schema.json`.
 
 ### 8.16 Schema Inference (v1)
 
@@ -2426,6 +2487,8 @@ The SSE stream handler runs a `while True` loop:
 6. Feed results into the next LLM call (loop continues)
 7. When LLM emits no tool calls, yield `done`
 
+`mcp_api_key` is optional and is required only for MCP calls. If a turn mixes UI and MCP calls without an MCP credential, each MCP call produces a failed `tool_call` result while manifest and browser UI calls continue; all results are fed back to the LLM on the next turn. A missing MCP credential does not abort the SSE stream.
+
 This allows multi-step workflows in a single stream: "Let me check the current config… [extract] → I see X is not set. Let me update it. [navigate → click → fill → click → go_back] → Done!"
 
 #### 8.27.7 Component Support
@@ -2687,7 +2750,7 @@ class RemyConfig(BaseModel):
 The admin Remy page (`/admin/remy`, `AdminRemyView.vue`) gains a **"Knowledge Sources"** section:
 
 ```
-## Knowledge Sources
+#### 8.29.7.1 Knowledge Sources
 
 Control what Remy knows and how it loads that knowledge.
 
@@ -2774,7 +2837,7 @@ Remy needs a baseline understanding of what Modulo is and how it works, present 
 The primer is a Markdown block injected before page context:
 
 ```
-## Product Overview
+#### 8.30.1.1 Product Overview
 
 ### What is Modulo
 Governed orchestration for AI-powered SDLC pipelines — automated workflows that
@@ -3050,7 +3113,7 @@ Telemetry is opt-in and disabled by default. The OTel bridge (`setup_otel`) is c
 | Encryption | cryptography (Fernet) | Connector credentials + model backend credentials |
 | API keys | SHA-256 hash storage | `mk_<lookup_prefix>_<secret>` format |
 | Task queue | Celery + Redis | Optional alpha; required for v1 cron/polling triggers |
-| Auth (v1+) | python-jose (JWT), passlib (bcrypt), python-saml, authlib (OIDC) | |
+| Auth (v1+) | PyJWT[crypto] (JWT/JWK), passlib (bcrypt), python-saml, authlib (OIDC) | |
 
 ### Frontend
 | Layer | Technology | Notes |

@@ -137,7 +137,7 @@ class TestRemyContextSourceServiceSetOrgDefault:
         mock_session: AsyncMock,
         org_id: uuid.UUID,
     ) -> None:
-        await service.set_org_default(org_id, "product_docs", "disabled")
+        await service.set_org_default(org_id, "product_docs", "off")
 
         mock_session.execute.assert_called_once()
         stmt = mock_session.execute.call_args[0][0]

@@ -13,13 +13,18 @@
           <span class="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full" />
         </div>
 
+        <div v-else-if="error" class="flex flex-col items-center justify-center h-32 gap-3">
+          <p class="text-destructive text-sm">{{ error || 'Failed to load monitoring configuration' }}</p>
+          <Button size="sm" variant="outline" @click="load()">Retry</Button>
+        </div>
+
         <template v-else>
           <div class="space-y-6">
             <div
               v-for="b in backendForms"
               :key="b.key"
               class="border rounded-lg p-5 space-y-4"
-              :class="{ 'opacity-50': !b.enabled }"
+              :class="{}"
             >
               <div class="flex items-center justify-between">
                 <div>
@@ -27,16 +32,16 @@
                   <p class="text-xs text-muted-foreground">{{ b.description }}</p>
                   <p v-if="!b.enabled" class="text-xs text-muted-foreground/60 mt-1">{{ b.hint }}</p>
                 </div>
-                <label class="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" v-model="b.enabled" class="sr-only peer" @change="onDirty" />
+                <label for="settingsmonitorconfigview-field-2" class="relative inline-flex items-center cursor-pointer">
+                  <input id="settingsmonitorconfigview-field-2" type="checkbox" v-model="b.enabled" class="sr-only peer" @change="onDirty" />
                   <div class="w-9 h-5 bg-muted rounded-full peer peer-checked:bg-primary peer-focus:ring-2 peer-focus:ring-primary/20 after:content-[''] after:absolute after:top-0.5 after:start-0.5 after:bg-background after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full" />
                 </label>
               </div>
 
               <div v-if="b.enabled" class="space-y-3">
                 <div v-for="field in b.fields" :key="field.key">
-                  <label class="block text-xs text-muted-foreground mb-1">{{ field.label }}</label>
-                  <input
+                  <label for="settingsmonitorconfigview-field-1" class="block text-xs text-muted-foreground mb-1">{{ field.label }}</label>
+                  <input id="settingsmonitorconfigview-field-1"
                     v-model="field.value"
                     :type="field.secret && !field.revealed ? 'password' : 'text'"
                     :placeholder="field.placeholder"
@@ -147,7 +152,7 @@ const backendForms = reactive<BackendForm[]>([
   },
 ])
 
-const { loading, load } = useDataFetch(
+const { loading, load, error } = useDataFetch(
   async () => {
     const res = await api.GET('/api/v1/admin/monitor-config')
     if (res.data) {
@@ -176,7 +181,7 @@ function showFlash(msg: string, type: 'success' | 'error') {
 
 function toMonitorConfig(): MonitorConfig {
   const activeKeys: string[] = []
-  let perBackend: Record<string, Record<string, string>> = {}
+  const perBackend: Record<string, Record<string, string>> = {}
   for (const b of backendForms) {
     if (b.enabled) {
       activeKeys.push(b.key)
@@ -195,9 +200,15 @@ function toMonitorConfig(): MonitorConfig {
 
   return {
     monitorBackends: activeKeys,
-    sentry: activeKeys.includes('sentry') ? (perBackend.sentry ?? { dsn: '' }) : undefined,
-    'datadog-rum': activeKeys.includes('datadog_rum') ? (perBackend.datadog_rum ?? { clientToken: '' }) : undefined,
-    'grafana-faro': activeKeys.includes('grafana_faro') ? (perBackend.grafana_faro ?? { url: '' }) : undefined,
+    sentry: activeKeys.includes('sentry')
+      ? { dsn: perBackend.sentry?.dsn ?? '' }
+      : undefined,
+    datadogRum: activeKeys.includes('datadog_rum')
+      ? { clientToken: perBackend.datadog_rum?.clientToken ?? '' }
+      : undefined,
+    grafanaFaro: activeKeys.includes('grafana_faro')
+      ? { url: perBackend.grafana_faro?.url ?? '' }
+      : undefined,
   }
 }
 

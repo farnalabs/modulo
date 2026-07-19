@@ -1,15 +1,14 @@
-from __future__ import annotations
-
 """CRUD for notifications and dismissals.
 
 All functions enforce org scoping via organisation_id filter.
 """
 
+from __future__ import annotations
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -27,7 +26,7 @@ DASHBOARD_LIMIT_MAX = 50
 NOTIFICATIONS_LIMIT_MAX = 200
 
 
-def _visible_to_user_clause(user_id: uuid.UUID):
+def _visible_to_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
     return (
         (Notification.scope == "org")
         | (Notification.scope == "admin")

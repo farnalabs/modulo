@@ -1,6 +1,10 @@
-"""PyPIConnector — async PyPI JSON/XML-RPC API connector for package metadata."""
+"""PyPI connector for package metadata.
 
-import xmlrpc.client
+The defusedxml monkey patch is installed at import time before the XML-RPC client makes any request.
+"""
+
+import asyncio
+import xmlrpc.client  # nosec B411
 from typing import Any, cast
 
 import defusedxml.xmlrpc
@@ -50,6 +54,8 @@ class PyPIConnector(ConnectorBase):
                 return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Cannot connect to PyPI registry")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -124,7 +130,7 @@ class PyPIConnector(ConnectorBase):
                     "description": r.get("description", ""),
                     "platform": r.get("platform", ""),
                     "downloads": r.get("downloads", 0),
-                }
+                },
             )
         return ConnectorResult(
             records=records,

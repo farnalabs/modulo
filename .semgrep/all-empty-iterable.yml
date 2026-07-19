@@ -8,6 +8,10 @@ rules:
           if not $Z:
             ...
           ...
+      - pattern-not: all($X for $Y in ($FIRST, ...))
+      - pattern-not: all([$X for $Y in ($FIRST, ...)])
+      - pattern-not: all($X for $Y in [$FIRST, ...])
+      - pattern-not: all([$X for $Y in [$FIRST, ...]])
     message: "all() on empty iterable returns True — guard with `if not iterable: return False` before the all() call"
     languages: [python]
     severity: WARNING

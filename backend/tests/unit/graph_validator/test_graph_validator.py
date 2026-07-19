@@ -4,6 +4,8 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 
 # ---------------------------------------------------------------------------
@@ -94,25 +96,41 @@ async def test_topology_single_node_no_edges():
 # ---------------------------------------------------------------------------
 
 
-async def test_topology_no_nodes_is_error():
-    snap = _snapshot(graph_json={"nodes": [], "edges": []})
+@pytest.mark.parametrize(
+    "graph_json,expected_code",
+    [
+        ({"nodes": [], "edges": []}, "TOPOLOGY_NO_NODES"),
+        ({"nodes": [{"id": "a"}], "edges": [{"source": "x", "target": "a"}]}, "TOPOLOGY_UNKNOWN_SOURCE"),
+        ({"nodes": [{"id": "a"}], "edges": [{"source": "a", "target": "z"}]}, "TOPOLOGY_UNKNOWN_TARGET"),
+        (
+            {
+                "nodes": [{"id": "a"}, {"id": "b"}],
+                "edges": [{"source": "a", "target": "b"}, {"source": "b", "target": "a"}],
+            },
+            "TOPOLOGY_CYCLE",
+        ),
+    ],
+)
+async def test_topology_errors(graph_json, expected_code):
+    snap = _snapshot(graph_json=graph_json)
     session = _session_returning([])
     result = await GraphValidator().validate(snap, session)
     assert not result.is_valid
-    assert any(i.code == "TOPOLOGY_NO_NODES" for i in result.issues)
+    assert any(i.code == expected_code for i in result.issues)
 
 
-async def test_topology_edge_unknown_source():
+async def test_topology_null_source_uses_missing_value_marker():
     snap = _snapshot(
         graph_json={
             "nodes": [{"id": "a"}],
-            "edges": [{"source": "x", "target": "a"}],
+            "edges": [{"source": None, "target": "a"}],
         }
     )
-    session = _session_returning([])
-    result = await GraphValidator().validate(snap, session)
-    assert not result.is_valid
-    assert any(i.code == "TOPOLOGY_UNKNOWN_SOURCE" for i in result.issues)
+    result = await GraphValidator().validate(snap, _session_returning([]))
+
+    issue = next(i for i in result.issues if i.code == "TOPOLOGY_UNKNOWN_SOURCE")
+    assert "'?'" in issue.message
+    assert "None" not in issue.message
 
 
 async def test_topology_edge_unknown_target():
