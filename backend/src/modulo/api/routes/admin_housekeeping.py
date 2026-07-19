@@ -149,7 +149,9 @@ async def perform_cleanup(
                                 deleted_count += 1
                     except IntegrityError:
                         _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
-                        errors.append({"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"})
+                        errors.append(
+                            {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}
+                        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

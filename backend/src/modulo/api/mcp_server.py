@@ -436,7 +436,7 @@ async def list_pipelines_tool(
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             org_id = _ctx_org_id_val()
             from modulo.db.crud.pipeline import list_pipelines
-    
+
             lim = max(1, min(limit, 100))
             async with _session(org_id) as s:
                 result = await list_pipelines(s, cursor=cursor, page_size=lim)
@@ -450,14 +450,13 @@ async def list_pipelines_tool(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in list_pipelines_tool, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except ProgrammingError:
             _log.exception("list_pipelines_tool failed")
             return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
         except Exception:
             _log.exception("list_pipelines_tool failed")
             return _tool_error("Failed to list pipelines")
-    return _tool_error("Failed to list pipelines")
 
 
 @mcp.tool(description="Create a new pipeline in the organisation. Returns the created pipeline details.")
@@ -516,7 +515,7 @@ async def create_pipeline(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in create_pipeline, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -525,7 +524,6 @@ async def create_pipeline(
         except Exception:
             _log.exception("create_pipeline failed")
             return _tool_error("Failed to create pipeline")
-    return _tool_error("Failed to create pipeline")
 
 
 @mcp.tool(
@@ -543,7 +541,7 @@ async def list_runs(
                 return _tool_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "list_runs")
             from modulo.db.crud.run import list_runs as db_list_runs
-    
+
             org_id = _ctx_org_id_val()
             pid = uuid.UUID(pipeline_id) if pipeline_id else None
             async with _session(org_id) as s:
@@ -578,7 +576,7 @@ async def list_runs(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in list_runs, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -587,7 +585,6 @@ async def list_runs(
         except Exception:
             _log.exception("list_runs failed")
             return _tool_error("Failed to list runs")
-    return _tool_error("Token revoked or expired - re-authenticate")
 
 
 @mcp.tool(
@@ -607,13 +604,13 @@ async def update_pipeline_graph(
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
             from modulo.db.crud.pipeline import replace_pipeline_graph
-    
+
             org_id = _ctx_org_id_val()
             try:
                 pid = uuid.UUID(pipeline_id)
             except ValueError:
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
-    
+
             async with _session(org_id) as s:
                 result = await replace_pipeline_graph(
                     s,
@@ -625,7 +622,7 @@ async def update_pipeline_graph(
                 if result is None:
                     return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
                 updated_nodes, updated_edges = result
-    
+
             return {
                 "pipeline_id": pipeline_id,
                 "nodes": updated_nodes,
@@ -645,7 +642,7 @@ async def update_pipeline_graph(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in update_pipeline_graph, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -654,7 +651,6 @@ async def update_pipeline_graph(
         except Exception:
             _log.exception("update_pipeline_graph failed")
             return _tool_error("Failed to update pipeline graph")
-    return _tool_error("Failed to update pipeline graph")
 
 
 @mcp.tool(
@@ -673,9 +669,9 @@ async def bind_connector_to_node(
             if not await validate_current_auth():
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "bind_connector_to_node")
-    
+
             from modulo.db.crud.connector_instance import get_connector_instance
-    
+
             org_id = _ctx_org_id_val()
             try:
                 pid = uuid.UUID(pipeline_id)
@@ -683,24 +679,24 @@ async def bind_connector_to_node(
                 cid = uuid.UUID(connector_instance_id)
             except ValueError:
                 return {"error": "invalid_id", "detail": "One or more IDs have invalid UUID format"}
-    
+
             async with _session(org_id) as s:
                 # Verify connector exists in org
                 connector = await get_connector_instance(s, cid)
                 if connector is None or connector.organisation_id != org_id:
                     return {"error": "connector_not_found", "detail": "Connector not found in this organisation"}
-    
+
                 # Get pipeline and update node
                 from sqlalchemy import select
-    
+
                 from modulo.db.models.pipeline import Pipeline
-    
+
                 pipeline = (
                     await s.execute(select(Pipeline).where(Pipeline.id == pid).with_for_update())
                 ).scalar_one_or_none()
                 if pipeline is None:
                     return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-    
+
                 nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
                 target = None
                 for node in nodes:
@@ -709,14 +705,14 @@ async def bind_connector_to_node(
                         break
                 if target is None:
                     return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
-    
+
                 target["connector_binding"] = {
                     "type": connector_type,
                     "instance_id": connector_instance_id,
                 }
                 pipeline.graph_nodes_json = nodes
                 await s.flush()
-    
+
             return {
                 "pipeline_id": pipeline_id,
                 "node_id": node_id,
@@ -728,7 +724,7 @@ async def bind_connector_to_node(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in bind_connector_to_node, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -737,7 +733,6 @@ async def bind_connector_to_node(
         except Exception:
             _log.exception("bind_connector_to_node failed")
             return _tool_error("Failed to bind connector to node")
-    return _tool_error("Failed to bind connector to node")
 
 
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
@@ -753,14 +748,14 @@ async def trigger_pipeline(
             from modulo.db.crud.pipeline import get_pipeline
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
             from modulo.db.crud.run import create_run
-    
+
             org_id = _ctx_org_id_val()
             try:
                 pid = uuid.UUID(pipeline_id)
             except ValueError:
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
             payload = input_payload or {}
-    
+
             async with _session(org_id) as s:
                 pipeline = await get_pipeline(s, pid)
                 if pipeline is None:
@@ -770,7 +765,10 @@ async def trigger_pipeline(
                 if snapshot is None:
                     return {"error": "snapshot_failed", "pipeline_id": pipeline_id}
                 if not snapshot.graph_json or not snapshot.graph_json.get("nodes"):
-                    return {"error": "validation_failed", "detail": "Pipeline graph has no nodes â€” cannot trigger run"}
+                    return {
+                        "error": "validation_failed",
+                        "detail": "Pipeline graph has no nodes â€” cannot trigger run",
+                    }
                 run = await create_run(
                     s,
                     org_id=org_id,
@@ -781,12 +779,12 @@ async def trigger_pipeline(
                 )
                 run_id = run.id
                 thread_id = run.langgraph_thread_id
-    
+
             if _bg_worker is not None:
                 _bg_worker.submit(run_id, org_id, payload)
             else:
                 _log.warning("MCP: Background worker not initialized â€” run %s will not execute", run_id)
-    
+
             return {
                 "run_id": str(run_id),
                 "status": "pending",
@@ -796,7 +794,7 @@ async def trigger_pipeline(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in trigger_pipeline, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -805,7 +803,6 @@ async def trigger_pipeline(
         except Exception:
             _log.exception("trigger_pipeline failed")
             return _tool_error("Failed to trigger pipeline")
-    return _tool_error("Failed to trigger pipeline")
 
 
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
@@ -861,14 +858,13 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in get_run_status, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except ProgrammingError:
             _log.exception("get_run_status failed")
             return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
         except Exception:
             _log.exception("get_run_status failed")
             return _tool_error("Failed to get run status")
-    return _tool_error("Failed to get run status")
 
 
 @mcp.tool(
@@ -885,7 +881,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "get_run_output")
             from modulo.api.routes.runs import _mask_output_value
-    
+
             org_id = _ctx_org_id_val()
             try:
                 rid = uuid.UUID(run_id)
@@ -900,14 +896,14 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
             if node_output is None:
                 return {"error": "node_output_not_found", "run_id": run_id, "node_id": node_id}
             masked = _mask_output_value(node_output)
-    
+
             # Detect masked fields by scanning for the bullet mask character.
             masked_fields: list[str] = []
             if isinstance(masked, dict):
                 for k, v in masked.items():
                     if isinstance(v, str) and "\u2022" in v:
                         masked_fields.append(k)
-    
+
             return {
                 "node_id": node_id,
                 "output": masked,
@@ -917,7 +913,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in get_run_output, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -926,7 +922,6 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         except Exception:
             _log.exception("get_run_output failed")
             return _tool_error("Failed to get node output")
-    return _tool_error("Failed to get node output")
 
 
 @mcp.tool(
@@ -940,19 +935,19 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
                 return _tool_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "get_run_evals")
             from modulo.db.crud.eval_run import get_run_evals as db_get_run_evals
-    
+
             org_id = _ctx_org_id_val()
             try:
                 rid = uuid.UUID(run_id)
             except ValueError:
                 return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
-    
+
             async with _session(org_id) as s:
                 run = await get_run(s, rid)
                 if run is None:
                     return {"error": "run_not_found", "run_id": run_id}
                 evals = await db_get_run_evals(s, rid)
-    
+
             return {
                 "run_id": run_id,
                 "status": run.status,
@@ -974,7 +969,7 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in get_run_evals, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -983,7 +978,6 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
         except Exception:
             _log.exception("get_run_evals failed")
             return _tool_error("Failed to get run evals")
-    return _tool_error("Token revoked or expired - re-authenticate")
 
 
 @mcp.tool(
@@ -1000,14 +994,14 @@ async def list_eval_definitions(
                 return _tool_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "list_eval_definitions")
             from modulo.db.crud.eval_definition import list_eval_definitions as db_list_eval_definitions
-    
+
             org_id = _ctx_org_id_val()
             pid = uuid.UUID(pipeline_id) if pipeline_id else None
             lim = max(1, min(limit, 100))
-    
+
             async with _session(org_id) as s:
                 result = await db_list_eval_definitions(s, org_id, pipeline_id=pid, cursor=cursor, limit=lim)
-    
+
             return {
                 "data": [
                     {
@@ -1029,7 +1023,7 @@ async def list_eval_definitions(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in list_eval_definitions, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -1038,7 +1032,6 @@ async def list_eval_definitions(
         except Exception:
             _log.exception("list_eval_definitions failed")
             return _tool_error("Failed to list eval definitions")
-    return _tool_error("Token revoked or expired - re-authenticate")
 
 
 @mcp.tool(description="Cancel a running pipeline run.")
@@ -1049,7 +1042,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "cancel_run")
             from modulo.db.crud.run import request_cancellation
-    
+
             org_id = _ctx_org_id_val()
             try:
                 rid = uuid.UUID(run_id)
@@ -1057,7 +1050,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
                 return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
             async with _session(org_id) as s:
                 from modulo.db.crud.run import get_run
-    
+
                 run = await get_run(s, rid)
                 if run is None:
                     return {"error": "run_not_found", "run_id": run_id}
@@ -1073,7 +1066,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in cancel_run, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -1082,7 +1075,6 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
         except Exception:
             _log.exception("cancel_run failed")
             return _tool_error("Failed to cancel run")
-    return _tool_error("Failed to cancel run")
 
 
 @mcp.tool(description="List all pending (undecided) HITL gates across all runs.")
@@ -1093,7 +1085,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "list_pending_hitl")
             from sqlalchemy import func, select
-    
+
             org_id = _ctx_org_id_val()
             async with _session(org_id) as s:
                 total_result = await s.execute(
@@ -1105,7 +1097,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
                     )
                 )
                 total = total_result.scalar_one()
-    
+
                 offset = (page - 1) * page_size
                 result = await s.execute(
                     select(HitlClaim)
@@ -1138,7 +1130,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in list_pending_hitl, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -1147,7 +1139,6 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         except Exception:
             _log.exception("list_pending_hitl failed")
             return _tool_error("Failed to list pending HITL gates")
-    return _tool_error("Failed to list pending HITL gates")
 
 
 @mcp.tool(
@@ -1227,9 +1218,11 @@ async def review_hitl(
                         if edge and edge.hitl_gate_config and edge.hitl_gate_config.get("human_only", False):
                             return {
                                 "error": "human_only_gate",
-                                "detail": ("This gate has human_only=true. Only a browser-authenticated human can approve it."),
+                                "detail": (
+                                    "This gate has human_only=true. Only a browser-authenticated human can approve it."
+                                ),
                             }
-        
+
                 try:
                     if action == "claim":
                         gate = await mgr.claim(
@@ -1277,7 +1270,10 @@ async def review_hitl(
                 except GateNotFoundError:
                     return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
                 except NotTeamMemberError:
-                    return {"error": "not_team_member", "detail": "You are not a member of the team required by this gate"}
+                    return {
+                        "error": "not_team_member",
+                        "detail": "You are not a member of the team required by this gate",
+                    }
                 except AlreadyClaimedError:
                     return {"error": "already_claimed", "detail": "Gate is already held by another client"}
                 except ClaimTokenInvalidError:
@@ -1288,11 +1284,17 @@ async def review_hitl(
                     return {"error": "already_decided", "detail": "Gate already has a final decision"}
                 except ProgrammingError:
                     _log.exception("review_hitl failed")
-                    return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+                    return {
+                        "error": "migration_required",
+                        "detail": "Database migration required. Run `alembic upgrade head`.",
+                    }
                 except Exception:
                     _log.exception("review_hitl failed")
                     return _tool_error("Failed to process HITL action")
-return _tool_error("Failed to process HITL action")
+
+        except Exception:
+            _log.exception("review_hitl operation failed")
+            return _tool_error("Failed to process HITL action")
 
 
 @mcp.tool(
@@ -1332,23 +1334,25 @@ async def copy_library_primitive(
                     return {"error": "not_found", "primitive_id": primitive_id}
                 except ProgrammingError:
                     _log.exception("copy_library_primitive failed")
-                    return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+                    return {
+                        "error": "migration_required",
+                        "detail": "Database migration required. Run `alembic upgrade head`.",
+                    }
                 except Exception:
                     _log.exception("copy_library_primitive failed")
                     return _tool_error("Failed to copy library primitive")
-        
+
         except OperationalError as exc:
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in copy_library_primitive, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
     return {
         "status": "copied",
         "primitive_id": str(result.id),
         "name": result.name,
         "slug": result.slug,
     }
-return _tool_error("Failed to copy library primitive")
 
 
 @mcp.tool(
@@ -1419,14 +1423,13 @@ async def search_library(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in search_library, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except ProgrammingError:
             _log.exception("search_library failed")
             return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
         except Exception:
             _log.exception("search_library failed")
             return _tool_error("Failed to search library")
-    return _tool_error("Failed to search library")
 
 
 @mcp.tool(
@@ -1465,17 +1468,17 @@ async def list_trigger_events(
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "list_trigger_events")
             from sqlalchemy import func, select
-    
+
             from modulo.db.crud.pagination import CursorPaginator
             from modulo.db.models.trigger import Trigger
             from modulo.db.models.trigger_event import TriggerEvent
-    
+
             org_id = _ctx_org_id_val()
             lim = max(1, min(limit, 100))
-    
+
             async with _session(org_id) as s:
                 q = select(TriggerEvent).where(TriggerEvent.organisation_id == org_id)
-    
+
                 if trigger_id is not None:
                     try:
                         tid = uuid.UUID(trigger_id)
@@ -1486,7 +1489,7 @@ async def list_trigger_events(
                             "detail": f"Invalid UUID format: {trigger_id}",
                         }
                     q = q.where(TriggerEvent.trigger_id == tid)
-    
+
                 if pipeline_id is not None:
                     try:
                         pid = uuid.UUID(pipeline_id)
@@ -1499,9 +1502,9 @@ async def list_trigger_events(
                     q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id).where(
                         Trigger.pipeline_id == pid,
                     )
-    
+
                 total = (await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0
-    
+
                 if cursor is not None:
                     paginator = CursorPaginator(sort_field="created_at", sort_dir="desc")
                     cp = await paginator.paginate(
@@ -1524,7 +1527,7 @@ async def list_trigger_events(
                     if has_more:
                         last = items[-1]
                         next_cursor = CursorPaginator.encode_cursor(last.created_at, last.id)
-    
+
             return {
                 "data": [
                     {
@@ -1545,7 +1548,7 @@ async def list_trigger_events(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in list_trigger_events, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -1554,7 +1557,6 @@ async def list_trigger_events(
         except Exception:
             _log.exception("list_trigger_events failed")
             return _tool_error("Failed to list trigger events")
-    return _tool_error("Failed to list trigger events")
 
 
 @mcp.tool(
@@ -1573,14 +1575,14 @@ async def list_triggers(
                 return _tool_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "list_triggers")
             from modulo.db.crud.trigger import list_triggers as db_list_triggers
-    
+
             org_id = _ctx_org_id_val()
             pid = uuid.UUID(pipeline_id) if pipeline_id else None
             lim = max(1, min(limit, 100))
-    
+
             async with _session(org_id) as s:
                 result = await db_list_triggers(s, org_id, pipeline_id=pid, cursor=cursor, limit=lim)
-    
+
             return {
                 "data": [
                     {
@@ -1603,7 +1605,7 @@ async def list_triggers(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in list_triggers, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -1612,7 +1614,6 @@ async def list_triggers(
         except Exception:
             _log.exception("list_triggers failed")
             return _tool_error("Failed to list triggers")
-    return _tool_error("Token revoked or expired - re-authenticate")
 
 
 @mcp.tool(
@@ -1635,12 +1636,12 @@ async def create_model_backend(
             if not await validate_current_auth():
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "create_model_backend")
-    
+
             from modulo.core.mcp_setup_handoff import create_handoff
-    
+
             org_id = _ctx_org_id_val()
             account_id = _ctx_user_id_val()
-    
+
             async with _session(org_id) as s:
                 mb = await db_create_model_backend(
                     s,
@@ -1662,7 +1663,7 @@ async def create_model_backend(
                     resource_id=mb.id,
                     created_by=account_id,
                 )
-    
+
             return {
                 "id": str(mb.id),
                 "name": mb.name,
@@ -1677,7 +1678,7 @@ async def create_model_backend(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in create_model_backend, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -1686,7 +1687,6 @@ async def create_model_backend(
         except Exception:
             _log.exception("create_model_backend failed")
             return _tool_error("Failed to create model backend")
-    return _tool_error("Failed to create model backend")
 
 
 @mcp.tool(
@@ -1706,16 +1706,16 @@ async def create_connector(
             if not await validate_current_auth():
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "create_connector")
-    
+
             from cryptography.fernet import Fernet
-    
+
             from modulo.db.crud.connector_instance import create_connector_instance
-    
+
             org_id = _ctx_org_id_val()
             account_id = _ctx_user_id_val()
             settings = get_settings()
             credentials_ciphertext = Fernet(settings.fernet_key.encode()).encrypt(credentials.encode())
-    
+
             async with _session(org_id) as s:
                 ci = await create_connector_instance(
                     s,
@@ -1728,7 +1728,7 @@ async def create_connector(
                     allowed_operations=allowed_operations or [],
                     visibility=visibility,
                 )
-    
+
             return {
                 "id": str(ci.id),
                 "name": ci.name,
@@ -1740,7 +1740,7 @@ async def create_connector(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in create_connector, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -1749,7 +1749,6 @@ async def create_connector(
         except Exception:
             _log.exception("create_connector failed")
             return _tool_error("Failed to create connector")
-    return _tool_error("Failed to create connector")
 
 
 @mcp.tool(description="Create a new trigger for a pipeline.")
@@ -1765,16 +1764,16 @@ async def create_trigger(
             if not await validate_current_auth():
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "create_trigger")
-    
+
             org_id = _ctx_org_id_val()
             account_id = _ctx_user_id_val()
             try:
                 pid = uuid.UUID(pipeline_id)
             except ValueError:
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
-    
+
             from modulo.db.models.trigger import Trigger
-    
+
             async with _session(org_id) as s:
                 trigger = Trigger(
                     organisation_id=org_id,
@@ -1788,7 +1787,7 @@ async def create_trigger(
                     trigger.cron_expression = cron_expression
                 s.add(trigger)
                 await s.flush()
-    
+
             return {
                 "id": str(trigger.id),
                 "pipeline_id": str(trigger.pipeline_id),
@@ -1800,7 +1799,7 @@ async def create_trigger(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in create_trigger, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -1809,7 +1808,6 @@ async def create_trigger(
         except Exception:
             _log.exception("create_trigger failed")
             return _tool_error("Failed to create trigger")
-    return _tool_error("Failed to create trigger")
 
 
 @mcp.tool(description="Delete a pipeline by ID.")
@@ -1821,27 +1819,27 @@ async def delete_pipeline(
             if not await validate_current_auth():
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "delete_pipeline")
-    
+
             org_id = _ctx_org_id_val()
             try:
                 pid = uuid.UUID(pipeline_id)
             except ValueError:
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
-    
+
             from modulo.db.crud.pipeline import delete_pipeline as db_delete_pipeline
-    
+
             async with _session(org_id) as s:
                 deleted = await db_delete_pipeline(s, pid)
-    
+
             if not deleted:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-    
+
             return {"status": "deleted", "pipeline_id": pipeline_id}
         except OperationalError as exc:
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in delete_pipeline, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -1850,7 +1848,6 @@ async def delete_pipeline(
         except Exception:
             _log.exception("delete_pipeline failed")
             return _tool_error("Failed to delete pipeline")
-    return _tool_error("Failed to delete pipeline")
 
 
 @mcp.tool(description="Create a new agent. Returns the created agent details.")
@@ -1872,16 +1869,16 @@ async def create_agent(
             if not await validate_current_auth():
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "create_agent")
-    
+
             from modulo.db.crud.agent import create_agent as db_create_agent
-    
+
             org_id = _ctx_org_id_val()
             account_id = _ctx_user_id_val()
-    
+
             parsed_model_backend_id = uuid.UUID(model_backend_id) if model_backend_id else uuid.UUID(int=0)
             parsed_input_schema_id = uuid.UUID(input_schema_id) if input_schema_id else uuid.UUID(int=0)
             parsed_output_schema_id = uuid.UUID(output_schema_id) if output_schema_id else uuid.UUID(int=0)
-    
+
             async with _session(org_id) as s:
                 agent = await db_create_agent(
                     s,
@@ -1900,7 +1897,7 @@ async def create_agent(
                     template_id=template_id,
                     agent_command=agent_command,
                 )
-    
+
             return {
                 "id": str(agent.id),
                 "name": agent.name,
@@ -1912,7 +1909,7 @@ async def create_agent(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in create_agent, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -1921,13 +1918,11 @@ async def create_agent(
         except Exception as e:
             _log.exception("create_agent failed")
             return {"error": "internal_error", "detail": f"Failed to create agent: {e}"}
-    
-    
+
     # ---------------------------------------------------------------------------
     # Context retrieval tools
     # ---------------------------------------------------------------------------
-    
-    
+
     _DOC_INDEX: DocumentationIndex | None = None
     _DOC_INDEX_TS: float = 0.0
     _DOC_INDEX_TTL: float = 300.0  # 5 minutes
@@ -2200,10 +2195,10 @@ async def list_schemas(
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             org_id = _ctx_org_id_val()
             lim = max(1, min(limit, 100))
-    
+
             async with _session(org_id) as s:
                 result = await db_list_schemas(s, cursor=cursor, limit=lim)
-    
+
             return {
                 "data": [
                     {
@@ -2223,14 +2218,13 @@ async def list_schemas(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in list_schemas, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except ProgrammingError:
             _log.exception("list_schemas failed")
             return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
         except Exception:
             _log.exception("list_schemas failed")
             return _tool_error("Failed to list schemas")
-    return _tool_error("Failed to list schemas")
 
 
 @mcp.tool(
@@ -2247,28 +2241,28 @@ async def infer_schema(
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "infer_schema")
             from modulo.core.schema_registry import SchemaInferenceError, SchemaInferenceService
-    
+
             org_id = _ctx_org_id_val()
-    
+
             async with _session(org_id) as s:
                 from modulo.db.crud.model_backend import list_model_backends
-    
+
                 mbs = await list_model_backends(s, org_id=org_id, page_size=1)
                 if not mbs.items:
                     return {"error": "no_backend", "detail": "No model backends configured; cannot perform inference"}
-    
+
                 from modulo.core.model_backend_hub import ModelBackendHub
                 from modulo.core.secrets_backend import create_secrets_backend
-    
+
                 secrets_backend = create_secrets_backend(fernet_key=get_settings().fernet_key)
                 async with ModelBackendHub() as mh:
                     await mh.initialise(mbs.items, secrets_backend=secrets_backend)
                     backend = await mh.get(mbs.items[0].id)
-    
+
                     samples = [input_sample]
                     service = SchemaInferenceService(backend)
                     definition = await service.infer(samples)
-    
+
             return {
                 "definition": definition,
                 "sample_count": 1,
@@ -2277,7 +2271,7 @@ async def infer_schema(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in infer_schema, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except SchemaInferenceError as exc:
@@ -2288,7 +2282,6 @@ async def infer_schema(
         except Exception:
             _log.exception("infer_schema failed")
             return _tool_error("Failed to infer schema")
-    return _tool_error("Failed to infer schema")
 
 
 @mcp.tool(
@@ -2304,22 +2297,22 @@ async def validate_payload(
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
             from jsonschema.exceptions import SchemaError as JsSchemaError  # type: ignore[import-untyped]
-    
+
             org_id = _ctx_org_id_val()
             try:
                 sid = uuid.UUID(schema_id)
             except ValueError:
                 return {"error": "invalid_id", "field": "schema_id", "detail": f"Invalid UUID format: {schema_id}"}
-    
+
             async with _session(org_id) as s:
                 schema = await get_schema(s, sid)
                 if schema is None:
                     return {"error": "not_found", "detail": f"Schema {schema_id} not found"}
-    
+
                 from sqlalchemy import select
-    
+
                 from modulo.db.models.schema import SchemaVersion
-    
+
                 result = await s.execute(
                     select(SchemaVersion)
                     .where(SchemaVersion.schema_id == sid)
@@ -2329,7 +2322,7 @@ async def validate_payload(
                 sv = result.scalar_one_or_none()
                 if sv is None:
                     return {"error": "no_version", "detail": f"Schema {schema_id} has no versions"}
-    
+
             definition = sv.definition_json
             try:
                 Draft202012Validator.check_schema(definition)
@@ -2356,15 +2349,14 @@ async def validate_payload(
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in validate_payload, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except ProgrammingError:
             _log.exception("validate_payload failed")
             return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
         except Exception:
             _log.exception("validate_payload failed")
             return _tool_error("Failed to validate payload")
-    
-    
+
     # ---------------------------------------------------------------------------
     # Housekeeping tools
     # ---------------------------------------------------------------------------
@@ -2383,7 +2375,7 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "list_housekeeping")
             from modulo.core.housekeeping import scan_all as hk_scan_all
-    
+
             org_id = _ctx_org_id_val()
             lim = max(1, min(limit, 500))
             async with _session(org_id) as s:
@@ -2405,7 +2397,7 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
             if attempt == 2:
                 raise
             _log.warning("Transient DB error in list_housekeeping, retrying (%d/3): %s", attempt + 1, exc)
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except ProgrammingError:
@@ -2414,7 +2406,6 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
         except Exception:
             _log.exception("list_housekeeping failed")
             return _tool_error("Failed to list housekeeping candidates")
-    return _tool_error("Failed to list housekeeping candidates")
 
 
 @mcp.tool(
@@ -2455,6 +2446,7 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
                     try:
                         async with s.begin_nested():
                             from sqlalchemy import select as _sa_select
+
                             stmt = _sa_select(model_cls).where(
                                 model_cls.id == eid,
                                 model_cls.organisation_id == org_id,
@@ -2465,7 +2457,9 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
                                 deleted_count += 1
                     except IntegrityError:
                         _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
-                        errors.append({"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"})
+                        errors.append(
+                            {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}
+                        )
 
         return {"deleted_count": deleted_count, "errors": errors}
     except MCPAuthorizationError as exc:

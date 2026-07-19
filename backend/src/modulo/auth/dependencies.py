@@ -46,7 +46,9 @@ async def get_current_user(
     try:
         principal = decode_principal(credentials.credentials, settings.secret_key)
     except JWTError as exc:
-        _log.warning("auth.jwt_decode_failed", extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)})
+        _log.warning(
+            "auth.jwt_decode_failed", extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)}
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
