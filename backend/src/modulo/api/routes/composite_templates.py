@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -102,6 +102,7 @@ class CompositeTemplateListResponse(BaseModel):
 
 
 @handle_db_errors("composite_templates.list_composite_templates_endpoint")
+@with_db_retry()
 @router.get("", response_model=CompositeTemplateListResponse)
 async def list_composite_templates_endpoint(
     page: int = Query(default=1, ge=1),
@@ -145,6 +146,7 @@ async def list_composite_templates_endpoint(
 
 
 @handle_db_errors("composite_templates.create_composite_template_endpoint")
+@with_db_retry()
 @router.post("", response_model=CompositeTemplateResponse, status_code=status.HTTP_201_CREATED)
 async def create_composite_template_endpoint(
     req: CompositeTemplateCreate,
@@ -189,6 +191,7 @@ async def create_composite_template_endpoint(
 
 
 @handle_db_errors("composite_templates.get_composite_template_endpoint")
+@with_db_retry()
 @router.get("/{template_id}", response_model=CompositeTemplateResponse)
 async def get_composite_template_endpoint(
     template_id: uuid.UUID,
@@ -223,6 +226,7 @@ async def get_composite_template_endpoint(
 
 
 @handle_db_errors("composite_templates.update_composite_template_endpoint")
+@with_db_retry()
 @router.patch("/{template_id}", response_model=CompositeTemplateResponse)
 async def update_composite_template_endpoint(
     template_id: uuid.UUID,
@@ -264,6 +268,7 @@ async def update_composite_template_endpoint(
 
 
 @handle_db_errors("composite_templates.delete_composite_template_endpoint")
+@with_db_retry()
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_composite_template_endpoint(
     template_id: uuid.UUID,
@@ -314,6 +319,7 @@ class EditorGraphUpdate(BaseModel):
 
 
 @handle_db_errors("composite_templates.get_composite_editor_endpoint")
+@with_db_retry()
 @router.get("/{template_id}/editor", response_model=EditorGraphResponse)
 async def get_composite_editor_endpoint(
     template_id: uuid.UUID,
@@ -347,6 +353,7 @@ async def get_composite_editor_endpoint(
 
 
 @handle_db_errors("composite_templates.save_composite_editor_endpoint")
+@with_db_retry()
 @router.put("/{template_id}/editor", response_model=EditorGraphResponse)
 async def save_composite_editor_endpoint(
     template_id: uuid.UUID,
@@ -415,6 +422,7 @@ class DetectParamsResponse(BaseModel):
 
 
 @handle_db_errors("composite_templates.detect_params_endpoint")
+@with_db_retry()
 @router.post("/detect-params", response_model=DetectParamsResponse)
 async def detect_params_endpoint(
     req: DetectParamsRequest,
@@ -453,6 +461,7 @@ class PublishResponse(BaseModel):
 
 
 @handle_db_errors("composite_templates.publish_composite_endpoint")
+@with_db_retry()
 @router.post("/{template_id}/publish", response_model=PublishResponse)
 async def publish_composite_endpoint(
     template_id: uuid.UUID,

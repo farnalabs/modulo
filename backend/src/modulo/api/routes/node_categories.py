@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -68,6 +68,7 @@ class NodeCategoryListResponse(BaseModel):
 
 
 @handle_db_errors("node_categories.list_node_categories_endpoint")
+@with_db_retry()
 @router.get("", response_model=NodeCategoryListResponse)
 async def list_node_categories_endpoint(
     page: int = Query(default=1, ge=1),
@@ -117,6 +118,7 @@ async def list_node_categories_endpoint(
 
 
 @handle_db_errors("node_categories.create_node_category_endpoint")
+@with_db_retry()
 @router.post("", response_model=NodeCategoryResponse, status_code=status.HTTP_201_CREATED)
 async def create_node_category_endpoint(
     req: NodeCategoryCreate,
@@ -167,6 +169,7 @@ async def create_node_category_endpoint(
 
 
 @handle_db_errors("node_categories.get_node_category_endpoint")
+@with_db_retry()
 @router.get("/{category_id}", response_model=NodeCategoryResponse)
 async def get_node_category_endpoint(
     category_id: uuid.UUID,
@@ -210,6 +213,7 @@ async def get_node_category_endpoint(
 
 
 @handle_db_errors("node_categories.update_node_category_endpoint")
+@with_db_retry()
 @router.patch("/{category_id}", response_model=NodeCategoryResponse)
 async def update_node_category_endpoint(
     category_id: uuid.UUID,
@@ -255,6 +259,7 @@ async def update_node_category_endpoint(
 
 
 @handle_db_errors("node_categories.delete_node_category_endpoint")
+@with_db_retry()
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_node_category_endpoint(
     category_id: uuid.UUID,

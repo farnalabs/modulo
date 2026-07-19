@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -81,6 +81,7 @@ class LifecycleMapListResponse(BaseModel):
 
 
 @handle_db_errors("lifecycle_maps.list_lifecycle_maps_endpoint")
+@with_db_retry()
 @router.get("", response_model=LifecycleMapListResponse)
 async def list_lifecycle_maps_endpoint(
     page: int = Query(default=1, ge=1),
@@ -128,6 +129,7 @@ async def list_lifecycle_maps_endpoint(
 
 
 @handle_db_errors("lifecycle_maps.create_lifecycle_map_endpoint")
+@with_db_retry()
 @router.post("", response_model=LifecycleMapResponse, status_code=status.HTTP_201_CREATED)
 async def create_lifecycle_map_endpoint(
     req: LifecycleMapCreate,
@@ -171,6 +173,7 @@ async def create_lifecycle_map_endpoint(
 
 
 @handle_db_errors("lifecycle_maps.get_lifecycle_map_endpoint")
+@with_db_retry()
 @router.get("/{lifecycle_map_id}", response_model=LifecycleMapResponse)
 async def get_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
@@ -206,6 +209,7 @@ async def get_lifecycle_map_endpoint(
 
 
 @handle_db_errors("lifecycle_maps.update_lifecycle_map_endpoint")
+@with_db_retry()
 @router.put("/{lifecycle_map_id}", response_model=LifecycleMapResponse)
 async def update_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
@@ -246,6 +250,7 @@ async def update_lifecycle_map_endpoint(
 
 
 @handle_db_errors("lifecycle_maps.delete_lifecycle_map_endpoint")
+@with_db_retry()
 @router.delete("/{lifecycle_map_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import with_db_retry
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.dependencies import get_current_tenant_user
@@ -136,6 +137,7 @@ def _build_degraded_response(org_id: str) -> OtelSettingsResponse:
 
 
 @router.get("", response_model=OtelSettingsResponse, dependencies=[require_feature("observability")])
+@with_db_retry()
 async def get_observability_settings(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -165,6 +167,7 @@ async def get_observability_settings(
 
 
 @router.put("", response_model=OtelSettingsResponse, dependencies=[require_feature("observability")])
+@with_db_retry()
 async def update_observability_settings(
     req: OtelSettingsUpdate,
     session: AsyncSession = Depends(get_db_session),
@@ -291,6 +294,7 @@ async def test_otel_connection(
 
 
 @router.get("/preview", response_model=ExportPreviewResponse, dependencies=[require_feature("observability")])
+@with_db_retry()
 async def get_export_preview(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),

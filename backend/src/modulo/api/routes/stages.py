@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -66,6 +66,7 @@ class StageListResponse(BaseModel):
 
 
 @handle_db_errors("stages.list_stages_endpoint")
+@with_db_retry()
 @router.get("", response_model=StageListResponse)
 async def list_stages_endpoint(
     page: int = Query(default=1, ge=1),
@@ -106,6 +107,7 @@ async def list_stages_endpoint(
 
 
 @handle_db_errors("stages.create_stage_endpoint")
+@with_db_retry()
 @router.post("", response_model=StageResponse, status_code=status.HTTP_201_CREATED)
 async def create_stage_endpoint(
     req: StageCreate,
@@ -148,6 +150,7 @@ async def create_stage_endpoint(
 
 
 @handle_db_errors("stages.get_stage_endpoint")
+@with_db_retry()
 @router.get("/{stage_id}", response_model=StageResponse)
 async def get_stage_endpoint(
     stage_id: uuid.UUID,
@@ -183,6 +186,7 @@ async def get_stage_endpoint(
 
 
 @handle_db_errors("stages.update_stage_endpoint")
+@with_db_retry()
 @router.patch("/{stage_id}", response_model=StageResponse)
 async def update_stage_endpoint(
     stage_id: uuid.UUID,
@@ -220,6 +224,7 @@ async def update_stage_endpoint(
 
 
 @handle_db_errors("stages.delete_stage_endpoint")
+@with_db_retry()
 @router.delete("/{stage_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_stage_endpoint(
     stage_id: uuid.UUID,

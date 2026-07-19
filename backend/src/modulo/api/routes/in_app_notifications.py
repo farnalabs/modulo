@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -103,6 +103,7 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
 
 
 @handle_db_errors("in_app_notifications.get_dashboard")
+@with_db_retry()
 @router.get("/dashboard", response_model=DashboardNotificationResponse)
 async def get_dashboard(
     session: AsyncSession = Depends(get_db_session),
@@ -145,6 +146,7 @@ async def get_dashboard(
 
 
 @handle_db_errors("in_app_notifications.get_unread")
+@with_db_retry()
 @router.get("/unread-count", response_model=dict)
 async def get_unread(
     session: AsyncSession = Depends(get_db_session),
@@ -178,6 +180,7 @@ async def get_unread(
 
 
 @handle_db_errors("in_app_notifications.list_notifications")
+@with_db_retry()
 @router.get("", response_model=PaginatedNotificationsResponse)
 async def list_notifications(
     session: AsyncSession = Depends(get_db_session),
@@ -238,6 +241,7 @@ async def list_notifications(
 
 
 @handle_db_errors("in_app_notifications.get_notification_detail")
+@with_db_retry()
 @router.get("/{notification_id}", response_model=NotificationResponse)
 async def get_notification_detail(
     notification_id: uuid.UUID,
@@ -274,6 +278,7 @@ async def get_notification_detail(
 
 
 @handle_db_errors("in_app_notifications.review_later_endpoint")
+@with_db_retry()
 @router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)
 async def review_later_endpoint(
     notification_id: uuid.UUID,
@@ -325,6 +330,7 @@ async def review_later_endpoint(
 
 
 @handle_db_errors("in_app_notifications.dismiss_endpoint")
+@with_db_retry()
 @router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
 async def dismiss_endpoint(
     notification_id: uuid.UUID,

@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -76,6 +76,7 @@ class NotificationEndpointResponse(BaseModel):
 
 
 @handle_db_errors("notifications.list_endpoints")
+@with_db_retry()
 @router.get("", response_model=list[NotificationEndpointResponse])
 async def list_endpoints(
     session: AsyncSession = Depends(get_db_session),
@@ -113,6 +114,7 @@ async def list_endpoints(
 
 
 @handle_db_errors("notifications.create_endpoint")
+@with_db_retry()
 @router.post("", response_model=NotificationEndpointResponse, status_code=status.HTTP_201_CREATED)
 async def create_endpoint(
     req: NotificationEndpointCreate,
@@ -178,6 +180,7 @@ async def create_endpoint(
 
 
 @handle_db_errors("notifications.get_endpoint")
+@with_db_retry()
 @router.get("/{endpoint_id}", response_model=NotificationEndpointResponse)
 async def get_endpoint(
     endpoint_id: uuid.UUID,
@@ -215,6 +218,7 @@ async def get_endpoint(
 
 
 @handle_db_errors("notifications.update_endpoint")
+@with_db_retry()
 @router.put("/{endpoint_id}", response_model=NotificationEndpointResponse)
 async def update_endpoint(
     endpoint_id: uuid.UUID,
@@ -277,6 +281,7 @@ async def update_endpoint(
 
 
 @handle_db_errors("notifications.delete_endpoint")
+@with_db_retry()
 @router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_endpoint(
     endpoint_id: uuid.UUID,

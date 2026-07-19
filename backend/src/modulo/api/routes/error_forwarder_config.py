@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import with_db_retry
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.api.models.error_forwarder_config import (
     ForwarderConfigResponse,
@@ -72,6 +73,7 @@ def _is_configured(forwarder_type: str, config_json: dict[str, Any] | None) -> b
 
 
 @router.get("", response_model=ForwarderListResponse, dependencies=[require_feature("error_forwarders")])
+@with_db_retry()
 async def list_forwarders(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -128,6 +130,7 @@ async def list_forwarders(
     response_model=ForwarderConfigResponse,
     dependencies=[require_feature("error_forwarders")],
 )
+@with_db_retry()
 async def configure_forwarder(
     forwarder_type: str,
     req: ForwarderConfigUpdate,
@@ -199,6 +202,7 @@ async def configure_forwarder(
     response_model=ForwarderTestResult,
     dependencies=[require_feature("error_forwarders")],
 )
+@with_db_retry()
 async def test_forwarder(
     forwarder_type: str,
     req: TestConnectionRequest,

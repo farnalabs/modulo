@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.admin_remy import (
     SkillCreate,
@@ -42,6 +42,7 @@ router = APIRouter(prefix="/api/v1", tags=["user"])
 
 @router.get("/me", response_model=MeResponse)
 @handle_db_errors("me.current_user_profile")
+@with_db_retry()
 async def current_user_profile(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -61,6 +62,7 @@ class SettingsUpdate(BaseModel):
 
 @router.get("/me/settings", response_model=SettingsResponse)
 @handle_db_errors("me.get_user_settings")
+@with_db_retry()
 async def get_user_settings(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -85,6 +87,7 @@ SUPPORTED_LOCALES = {"en-US"}
 
 @router.put("/me/settings", response_model=SettingsResponse)
 @handle_db_errors("me.update_user_settings")
+@with_db_retry()
 async def update_user_settings(
     req: SettingsUpdate | None = None,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -127,6 +130,7 @@ class PasswordChangeRequest(BaseModel):
 
 @router.put("/me/password", status_code=status.HTTP_200_OK)
 @handle_db_errors("me.change_password")
+@with_db_retry()
 async def change_password(
     req: PasswordChangeRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -178,6 +182,7 @@ async def change_password(
 
 @router.get("/me/remy/skills", response_model=list[SkillResponse])
 @handle_db_errors("me.list_user_skills")
+@with_db_retry()
 async def list_user_skills(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -198,6 +203,7 @@ async def list_user_skills(
 
 @router.post("/me/remy/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("me.create_user_skill")
+@with_db_retry()
 async def create_user_skill(
     req: SkillCreate,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -230,6 +236,7 @@ async def create_user_skill(
 
 @router.put("/me/remy/skills/{skill_id}", response_model=SkillResponse)
 @handle_db_errors("me.update_user_skill")
+@with_db_retry()
 async def update_user_skill(
     skill_id: uuid.UUID,
     req: SkillUpdate,
@@ -263,6 +270,7 @@ async def update_user_skill(
 
 @router.delete("/me/remy/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("me.delete_user_skill")
+@with_db_retry()
 async def delete_user_skill(
     skill_id: uuid.UUID,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -290,6 +298,7 @@ class ContextSourceModeUpdate(BaseModel):
 
 @router.get("/me/remy/context-sources")
 @handle_db_errors("me.get_user_context_sources")
+@with_db_retry()
 async def get_user_context_sources(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -311,6 +320,7 @@ async def get_user_context_sources(
 
 @router.put("/me/remy/context-sources/{source_key}")
 @handle_db_errors("me.set_user_context_source")
+@with_db_retry()
 async def set_user_context_source(
     source_key: str,
     req: ContextSourceModeUpdate,
@@ -340,6 +350,7 @@ async def set_user_context_source(
 
 @router.delete("/me/remy/context-sources", status_code=status.HTTP_200_OK)
 @handle_db_errors("me.reset_user_context_sources")
+@with_db_retry()
 async def reset_user_context_sources(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),

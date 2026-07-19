@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -163,6 +163,7 @@ class ValidateResponse(BaseModel):
 
 @router.get("/parameter-schemas", response_model=SchemaListResponse)
 @handle_db_errors("parameter_schemas.list")
+@with_db_retry()
 async def list_parameter_schemas_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -209,6 +210,7 @@ async def list_parameter_schemas_endpoint(
 
 @router.post("/parameter-schemas", response_model=SchemaResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("parameter_schemas.create")
+@with_db_retry()
 async def create_parameter_schema_endpoint(
     req: SchemaCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -257,6 +259,7 @@ async def create_parameter_schema_endpoint(
 
 @router.get("/parameter-schemas/{schema_id}", response_model=SchemaResponse)
 @handle_db_errors("parameter_schemas.get")
+@with_db_retry()
 async def get_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -299,6 +302,7 @@ async def get_parameter_schema_endpoint(
 
 @router.put("/parameter-schemas/{schema_id}", response_model=SchemaResponse)
 @handle_db_errors("parameter_schemas.update")
+@with_db_retry()
 async def update_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     req: SchemaUpdate,
@@ -353,6 +357,7 @@ async def update_parameter_schema_endpoint(
 
 @router.delete("/parameter-schemas/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("parameter_schemas.delete")
+@with_db_retry()
 async def delete_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -397,6 +402,7 @@ async def delete_parameter_schema_endpoint(
 
 @router.get("/parameter-schemas/{schema_id}/diff")
 @handle_db_errors("parameter_schemas.diff")
+@with_db_retry()
 async def diff_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     from_version: int = Query(..., description="Source version"),
@@ -460,6 +466,7 @@ async def diff_parameter_schema_endpoint(
 
 @router.get("/parameter-schemas/{schema_id}/references", response_model=SchemaReferencesResponse)
 @handle_db_errors("parameter_schemas.references")
+@with_db_retry()
 async def get_parameter_schema_references_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -498,6 +505,7 @@ async def get_parameter_schema_references_endpoint(
 
 @router.post("/parameter-schemas/{schema_id}/validate", response_model=ValidateResponse)
 @handle_db_errors("parameter_schemas.validate")
+@with_db_retry()
 async def validate_parameter_values_endpoint(
     schema_id: uuid.UUID,
     req: ValidateRequest,
@@ -584,6 +592,7 @@ async def validate_parameter_values_endpoint(
 
 @router.get("/parameter-schemas/{schema_id}/sets", response_model=list[SetResponse])
 @handle_db_errors("parameter_schemas.list_sets")
+@with_db_retry()
 async def list_parameter_sets_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -635,6 +644,7 @@ async def list_parameter_sets_endpoint(
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("parameter_schemas.create_set")
+@with_db_retry()
 async def create_parameter_set_endpoint(
     schema_id: uuid.UUID,
     req: SetCreate,
@@ -689,6 +699,7 @@ async def create_parameter_set_endpoint(
 
 @router.get("/parameter-schemas/{schema_id}/sets/{set_id}", response_model=SetResponse)
 @handle_db_errors("parameter_schemas.get_set")
+@with_db_retry()
 async def get_parameter_set_endpoint(
     schema_id: uuid.UUID,
     set_id: uuid.UUID,
@@ -732,6 +743,7 @@ async def get_parameter_set_endpoint(
 
 @router.put("/parameter-schemas/{schema_id}/sets/{set_id}", response_model=SetResponse)
 @handle_db_errors("parameter_schemas.update_set")
+@with_db_retry()
 async def update_parameter_set_endpoint(
     schema_id: uuid.UUID,
     set_id: uuid.UUID,
@@ -793,6 +805,7 @@ async def update_parameter_set_endpoint(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 @handle_db_errors("parameter_schemas.delete_set")
+@with_db_retry()
 async def delete_parameter_set_endpoint(
     schema_id: uuid.UUID,
     set_id: uuid.UUID,
@@ -843,6 +856,7 @@ async def delete_parameter_set_endpoint(
 
 @router.get("/parameter-sets/{set_id}/references")
 @handle_db_errors("parameter_sets.references")
+@with_db_retry()
 async def get_parameter_set_references_endpoint(
     set_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

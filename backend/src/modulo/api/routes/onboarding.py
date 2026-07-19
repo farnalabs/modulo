@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -214,6 +214,7 @@ def _build_action_list(
 
 
 @handle_db_errors("onboarding.get_onboarding_status")
+@with_db_retry()
 @router.get("/status", response_model=OnboardingStatusResponse)
 async def get_onboarding_status(
     session: AsyncSession = Depends(get_db_session),
@@ -244,6 +245,7 @@ async def get_onboarding_status(
 
 
 @handle_db_errors("onboarding.mark_action_completed")
+@with_db_retry()
 @router.post("/actions/{action_id}/complete", response_model=ActionCompletedResponse)
 async def mark_action_completed(
     action_id: str,
@@ -277,6 +279,7 @@ async def mark_action_completed(
 
 
 @handle_db_errors("onboarding.mark_action_skipped")
+@with_db_retry()
 @router.post("/actions/{action_id}/skip", response_model=ActionSkippedResponse)
 async def mark_action_skipped(
     action_id: str,
@@ -308,6 +311,7 @@ async def mark_action_skipped(
 
 
 @handle_db_errors("onboarding.dismiss")
+@with_db_retry()
 @router.post("/dismiss", response_model=DismissResponse)
 async def dismiss_onboarding(
     session: AsyncSession = Depends(get_db_session),
@@ -322,6 +326,7 @@ async def dismiss_onboarding(
 
 
 @handle_db_errors("onboarding.seed_examples")
+@with_db_retry()
 @router.post("/seed-examples", response_model=SeedExamplesResponse, status_code=status.HTTP_201_CREATED)
 async def seed_examples(
     session: AsyncSession = Depends(get_db_session),
@@ -458,6 +463,7 @@ async def seed_examples(
 
 
 @handle_db_errors("onboarding.create_starter_pipeline")
+@with_db_retry()
 @router.post("/starter-pipeline", response_model=StarterPipelineResponse, status_code=status.HTTP_201_CREATED)
 async def create_starter_pipeline(
     session: AsyncSession = Depends(get_db_session),

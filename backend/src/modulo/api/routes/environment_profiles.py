@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -111,6 +111,7 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
 
 
 @handle_db_errors("environment_profiles.list_profiles")
+@with_db_retry()
 @router.get("", response_model=ProfileListResponse)
 async def list_profiles(
     page: int = Query(1, ge=1),
@@ -150,6 +151,7 @@ async def list_profiles(
 
 
 @handle_db_errors("environment_profiles.create_profile")
+@with_db_retry()
 @router.post("", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
 async def create_profile(
     req: ProfileCreate,
@@ -204,6 +206,7 @@ async def create_profile(
 
 
 @handle_db_errors("environment_profiles.get_profile")
+@with_db_retry()
 @router.get("/{profile_id}", response_model=ProfileResponse)
 async def get_profile(
     profile_id: uuid.UUID,
@@ -237,6 +240,7 @@ async def get_profile(
 
 
 @handle_db_errors("environment_profiles.update_profile")
+@with_db_retry()
 @router.put("/{profile_id}", response_model=ProfileResponse)
 async def update_profile(
     profile_id: uuid.UUID,
@@ -283,6 +287,7 @@ async def update_profile(
 
 
 @handle_db_errors("environment_profiles.delete_profile")
+@with_db_retry()
 @router.delete("/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_profile(
     profile_id: uuid.UUID,

@@ -13,6 +13,7 @@ Dual-layer enforcement:
 Org context validated per-event for streaming (SSE) connections.
 """
 
+import asyncio
 import contextvars
 import json
 import logging
@@ -24,7 +25,7 @@ from typing import Any
 
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -2238,55 +2239,62 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
     "Deletions are grouped by entity type with per-group savepoints.",
 )
 async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
-    try:
-        if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
-        check_tool_scope(_ctx_role_val(), "perform_housekeeping")
-        from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
+    for attempt in range(3):
+        try:
+            if not await validate_current_auth():
+                return _tool_auth_error("Token revoked or expired - re-authenticate")
+            check_tool_scope(_ctx_role_val(), "perform_housekeeping")
+            from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
 
-        org_id = _ctx_org_id_val()
-        deleted_count = 0
-        errors: list[dict[str, str]] = []
+            org_id = _ctx_org_id_val()
+            deleted_count = 0
+            errors: list[dict[str, str]] = []
 
-        grouped: dict[str, list[str]] = {}
-        for item in items:
-            et = item.get("entity_type", "")
-            eid = item.get("id", "")
-            if not et or not eid:
-                errors.append({"error": "item missing entity_type or id", "item": str(item)})
-                continue
-            grouped.setdefault(et, []).append(eid)
-
-        async with _session(org_id) as s:
-            for entity_type, ids in grouped.items():
-                model_cls = HK_ENTITY_MAP.get(entity_type)
-                if model_cls is None:
-                    errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
+            grouped: dict[str, list[str]] = {}
+            for item in items:
+                et = item.get("entity_type", "")
+                eid = item.get("id", "")
+                if not et or not eid:
+                    errors.append({"error": "item missing entity_type or id", "item": str(item)})
                     continue
+                grouped.setdefault(et, []).append(eid)
 
-                try:
-                    async with s.begin_nested():
-                        for eid in ids:
-                            obj = await s.get(model_cls, eid)  # type: ignore[func-returns-value]
-                            if obj is not None:
-                                await s.delete(obj)
-                                deleted_count += 1
-                except IntegrityError:
-                    _log.warning("IntegrityError cleaning up %s group", entity_type)
-                    errors.append({"entity_type": entity_type, "error": "Foreign key constraint violation"})
-                except Exception as exc:
-                    _log.exception("Error cleaning up %s group", entity_type)
-                    errors.append({"entity_type": entity_type, "error": str(exc)})
+            async with _session(org_id) as s:
+                for entity_type, ids in grouped.items():
+                    model_cls = HK_ENTITY_MAP.get(entity_type)
+                    if model_cls is None:
+                        errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
+                        continue
 
-        return {"deleted_count": deleted_count, "errors": errors}
-    except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": str(exc)}
-    except ProgrammingError:
-        _log.exception("perform_housekeeping failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
-    except Exception:
-        _log.exception("perform_housekeeping failed")
-        return _tool_error("Failed to perform housekeeping")
+                    try:
+                        async with s.begin_nested():
+                            for eid in ids:
+                                obj = await s.get(model_cls, eid)  # type: ignore[func-returns-value]
+                                if obj is not None:
+                                    await s.delete(obj)
+                                    deleted_count += 1
+                    except IntegrityError:
+                        _log.warning("IntegrityError cleaning up %s group", entity_type)
+                        errors.append({"entity_type": entity_type, "error": "Foreign key constraint violation"})
+                    except Exception as exc:
+                        _log.exception("Error cleaning up %s group", entity_type)
+                        errors.append({"entity_type": entity_type, "error": str(exc)})
+
+            return {"deleted_count": deleted_count, "errors": errors}
+        except OperationalError as exc:
+            if attempt == 2:
+                raise
+            _log.warning("Transient DB error in perform_housekeeping, retrying (%d/3): %s", attempt + 1, exc)
+            await asyncio.sleep(0.5 * (2**attempt))
+        except MCPAuthorizationError as exc:
+            return {"error": "insufficient_scope", "detail": str(exc)}
+        except ProgrammingError:
+            _log.exception("perform_housekeeping failed")
+            return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        except Exception:
+            _log.exception("perform_housekeeping failed")
+            return _tool_error("Failed to perform housekeeping")
+    return _tool_error("Failed to perform housekeeping")
 
 
 # Backward-compatible function references for renamed tools

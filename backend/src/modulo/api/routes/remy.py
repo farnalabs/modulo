@@ -42,7 +42,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.api.mcp_tool_registry import build_tool_registry, get_mcp_tool_definitions
 from modulo.api.ui_tools import (
@@ -598,6 +598,7 @@ def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, A
 
 
 @handle_db_errors("remy.list_sessions")
+@with_db_retry()
 @router.get("/sessions", status_code=status.HTTP_200_OK)
 async def list_sessions(
     page: int = Query(1, ge=1),
@@ -657,6 +658,7 @@ async def list_sessions(
 
 
 @handle_db_errors("remy.create_session")
+@with_db_retry()
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
 async def create_session(
     req: CreateSessionRequest,
@@ -733,6 +735,7 @@ async def create_session(
 
 
 @handle_db_errors("remy.get_session")
+@with_db_retry()
 @router.get("/sessions/{session_id}", status_code=status.HTTP_200_OK)
 async def get_session(
     session_id: uuid.UUID,
@@ -771,6 +774,7 @@ async def get_session(
 
 
 @handle_db_errors("remy.rename_session")
+@with_db_retry()
 @router.patch("/sessions/{session_id}", status_code=status.HTTP_200_OK)
 async def rename_session(
     session_id: uuid.UUID,
@@ -809,6 +813,7 @@ async def rename_session(
 
 
 @handle_db_errors("remy.delete_session")
+@with_db_retry()
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_200_OK)
 async def delete_session(
     session_id: uuid.UUID,
@@ -866,6 +871,7 @@ async def delete_session(
 
 
 @handle_db_errors("remy.list_messages")
+@with_db_retry()
 @router.get("/sessions/{session_id}/messages", status_code=status.HTTP_200_OK)
 async def list_messages(
     session_id: uuid.UUID,
@@ -921,6 +927,7 @@ async def list_messages(
 
 
 @handle_db_errors("remy.append_message")
+@with_db_retry()
 @router.post("/sessions/{session_id}/messages", status_code=status.HTTP_201_CREATED)
 async def append_message(
     session_id: uuid.UUID,
@@ -972,6 +979,7 @@ async def append_message(
 
 
 @handle_db_errors("remy.stream_chat")
+@with_db_retry()
 @router.post("/sessions/{session_id}/stream")
 async def stream_chat(
     session_id: uuid.UUID,
@@ -1536,6 +1544,7 @@ async def stream_chat(
 
 
 @handle_db_errors("remy.submit_permission_response")
+@with_db_retry()
 @router.post("/sessions/{session_id}/permission-response")
 async def submit_permission_response(
     session_id: uuid.UUID,
@@ -1594,6 +1603,7 @@ async def submit_permission_response(
 
 
 @handle_db_errors("remy.submit_ui_command_results")
+@with_db_retry()
 @router.post("/sessions/{session_id}/ui-command-results")
 async def submit_ui_command_results(
     session_id: uuid.UUID,
@@ -1646,6 +1656,7 @@ async def submit_ui_command_results(
 
 
 @handle_db_errors("remy.reset_session_permissions")
+@with_db_retry()
 @router.post("/sessions/{session_id}/reset-permissions")
 async def reset_session_permissions(
     session_id: uuid.UUID,
@@ -1683,6 +1694,7 @@ async def reset_session_permissions(
 
 
 @handle_db_errors("remy.resume_session")
+@with_db_retry()
 @router.post("/sessions/{session_id}/resume")
 async def resume_session(
     session_id: uuid.UUID,
@@ -1723,6 +1735,7 @@ async def resume_session(
 
 
 @handle_db_errors("remy.stop_session")
+@with_db_retry()
 @router.post("/sessions/{session_id}/stop")
 async def stop_session(
     session_id: uuid.UUID,
@@ -1773,6 +1786,7 @@ async def stop_session(
 
 
 @handle_db_errors("remy.get_audit_trail")
+@with_db_retry()
 @router.get("/sessions/{session_id}/audit-trail", status_code=status.HTTP_200_OK)
 async def get_audit_trail(
     session_id: uuid.UUID,
@@ -1836,6 +1850,7 @@ async def get_audit_trail(
 
 
 @handle_db_errors("remy.undo_last_action")
+@with_db_retry()
 @router.post("/sessions/{session_id}/undo")
 async def undo_last_action(
     session_id: uuid.UUID,

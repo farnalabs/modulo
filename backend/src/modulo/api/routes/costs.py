@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -69,6 +69,7 @@ def _require_admin(principal: TenantPrincipal) -> None:
 
 
 @handle_db_errors("costs.get_costs")
+@with_db_retry()
 @router.get("", response_model=CostReportResponse)
 async def get_costs(
     group_by: str = Query("team", pattern=r"^(team|org)$"),
@@ -121,6 +122,7 @@ async def get_costs(
 
 
 @handle_db_errors("costs.get_spend_limits")
+@with_db_retry()
 @router.get("/limits", response_model=SpendLimitResponse)
 async def get_spend_limits(
     _: object = require_feature("admin_spend_limits"),
@@ -175,6 +177,7 @@ async def get_spend_limits(
 
 
 @handle_db_errors("costs.set_org_spend_limit")
+@with_db_retry()
 @router.put("/limits/org", response_model=dict[str, Any])
 async def set_org_spend_limit(
     req: SetSpendLimitRequest,
@@ -224,6 +227,7 @@ async def set_org_spend_limit(
 
 
 @handle_db_errors("costs.set_team_spend_limit")
+@with_db_retry()
 @router.put("/limits/teams/{team_id}", response_model=dict[str, Any])
 async def set_team_spend_limit(
     team_id: uuid.UUID,
@@ -289,6 +293,7 @@ class UpdateCostControlsRequest(BaseModel):
 
 
 @handle_db_errors("costs.get_cost_controls")
+@with_db_retry()
 @router.get("/controls", response_model=CostControlsResponse)
 async def get_cost_controls(
     _: object = require_feature("admin_spend_limits"),
@@ -340,6 +345,7 @@ async def get_cost_controls(
 
 
 @handle_db_errors("costs.update_cost_controls")
+@with_db_retry()
 @router.put("/controls", response_model=CostControlsResponse)
 async def update_cost_controls(
     req: UpdateCostControlsRequest,
@@ -403,6 +409,7 @@ async def update_cost_controls(
 
 
 @handle_db_errors("costs.export_costs")
+@with_db_retry()
 @router.get("/export")
 async def export_costs(
     period: str = Query("this_month", pattern=r"^(this_month|last_month|7d|30d|90d)$"),
@@ -510,6 +517,7 @@ def _report_response(report: ScheduledReport) -> ReportResponse:
 
 
 @handle_db_errors("costs.create_report")
+@with_db_retry()
 @router.post("/reports", response_model=ReportResponse, status_code=201)
 async def create_report(
     req: CreateReportRequest,
@@ -561,6 +569,7 @@ async def create_report(
 
 
 @handle_db_errors("costs.list_reports")
+@with_db_retry()
 @router.get("/reports", response_model=list[ReportResponse])
 async def list_reports(
     _: object = require_feature("admin_spend_limits"),
@@ -605,6 +614,7 @@ async def list_reports(
 
 
 @handle_db_errors("costs.delete_report")
+@with_db_retry()
 @router.delete("/reports/{report_id}", status_code=204)
 async def delete_report(
     report_id: uuid.UUID,
@@ -665,6 +675,7 @@ class AnomalyResponse(BaseModel):
 
 
 @handle_db_errors("costs.get_anomalies")
+@with_db_retry()
 @router.get("/anomalies", response_model=list[AnomalyResponse])
 async def get_anomalies(
     _: object = require_feature("admin_spend_limits"),
@@ -779,6 +790,7 @@ async def get_anomalies(
 
 
 @handle_db_errors("costs.dismiss_anomaly_endpoint")
+@with_db_retry()
 @router.get("/anomalies/dismiss/{anomaly_id}", status_code=204)
 async def dismiss_anomaly_endpoint(
     anomaly_id: uuid.UUID,

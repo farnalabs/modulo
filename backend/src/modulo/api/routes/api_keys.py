@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, update_api_key
 from modulo.auth.dependencies import get_current_tenant_user
@@ -81,6 +81,7 @@ def _require_admin(principal: TenantPrincipal) -> None:
 
 
 @handle_db_errors("api_keys.create_api_key_endpoint")
+@with_db_retry()
 @router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key_endpoint(
     req: ApiKeyCreate,
@@ -150,6 +151,7 @@ async def create_api_key_endpoint(
 
 
 @handle_db_errors("api_keys.list_api_keys_endpoint")
+@with_db_retry()
 @router.get("", response_model=list[dict[str, Any]])
 async def list_api_keys_endpoint(
     session: AsyncSession = Depends(get_db_session),
@@ -182,6 +184,7 @@ async def list_api_keys_endpoint(
 
 
 @handle_db_errors("api_keys.update_api_key_endpoint")
+@with_db_retry()
 @router.put("/{key_id}")
 async def update_api_key_endpoint(
     key_id: uuid.UUID,
@@ -255,6 +258,7 @@ async def update_api_key_endpoint(
 
 
 @handle_db_errors("api_keys.revoke_api_key_endpoint")
+@with_db_retry()
 @router.delete("/{key_id}", response_model=ApiKeyRevokeResponse)
 async def revoke_api_key_endpoint(
     key_id: uuid.UUID,

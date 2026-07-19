@@ -14,7 +14,7 @@ from sqlalchemy import Date, case, cast, func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -107,6 +107,7 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
 
 
 @handle_db_errors("dashboard.dashboard_summary")
+@with_db_retry()
 @router.get("/summary")
 async def dashboard_summary(
     session: AsyncSession = Depends(get_db_session),
@@ -460,6 +461,7 @@ async def dashboard_summary(
 
 
 @handle_db_errors("dashboard.dashboard_trends")
+@with_db_retry()
 @router.get("/trends")
 async def dashboard_trends(
     days: int = Query(7, ge=1, le=90),
@@ -677,6 +679,7 @@ async def dashboard_trends(
 
 
 @handle_db_errors("dashboard.daily_run_counts")
+@with_db_retry()
 @router.get("/daily-run-counts")
 async def daily_run_counts(
     days: int = Query(30, ge=1, le=365),

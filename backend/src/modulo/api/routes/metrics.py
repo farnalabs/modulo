@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -56,6 +57,7 @@ class WebVitalTimeSeriesPoint(BaseModel):
 
 
 @router.post("/web-vitals", status_code=status.HTTP_204_NO_CONTENT)
+@with_db_retry()
 async def ingest_web_vitals(
     req: WebVitalBatchRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -98,6 +100,7 @@ async def ingest_web_vitals(
 
 
 @router.get("/web-vitals/summary")
+@with_db_retry()
 async def get_web_vitals_summary(
     days: int = Query(7, ge=1, le=90),
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -151,6 +154,7 @@ async def get_web_vitals_summary(
 
 
 @router.get("/web-vitals/timeseries")
+@with_db_retry()
 async def get_web_vitals_timeseries(
     metric_name: str = Query(..., max_length=50),
     days: int = Query(7, ge=1, le=90),

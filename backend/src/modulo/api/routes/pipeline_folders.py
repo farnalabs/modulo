@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -57,6 +57,7 @@ class FolderResponse(BaseModel):
 
 @router.get("", response_model=list[FolderResponse])
 @handle_db_errors("pipeline_folders.list")
+@with_db_retry()
 async def list_folders_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -77,6 +78,7 @@ async def list_folders_endpoint(
 
 @router.post("", response_model=FolderResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("pipeline_folders.create")
+@with_db_retry()
 async def create_folder_endpoint(
     req: FolderCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -104,6 +106,7 @@ async def create_folder_endpoint(
 
 @router.patch("/{folder_id}", response_model=FolderResponse)
 @handle_db_errors("pipeline_folders.update")
+@with_db_retry()
 async def update_folder_endpoint(
     folder_id: uuid.UUID,
     req: FolderUpdate,
@@ -129,6 +132,7 @@ async def update_folder_endpoint(
 
 @router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("pipeline_folders.delete")
+@with_db_retry()
 async def delete_folder_endpoint(
     folder_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -151,6 +155,7 @@ async def delete_folder_endpoint(
 
 @router.patch("/{folder_id}/move", response_model=FolderResponse)
 @handle_db_errors("pipeline_folders.move")
+@with_db_retry()
 async def reorder_folder_endpoint(
     folder_id: uuid.UUID,
     req: FolderMove,

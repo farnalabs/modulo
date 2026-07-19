@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
 from modulo.api.routes.remy import clear_all_session_approvals
@@ -85,6 +85,7 @@ class MeResponse(BaseModel):
 
 
 @handle_db_errors("auth.login")
+@with_db_retry()
 @router.post("/login")
 async def login(
     req: LoginRequest,
@@ -185,6 +186,7 @@ async def login(
 
 
 @handle_db_errors("auth.refresh")
+@with_db_retry()
 @router.post("/refresh")
 async def refresh(
     req: RefreshRequest,
@@ -302,6 +304,7 @@ async def refresh(
 
 
 @handle_db_errors("auth.logout")
+@with_db_retry()
 @router.post("/logout")
 async def logout(
     req: RefreshRequest,
@@ -366,6 +369,7 @@ async def logout(
 
 
 @handle_db_errors("auth.ws_token")
+@with_db_retry()
 @router.post("/ws-token", response_model=WsTokenResponse)
 async def ws_token(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -429,6 +433,7 @@ async def ws_token(
 
 
 @handle_db_errors("auth.me")
+@with_db_retry()
 @router.get("/me", response_model=MeResponse)
 async def me(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),

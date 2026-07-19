@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -30,6 +30,7 @@ class CompleteSetupRequest(BaseModel):
 
 
 @handle_db_errors("mcp_setup.complete_model_backend_setup")
+@with_db_retry()
 @router.post("/model-backends/{backend_id}/complete-setup")
 async def complete_model_backend_setup(
     backend_id: uuid.UUID,

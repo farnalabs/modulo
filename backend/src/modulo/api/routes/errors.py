@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.api.models.error import (
     ErrorEventListResponse,
@@ -90,6 +90,7 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
 
 
 @handle_db_errors("errors.create_session_key")
+@with_db_retry()
 @router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
 async def create_session_key(
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -106,6 +107,7 @@ async def create_session_key(
 
 
 @handle_db_errors("errors.ingest_errors")
+@with_db_retry()
 @router.post("/ingest", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_errors(
     request: Request,
@@ -186,6 +188,7 @@ async def ingest_errors(
 
 
 @handle_db_errors("errors.ingest_errors_public")
+@with_db_retry()
 @router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_errors_public(
     request: Request,
@@ -338,6 +341,7 @@ async def _fetch_sample_event(session: AsyncSession, org_id: uuid.UUID, group: E
 
 
 @handle_db_errors("errors.list_error_groups")
+@with_db_retry()
 @router.get("", response_model=ErrorListResponse)
 async def list_error_groups(
     status_filter: str | None = Query(None, alias="status"),
@@ -416,6 +420,7 @@ async def list_error_groups(
 
 
 @handle_db_errors("errors.get_error_group_detail")
+@with_db_retry()
 @router.get("/{error_id}", response_model=ErrorGroupDetail)
 async def get_error_group_detail(
     error_id: uuid.UUID,
@@ -467,6 +472,7 @@ async def get_error_group_detail(
 
 
 @handle_db_errors("errors.patch_error_group")
+@with_db_retry()
 @router.patch("/{error_id}", response_model=ErrorGroupDetail)
 async def patch_error_group(
     error_id: uuid.UUID,
@@ -527,6 +533,7 @@ async def patch_error_group(
 
 
 @handle_db_errors("errors.list_error_events")
+@with_db_retry()
 @router.get("/{error_id}/events", response_model=ErrorEventListResponse)
 async def list_error_events(
     error_id: uuid.UUID,

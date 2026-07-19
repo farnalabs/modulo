@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import with_db_retry
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -76,6 +77,7 @@ class ViewListResponse(BaseModel):
 
 
 @router.get("", response_model=ViewListResponse, dependencies=[require_feature("view_modes")])
+@with_db_retry()
 async def list_views_endpoint(
     view_type: str | None = Query(None, pattern=r"^(run_list|pipeline_list|audit_log)$"),
     page: int = Query(default=1, ge=1),
@@ -122,6 +124,7 @@ async def list_views_endpoint(
     status_code=status.HTTP_201_CREATED,
     dependencies=[require_feature("view_modes")],
 )
+@with_db_retry()
 async def create_view_endpoint(
     req: ViewCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -167,6 +170,7 @@ async def create_view_endpoint(
 
 
 @router.get("/{view_id}", response_model=ViewResponse, dependencies=[require_feature("view_modes")])
+@with_db_retry()
 async def get_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -203,6 +207,7 @@ async def get_view_endpoint(
 
 
 @router.patch("/{view_id}", response_model=ViewResponse, dependencies=[require_feature("view_modes")])
+@with_db_retry()
 async def update_view_endpoint(
     view_id: uuid.UUID,
     req: ViewUpdate,
@@ -241,6 +246,7 @@ async def update_view_endpoint(
 
 
 @router.delete("/{view_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("view_modes")])
+@with_db_retry()
 async def delete_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

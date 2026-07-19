@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -122,6 +122,7 @@ class RegisterPublisherRequest(BaseModel):
 
 
 @handle_db_errors("registry.list_registry_primitives_endpoint")
+@with_db_retry()
 @router.get("/primitives", response_model=RegistryRankedListResponse)
 async def list_registry_primitives_endpoint(
     author: str | None = Query(None),
@@ -169,6 +170,7 @@ async def list_registry_primitives_endpoint(
 
 
 @handle_db_errors("registry.get_registry_primitive_endpoint")
+@with_db_retry()
 @router.get("/primitives/{slug:path}", response_model=PullResponse)
 async def get_registry_primitive_endpoint(
     slug: str,
@@ -398,6 +400,7 @@ class VerifyResponseV2(BaseModel):
 
 
 @handle_db_errors("registry.publish_primitive_v2")
+@with_db_retry()
 @router.post("/publish", response_model=PublishResponseV2, status_code=status.HTTP_201_CREATED)
 async def publish_primitive_v2(
     req: PublishRequestV2,
@@ -487,6 +490,7 @@ async def publish_primitive_v2(
 
 
 @handle_db_errors("registry.pull_registry_primitive_v2")
+@with_db_retry()
 @router.get("/pull/{slug:path}", response_model=PullResponseV2)
 async def pull_registry_primitive_v2(
     slug: str,
@@ -524,6 +528,7 @@ async def pull_registry_primitive_v2(
 
 
 @handle_db_errors("registry.verify_registry_primitive_v2")
+@with_db_retry()
 @router.get("/verify/{slug:path}", response_model=VerifyResponseV2)
 async def verify_registry_primitive_v2(
     slug: str,

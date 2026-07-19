@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -75,6 +75,7 @@ class FromTemplateResponse(BaseModel):
 
 
 @handle_db_errors("templates.list_templates_endpoint")
+@with_db_retry()
 @router.get("/templates", response_model=TemplateListResponse)
 async def list_templates_endpoint(
     page: int = Query(1, ge=1),

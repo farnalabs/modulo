@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -62,6 +62,7 @@ class DeleteOAuthClientResponse(BaseModel):
 
 
 @handle_db_errors("mcp_oauth.register_oauth_client")
+@with_db_retry()
 @router.post("/clients", response_model=CreateOAuthClientResponse, status_code=status.HTTP_201_CREATED)
 async def register_oauth_client(
     req: CreateOAuthClientRequest,
@@ -141,6 +142,7 @@ async def register_oauth_client(
 
 
 @handle_db_errors("mcp_oauth.list_oauth_clients_endpoint")
+@with_db_retry()
 @router.get("/clients", response_model=list[OAuthClientItem])
 async def list_oauth_clients_endpoint(
     session: AsyncSession = Depends(get_db_session),
@@ -178,6 +180,7 @@ async def list_oauth_clients_endpoint(
 
 
 @handle_db_errors("mcp_oauth.remove_oauth_client")
+@with_db_retry()
 @router.delete("/clients/{client_id}", response_model=DeleteOAuthClientResponse)
 async def remove_oauth_client(
     client_id: str,

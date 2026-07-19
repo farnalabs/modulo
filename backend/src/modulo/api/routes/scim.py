@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal, require_scim_feature
 from modulo.db.crud.scim import (
@@ -201,6 +202,7 @@ async def get_service_provider_config(
 
 
 @router.get("/Users", response_model=ScimListResponse, dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def list_users(
     filter: str | None = Query(None),
     startIndex: int = Query(1, ge=1),
@@ -257,6 +259,7 @@ async def list_users(
 
 
 @router.post("/Users", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def create_user(
     req: ScimUserRequest,
     settings: Settings = Depends(get_settings),
@@ -326,6 +329,7 @@ async def create_user(
 
 
 @router.get("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def get_user(
     user_id: uuid.UUID,
     settings: Settings = Depends(get_settings),
@@ -370,6 +374,7 @@ async def get_user(
 
 
 @router.put("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def replace_user(
     user_id: uuid.UUID,
     req: ScimUserRequest,
@@ -423,6 +428,7 @@ async def replace_user(
 
 
 @router.patch("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def patch_user(
     user_id: uuid.UUID,
     req: ScimPatchRequest,
@@ -498,6 +504,7 @@ async def patch_user(
 
 
 @router.delete("/Users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def delete_user(
     user_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),
@@ -543,6 +550,7 @@ async def delete_user(
 
 
 @router.get("/Groups", response_model=ScimListResponse, dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def list_groups(
     filter: str | None = Query(None),
     startIndex: int = Query(1, ge=1),
@@ -611,6 +619,7 @@ async def list_groups(
 
 
 @router.post("/Groups", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def create_group(
     req: ScimGroupRequest,
     settings: Settings = Depends(get_settings),
@@ -704,6 +713,7 @@ async def create_group(
 
 
 @router.get("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def get_group(
     group_id: uuid.UUID,
     settings: Settings = Depends(get_settings),
@@ -757,6 +767,7 @@ async def get_group(
 
 
 @router.put("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def replace_group(
     group_id: uuid.UUID,
     req: ScimGroupRequest,
@@ -831,6 +842,7 @@ async def replace_group(
 
 
 @router.patch("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
+@with_db_retry()
 async def patch_group(
     group_id: uuid.UUID,
     req: ScimPatchRequest,
@@ -961,6 +973,7 @@ async def patch_group(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_scim_feature)],
 )
+@with_db_retry()
 async def delete_group(
     group_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),
