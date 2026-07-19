@@ -53,7 +53,11 @@ _ENGINE: AsyncEngine | None = None
 def _get_engine() -> AsyncEngine:
     global _ENGINE
     if _ENGINE is None:
-        _ENGINE = create_async_engine(get_settings().database_url)
+        settings = get_settings()
+        kw: dict[str, Any] = {"url": settings.database_url}
+        if settings.modulo_db.lower() == "postgres":
+            kw["connect_args"] = {"timeout": 10, "ssl": False}
+        _ENGINE = create_async_engine(**kw)
     return _ENGINE
 
 
@@ -183,10 +187,12 @@ async def fire_cron_trigger(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     cron_expression: str,
+    factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> dict[str, Any]:
     """Core fire logic — runs inside asyncio.run() inside the Celery task."""
-    engine = _get_engine()
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    if factory is None:
+        engine = _get_engine()
+        factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
