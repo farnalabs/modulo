@@ -312,7 +312,7 @@ const connectors = ref<ConnectorItem[]>([])
 const connectorTypes = ref<{id: string, display_name: string}[]>([])
 
 async function loadConnectorTypes() {
-  const resp = await api.GET('/api/v1/connectors/types') as { data?: { items: Array<{id: string, display_name: string}> } }
+  const { data } = await api.GET('/api/v1/connectors/types') as any
   if (resp.data) connectorTypes.value = resp.data.items
 }
 
