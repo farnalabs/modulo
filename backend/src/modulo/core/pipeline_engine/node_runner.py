@@ -70,6 +70,7 @@ _is_truthy = bool
 
 _MAX_ARTIFACT_LOG = 102400
 _MAX_OTEL_LOG_ATTR = 32768
+_MAX_ERROR_MSG = 500
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
@@ -599,6 +600,7 @@ def make_sandbox_agent_fn(
 
     @cancellable_node(timeout=timeout or sandbox_timeout, role="sandbox_agent")
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
+        import base64 as _b64
         import os
         import time as _time
 
@@ -628,13 +630,14 @@ def make_sandbox_agent_fn(
         pipeline_id: str = str(state.get("_pipeline_id", ""))
         org_id: str = str(state.get("_org_id", ""))
 
+        _stdout_len = 0
+        _stderr_len = 0
+
         try:
             sandbox = await AsyncSandbox.create(template=template_id)
 
             for path, content in context_files.items():
                 if path.endswith(".b64"):
-                    import base64 as _b64
-
                     content = _b64.b64decode(content).decode()
                     path = path[:-4]
                 await sandbox.files.write(path, content)
@@ -657,10 +660,12 @@ def make_sandbox_agent_fn(
 
             elapsed = _time.monotonic() - start_time
             exit_code: int = getattr(cmd_result, "exit_code", -1)
-            agent_stdout: str = getattr(cmd_result, "stdout", "") or ""
-            agent_stderr: str = getattr(cmd_result, "stderr", "") or ""
-            agent_stdout = agent_stdout[:_MAX_ARTIFACT_LOG]
-            agent_stderr = agent_stderr[:_MAX_ARTIFACT_LOG]
+            agent_stdout_raw: str = getattr(cmd_result, "stdout", "") or ""
+            agent_stderr_raw: str = getattr(cmd_result, "stderr", "") or ""
+            _stdout_len = len(agent_stdout_raw)
+            _stderr_len = len(agent_stderr_raw)
+            agent_stdout = agent_stdout_raw[:_MAX_ARTIFACT_LOG]
+            agent_stderr = agent_stderr_raw[:_MAX_ARTIFACT_LOG]
 
             raw_output: str = ""
             output_json: Any = None
@@ -680,8 +685,8 @@ def make_sandbox_agent_fn(
                     {
                         "stdout": agent_stdout[:_MAX_OTEL_LOG_ATTR],
                         "stderr": agent_stderr[:_MAX_OTEL_LOG_ATTR],
-                        "stdout_length": len(agent_stdout),
-                        "stderr_length": len(agent_stderr),
+                        "stdout_length": _stdout_len,
+                        "stderr_length": _stderr_len,
                     },
                 )
 
@@ -763,10 +768,8 @@ def make_sandbox_agent_fn(
             import traceback as _tb
 
             _exc_type = type(_exc).__name__
-            _exc_msg = str(_exc)[:500]
+            _exc_msg = str(_exc)[:_MAX_ERROR_MSG]
             _exc_tb = _tb.format_exc()
-            _log.warning(f"SANDBOX_AGENT_ERROR type={_exc_type} msg={_exc_msg}")
-            _log.warning(f"SANDBOX_AGENT_TRACEBACK:\n{_exc_tb}")
             _log.exception(
                 "sandbox_agent.execution_failed",
                 extra={
@@ -783,6 +786,8 @@ def make_sandbox_agent_fn(
                     {
                         "stdout": locals().get("agent_stdout", "")[:_MAX_OTEL_LOG_ATTR],
                         "stderr": locals().get("agent_stderr", "")[:_MAX_OTEL_LOG_ATTR],
+                        "stdout_length": _stdout_len,
+                        "stderr_length": _stderr_len,
                     },
                 )
             _exc_stdout = locals().get("agent_stdout", "")
