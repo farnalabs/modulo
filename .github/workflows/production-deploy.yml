@@ -33,10 +33,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      - # flyctl installed inline below
+      - uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Log deploy reason
-        shell: bash
+        shell: pwsh
         run: 'Write-Host "Production deploy reason: ${{ inputs.reason }}"'
 
       - name: Capture git metadata
@@ -45,7 +45,7 @@ jobs:
 
       - id: deploy
         name: Deploy to ${{ matrix.env.name }}.modulo.run
-        shell: bash
+        shell: pwsh
         run: |
           fly deploy --app ${{ matrix.env.fly-app }} --config ${{ matrix.env.fly-config }} `
             --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
@@ -61,7 +61,7 @@ jobs:
 
       - name: Rollback on verification failure
         if: failure() && steps.deploy.outcome == 'success'
-        shell: bash
+        shell: pwsh
         run: |
           Write-Host "Deploy succeeded but verification failed - rolling back ${{ matrix.env.fly-app }}"
           fly rollback --app ${{ matrix.env.fly-app }}
@@ -76,13 +76,13 @@ jobs:
           fetch-depth: 1
 
       - name: Verify deployed SHAs
-        shell: bash
+        shell: pwsh
         run: |
           $expectedSha = git rev-parse HEAD
           $expectedSha7 = $expectedSha.Substring(0, 7)
           $allOk = $true
           foreach ($url in @("https://app.modulo.run")) {
-            $info = curl -s -m 10 "$url/api/v1/deployment" 2>$null
+            $info = curl.exe -s -m 10 "$url/api/v1/deployment" 2>$null
             if ($info) {
               $deployInfo = $info | ConvertFrom-Json
               $deployedSha = if ($deployInfo.git_sha -and $deployInfo.git_sha.Length -ge 7) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
