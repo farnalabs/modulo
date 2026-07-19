@@ -3,7 +3,7 @@
 import json
 from unittest.mock import MagicMock
 
-from modulo.api.routes.system_config import SENSITIVE_CONFIG_KEYS
+from modulo.api.mcp_server import SENSITIVE_CONFIG_KEYS
 
 from modulo.api.mcp_server import (
     _get_doc_index,
