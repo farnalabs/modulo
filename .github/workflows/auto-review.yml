@@ -83,7 +83,12 @@ jobs:
           FILES="${{ steps.changed-files.outputs.files }}"
           echo "::group::opencode qa ${FILES}"
 
-          QA_OUTPUT=$(opencode qa ${FILES} 2>&1) || true
+          REVIEW_PROMPT=".agents/skills/auto-review/REVIEW_PROMPT.md"
+          if [ -f "$REVIEW_PROMPT" ]; then
+            QA_OUTPUT=$(opencode run --agent coder "Review the following files for issues according to the guidelines in $REVIEW_PROMPT: ${FILES}" 2>&1) || true
+          else
+            QA_OUTPUT=$(opencode run --agent coder "Review the following changed files for bugs, security issues, code quality problems, and violations of project conventions. Be thorough but concise. Flag each finding with [critical], [major], [minor], or [nit]: ${FILES}" 2>&1) || true
+          fi
 
           echo "::notice::QA completed"
           echo "critical_count=$(echo "${QA_OUTPUT}" | grep -ci '\[critical\]' || echo 0)" >> "$GITHUB_OUTPUT"
