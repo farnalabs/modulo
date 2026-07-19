@@ -17,7 +17,7 @@ import copy
 import json
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Self, cast
 
 from opentelemetry import trace
@@ -73,7 +73,6 @@ from modulo.connectors.teamcity import TeamCityConnector
 from modulo.connectors.trello import TrelloConnector
 from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
-from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -108,6 +107,7 @@ class ConnectorHub:
     """Decrypts connector credentials once at run-start; discards them on exit.
 
     Not thread-safe. Each run gets its own ConnectorHub instance.
+    All public methods raise ConnectorNotFoundError if called before initialise().
     """
 
     def __init__(
@@ -115,6 +115,7 @@ class ConnectorHub:
         secrets_backend: SecretsBackend,
         org_id: str | None = None,
         runtime_provider: Any = None,
+        runtime_provider_hub: Any = None,
     ) -> None:
         self._secrets_backend = secrets_backend
         self._connectors: dict[uuid.UUID, ConnectorBase] = {}
@@ -122,6 +123,7 @@ class ConnectorHub:
         self._tracer = trace.get_tracer("modulo.connector_hub")
         self._org_id = org_id
         self._runtime_provider = runtime_provider
+        self._runtime_provider_hub = runtime_provider_hub
         self._initialised = False
         self._init_lock = asyncio.Lock()
 
@@ -149,12 +151,31 @@ class ConnectorHub:
                 return
             for ci in instances:
                 try:
-                    raw_str = await asyncio.wait_for(
-                        self._secrets_backend.get_secret(str(ci.id)),
-                        timeout=30.0,
-                    )
+                    try:
+                        raw_str = await asyncio.wait_for(
+                            self._secrets_backend.get_secret(str(ci.id)),
+                            timeout=30.0,
+                        )
+                    except KeyError:
+                        # Fall back to credentials_ciphertext column
+                        ciphertext = getattr(ci, "credentials_ciphertext", None)
+                        if ciphertext and isinstance(ciphertext, bytes) and ciphertext != b"":
+                            try:
+                                from cryptography.fernet import Fernet
+
+                                from modulo.settings import get_settings
+
+                                _settings = get_settings()
+                                f = Fernet(_settings.fernet_key.encode())
+                                plaintext = f.decrypt(ciphertext)
+                                raw_str = json.dumps({"api_key": plaintext.decode()})
+                            except Exception:
+                                logger.warning("Failed to decrypt credentials_ciphertext for connector %s", ci.id)
+                                raise ConnectorDecryptError(ci.id) from None
+                        else:
+                            raw_str = "{}"
                     if raw_str is None:
-                        raise ConnectorDecryptError(ci.id)
+                        raw_str = "{}"
                     try:
                         parsed = json.loads(raw_str)
                     except json.JSONDecodeError as exc:
@@ -167,6 +188,7 @@ class ConnectorHub:
                         ci.config_json,
                         creds,
                         runtime_provider=self._runtime_provider,
+                        runtime_provider_hub=self._runtime_provider_hub,
                     )
                     acl = ConnectorACL(
                         visibility=ci.visibility,
@@ -180,13 +202,23 @@ class ConnectorHub:
                     )
                     self._connectors[ci.id] = traced
                     self._acls[ci.id] = acl
-                except (TimeoutError, ConnectorDecryptError, ValueError, TypeError, KeyError, json.JSONDecodeError, OSError):
+                except (
+                    TimeoutError,
+                    ConnectorDecryptError,
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                    json.JSONDecodeError,
+                    OSError,
+                ):
                     logger.warning(
                         "Skipping connector %s (%s)",
                         ci.id,
                         ci.connector_type_id,
                         exc_info=True,
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     logger.error(
                         "Unexpected error skipping connector %s (%s) — programming bug",
@@ -197,6 +229,8 @@ class ConnectorHub:
             self._initialised = True
 
     def _get_or_raise(self, connector_id: uuid.UUID) -> ConnectorBase:
+        if not self._initialised:
+            raise ConnectorNotFoundError(connector_id)
         try:
             return self._connectors[connector_id]
         except KeyError:
@@ -284,7 +318,7 @@ class _TracedConnector(ConnectorBase):
         method: Any,
         *args: Any,
         extra_attrs: dict[str, Any] | None = None,
-        post_span: Any = None,
+        post_span: Callable[..., Any] | None = None,
         acl_operation: str | None = None,
         **kwargs: Any,
     ) -> Any:
@@ -306,6 +340,9 @@ class _TracedConnector(ConnectorBase):
                     except Exception as meta_exc:
                         logger.warning("post_span callback failed: %s", meta_exc, exc_info=True)
                 return result
+            except asyncio.CancelledError:
+                span.set_status(Status(StatusCode.ERROR, f"{operation} cancelled"))
+                raise
             except Exception as exc:
                 span.set_status(Status(StatusCode.ERROR, f"{operation} failed"))
                 span.set_attribute("connector.error_type", type(exc).__name__)
@@ -341,6 +378,8 @@ class _TracedConnector(ConnectorBase):
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         payload = copy.deepcopy(payload)
+        from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
+
         filter_payload_for_injection(payload)
         return cast(
             dict[str, Any],
@@ -378,6 +417,7 @@ def _build_connector(
     config: dict[str, Any] | None,
     creds: dict[str, Any],
     runtime_provider: Any = None,
+    runtime_provider_hub: Any = None,
 ) -> ConnectorBase:
     config = config or {}
     match type_id:
@@ -403,7 +443,13 @@ def _build_connector(
             return GitLabConnector(token=_get_cred(creds, "token", type_id))
         case "shell":
             allowed = config.get("allowed_commands")
-            return ShellConnector(runtime_provider=runtime_provider, allowed_commands=allowed)
+            env_profile_id = config.get("environment_profile_id")
+            return ShellConnector(
+                runtime_provider=runtime_provider,
+                runtime_provider_hub=runtime_provider_hub,
+                environment_profile_id=env_profile_id,
+                allowed_commands=allowed,
+            )
         case "linear":
             return LinearConnector(api_key=_get_cred(creds, "api_key", type_id))
         case "jira":
@@ -487,7 +533,7 @@ def _build_connector(
             return PagerDutyConnector(token=_get_cred(creds, "token", type_id))
         case "grafana":
             return GrafanaConnector(
-                token=_get_cred(creds, "token", type_id),                 base_url=config.get("base_url", _LOCALHOST_3000)
+                token=_get_cred(creds, "token", type_id), base_url=config.get("base_url", _LOCALHOST_3000)
             )
         case "microsoft_teams":
             return MicrosoftTeamsConnector(token=_get_cred(creds, "token", type_id))
@@ -519,6 +565,17 @@ def _build_connector(
                 token=_get_cred(creds, "token", type_id),
                 base_url=config.get("base_url", _LOCALHOST_5678),
             )
+        case "ticket-tracker":
+            provider = config.get("provider", "github")
+            if provider == "github":
+                from modulo.connectors.ticket_tracker.github import GitHubTicketTracker
+
+                return GitHubTicketTracker(config, creds)
+            if provider == "trello":
+                from modulo.connectors.ticket_tracker.trello import TrelloTicketTracker
+
+                return TrelloTicketTracker(config, creds)
+            raise ValueError(f"Unknown ticket-tracker provider: {provider!r}")
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):

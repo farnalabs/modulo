@@ -1,8 +1,8 @@
-﻿<template>
+<template>
   <div class="space-y-4">
     <div>
-      <label class="mb-1 block text-sm font-medium">Name</label>
-      <input
+      <label for="nodecategoryeditor-field-5" class="mb-1 block text-sm font-medium">Name</label>
+      <input id="nodecategoryeditor-field-5"
         v-model="form.name"
         type="text"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -11,8 +11,8 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Description</label>
-      <textarea
+      <label for="nodecategoryeditor-field-4" class="mb-1 block text-sm font-medium">Description</label>
+      <textarea id="nodecategoryeditor-field-4"
         v-model="form.description"
         rows="3"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -21,14 +21,14 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Color</label>
+      <label for="nodecategoryeditor-field-3" class="mb-1 block text-sm font-medium">Color</label>
       <div class="flex items-center gap-3">
-        <input
+        <input id="nodecategoryeditor-field-3"
           v-model="form.color"
           type="color"
           class="h-9 w-14 cursor-pointer rounded border border-input bg-background p-0.5"
         />
-        <input
+        <input aria-label="#6366f1"
           v-model="form.color"
           type="text"
           class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -39,31 +39,32 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Icon</label>
-      <select
-        v-model="form.icon"
-        aria-label="Icon"
-        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <option value="">None</option>
-        <option value="bot">Bot</option>
-        <option value="database">Database</option>
-        <option value="globe">Globe</option>
-        <option value="mail">Mail</option>
-        <option value="message-circle">{{ $t('components.NodeCategoryEditor.message_circle') }}</option>
-        <option value="refresh-cw">Refresh</option>
-        <option value="search">Search</option>
-        <option value="settings">Settings</option>
-        <option value="sliders">Sliders</option>
-        <option value="terminal">Terminal</option>
-        <option value="upload">Upload</option>
-        <option value="zap">Zap</option>
-      </select>
+      <label for="nodecategoryeditor-field-2" class="mb-1 block text-sm font-medium">Icon</label>
+      <Select v-model="form.icon">
+        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Icon">
+          <SelectValue placeholder="None" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__all__">None</SelectItem>
+          <SelectItem value="bot">Bot</SelectItem>
+          <SelectItem value="database">Database</SelectItem>
+          <SelectItem value="globe">Globe</SelectItem>
+          <SelectItem value="mail">Mail</SelectItem>
+          <SelectItem value="message-circle">{{ $t('components.NodeCategoryEditor.message_circle') }}</SelectItem>
+          <SelectItem value="refresh-cw">Refresh</SelectItem>
+          <SelectItem value="search">Search</SelectItem>
+          <SelectItem value="settings">Settings</SelectItem>
+          <SelectItem value="sliders">Sliders</SelectItem>
+          <SelectItem value="terminal">Terminal</SelectItem>
+          <SelectItem value="upload">Upload</SelectItem>
+          <SelectItem value="zap">Zap</SelectItem>
+        </SelectContent>
+      </Select>
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
-      <input
+      <label for="nodecategoryeditor-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
+      <input id="nodecategoryeditor-field-1"
         v-model.number="form.sort_order"
         type="number"
         min="0"
@@ -102,6 +103,7 @@ import { ref, reactive, computed, watch } from "vue";
 import { api } from "../lib/api/client";
 import { formatApiError } from "../lib/api/formatError";
 import { Button } from '@/components/ui/button';
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select';
 
 export interface NodeCategoryForm {
   name: string;
@@ -136,7 +138,7 @@ const form = reactive<NodeCategoryForm>({
   name: "",
   description: "",
   color: "#6366f1",
-  icon: "",
+  icon: "__all__",
   sort_order: 0,
 });
 
@@ -149,7 +151,7 @@ watch(
       form.name = cat.name ?? "";
       form.description = cat.description ?? "";
       form.color = cat.color ?? "#6366f1";
-      form.icon = cat.icon ?? "";
+      form.icon = cat.icon ?? "__all__";
       form.sort_order = cat.sort_order ?? 0;
     }
   },
@@ -164,7 +166,7 @@ async function save() {
     name: form.name.trim(),
     description: form.description.trim() || null,
     color: form.color,
-    icon: form.icon || null,
+    icon: form.icon === '__all__' ? null : form.icon,
     sort_order: form.sort_order,
   };
 

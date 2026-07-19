@@ -1,5 +1,6 @@
 """Step definitions for observability features — metrics, OTel traces, and run logs."""
 
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,18 +10,12 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/observability/metrics.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/observability/otel_traces.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/observability/run_logs.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +32,6 @@ def ctx():
 # ============================================================================
 # metrics.feature — Observability Settings
 # ============================================================================
-
 
 
 @given("the observability module is active")
@@ -80,24 +74,27 @@ def get_observability_settings(client, ctx, request):
 
 @when(parsers.parse("I PUT /api/v1/settings/observability with a valid OTLP endpoint"))
 def put_observability_settings(client, ctx, request):
-    with patch(
-        "modulo.api.routes.observability.get_otel_config",
-        new_callable=AsyncMock,
-        return_value={
-            "otlp_endpoint": "http://otel-collector:4318",
-            "otlp_headers": {},
-            "export_interval_seconds": 10,
-            "langsmith_enabled": False,
-        },
-    ), patch(
-        "modulo.api.routes.observability.update_otel_config",
-        new_callable=AsyncMock,
-        return_value={
-            "otlp_endpoint": "http://otel-collector:4318",
-            "otlp_headers": {},
-            "export_interval_seconds": 10,
-            "langsmith_enabled": False,
-        },
+    with (
+        patch(
+            "modulo.api.routes.observability.get_otel_config",
+            new_callable=AsyncMock,
+            return_value={
+                "otlp_endpoint": "http://otel-collector:4318",
+                "otlp_headers": {},
+                "export_interval_seconds": 10,
+                "langsmith_enabled": False,
+            },
+        ),
+        patch(
+            "modulo.api.routes.observability.update_otel_config",
+            new_callable=AsyncMock,
+            return_value={
+                "otlp_endpoint": "http://otel-collector:4318",
+                "otlp_headers": {},
+                "export_interval_seconds": 10,
+                "langsmith_enabled": False,
+            },
+        ),
     ):
         resp = client.put(
             "/api/v1/settings/observability",
@@ -174,7 +171,6 @@ def response_has_sample_span(ctx):
 # ============================================================================
 # otel_traces.feature — OTel Span Capture
 # ============================================================================
-
 
 
 @given("OpenTelemetry is configured")
@@ -255,9 +251,7 @@ def pipeline_run_completes(ctx):
 def trace_has_node_spans(ctx):
     spans = ctx.get("captured_spans", [])
     span_names = [s["name"] for s in spans]
-    assert any("chain" in name for name in span_names), (
-        f"No chain spans found in {span_names}"
-    )
+    assert any("chain" in name for name in span_names), f"No chain spans found in {span_names}"
 
 
 @then("the trace contains attributes for organisation_id and pipeline_id")
@@ -283,18 +277,14 @@ def trace_no_credentials(ctx):
     for s in spans:
         for attr_key in s.get("attributes", {}):
             for sensitive in sensitive_keys:
-                assert sensitive not in attr_key.lower(), (
-                    f"Sensitive key '{attr_key}' found in span attributes"
-                )
+                assert sensitive not in attr_key.lower(), f"Sensitive key '{attr_key}' found in span attributes"
 
 
 @then("each tool invocation has a child span under its parent node span")
 def tool_has_child_span(ctx):
     spans = ctx.get("captured_spans", [])
     span_names = [s["name"] for s in spans]
-    assert any("tool" in name for name in span_names), (
-        f"No tool spans found in {span_names}"
-    )
+    assert any("tool" in name for name in span_names), f"No tool spans found in {span_names}"
 
 
 @then("no OTel spans are exported")
@@ -306,7 +296,6 @@ def no_otel_spans_exported(ctx):
 # ============================================================================
 # run_logs.feature — Run Log Streaming
 # ============================================================================
-
 
 
 @given("a pipeline run is in progress")
@@ -339,11 +328,13 @@ def node_begins_executing(ctx):
 @when("all nodes complete")
 def all_nodes_complete(ctx):
     for node in ctx.get("nodes", []):
-        ctx.setdefault("log_entries", []).append({
-            "node_id": node,
-            "level": "INFO",
-            "message": f"Node '{node}' completed",
-        })
+        ctx.setdefault("log_entries", []).append(
+            {
+                "node_id": node,
+                "level": "INFO",
+                "message": f"Node '{node}' completed",
+            }
+        )
 
 
 @when("a node raises an exception")
@@ -359,11 +350,13 @@ def node_raises_exception(ctx):
 @when("I subscribe to the run event stream")
 def subscribe_to_event_stream(ctx):
     ctx["stream_active"] = True
-    ctx.setdefault("log_entries", []).append({
-        "node_id": "analyze",
-        "level": "INFO",
-        "message": "Node 'analyze' started executing",
-    })
+    ctx.setdefault("log_entries", []).append(
+        {
+            "node_id": "analyze",
+            "level": "INFO",
+            "message": "Node 'analyze' started executing",
+        }
+    )
 
 
 @then("log entries are emitted for the node")

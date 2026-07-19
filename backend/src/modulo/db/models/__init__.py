@@ -16,6 +16,8 @@ from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.lifecycle_map import LifecycleMap
+from modulo.db.models.mcp_setup_token import McpSetupToken
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.node import Node
 from modulo.db.models.node_category import NodeCategory
@@ -25,10 +27,14 @@ from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.oauth_client import OAuthClient
 from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
+from modulo.db.models.onboarding_progress import OnboardingProgress
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.parameter_schema import ParameterSchema
+from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
+from modulo.db.models.pipeline_folder import PipelineFolder
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
 from modulo.db.models.primitive_rating import PrimitiveRating
@@ -53,6 +59,7 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.variant_group import VariantGroup
 from modulo.db.models.view import SavedView
+from modulo.db.models.web_vital_event import WebVitalEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
 from modulo.db.models.workspace_lease import WorkspaceLease
 
@@ -78,6 +85,8 @@ __all__ = [
     "FeedbackRecord",
     "HitlClaim",
     "LibraryPrimitive",
+    "LifecycleMap",
+    "McpSetupToken",
     "ModelBackend",
     "Node",
     "NodeCategory",
@@ -88,13 +97,17 @@ __all__ = [
     "OAuthAuthorizationCode",
     "OAuthClient",
     "OAuthTokenFamily",
+    "OnboardingProgress",
     "OrgApiKey",
     "OrgDailyRunCount",
     "OrgMembership",
     "OrgScoped",
     "Organisation",
+    "ParameterSchema",
+    "ParameterSet",
     "Pipeline",
     "PipelineEdge",
+    "PipelineFolder",
     "PipelineSnapshot",
     "PrimitiveAbuseReport",
     "PrimitiveRating",
@@ -119,6 +132,7 @@ __all__ = [
     "Trigger",
     "TriggerEvent",
     "VariantGroup",
+    "WebVitalEvent",
     "WebhookDedupHash",
     "WebhookPayload",
     "WorkspaceLease",

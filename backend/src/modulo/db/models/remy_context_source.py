@@ -19,7 +19,9 @@ class RemyContextSource(Base):
             name="ck_remy_context_sources_mode",
         ),
         UniqueConstraint(
-            "organisation_id", "user_id", "source_key",
+            "organisation_id",
+            "user_id",
+            "source_key",
             name="uq_remy_context_sources_key",
         ),
     )

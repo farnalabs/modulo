@@ -39,7 +39,9 @@ async def test_create_model_backend(rls_session: AsyncSession, test_org: uuid.UU
 
 
 async def test_get_model_backend_returns_existing(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     mb = await create_model_backend(rls_session, **_mb_kwargs(test_org, test_user, suffix="-fetch"))
     fetched = await get_model_backend(rls_session, mb.id)
@@ -52,7 +54,9 @@ async def test_get_model_backend_returns_none_for_unknown(rls_session: AsyncSess
 
 
 async def test_list_model_backends_pagination(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     for i in range(3):
         await create_model_backend(
@@ -98,11 +102,16 @@ class TestListModelBackendsTierFiltering:
         suffix: str,
     ) -> None:
         await create_model_backend(
-            rls_session, tier=tier, **_mb_kwargs(test_org, test_user, suffix=suffix),
+            rls_session,
+            tier=tier,
+            **_mb_kwargs(test_org, test_user, suffix=suffix),
         )
 
     async def test_default_excludes_in_dev(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+        self,
+        rls_session: AsyncSession,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "preview", "-tier-prev")
@@ -112,7 +121,10 @@ class TestListModelBackendsTierFiltering:
         assert all(i.tier != "in_dev" for i in result.items)
 
     async def test_explicit_excluded_tiers_in_dev(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+        self,
+        rls_session: AsyncSession,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier2-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier2-nat")
@@ -121,7 +133,10 @@ class TestListModelBackendsTierFiltering:
         assert result.items[0].tier == "native"
 
     async def test_excluded_tiers_none_defaults_to_in_dev(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+        self,
+        rls_session: AsyncSession,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier3-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier3-nat")
@@ -130,7 +145,10 @@ class TestListModelBackendsTierFiltering:
         assert result.items[0].tier == "native"
 
     async def test_excluded_tiers_empty_skips_filter(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+        self,
+        rls_session: AsyncSession,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier4-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier4-nat")
@@ -138,7 +156,10 @@ class TestListModelBackendsTierFiltering:
         assert result.total == 2
 
     async def test_excluded_tiers_preview(
-        self, rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+        self,
+        rls_session: AsyncSession,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier5-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "preview", "-tier5-prev")

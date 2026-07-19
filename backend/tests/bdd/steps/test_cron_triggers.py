@@ -1,6 +1,7 @@
 """BDD step definitions: cron trigger create, schedule, spend limit,
 input template, event logging, timezone support, and disable."""
 
+import contextlib
 import datetime
 import json
 import uuid
@@ -9,10 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/cron.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 from modulo.db.models.trigger import Trigger
 from tests.bdd.conftest import make_mock_run
@@ -46,22 +45,14 @@ def org_has_pipeline_cron(org: str, name: str, request):
     request.node._pipeline_name = name
 
 
-@given(
-    parsers.parse(
-        'an active cron trigger exists for pipeline "{name}" with expression "{expression}"'
-    )
-)
+@given(parsers.parse('an active cron trigger exists for pipeline "{name}" with expression "{expression}"'))
 def active_cron_trigger_with_expression(name: str, expression: str, request):
     request.node._pipeline_name = name
     request.node._cron_expression = expression
     request.node._trigger_active = True
 
 
-@given(
-    parsers.parse(
-        'an active cron trigger exists for pipeline "{name}" with daily_spend_limit "{limit}"'
-    )
-)
+@given(parsers.parse('an active cron trigger exists for pipeline "{name}" with daily_spend_limit "{limit}"'))
 def active_cron_trigger_with_spend_limit(name: str, limit: str, request):
     request.node._pipeline_name = name
     request.node._cron_expression = "0 * * * *"
@@ -69,11 +60,7 @@ def active_cron_trigger_with_spend_limit(name: str, limit: str, request):
     request.node._trigger_active = True
 
 
-@given(
-    parsers.parse(
-        'an active cron trigger exists for pipeline "{name}" with input_template {template}'
-    )
-)
+@given(parsers.parse('an active cron trigger exists for pipeline "{name}" with input_template {template}'))
 def active_cron_trigger_with_template(name: str, template, request):
     input_template = json.loads(template) if isinstance(template, str) else template
     request.node._pipeline_name = name
@@ -96,11 +83,7 @@ def deactivated_cron_trigger(name: str, request):
     request.node._trigger_active = False
 
 
-@given(
-    parsers.parse(
-        'the pipeline has accumulated "{cost}" in run costs today'
-    )
-)
+@given(parsers.parse('the pipeline has accumulated "{cost}" in run costs today'))
 def accumulated_run_cost(cost: str, request):
     request.node._today_cost = Decimal(cost)
 
@@ -110,11 +93,7 @@ def accumulated_run_cost(cost: str, request):
 # ---------------------------------------------------------------------------
 
 
-@when(
-    parsers.parse(
-        'I create a cron trigger for pipeline "{pipeline}" with expression "{expression}"'
-    )
-)
+@when(parsers.parse('I create a cron trigger for pipeline "{pipeline}" with expression "{expression}"'))
 def create_cron_trigger_simple(pipeline: str, expression: str, client, request):
     create_cron_trigger_full(pipeline, expression, "UTC", "{}", client, request)
 
@@ -132,8 +111,7 @@ def create_cron_trigger_full(pipeline: str, expression: str, timezone: str, temp
 
 @when(
     parsers.parse(
-        'I create a cron trigger for pipeline "{pipeline}" with expression "{expression}" '
-        'timezone "{timezone}"'
+        'I create a cron trigger for pipeline "{pipeline}" with expression "{expression}" timezone "{timezone}"'
     )
 )
 def create_cron_trigger_timezone(pipeline: str, expression: str, timezone: str, client, request):
@@ -198,9 +176,7 @@ def fire_cron_trigger(request, client):
 
     execute_result = MagicMock()
     execute_result.scalar_one_or_none = MagicMock(return_value=trigger_mock)
-    execute_result.scalar_one = MagicMock(
-        return_value=getattr(request.node, "_today_cost", Decimal(0))
-    )
+    execute_result.scalar_one = MagicMock(return_value=getattr(request.node, "_today_cost", Decimal(0)))
     session.execute = AsyncMock(return_value=execute_result)
 
     mock_factory = MagicMock(return_value=session)
@@ -327,7 +303,7 @@ def trigger_event_references_run(request):
     pass
 
 
-@then(parsers.parse('a run is created with input_payload {payload}'))
+@then(parsers.parse("a run is created with input_payload {payload}"))
 def run_created_with_input_payload(payload, request):
     result = getattr(request.node, "_fire_result", None)
     assert result is not None

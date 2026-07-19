@@ -6,7 +6,7 @@ import { nextTick } from 'vue'
 
 vi.mock('vue-router', () => ({
   useRouter: vi.fn(() => ({ push: vi.fn(), isReady: vi.fn(() => Promise.resolve()) })),
-  useRoute: vi.fn(() => ({ name: 'login', params: { id: 'test-id' }, path: '/' })),
+  useRoute: vi.fn(() => ({ name: 'login', params: { id: 'test-id' }, path: '/', query: {} })),
   RouterLink: { template: '<a><slot /></a>' },
 }))
 
@@ -39,6 +39,7 @@ vi.mock('../stores/planStore', () => ({
     isTeam: false,
     isLoading: false,
     isFree: true,
+    featureEnabled: vi.fn(() => true),
   })),
 }))
 
@@ -119,10 +120,11 @@ function globalStubs() {
       CardTitle: { template: '<div><slot /></div>' },
       CardDescription: { template: '<div><slot /></div>' },
       CardContent: { template: '<div><slot /></div>' },
-      Input: { template: '<input v-bind="$attrs" /><slot /></div>' },
+      Input: { template: '<input v-bind="$attrs" />' },
       Button: { template: '<button><slot /></button>' },
       OwnershipPicker: true,
       SsoProviderForm: true,
+      EmptyState: { template: '<div><slot /></div>' },
     },
   }
 }

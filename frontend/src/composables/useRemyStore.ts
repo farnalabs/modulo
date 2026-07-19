@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
-import { ref, computed, watch } from 'vue'
-import { api } from '@/lib/api/client'
+import { ref, computed } from 'vue'
+import { useStorage } from '@vueuse/core'
+import { api, type components } from '@/lib/api/client'
 import { formatApiError } from '@/lib/api/formatError'
 import { pauseUiCommands, resumeUiCommands } from './useUiCommandExecutor'
 import type { ChatSession, ChatMessage, PageContext } from '@/types/remy'
@@ -10,39 +11,7 @@ export interface PermissionRequest {
   tools: Array<{ name: string; args: Record<string, unknown> }>
 }
 
-const POSITION_KEY = 'remy_panel_position'
-const SIZE_KEY = 'remy_panel_size'
-const ACTIVE_SESSION_KEY = 'remy_active_session_id'
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200000
-
-function loadPosition(): { x: number; y: number } {
-  try {
-    const raw = localStorage.getItem(POSITION_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      return {
-        x: Math.max(8, Math.min(parsed.x, window.innerWidth - 340)),
-        y: Math.max(8, Math.min(parsed.y, window.innerHeight - 100)),
-      }
-    }
-  } catch {
-    console.warn('[RemyStore] Failed to load panel position')
-  }
-  const defaultX = Math.max(8, window.innerWidth - 460)
-  return { x: defaultX, y: 80 }
-}
-
-function loadSize(): { width: number; height: number } {
-  try {
-    const raw = localStorage.getItem(SIZE_KEY)
-    if (raw) return JSON.parse(raw)
-  } catch {
-    console.warn('[RemyStore] Failed to load panel size')
-  }
-  const defaultWidth = Math.min(440, window.innerWidth - 16)
-  const defaultHeight = Math.min(600, window.innerHeight - 120)
-  return { width: defaultWidth, height: defaultHeight }
-}
 
 export function extractErrorMessage(err: unknown): string {
   return formatApiError(err)
@@ -65,11 +34,11 @@ function createMessage(role: ChatMessage['role'], content: string, overrides?: P
 
 export const useRemyStore = defineStore('remy', () => {
   const sessions = ref<ChatSession[]>([])
-  const activeSessionId = ref<string | null>(null)
+  const activeSessionId = useStorage<string | null>('remy-active-session', null)
   const messages = ref<ChatMessage[]>([])
-  const panelState = ref<'closed' | 'floating' | 'docked' | 'maximised'>('docked')
-  const panelPosition = ref(loadPosition())
-  const panelSize = ref(loadSize())
+  const panelState = useStorage<'closed' | 'floating' | 'docked' | 'maximised'>('remy-panel-state', 'docked')
+  const panelPosition = useStorage('remy-panel-position', { x: Math.max(8, window.innerWidth - 460), y: 80 })
+  const panelSize = useStorage('remy-panel-size', { width: Math.min(440, window.innerWidth - 16), height: Math.min(600, window.innerHeight - 120) })
   const isStreaming = ref(false)
   const pageContext = ref<PageContext>({ route: '', params: {}, entities: [] })
   const loading = ref(false)
@@ -104,26 +73,6 @@ export const useRemyStore = defineStore('remy', () => {
       : [],
   )
 
-  function persistPosition() {
-    localStorage.setItem(POSITION_KEY, JSON.stringify(panelPosition.value))
-  }
-
-  function persistSize() {
-    localStorage.setItem(SIZE_KEY, JSON.stringify(panelSize.value))
-  }
-
-  function persistActiveSessionId() {
-    if (activeSessionId.value) {
-      localStorage.setItem(ACTIVE_SESSION_KEY, activeSessionId.value)
-    } else {
-      localStorage.removeItem(ACTIVE_SESSION_KEY)
-    }
-  }
-
-  function loadActiveSessionId(): string | null {
-    return localStorage.getItem(ACTIVE_SESSION_KEY)
-  }
-
   async function fetchSessions() {
     sessionsLoading.value = true
     error.value = null
@@ -132,7 +81,8 @@ export const useRemyStore = defineStore('remy', () => {
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
       } else {
-        sessions.value = resp.data?.items ?? []
+        const payload = resp.data as unknown as { items?: ChatSession[] } | undefined
+        sessions.value = payload?.items ?? []
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : extractErrorMessage(e)
@@ -145,13 +95,13 @@ export const useRemyStore = defineStore('remy', () => {
     error.value = null
     try {
       const resp = await api.POST('/api/v1/remy/sessions', {
-        body: { name: null, provider: null, model: null, context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS } as unknown as Record<string, unknown>,
+        body: { name: null, provider: null, model: null, context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS } as unknown as components['schemas']['CreateSessionRequest'],
       })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
         return null
       }
-      const session = resp.data!
+      const session = resp.data as unknown as ChatSession
       if (Array.isArray(sessions.value)) sessions.value.unshift(session)
       activeSessionId.value = session.id
       messages.value = []
@@ -167,13 +117,13 @@ export const useRemyStore = defineStore('remy', () => {
     error.value = null
     messages.value = []
     try {
-      const resp = await api.GET('/api/v1/remy/sessions/{id}/messages', {
-        params: { path: { id } },
+      const resp = await api.GET('/api/v1/remy/sessions/{session_id}/messages', {
+        params: { path: { session_id: id } },
       })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
       } else {
-        messages.value = (resp.data as any)?.items ?? []
+        messages.value = (resp.data as unknown as { items?: ChatMessage[] } | undefined)?.items ?? []
         activeSessionId.value = id
       }
     } catch (e: unknown) {
@@ -186,18 +136,18 @@ export const useRemyStore = defineStore('remy', () => {
   async function renameSession(id: string, name: string): Promise<boolean> {
     error.value = null
     try {
-      const resp = await api.PATCH('/api/v1/remy/sessions/{id}', {
-        params: { path: { id } },
+      const resp = await api.PATCH('/api/v1/remy/sessions/{session_id}', {
+        params: { path: { session_id: id } },
         body: { name },
       })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
         return false
       }
-      const updated = resp.data!
+      const updated = resp.data as unknown as ChatSession
       if (Array.isArray(sessions.value)) {
         const idx = sessions.value.findIndex(s => s.id === id)
-        if (idx >= 0) sessions.value[idx] = updated as any
+        if (idx >= 0) sessions.value[idx] = updated
       }
       return true
     } catch (e: unknown) {
@@ -209,8 +159,8 @@ export const useRemyStore = defineStore('remy', () => {
   async function deleteSession(id: string) {
     error.value = null
     try {
-      const resp = await api.DELETE('/api/v1/remy/sessions/{id}', {
-        params: { path: { id } },
+      const resp = await api.DELETE('/api/v1/remy/sessions/{session_id}', {
+        params: { path: { session_id: id } },
       })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
@@ -220,7 +170,6 @@ export const useRemyStore = defineStore('remy', () => {
       if (activeSessionId.value === id) {
         activeSessionId.value = null
         messages.value = []
-        persistActiveSessionId()
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : extractErrorMessage(e)
@@ -249,7 +198,6 @@ export const useRemyStore = defineStore('remy', () => {
       x: Math.max(8, Math.min(pos.x, window.innerWidth - 340)),
       y: Math.max(8, Math.min(pos.y, window.innerHeight - 100)),
     }
-    persistPosition()
   }
 
   function updateSize(size: { width: number; height: number }) {
@@ -257,7 +205,6 @@ export const useRemyStore = defineStore('remy', () => {
       width: Math.max(100, Math.min(size.width, window.innerWidth - 16)),
       height: Math.max(100, Math.min(size.height, window.innerHeight - 40)),
     }
-    persistSize()
   }
 
   function setPageContext(ctx: PageContext) {
@@ -344,8 +291,6 @@ export const useRemyStore = defineStore('remy', () => {
     }
   }
 
-  watch(activeSessionId, persistActiveSessionId)
-
   function appendToolCall(tc: { tool_call_id: string; tool_name: string; success: boolean; result?: unknown; error?: string }) {
     const summary = tc.success
       ? `Tool: ${tc.tool_name} — completed`
@@ -380,7 +325,6 @@ export const useRemyStore = defineStore('remy', () => {
     fetchSessions,
     createSession,
     loadSession,
-    loadActiveSessionId,
     renameSession,
     deleteSession,
     sendMessage,
@@ -399,7 +343,5 @@ export const useRemyStore = defineStore('remy', () => {
     resumeRemy,
     appendSystemMessage,
     appendTurnSeparator,
-    persistPosition,
-    persistSize,
   }
 })

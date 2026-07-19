@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, String, Uuid, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -22,5 +22,6 @@ class SystemConfig(Base):
     )
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
+        ForeignKey("accounts.id", ondelete="SET NULL"),
         nullable=True,
     )

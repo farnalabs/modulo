@@ -1,13 +1,16 @@
 """Determination API — read-only SDLC assessment and pipeline draft generation."""
 
+import asyncio
 import logging
 import uuid
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.connectors.base import ConnectorType
@@ -22,6 +25,8 @@ from modulo.determination.scanner import ScanSample, run_scan
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/determination", tags=["determination"])
 
@@ -65,7 +70,7 @@ class DraftNodeResponse(BaseModel):
     node_type: str
     label: str
     connector_type: str | None = None
-    required_capabilities: list[str] = []
+    required_capabilities: ClassVar[list[str]] = []
 
 
 class DraftEdgeResponse(BaseModel):
@@ -110,48 +115,7 @@ def _sample_to_response(s: ScanSample) -> SampleResponse:
     )
 
 
-async def _load_and_scan(settings: Settings) -> tuple[list[ScanSample], list[Finding]]:
-    """Load relevant connector instances and run the scan + inference."""
-    from modulo.api.dependencies import get_db_session as _get_session
-
-    async for session in _get_session():
-        try:
-
-            async with session.begin():
-                await set_rls_org(session, _PLACEHOLDER_ORG_ID)
-                instances = await list_connector_instances(session, page_size=100)
-
-        except ProgrammingError:
-
-            logger.exception("routes.determination")
-
-            raise HTTPException(
-
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
-                detail="This feature is not available. Run database migrations to enable it.",
-
-            )
-
-    relevant: list[ConnectorInstance] = [
-        ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
-    ]
-
-    async with ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=settings.fernet_key)) as hub:
-        try:
-            await hub.initialise(relevant)
-        except ConnectorDecryptError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to decrypt credentials for connector {exc.connector_id}",
-            ) from exc
-
-        samples = await run_scan(hub)
-
-    findings = infer(samples)
-    return samples, findings
-
-
+@handle_db_errors("determination.run_determination")
 @router.get("", response_model=DeterminationResponse)
 async def run_determination(
     session: AsyncSession = Depends(get_db_session),
@@ -161,22 +125,17 @@ async def run_determination(
     """Scan all connected tools and produce an SDLC maturity assessment."""
     try:
         try:
-
             async with session.begin():
                 await set_rls_org(session, _PLACEHOLDER_ORG_ID)
                 instances = await list_connector_instances(session, page_size=100)
 
         except ProgrammingError:
-
             logger.exception("routes.determination")
 
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
-
-            )
+            ) from None
 
         relevant: list[ConnectorInstance] = [
             ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
@@ -205,23 +164,28 @@ async def run_determination(
         )
     except HTTPException:
         raise
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database service unavailable. Please try again later.",
-        )
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable. Please try again later.",
+        ) from None
     except ProgrammingError:
-        raise HTTPException(status_code=501, detail="Feature is not available. Run database migrations to enable it.")
-    except Exception as e:
-        logger.error("Unexpected error in run_determination: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(
+            status_code=501, detail="Feature is not available. Run database migrations to enable it."
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in run_determination")
+        raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
+@handle_db_errors("determination.create_determination_draft")
 @router.post("/draft", response_model=DraftResponse)
 async def create_determination_draft(
     session: AsyncSession = Depends(get_db_session),
@@ -236,22 +200,17 @@ async def create_determination_draft(
     """
     try:
         try:
-
             async with session.begin():
                 await set_rls_org(session, _PLACEHOLDER_ORG_ID)
                 instances = await list_connector_instances(session, page_size=100)
 
         except ProgrammingError:
-
             logger.exception("routes.determination")
 
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
-
-            )
+            ) from None
 
         relevant: list[ConnectorInstance] = [
             ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
@@ -307,18 +266,22 @@ async def create_determination_draft(
         )
     except HTTPException:
         raise
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database service unavailable. Please try again later.",
-        )
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable. Please try again later.",
+        ) from None
     except ProgrammingError:
-        raise HTTPException(status_code=501, detail="Feature is not available. Run database migrations to enable it.")
-    except Exception as e:
-        logger.error("Unexpected error in create_determination_draft: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(
+            status_code=501, detail="Feature is not available. Run database migrations to enable it."
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in create_determination_draft")
+        raise HTTPException(status_code=500, detail="Internal server error") from None

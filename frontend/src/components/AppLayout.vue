@@ -1,8 +1,8 @@
-﻿<template>
+<template>
   <TooltipProvider :delay-duration="300">
   <div class="flex items-start min-h-screen">
     <!-- Sidebar -->
-    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col">
+    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col h-screen sticky top-0">
       <div class="mb-6 flex items-center gap-2.5 pl-1">
         <router-link to="/" class="flex items-center gap-2.5">
           <div
@@ -37,7 +37,7 @@
         </div>
 
         <div class="flex items-center justify-between pb-2 mb-1">
-          <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
+          <label for="applayout-field-2" class="toggle-switch" :class="isLight ? 'light' : 'dark'">
             <span class="track">
               <span class="thumb" />
             </span>
@@ -76,7 +76,7 @@
               </svg>
               <span>{{ isLight ? $t('common.light') : $t('common.dark') }}</span>
             </span>
-            <input
+            <input id="applayout-field-2"
               type="checkbox"
               class="sr-only"
               @change="toggleTheme"
@@ -160,6 +160,8 @@
     />
 
     <!-- Mobile sidebar -->
+    <!-- The sidebar owns Escape handling while focus is within its descendants. -->
+    <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -->
     <aside
       id="mobile-sidebar"
       ref="mobileSidebarRef"
@@ -186,7 +188,7 @@
       </div>
 
       <div class="flex items-center justify-between pb-2 mb-1">
-        <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
+        <label for="applayout-field-1" class="toggle-switch" :class="isLight ? 'light' : 'dark'">
           <span class="track">
             <span class="thumb" />
           </span>
@@ -225,7 +227,7 @@
             </svg>
             <span>{{ isLight ? $t('common.light') : $t('common.dark') }}</span>
           </span>
-          <input
+          <input id="applayout-field-1"
             type="checkbox"
             class="sr-only"
             @change="toggleTheme"
@@ -252,9 +254,10 @@
     </aside>
 
     <main
-      class="flex-1 overflow-auto bg-background pt-14 md:pt-0"
+      class="flex-1 overflow-auto bg-background pt-14 md:pt-0 relative"
       :style="remyDockedStyle"
     >
+      <OnboardingBanner />
       <Breadcrumb class="px-6 pt-4 pb-3" />
       <router-view v-slot="{ Component, route }">
         <transition name="page">
@@ -271,6 +274,7 @@
       </div>
     </div>
 
+    <SpotlightOverlay />
     <RemyPanel />
   </div>
   </TooltipProvider>
@@ -292,6 +296,8 @@ import { TooltipProvider } from "./ui/tooltip";
 import { useSidebar } from "../composables/useSidebar";
 import { useRemyStore } from "../composables/useRemyStore";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
+import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
+import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
 
 const viewModeOptions = [
   { label: 'Essentials', value: 'simple' },

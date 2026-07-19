@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """ModuloPostgresSaver — AsyncPostgresSaver with org_id column isolation.
 
 Adds ``organisation_id`` to all ``langgraph.*`` checkpoint tables, enforces
@@ -8,6 +6,7 @@ Fernet. Resolves the alpha limitation where DB-privileged admins could read
 any tenant's checkpoints.
 """
 
+from __future__ import annotations
 
 import json
 import logging
@@ -231,6 +230,8 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
 
     def _decrypt_with_fallback(self, ciphertext: bytes) -> bytes:
         """Decrypt with primary key, falling back to old key on InvalidToken."""
+        if self._fernet is None:
+            return ciphertext
         try:
             return self._fernet.decrypt(ciphertext)
         except InvalidToken:
@@ -306,7 +307,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
 
             async for value in cur:
                 checkpoint = self._decrypt_checkpoint(value["checkpoint"])
-                return CheckpointTuple(  # type: ignore[call-arg]
+                return CheckpointTuple(
                     {
                         "configurable": {
                             "thread_id": thread_id,
@@ -327,10 +328,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                         if value.get("parent_checkpoint_id")
                         else None
                     ),
-                    (self._load_blobs(value["channel_values"]) if value.get("channel_values") else None),  # type: ignore[arg-type]
                     (self._load_writes(value["pending_writes"]) if value.get("pending_writes") else None),
-                    (self._load_writes(value["pending_sends"]) if value.get("pending_sends") else None),
-                    value["metadata"] if not isinstance(value["metadata"], dict) else None,
                 )
         return None
 
@@ -367,7 +365,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             await cur.execute(self.SELECT_SQL + " " + where, args, binary=True)
             async for value in cur:
                 checkpoint = self._decrypt_checkpoint(value["checkpoint"])
-                yield CheckpointTuple(  # type: ignore[call-arg]
+                yield CheckpointTuple(
                     {
                         "configurable": {
                             "thread_id": thread_id,
@@ -388,10 +386,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                         if value.get("parent_checkpoint_id")
                         else None
                     ),
-                    (self._load_blobs(value["channel_values"]) if value.get("channel_values") else None),  # type: ignore[arg-type]
                     (self._load_writes(value["pending_writes"]) if value.get("pending_writes") else None),
-                    (self._load_writes(value["pending_sends"]) if value.get("pending_sends") else None),
-                    value["metadata"] if not isinstance(value["metadata"], dict) else None,
                 )
 
     # ------------------------------------------------------------------
@@ -405,7 +400,6 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         metadata: CheckpointMetadata,
         new_versions: dict[str, str | int | float | bool] | None = None,
     ) -> dict[str, Any]:
-        del new_versions
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = config["configurable"].get("checkpoint_id")
@@ -416,7 +410,10 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             parent_checkpoint_id = parent_config["configurable"].get("checkpoint_id")
 
         if not checkpoint_id:
-            checkpoint_id = self.get_next_version()  # type: ignore[call-arg]
+            nv = new_versions or {}
+            channel = next(iter(nv.keys())) if nv else ""
+            current = nv.get(channel) if nv else None
+            checkpoint_id = self.get_next_version(current, channel)  # type: ignore[arg-type]
 
         encrypted_checkpoint = self._encrypt_checkpoint(checkpoint)
 

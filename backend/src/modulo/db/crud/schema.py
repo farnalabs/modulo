@@ -5,7 +5,6 @@ or LibraryPrimitive references this schema. Use force=True to skip all checks.
 All functions require RLS org context to be set by the caller.
 """
 
-import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -15,12 +14,11 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
+from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.agent import Agent
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import Schema, SchemaVersion
-
-_log = logging.getLogger(__name__)
 
 
 class SchemaDeletionProtectedError(Exception):
@@ -70,20 +68,39 @@ async def get_schema(session: AsyncSession, schema_id: uuid.UUID) -> Schema | No
 async def list_schemas(
     session: AsyncSession,
     *,
-    page: int = 1,
-    page_size: int = 20,
+    cursor: str | None = None,
+    limit: int = 20,
 ) -> PageResult[Schema]:
-    offset = (page - 1) * page_size
+    q = select(Schema)
+
     try:
         total = (await session.execute(select(func.count()).select_from(Schema))).scalar_one()
     except ProgrammingError:
-        return PageResult(items=[], total=0, page=page, page_size=page_size)
-    items = list(
-        (
-            await session.execute(select(Schema).order_by(Schema.created_at.desc()).offset(offset).limit(page_size))
-        ).scalars()
-    )
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
+        return PageResult(items=[], total=0, page=1, page_size=limit)
+
+    if cursor is not None:
+        paginator = CursorPaginator()
+        cp = await paginator.paginate(
+            session,
+            q,
+            cursor=cursor,
+            limit=limit,
+            model=Schema,
+            compute_total=False,
+        )
+        return PageResult(
+            items=cp.items,
+            total=total,
+            page=1,
+            page_size=limit,
+            next_cursor=cp.next_cursor,
+            has_more=cp.has_more,
+        )
+
+    items = list((await session.execute(q.order_by(Schema.created_at.desc()).limit(limit + 1))).scalars())
+    has_more = len(items) > limit
+    items = items[:limit]
+    return PageResult(items=items, total=total, page=1, page_size=limit, has_more=has_more)
 
 
 async def update_schema(
@@ -142,11 +159,7 @@ async def delete_schema(
             await session.execute(
                 select(func.count())
                 .select_from(PipelineSnapshot)
-                .where(
-                    cast(PipelineSnapshot.schema_pins_json, String).contains(
-                        str(schema_id)
-                    )
-                )
+                .where(cast(PipelineSnapshot.schema_pins_json, String).contains(str(schema_id)))
             )
         ).scalar_one()
         if pipelines_with_ref:
@@ -159,9 +172,7 @@ async def delete_schema(
                 .where(
                     LibraryPrimitive.primitive_type == "schema",
                     LibraryPrimitive.source == "local",
-                    cast(LibraryPrimitive.content_json, String).contains(
-                        str(schema_id)
-                    ),
+                    cast(LibraryPrimitive.content_json, String).contains(str(schema_id)),
                 )
             )
         ).scalar_one()

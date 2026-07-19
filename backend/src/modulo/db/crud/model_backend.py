@@ -57,6 +57,7 @@ async def get_model_backend(session: AsyncSession, model_backend_id: uuid.UUID) 
 async def list_model_backends(
     session: AsyncSession,
     *,
+    org_id: uuid.UUID,
     page: int = 1,
     page_size: int = 20,
     excluded_tiers: list[str] | None = None,
@@ -65,21 +66,23 @@ async def list_model_backends(
         excluded_tiers = ["in_dev"]
     offset = (page - 1) * page_size
     try:
-        total_query = select(func.count()).select_from(ModelBackend)
+        total_query = select(func.count()).select_from(ModelBackend).where(ModelBackend.organisation_id == org_id)
         if excluded_tiers:
             total_query = total_query.where(~ModelBackend.tier.in_(excluded_tiers))
         total = (await session.execute(total_query)).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     try:
-        items_stmt = select(ModelBackend).order_by(ModelBackend.created_at.desc()).offset(offset).limit(page_size)
+        items_stmt = (
+            select(ModelBackend)
+            .where(ModelBackend.organisation_id == org_id)
+            .order_by(ModelBackend.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
         if excluded_tiers:
             items_stmt = items_stmt.where(~ModelBackend.tier.in_(excluded_tiers))
-        items = list(
-            (
-                await session.execute(items_stmt)
-            ).scalars()
-        )
+        items = list((await session.execute(items_stmt)).scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     return PageResult(items=items, total=total, page=page, page_size=page_size)

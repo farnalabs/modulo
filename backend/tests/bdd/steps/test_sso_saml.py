@@ -2,6 +2,7 @@
 
 import base64
 import uuid
+from contextlib import suppress
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,10 +13,8 @@ from modulo.api.dependencies import get_plan_context
 from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.settings import Settings, get_settings
 
-try:
+with suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/sso_saml.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -57,18 +56,10 @@ _SAML_RESPONSE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 def _make_saml_response(email: str, display_name: str, groups: list[str] | None = None) -> str:
     groups_xml = ""
     if groups:
-        values = "".join(
-            f'        <saml:AttributeValue>{g}</saml:AttributeValue>'
-            for g in groups
-        )
-        groups_xml = (
-            '      <saml:Attribute Name="groups">\n'
-            f"{values}\n"
-            '      </saml:Attribute>'
-        )
+        values = "".join(f"        <saml:AttributeValue>{g}</saml:AttributeValue>" for g in groups)
+        groups_xml = f'      <saml:Attribute Name="groups">\n{values}\n      </saml:Attribute>'
     xml = (
-        _SAML_RESPONSE_XML
-        .replace("__EMAIL__", email)
+        _SAML_RESPONSE_XML.replace("__EMAIL__", email)
         .replace("__DISPLAY_NAME__", display_name)
         .replace("__GROUPS_XML__", groups_xml)
     )
@@ -160,11 +151,7 @@ def existing_saml_user(email: str, ctx: dict[str, Any]) -> None:
 # ── Given: group mapping ──────────────────────────────────────────────────
 
 
-@given(
-    parsers.parse(
-        'SAML group mapping is configured for "{idp_group}" to team "{team_id}" with role "{role}"'
-    )
-)
+@given(parsers.parse('SAML group mapping is configured for "{idp_group}" to team "{team_id}" with role "{role}"'))
 def group_mapping_configured(idp_group: str, team_id: str, role: str, ctx: dict[str, Any]) -> None:
     ctx["group_mappings"] = [{"idp_group": idp_group, "team_id": team_id, "team_role": role}]
 
@@ -214,7 +201,7 @@ def acs_valid_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
             user_mock.id = uuid.uuid4()
             user_mock.organisation_id = _ORG_ID
             user_mock.org_role = "runner"
-            mock_jit.return_value = user_mock
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
         else:
             existing = MagicMock()
             existing.email = email
@@ -223,7 +210,7 @@ def acs_valid_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
             existing.org_role = "admin"
             existing.sso_subject = "saml:https://idp.example.com:user@example.com"
             existing.auth_provider = "saml"
-            mock_jit.return_value = existing
+            mock_jit.return_value = (existing, _ORG_ID, "admin")
 
         mock_tok.return_value = {
             "access_token": "at-saml-test",
@@ -283,7 +270,7 @@ def acs_with_groups(groups: str, request: Any, ctx: dict[str, Any], client: Any)
         user_mock.id = uuid.uuid4()
         user_mock.organisation_id = _ORG_ID
         user_mock.org_role = "runner"
-        mock_jit.return_value = user_mock
+        mock_jit.return_value = (user_mock, _ORG_ID, "runner")
 
         provider_mock = MagicMock()
         provider_mock.group_mappings = ctx.get("group_mappings", [])
@@ -348,9 +335,7 @@ def new_user_provisioned(ctx: dict[str, Any], request: Any) -> None:
     mock_jit.assert_awaited_once()
     call_kwargs = mock_jit.await_args[1] if mock_jit.await_args else {}
     email_arg = mock_jit.call_args[0][2] if mock_jit.call_args else call_kwargs.get("email", "")
-    assert email_arg == ctx.get("expected_email", ""), (
-        f"Expected JIT for {ctx.get('expected_email')}, got {email_arg}"
-    )
+    assert email_arg == ctx.get("expected_email", ""), f"Expected JIT for {ctx.get('expected_email')}, got {email_arg}"
 
 
 @then("no duplicate account was created")
@@ -380,6 +365,4 @@ def error_detail_mentions(text: str, request: Any) -> None:
     resp = request.node._resp
     body = resp.json()
     detail = body.get("detail", "")
-    assert text.lower() in detail.lower(), (
-        f"Expected detail to mention '{text}', got '{detail}'"
-    )
+    assert text.lower() in detail.lower(), f"Expected detail to mention '{text}', got '{detail}'"

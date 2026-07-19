@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -35,5 +33,5 @@ class VariantGroup(OrgScoped):
     run_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
     degraded_evals: Mapped[bool] = mapped_column(server_default="false", nullable=False)
-    organisation: Mapped[Organisation] = relationship()
-    pipeline: Mapped[Pipeline] = relationship()
+    organisation: Mapped["Organisation"] = relationship()
+    pipeline: Mapped["Pipeline"] = relationship()

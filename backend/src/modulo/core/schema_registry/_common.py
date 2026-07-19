@@ -19,9 +19,7 @@ def _safe_json_dumps(data: Any, indent: int = 2) -> str:
     try:
         return json.dumps(data, indent=indent, default=str)
     except (ValueError, TypeError) as exc:
-        raise ValueError(
-            f"Data contains non-serializable values (e.g. circular references): {exc}"
-        ) from exc
+        raise ValueError(f"Data contains non-serializable values (e.g. circular references): {exc}") from exc
 
 
 def parse_schema_from_response(response_text: str) -> dict[str, Any]:
@@ -62,19 +60,21 @@ async def invoke_and_parse(
             _log.exception("LLM call failed during schema %s (attempt %d/%d)", context, attempt, _max_retries)
             if attempt == _max_retries:
                 raise error_cls("LLM call failed") from exc
-            await asyncio.sleep(2 ** attempt)
+            await asyncio.sleep(2**attempt)
             continue
 
         try:
             content = response.content
         except AttributeError:
-            _log.error("Backend returned response without .content attribute for schema %s (response type: %s)",
-                       context, type(response).__name__)
+            _log.error(
+                "Backend returned response without .content attribute for schema %s (response type: %s)",
+                context,
+                type(response).__name__,
+            )
             raise error_cls("Backend returned unexpected response type") from None
 
         if not isinstance(content, str):
-            _log.error("Backend returned non-string content for schema %s (got %s)",
-                       context, type(content).__name__)
+            _log.error("Backend returned non-string content for schema %s (got %s)", context, type(content).__name__)
             raise error_cls(f"Expected string response, got {type(content).__name__}")
 
         try:
@@ -83,4 +83,4 @@ async def invoke_and_parse(
             _log.exception("Failed to parse %s schema from LLM response", context)
             raise error_cls(f"Failed to parse {context} schema from LLM response") from exc
 
-    raise error_cls("LLM call failed after all retries")
+    raise error_cls("LLM call failed after all retries (unreachable — safety net)")

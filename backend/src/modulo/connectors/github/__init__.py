@@ -4,7 +4,7 @@ import asyncio
 import json
 import random
 import re
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -87,6 +87,9 @@ class GitHubConnector(ConnectorBase):
       "milestone"       — create a milestone; data: {"repo": ..., "title": ..., "description": ..., "due_on": ...}
       "pr"              — create a pull request; data: {"repo": ..., "title": ..., "head": ..., "base": ...,
                            "body": ..., "draft": ..., "maintainer_can_modify": ...}
+      "pr_review"       — submit a PR review; data: {"repo": ..., "pull_number": ..., "event": "APPROVE"|
+                           "REQUEST_CHANGES"|"COMMENT", "body": ..., "comments": [{"path": ..., "position": ...,
+                           "body": ...}]}
       "pr_comment"      — review comment on a PR; data: {"repo": ..., "pull_number": ..., "body": ...}
       "pr_update"       — update a pull request; data: {"repo": ..., "pull_number": ..., "title": ...,
                            "body": ..., "state": ..., "base": ...}
@@ -122,6 +125,7 @@ class GitHubConnector(ConnectorBase):
         Adds random jitter to retry delays to avoid thundering herd.
         Wraps HTTP/network/parse errors as ValueError.
         """
+        last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 async with self._client() as client:
@@ -130,31 +134,36 @@ class GitHubConnector(ConnectorBase):
                         raise ValueError("GitHub API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                         retry_after = _parse_retry_after(r)
-                        delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                        delay = (
+                            min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                        )
                         await asyncio.sleep(self._jitter(delay))
                         continue
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
+                last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     retry_after = _parse_retry_after(exc.response)
-                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError(f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
+                last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError("GitHub API timeout") from exc
             except httpx.ConnectError as exc:
+                last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError("GitHub API connection error") from exc
-
+        raise ValueError("GitHub API request failed after retries") from last_exc
 
     async def _parse_json(self, response: httpx.Response) -> Any:
         """Parse JSON response, wrapping decode errors as ValueError."""
@@ -162,6 +171,9 @@ class GitHubConnector(ConnectorBase):
             return response.json()
         except json.JSONDecodeError as exc:
             raise ValueError(f"GitHub API returned invalid JSON: {response.text[:200]}") from exc
+
+    async def _parse_json_object(self, response: httpx.Response) -> dict[str, Any]:
+        return cast(dict[str, Any], await self._parse_json(response))
 
     @staticmethod
     def _parse_scopes_from_headers(response: httpx.Response) -> set[str]:
@@ -182,6 +194,9 @@ class GitHubConnector(ConnectorBase):
             raise ValueError(f"Cannot verify scopes: {exc}") from exc
 
         token_scopes = self._parse_scopes_from_headers(r)
+        # admin:org is a superset of read:org
+        if "admin:org" in token_scopes:
+            token_scopes.add("read:org")
         return set(REQUIRED_SCOPES - token_scopes)
 
     async def health_check(self) -> HealthResult:
@@ -213,7 +228,10 @@ class GitHubConnector(ConnectorBase):
         """Get a required filter or raise a descriptive ValueError."""
         if key not in filters:
             raise ValueError(f"GitHub {resource} query requires '{key}' filter")
-        return filters[key]
+        value = filters[key]
+        if not isinstance(value, str):
+            raise ValueError(f"GitHub {resource} query filter '{key}' must be a string")
+        return value
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
@@ -244,7 +262,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "pr_commits")
                 pull_number = self._require_filter(q.filters, "pull_number", "pr_commits")
                 r = await self._call_api(
-                    "GET", f"/repos/{owner_repo}/pulls/{pull_number}/commits",
+                    "GET",
+                    f"/repos/{owner_repo}/pulls/{pull_number}/commits",
                     params={"per_page": q.limit},
                 )
                 commits: list[dict[str, Any]] = await self._parse_json(r)
@@ -253,7 +272,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "pr_files")
                 pull_number = self._require_filter(q.filters, "pull_number", "pr_files")
                 r = await self._call_api(
-                    "GET", f"/repos/{owner_repo}/pulls/{pull_number}/files",
+                    "GET",
+                    f"/repos/{owner_repo}/pulls/{pull_number}/files",
                     params={"per_page": q.limit},
                 )
                 files: list[dict[str, Any]] = await self._parse_json(r)
@@ -296,7 +316,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "issue_comments")
                 issue_number = self._require_filter(q.filters, "issue_number", "issue_comments")
                 r = await self._call_api(
-                    "GET", f"/repos/{owner_repo}/issues/{issue_number}/comments",
+                    "GET",
+                    f"/repos/{owner_repo}/issues/{issue_number}/comments",
                     params={"per_page": q.limit},
                 )
                 comments: list[dict[str, Any]] = await self._parse_json(r)
@@ -306,7 +327,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "issue_events")
                 issue_number = self._require_filter(q.filters, "issue_number", "issue_events")
                 r = await self._call_api(
-                    "GET", f"/repos/{owner_repo}/issues/{issue_number}/events",
+                    "GET",
+                    f"/repos/{owner_repo}/issues/{issue_number}/events",
                     params={"per_page": q.limit},
                 )
                 events: list[dict[str, Any]] = await self._parse_json(r)
@@ -322,7 +344,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "timeline")
                 issue_number = self._require_filter(q.filters, "issue_number", "timeline")
                 r = await self._call_api(
-                    "GET", f"/repos/{owner_repo}/issues/{issue_number}/timeline",
+                    "GET",
+                    f"/repos/{owner_repo}/issues/{issue_number}/timeline",
                     params={"per_page": q.limit},
                 )
                 timeline: list[dict[str, Any]] = await self._parse_json(r)
@@ -335,7 +358,19 @@ class GitHubConnector(ConnectorBase):
         """Get a required write field or raise a descriptive ValueError."""
         if key not in data:
             raise ValueError(f"GitHub {resource} write requires '{key}' in data")
-        return data[key]
+        value = data[key]
+        if not isinstance(value, str):
+            raise ValueError(f"GitHub {resource} write field '{key}' must be a string")
+        return value
+
+    def _require_string_list(self, data: dict[str, Any], key: str, resource: str) -> list[str]:
+        """Get a required non-empty list of strings or raise a descriptive ValueError."""
+        if key not in data:
+            raise ValueError(f"GitHub {resource} write requires '{key}' in data")
+        value = data[key]
+        if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+            raise ValueError(f"GitHub {resource} write field '{key}' must be a non-empty list of strings")
+        return value
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         match payload.resource:
@@ -349,8 +384,7 @@ class GitHubConnector(ConnectorBase):
                 if "sha" in payload.data:
                     body["sha"] = payload.data["sha"]
                 r = await self._call_api("PUT", f"/repos/{owner_repo}/contents/{path}", json=body)
-                result: dict[str, Any] = await self._parse_json(r)
-                return result
+                return await self._parse_json_object(r)
             case "issue":
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue")
                 issue_body: dict[str, Any] = {
@@ -365,7 +399,7 @@ class GitHubConnector(ConnectorBase):
                 if "milestone" in payload.data:
                     issue_body["milestone"] = payload.data["milestone"]
                 r = await self._call_api("POST", f"/repos/{owner_repo}/issues", json=issue_body)
-                return await self._parse_json(r)
+                return await self._parse_json_object(r)
             case "issue_update":
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_update")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_update")
@@ -374,32 +408,35 @@ class GitHubConnector(ConnectorBase):
                     if key in payload.data:
                         update_body[key] = payload.data[key]
                 r = await self._call_api("PATCH", f"/repos/{owner_repo}/issues/{issue_number}", json=update_body)
-                return await self._parse_json(r)
+                return await self._parse_json_object(r)
             case "issue_comment":
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_comment")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_comment")
                 r = await self._call_api(
-                    "POST", f"/repos/{owner_repo}/issues/{issue_number}/comments",
+                    "POST",
+                    f"/repos/{owner_repo}/issues/{issue_number}/comments",
                     json={"body": self._require_write_filter(payload.data, "body", "issue_comment")},
                 )
-                return await self._parse_json(r)
+                return await self._parse_json_object(r)
             case "issue_label":
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_label")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_label")
                 r = await self._call_api(
-                    "POST", f"/repos/{owner_repo}/issues/{issue_number}/labels",
-                    json={"labels": self._require_write_filter(payload.data, "labels", "issue_label")},
+                    "POST",
+                    f"/repos/{owner_repo}/issues/{issue_number}/labels",
+                    json={"labels": self._require_string_list(payload.data, "labels", "issue_label")},
                 )
-                return await self._parse_json(r)
+                return await self._parse_json_object(r)
             case "issue_reaction":
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_reaction")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_reaction")
                 r = await self._call_api(
-                    "POST", f"/repos/{owner_repo}/issues/{issue_number}/reactions",
+                    "POST",
+                    f"/repos/{owner_repo}/issues/{issue_number}/reactions",
                     json={"content": self._require_write_filter(payload.data, "content", "issue_reaction")},
                     headers={"Accept": "application/vnd.github.squirrel-girl-preview+json"},
                 )
-                return await self._parse_json(r)
+                return await self._parse_json_object(r)
             case "label":
                 owner_repo = self._require_write_filter(payload.data, "repo", "label")
                 label_body: dict[str, Any] = {
@@ -409,7 +446,7 @@ class GitHubConnector(ConnectorBase):
                 if "description" in payload.data:
                     label_body["description"] = payload.data["description"]
                 r = await self._call_api("POST", f"/repos/{owner_repo}/labels", json=label_body)
-                return await self._parse_json(r)
+                return await self._parse_json_object(r)
             case "milestone":
                 owner_repo = self._require_write_filter(payload.data, "repo", "milestone")
                 milestone_body: dict[str, Any] = {
@@ -420,7 +457,7 @@ class GitHubConnector(ConnectorBase):
                 if "due_on" in payload.data:
                     milestone_body["due_on"] = payload.data["due_on"]
                 r = await self._call_api("POST", f"/repos/{owner_repo}/milestones", json=milestone_body)
-                return await self._parse_json(r)
+                return await self._parse_json_object(r)
             case "pr":
                 owner_repo = self._require_write_filter(payload.data, "repo", "pr")
                 pr_body: dict[str, Any] = {
@@ -435,16 +472,37 @@ class GitHubConnector(ConnectorBase):
                 if "maintainer_can_modify" in payload.data:
                     pr_body["maintainer_can_modify"] = payload.data["maintainer_can_modify"]
                 r = await self._call_api("POST", f"/repos/{owner_repo}/pulls", json=pr_body)
-                return await self._parse_json(r)
+                return await self._parse_json_object(r)
+            case "pr_review":
+                owner_repo = self._require_write_filter(payload.data, "repo", "pr_review")
+                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_review")
+                event = self._require_write_filter(payload.data, "event", "pr_review")
+                if event not in ("APPROVE", "REQUEST_CHANGES", "COMMENT"):
+                    raise ValueError(
+                        f"GitHub pr_review 'event' must be one of APPROVE, REQUEST_CHANGES, COMMENT; got {event!r}"
+                    )
+                review_body: dict[str, Any] = {
+                    "event": event,
+                    "body": payload.data.get("body", ""),
+                }
+                if "comments" in payload.data:
+                    review_body["comments"] = payload.data["comments"]
+                r = await self._call_api(
+                    "POST",
+                    f"/repos/{owner_repo}/pulls/{pull_number}/reviews",
+                    json=review_body,
+                )
+                return await self._parse_json_object(r)
             case "pr_comment":
                 owner_repo = self._require_write_filter(payload.data, "repo", "pr_comment")
                 pull_number = self._require_write_filter(payload.data, "pull_number", "pr_comment")
                 body_value = self._require_write_filter(payload.data, "body", "pr_comment")
                 r = await self._call_api(
-                    "POST", f"/repos/{owner_repo}/pulls/{pull_number}/comments",
+                    "POST",
+                    f"/repos/{owner_repo}/pulls/{pull_number}/comments",
                     json={"body": body_value},
                 )
-                return await self._parse_json(r)
+                return await self._parse_json_object(r)
             case "pr_update":
                 owner_repo = self._require_write_filter(payload.data, "repo", "pr_update")
                 pull_number = self._require_write_filter(payload.data, "pull_number", "pr_update")
@@ -453,6 +511,6 @@ class GitHubConnector(ConnectorBase):
                     if key in payload.data:
                         update[key] = payload.data[key]
                 r = await self._call_api("PATCH", f"/repos/{owner_repo}/pulls/{pull_number}", json=update)
-                return await self._parse_json(r)
+                return await self._parse_json_object(r)
             case _:
                 raise ValueError(f"Unsupported GitHub write resource: {payload.resource!r}")

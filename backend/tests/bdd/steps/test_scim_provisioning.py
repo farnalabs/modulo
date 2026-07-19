@@ -4,6 +4,7 @@ Maps Gherkin scenarios from features/scim/scim_provisioning.feature to
 API calls against /scim/v2/Users and /scim/v2/Groups.
 """
 
+import contextlib
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
@@ -19,10 +20,8 @@ from modulo.settings import Settings, get_settings
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/scim/scim_provisioning.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants matching SCIM unit test patterns
@@ -73,10 +72,12 @@ _MOCK_MEMBERSHIPS = [_MOCK_MEMBERSHIP]
 _SCIM_USER_UUID = "00000000-0000-0000-0000-000000000002"
 _SCIM_TEAM_UUID = "00000000-0000-0000-0000-000000000003"
 
+
 def _resolve_id(alias: str) -> str:
     """Map human-readable IDs to valid UUIDs for URL paths."""
     mapping = {"user-001": _SCIM_USER_UUID, "group-001": _SCIM_TEAM_UUID}
     return mapping.get(alias, alias)
+
 
 # ---------------------------------------------------------------------------
 # SCIM request bodies (used across steps)
@@ -115,6 +116,7 @@ _PATCH_GROUP_REMOVE_MEMBER = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_scim_settings() -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -123,17 +125,6 @@ def _make_scim_settings() -> Settings:
         modulo_admin_password="testpass",
         modulo_license_key="enterprise-license",
         modulo_scim_token=_SCIM_TOKEN,
-        modulo_public_url="http://localhost:8000",
-    )
-
-
-def _make_no_license_settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://localhost/test",
-        secret_key=_VALID_32,
-        fernet_key=_VALID_32,
-        modulo_admin_password="testpass",
-        modulo_license_key="",
         modulo_public_url="http://localhost:8000",
     )
 
@@ -185,6 +176,7 @@ def _group_to_resp_json(team: MagicMock, members: list[MagicMock]) -> dict[str, 
 # Shared response context
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def ctx() -> dict[str, Any]:
     return {}
@@ -194,6 +186,7 @@ def ctx() -> dict[str, Any]:
 # SCIM client fixture (overrides SCIM auth instead of JWT auth)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def scim_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
@@ -201,10 +194,26 @@ def scim_client() -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
+    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from modulo.api.main import app
+    from modulo.core.feature_flags import LicenseData, LicenseKeyTier, PlanContext
+
+    _plan: PlanContext = LicenseKeyTier(
+        LicenseData(
+            tier="team",
+            features=["scim"],
+            expires_at="",
+            org_id="",
+            raw_payload={},
+            raw_key="test-license-key",
+        )
+    )
+
     app.dependency_overrides[get_settings] = _make_scim_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+    app.dependency_overrides[get_plan_context] = lambda: _plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -212,6 +221,7 @@ def scim_client() -> Generator[TestClient, None, None]:
 # ===========================================================================
 # GIVEN — Preconditions
 # ===========================================================================
+
 
 @given(parsers.parse('I am authenticated as a SCIM client for org "{org}"'))
 def _given_scim_auth(org: str) -> None:
@@ -257,6 +267,7 @@ def _given_scim_group_exists(group_id: str, display_name: str, request: Any) -> 
 # WHEN — Actions
 # ===========================================================================
 
+
 @when(parsers.parse('I POST /scim/v2/Users with SCIM user "{email}"'))
 def _when_post_user(email: str, scim_client: Any, request: Any, ctx: dict[str, Any]) -> None:
     """POST /scim/v2/Users to create a SCIM user."""
@@ -298,20 +309,26 @@ def _when_post_user_no_auth(email: str, request: Any, ctx: dict[str, Any]) -> No
     body = dict(_USER_CREATE_BODY)
     body["userName"] = email
 
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
+
     app.dependency_overrides.clear()
     app.dependency_overrides[get_settings] = _make_scim_settings
     app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     headers = {"X-CSRF-Token": "test-csrf-token"}
-    resp = TestClient(app).post(
-        "/scim/v2/Users", json=body,
-        headers=headers, cookies={"XSRF-TOKEN": "test-csrf-token"},
+    test_client = TestClient(app)
+    test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
+    resp = test_client.post(
+        "/scim/v2/Users",
+        json=body,
+        headers=headers,
     )
     app.dependency_overrides.clear()
     _store_response(request, ctx, resp)
 
 
-@when(parsers.parse('I GET /scim/v2/Users/{user_id}'))
+@when(parsers.parse("I GET /scim/v2/Users/{user_id}"))
 def _when_get_user(user_id: str, scim_client: Any, request: Any, ctx: dict[str, Any]) -> None:
     """GET /scim/v2/Users/{user_id} to retrieve a SCIM user."""
     resolved = _resolve_id(user_id)
@@ -356,7 +373,7 @@ def _when_put_user(user_id: str, email: str, scim_client: Any, request: Any, ctx
         ctx["updated_user"] = mock_user
 
 
-@when(parsers.parse('I DELETE /scim/v2/Users/{user_id}'))
+@when(parsers.parse("I DELETE /scim/v2/Users/{user_id}"))
 def _when_delete_user(user_id: str, scim_client: Any, request: Any, ctx: dict[str, Any]) -> None:
     """DELETE /scim/v2/Users/{user_id} to deprovision a SCIM user."""
     resolved = _resolve_id(user_id)
@@ -369,7 +386,7 @@ def _when_delete_user(user_id: str, scim_client: Any, request: Any, ctx: dict[st
         _store_response(request, ctx, resp)
 
 
-@when(parsers.parse('I PATCH /scim/v2/Users/{user_id} with active=false'))
+@when(parsers.parse("I PATCH /scim/v2/Users/{user_id} with active=false"))
 def _when_patch_user_deactivate(user_id: str, scim_client: Any, request: Any, ctx: dict[str, Any]) -> None:
     """PATCH /scim/v2/Users/{user_id} to deactivate a SCIM user."""
     resolved = _resolve_id(user_id)
@@ -425,7 +442,11 @@ def _when_post_group(display_name: str, user_id: str, scim_client: Any, request:
 
 @when(parsers.parse('I PATCH /scim/v2/Groups/{group_id} add member "{user_id}"'))
 def _when_patch_group_add_member(
-    group_id: str, user_id: str, scim_client: Any, request: Any, ctx: dict[str, Any],
+    group_id: str,
+    user_id: str,
+    scim_client: Any,
+    request: Any,
+    ctx: dict[str, Any],
 ) -> None:
     """PATCH /scim/v2/Groups/{group_id} to add a member."""
     resolved = _resolve_id(group_id)
@@ -446,7 +467,11 @@ def _when_patch_group_add_member(
 
 @when(parsers.parse('I PATCH /scim/v2/Groups/{group_id} remove member "{user_id}"'))
 def _when_patch_group_remove_member(
-    group_id: str, user_id: str, scim_client: Any, request: Any, ctx: dict[str, Any],
+    group_id: str,
+    user_id: str,
+    scim_client: Any,
+    request: Any,
+    ctx: dict[str, Any],
 ) -> None:
     """PATCH /scim/v2/Groups/{group_id} to remove a member."""
     resolved = _resolve_id(group_id)
@@ -469,7 +494,11 @@ def _when_patch_group_remove_member(
 def _when_get_users_list(scim_client: Any, request: Any, ctx: dict[str, Any]) -> None:
     """GET /scim/v2/Users to list SCIM users."""
     if ctx.get("_no_enterprise_license"):
-        app.dependency_overrides[get_settings] = _make_no_license_settings
+        from modulo.api.dependencies import get_plan_context
+        from modulo.api.main import app
+        from modulo.core.feature_flags import CommunityTier
+
+        app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = TestClient(app).get("/scim/v2/Users", headers=headers)
@@ -489,6 +518,7 @@ def _when_get_users_list(scim_client: Any, request: Any, ctx: dict[str, Any]) ->
 # ===========================================================================
 # THEN — Assertions
 # ===========================================================================
+
 
 @then("the response contains a SCIM User resource")
 def _then_response_has_scim_user(request: Any) -> None:
@@ -591,5 +621,3 @@ def _then_user_in_team(user_id: str, team_name: str, ctx: dict[str, Any]) -> Non
 def _then_user_not_in_team(user_id: str, team_name: str, ctx: dict[str, Any]) -> None:
     removed_id = ctx.get("_removed_member")
     assert removed_id is not None, "No member was removed in the previous step"
-
-

@@ -1,6 +1,7 @@
 """BDD step definitions for n8n connector scenarios."""
 
 import asyncio
+import contextlib
 
 import httpx
 import pytest
@@ -10,10 +11,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.n8n import N8NConnector
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/n8n.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 TOKEN = "n8n_test_token"
 BASE_URL = "http://localhost:5678"
@@ -179,9 +178,9 @@ def when_write_credential(n8n_connector, resource, name, cred_type):
                 return_value=httpx.Response(201, json={"data": {"id": "C1", "name": name, "type": cred_type}})
             )
         try:
-            _last_write_result = _run(n8n_connector.write(
-                ConnectorPayload(resource=resource, data={"name": name, "type": cred_type})
-            ))
+            _last_write_result = _run(
+                n8n_connector.write(ConnectorPayload(resource=resource, data={"name": name, "type": cred_type}))
+            )
         except Exception as exc:
             _last_error = exc
 
@@ -283,13 +282,9 @@ def _mock_list_endpoint(resource, **params):
     suffix = resource[:-1] if resource != "nodes" else "node"
     mock_kwargs = {"data": [{"id": f"{suffix}_1", "name": f"Mock {resource}"}]}
     if filtered_params:
-        respx.get(url, params=filtered_params).mock(
-            return_value=httpx.Response(200, json=mock_kwargs)
-        )
+        respx.get(url, params=filtered_params).mock(return_value=httpx.Response(200, json=mock_kwargs))
     else:
-        respx.get(url).mock(
-            return_value=httpx.Response(200, json=mock_kwargs)
-        )
+        respx.get(url).mock(return_value=httpx.Response(200, json=mock_kwargs))
 
 
 def _mock_write_single(resource, item_id):

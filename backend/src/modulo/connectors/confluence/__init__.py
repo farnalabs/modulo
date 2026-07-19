@@ -53,7 +53,7 @@ class ConfluenceConnector(ConnectorBase):
             self._auth = httpx.BasicAuth(username=creds["email"], password=creds["api_token"])
         else:
             raise ValueError(
-                "Confluence credentials must contain either 'token' (PAT/Bearer) or 'email' + 'api_token' (Basic auth)"
+                "Confluence credentials must contain either 'token' (PAT/Bearer) or 'email' + 'api_token' (Basic auth)",
             )
 
     @property
@@ -90,7 +90,10 @@ class ConfluenceConnector(ConnectorBase):
 
             return HealthResult(ok=True, detail=display_name)
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"Confluence API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False,
+                detail=f"Confluence API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Confluence API timeout")
         except httpx.ConnectError:

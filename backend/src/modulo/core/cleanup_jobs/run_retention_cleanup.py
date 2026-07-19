@@ -41,6 +41,7 @@ async def cleanup_old_runs(
                 Run.status.in_(_TERMINAL_STATES),
                 Run.created_at < cutoff,
             )
+            .order_by(Run.id)
             .limit(BATCH_SIZE)
         )
         ids = result.scalars().all()
@@ -48,7 +49,11 @@ async def cleanup_old_runs(
             break
 
         await db_session.execute(delete(Run).where(Run.id.in_(ids)))
-        await db_session.commit()
+        try:
+            await db_session.commit()
+        except Exception:
+            _log.exception("Failed to commit run retention cleanup for %d runs", len(ids))
+            raise
         total += len(ids)
 
         if len(ids) < BATCH_SIZE:

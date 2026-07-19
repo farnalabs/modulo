@@ -26,29 +26,31 @@ Autonomy integration:
   - ``notify_on_complete``:         gate auto-approves and records an artifact;
                                     no interrupt is raised.
   - ``fully_autonomous``:           gate is silently skipped.
-  - ``human_only`` on gate config:  overrides autonomy — always interrupts.
+  - ``human_only`` on gate config:  overrides autonomy Ã¢â,¬â€ always interrupts.
 
-Conditional gating (§8.17):
+Conditional gating (Ã,Â§8.17):
   - ``condition`` on ``hitl_gate_config``:  JMESPath expression evaluated
     against the current state (upstream node output).  If falsy the gate is
     skipped.  If truthy or absent the gate proceeds to autonomy checks.
 
-Eval-before-interrupt (§8.17):
+Eval-before-interrupt (Ã,Â§8.17):
   - ``eval_definitions``:  list of ``EvalDefinition`` DTOs scoped to the
     upstream node.  Evaluated *after* the condition check but *before* the
     interrupt.  If any eval with ``failure_behaviour='block'`` fails, an
-    ``EvalBlockedError`` is raised instead of a ``NodeInterrupt``.
+    ``EvalBlockedError`` is raised instead of a ``GraphInterrupt``.
 """
 
+import asyncio
 import json
 import logging
 import uuid
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from typing import Any
 
 import jmespath
 from langchain_core.messages import HumanMessage
-from langgraph.errors import NodeInterrupt
+from langgraph.types import interrupt
 
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.core.pipeline_engine.decorator import cancellable_node
@@ -87,7 +89,9 @@ def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> b
         case "neq":
             return score != threshold
         case _:
-            _log.warning("hitl_gate.unknown_operator", extra={"operator": operator, "score": score, "threshold": threshold})
+            _log.warning(
+                "hitl_gate.unknown_operator", extra={"operator": operator, "score": score, "threshold": threshold}
+            )
             return False
 
 
@@ -141,7 +145,23 @@ def make_node_fn(
 
         env = SandboxedEnvironment()
         template = env.from_string(prompt_template)
-        rendered_prompt = template.render(state=state, run_context=run_context, input=raw_input)
+        template_vars: dict[str, Any] = {
+            "state": state,
+            "run_context": run_context,
+            "input": raw_input,
+        }
+        # Inject resolved parameters as {{ parameter.<key> }}.
+        resolved = node_def.get("_resolved_parameters")
+        if isinstance(resolved, dict):
+            template_vars["parameter"] = resolved
+        rendered_prompt = template.render(**template_vars)
+
+        # Append routing prompt for LLM routing nodes.
+        routing_mode: str | None = node_def.get("routing_mode")
+        if routing_mode == "llm":
+            routing_prompt: str = node_def.get("routing_prompt", "")
+            if routing_prompt:
+                rendered_prompt = rendered_prompt + "\n\n" + routing_prompt
 
         # Get ModelBackendHub from ContextVar.
         from modulo.core.pipeline_engine.decorator import get_model_backend_hub
@@ -160,19 +180,25 @@ def make_node_fn(
         content = response.content if hasattr(response, "content") else str(response)
         output_data: Any = content
         if isinstance(content, str):
-            try:
+            with suppress(json.JSONDecodeError, ValueError):
                 output_data = json.loads(content)
-            except (json.JSONDecodeError, ValueError):
-                pass
 
         # Validate against output schema if defined.
         if isinstance(output_schema_json, dict) and isinstance(output_data, dict):
             _validate_against_schema(output_data, output_schema_json)
 
-        return {
+        result: dict[str, Any] = {
             "artifacts": [{"node_id": node_id, "status": "completed", "output": output_data}],
             "output": output_data,
         }
+
+        # Extract _next_node from LLM routing output for the router.
+        if routing_mode == "llm" and isinstance(output_data, dict):
+            next_node = output_data.pop("_next_node", None)
+            if next_node is not None:
+                result["_llm_next_node"] = next_node
+
+        return result
 
     _node.__name__ = f"node_{node_id}"
     return _node
@@ -218,7 +244,7 @@ def make_hitl_gate_fn(
     required_team_id: str | None = hitl_gate_config.get("required_team_id")
 
     async def _hitl_gate(state: dict[str, Any]) -> dict[str, Any]:
-        # --- Resume check — always first so condition/evals aren't re-evaluated. ---
+        # --- Resume check Ã¢â,¬â€ always first so condition/evals aren't re-evaluated. ---
         decision = state.get("_hitl_decision")
         if decision is not None:
             action = decision.get("action") if isinstance(decision, dict) else None
@@ -238,7 +264,7 @@ def make_hitl_gate_fn(
                 }
             is_rejected = action == "rejected"
             result_status = "rejected" if is_rejected else "approved"
-            result: dict[str, Any] = {
+            gate_result: dict[str, Any] = {
                 "artifacts": [
                     {
                         "node_id": gate_id,
@@ -252,10 +278,10 @@ def make_hitl_gate_fn(
             # downstream nodes receive the human's version instead of the
             # original agent output.
             if isinstance(decision, dict) and "modified_output" in decision:
-                result["output"] = decision["modified_output"]
-            return result
+                gate_result["output"] = decision["modified_output"]
+            return gate_result
 
-        # --- Conditional gate (§8.17) — evaluate condition against state. ---
+        # --- Conditional gate (Ã,Â§8.17) Ã¢â,¬â€ evaluate condition against state. ---
         if condition_expr:
             try:
                 compiled = jmespath.compile(condition_expr)
@@ -264,7 +290,7 @@ def make_hitl_gate_fn(
                 raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
             result = compiled.search(state)
             if not _is_truthy(result):
-                # Condition falsy — skip the gate entirely.
+                # Condition falsy Ã¢â,¬â€ skip the gate entirely.
                 return {
                     "artifacts": [
                         {
@@ -276,22 +302,22 @@ def make_hitl_gate_fn(
                     ],
                 }
 
-        # --- Eval-before-interrupt (§8.17) — run node-scoped evals. ---
+        # --- Eval-before-interrupt (Ã,Â§8.17) Ã¢â,¬â€ run node-scoped evals. ---
         eval_results_by_name: dict[str, EvalResult] = {}
         if eval_definitions:
             engine = EvalEngine()
             for eval_def in eval_definitions:
-                result = engine.evaluate(state, eval_def)
-                eval_results_by_name[eval_def.name] = result
+                eval_result = engine.evaluate(state, eval_def)
+                eval_results_by_name[eval_def.name] = eval_result
                 _log.info(
                     "hitl_gate.eval_result",
                     extra={
                         "gate_id": gate_id,
                         "eval_name": eval_def.name,
                         "eval_id": str(eval_def.id),
-                        "passed": result.passed,
-                        "score": result.score,
-                        "detail": result.detail,
+                        "passed": eval_result.passed,
+                        "score": eval_result.score,
+                        "detail": eval_result.detail,
                     },
                 )
             # If any block eval failed, EvalBlockedError was raised above.
@@ -306,9 +332,7 @@ def make_hitl_gate_fn(
                             await set_rls_org(session, org_id)
                             for eval_def in eval_definitions:
                                 eval_result = eval_results_by_name[eval_def.name]
-                                node_uuid: uuid.UUID | None = (
-                                    uuid.UUID(eval_def.node_id) if eval_def.node_id else None
-                                )
+                                node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
                                 db_result = EvalResultModel(
                                     organisation_id=org_id,
                                     run_id=_run_id,
@@ -319,10 +343,12 @@ def make_hitl_gate_fn(
                                     detail=eval_result.detail,
                                 )
                                 session.add(db_result)
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     _log.exception("hitl_gate.persist_eval_failed")
 
-        # --- Eval-reference condition check (§8.17 v1) — evaluate condition
+        # --- Eval-reference condition check (Ã,Â§8.17 v1) Ã¢â,¬â€ evaluate condition
         # against captured eval results. ---
         if eval_condition_raw is not None and eval_results_by_name:
             eval_name: str = eval_condition_raw.get("eval_name", "")
@@ -361,7 +387,7 @@ def make_hitl_gate_fn(
         autonomy = effective_autonomy_level(pipeline_default, run_context)
         human_only_effective: bool = human_only
 
-        # human_only overrides everything — always interrupt.
+        # human_only overrides everything Ã¢â,¬â€ always interrupt.
         if human_only_effective:
             pass
         elif should_skip_hitl_gate(autonomy):
@@ -387,13 +413,13 @@ def make_hitl_gate_fn(
                 ],
             }
 
-        # First invocation — store config and interrupt.
+        # First invocation Ã¢â,¬â€ store config and interrupt.
         hitl_gates: list[dict[str, Any]] = list(state.get("_hitl_gates") or [])
         hitl_gates.append(hitl_gate_config)
         state["_hitl_gates"] = hitl_gates
 
-        # State mutations before the raise are persisted by the checkpointer.
-        raise NodeInterrupt(
+        # State mutations before the interrupt are persisted by the checkpointer.
+        decision = interrupt(
             {
                 "gate_id": gate_id,
                 "autonomy_level": autonomy.value,
@@ -402,6 +428,7 @@ def make_hitl_gate_fn(
                 "required_team_id": required_team_id,
             }
         )
+        return await _hitl_gate({**state, "_hitl_decision": decision})
 
     _hitl_gate.__name__ = f"hitl_gate_{gate_id}"
     return _hitl_gate
@@ -449,7 +476,7 @@ def make_manual_node_fn(
                 "manual_output": manual_output,
             }
 
-        # First invocation — record pending artifact and interrupt.
+        # First invocation Ã¢â,¬â€ record pending artifact and interrupt.
         artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
         artifacts.append({"node_id": node_id, "status": "awaiting_human"})
         state["artifacts"] = artifacts
@@ -462,7 +489,7 @@ def make_manual_node_fn(
             },
         )
 
-        raise NodeInterrupt(
+        decision = interrupt(
             {
                 "manual": True,
                 "node_id": node_id,
@@ -470,9 +497,305 @@ def make_manual_node_fn(
                 "output_schema_id": node_def.get("output_schema_id"),
             }
         )
+        return await _manual_node({**state, "_hitl_decision": decision})
 
     _manual_node.__name__ = f"manual_{node_id}"
     return _manual_node
+
+
+def make_connector_fn(
+    node_def: dict[str, Any],
+    *,
+    timeout: float | None = None,
+) -> Any:
+    """
+    Return a decorated async node function that resolves a connector
+    from the ConnectorHub and executes a connector action (query/write).
+
+    The node_def must have a 'connector_binding' dict with:
+      - instance_id: uuid of the ConnectorInstance
+      - type: connector type (e.g. 'shell')
+      - operation: 'query' or 'write' (optional, default 'query')
+      - input: dict of input parameters (optional)
+    """
+    node_id: str = str(node_def["id"])
+    binding = node_def.get("connector_binding") or {}
+    op: str = binding.get("operation", "query")
+
+    @cancellable_node(timeout=timeout)
+    async def _connector_node(state: dict[str, Any]) -> dict[str, Any]:
+        from modulo.connectors.base import ConnectorPayload, ConnectorQuery
+        from modulo.core.pipeline_engine.decorator import get_connector_hub
+
+        hub = get_connector_hub()
+        if hub is None:
+            return {"artifacts": [{"node_id": node_id, "status": "executed", "output": {"note": "no connector hub"}}]}
+
+        instance_id_str = binding.get("instance_id")
+        if not instance_id_str:
+            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": "no connector instance_id"}]}
+
+        import uuid as _uuid
+
+        try:
+            connector = hub.get(_uuid.UUID(str(instance_id_str)))
+        except Exception as _conn_exc:
+            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": f"connector error: {_conn_exc}"}]}
+
+        run_context = state.get("run_context") or {}
+        raw_input = run_context.get("input", {})
+        resource: str = binding.get("resource", "command")
+        filters = dict(binding.get("filters", {}))
+        data = dict(binding.get("data", {}))
+        if isinstance(raw_input, dict):
+            filters.update({k: v for k, v in raw_input.items() if k not in data})
+            data.update({k: v for k, v in raw_input.items() if k not in filters})
+
+        # Ensure provider_ref for shell connectors
+        if "provider_ref" not in filters and "provider_ref" not in data:
+            filters["provider_ref"] = "/"
+
+        try:
+            if op == "write":
+                payload = ConnectorPayload(resource=resource, data=data)
+                result = await connector.write(payload)
+            else:
+                query = ConnectorQuery(resource=resource, filters=filters)
+                result = await connector.query(query)
+        except Exception as exc:
+            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(exc)}]}
+
+        return {
+            "artifacts": [{"node_id": node_id, "status": "completed", "output": result}],
+            "output": result,
+        }
+
+    _connector_node.__name__ = f"connector_{node_id}"
+    return _connector_node
+
+
+def make_sandbox_agent_fn(
+    node_def: dict[str, Any],
+    *,
+    timeout: float | None = None,
+) -> Any:
+    """Return a decorated async node function that dispatches work to an external
+    agent runtime in an E2B sandbox.
+
+    The node_def must have:
+      - agent_prompt: str Ã¢â,¬â€ Jinja2 template rendered against state
+      - template_id: str Ã¢â,¬â€ E2B sandbox template ID (default "base")
+      - agent_command: str Ã¢â,¬â€ command to run inside the sandbox
+        (default: "claude --output-json /home/user/prompt.md")
+      - output_schema_json: dict | None Ã¢â,¬â€ optional output schema validation
+      - timeout_seconds: int Ã¢â,¬â€ max wall-clock time (default 600)
+      - context_files: dict[str, str] Ã¢â,¬â€ optional files to write into the sandbox
+        keyed by path
+
+    The node creates an E2B sandbox, writes the rendered prompt + context files,
+    runs the external agent, reads structured output from /home/user/output.json,
+    and tears down the sandbox. Wall-clock time and exit code are captured
+    natively Ã¢â,¬â€ even on failure.
+    """
+    node_id: str = str(node_def["id"])
+    agent_prompt_template: str = node_def.get("agent_prompt") or ""
+    template_id: str = node_def.get("template_id", "base")
+    env_vars_extra: dict[str, str] = node_def.get("env_vars") or {}
+    agent_command: str = node_def.get(
+        "agent_command",
+        "claude --output-json /home/user/prompt.md",
+    )
+    output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
+    sandbox_timeout: int = node_def.get("timeout_seconds", 600)
+    context_files: dict[str, str] = node_def.get("context_files") or {}
+
+    @cancellable_node(timeout=timeout or sandbox_timeout, role="sandbox_agent")
+    async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
+        import json as _json
+        import time as _time
+
+        from e2b import AsyncSandbox  # type: ignore[import-untyped]
+        from jinja2.sandbox import SandboxedEnvironment
+
+        run_context: dict[str, Any] = state.get("run_context") or {}
+        raw_input: Any = run_context.get("input", {})
+
+        env = SandboxedEnvironment()
+        template = env.from_string(agent_prompt_template)
+        template_vars: dict[str, Any] = {
+            "state": state,
+            "run_context": run_context,
+            "input": raw_input,
+        }
+        resolved = node_def.get("_resolved_parameters")
+        if isinstance(resolved, dict):
+            template_vars["parameter"] = resolved
+        rendered_prompt = template.render(**template_vars)
+
+        start_time = _time.monotonic()
+        sandbox: AsyncSandbox | None = None
+
+        run_id: str = str(state.get("_run_id", ""))
+        pipeline_id: str = str(state.get("_pipeline_id", ""))
+        org_id: str = str(state.get("_org_id", ""))
+
+        try:
+            sandbox = await AsyncSandbox.create(template=template_id)
+
+            for path, content in context_files.items():
+                if path.endswith(".b64"):
+                    import base64 as _b64
+
+                    content = _b64.b64decode(content).decode()
+                    path = path[:-4]
+                await sandbox.files.write(path, content)
+
+            await sandbox.files.write("/home/user/prompt.md", rendered_prompt)
+
+            cmd_result = await sandbox.commands.run(
+                agent_command,
+                envs={
+                    "MODULO_RUN_ID": run_id,
+                    "MODULO_PIPELINE_ID": pipeline_id,
+                    "MODULO_ORG_ID": org_id,
+                    "APP_MODULO_OPENCODE_API_KEY": __import__("os").environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
+                    "GITHUB_TOKEN": __import__("os").environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
+                    or __import__("os").environ.get("GITHUB_DOGFOOD_PAT_WR", "")
+                    or __import__("os").environ.get("GITHUB_TOKEN", ""),
+                    **env_vars_extra,
+                },
+            )
+
+            elapsed = _time.monotonic() - start_time
+            exit_code: int = getattr(cmd_result, "exit_code", -1)
+
+            raw_output: str = ""
+            output_json: Any = None
+            try:
+                raw_output = await sandbox.files.read("/home/user/output.json")
+                output_json = _json.loads(raw_output)
+            except Exception:
+                _log.info(
+                    "sandbox_agent.no_output_json",
+                    extra={"node_id": node_id, "exit_code": exit_code},
+                )
+
+            if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
+                try:
+                    _validate_against_schema(output_json, output_schema_json)
+                except ValueError:
+                    _log.exception(
+                        "sandbox_agent.schema_validation_failed",
+                        extra={"node_id": node_id},
+                    )
+                    elapsed = _time.monotonic() - start_time
+                    return {
+                        "artifacts": [
+                            {
+                                "node_id": node_id,
+                                "status": "failed",
+                                "output": {
+                                    "status": "failed",
+                                    "summary": "Output failed schema validation",
+                                    "exit_code": exit_code,
+                                    "wall_clock_time_ms": int(elapsed * 1000),
+                                    "output_json": output_json,
+                                },
+                            }
+                        ],
+                        "output": {
+                            "status": "failed",
+                            "summary": "Output failed schema validation",
+                            "wall_clock_time_ms": int(elapsed * 1000),
+                        },
+                    }
+
+            status: str = "completed" if exit_code == 0 else "failed"
+            result_summary: str = ""
+            changed_files: list[str] = []
+            pr_url: str = ""
+
+            if isinstance(output_json, dict):
+                result_summary = output_json.get("summary", "")
+                changed_files = output_json.get("changed_files", [])
+                pr_url = output_json.get("pr_url", "")
+
+            return {
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": status,
+                        "output": {
+                            "status": status,
+                            "summary": result_summary,
+                            "changed_files": changed_files,
+                            "pr_url": pr_url,
+                            "exit_code": exit_code,
+                            "wall_clock_time_ms": int(elapsed * 1000),
+                            "output_json": output_json,
+                        },
+                    }
+                ],
+                "output": {
+                    "status": status,
+                    "summary": result_summary,
+                    "wall_clock_time_ms": int(elapsed * 1000),
+                },
+            }
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as _exc:
+            elapsed = _time.monotonic() - start_time
+            import traceback as _tb
+
+            _exc_type = type(_exc).__name__
+            _exc_msg = str(_exc)[:500]
+            _exc_tb = _tb.format_exc()
+            _log.warning(f"SANDBOX_AGENT_ERROR type={_exc_type} msg={_exc_msg}")
+            _log.warning(f"SANDBOX_AGENT_TRACEBACK:\n{_exc_tb}")
+            _log.exception(
+                "sandbox_agent.execution_failed",
+                extra={
+                    "node_id": node_id,
+                    "elapsed_ms": int(elapsed * 1000),
+                    "exc_type": _exc_type,
+                    "exc_msg": _exc_msg,
+                },
+            )
+            return {
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": "failed",
+                        "output": {
+                            "status": "failed",
+                            "summary": "Sandbox agent execution failed",
+                            "error_type": _exc_type,
+                            "error_message": _exc_msg,
+                            "exit_code": -1,
+                            "wall_clock_time_ms": int(elapsed * 1000),
+                        },
+                    }
+                ],
+                "output": {
+                    "status": "failed",
+                    "summary": "Sandbox agent execution failed",
+                    "wall_clock_time_ms": int(elapsed * 1000),
+                },
+            }
+        finally:
+            if sandbox is not None:
+                try:
+                    await sandbox.kill()
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.kill_failed",
+                        extra={"node_id": node_id},
+                    )
+
+    _sandbox_agent.__name__ = f"sandbox_agent_{node_id}"
+    return _sandbox_agent
 
 
 def _validate_against_schema(data: dict[str, Any], schema: dict[str, Any]) -> None:

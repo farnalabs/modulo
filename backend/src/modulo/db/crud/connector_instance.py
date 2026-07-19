@@ -21,7 +21,7 @@ async def create_connector_instance(
     org_id: uuid.UUID,
     name: str,
     connector_type_id: str,
-    owner_id: uuid.UUID,
+    account_id: uuid.UUID,
     credentials_ciphertext: bytes,
     config_json: dict[str, Any] | None = None,
     allowed_operations: list[str] | None = None,
@@ -33,7 +33,7 @@ async def create_connector_instance(
         organisation_id=org_id,
         name=name,
         connector_type_id=connector_type_id,
-        owner_id=owner_id,
+        account_id=account_id,
         credentials_ciphertext=credentials_ciphertext,
         config_json=config_json or {},
         allowed_operations=allowed_operations or [],
@@ -94,18 +94,11 @@ async def list_connector_instances(
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     try:
         items_stmt = (
-            select(ConnectorInstance)
-            .order_by(ConnectorInstance.created_at.desc())
-            .offset(offset)
-            .limit(page_size)
+            select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
         )
         if excluded_tiers:
             items_stmt = items_stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))
-        items = list(
-            (
-                await session.execute(items_stmt)
-            ).scalars()
-        )
+        items = list((await session.execute(items_stmt)).scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     return PageResult(items=items, total=total, page=page, page_size=page_size)

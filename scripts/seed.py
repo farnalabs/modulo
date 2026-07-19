@@ -37,7 +37,6 @@ from modulo.db.models import (
     ConnectorInstance,
     EvalDefinition,
     EvalResult,
-    FeedbackRecord,
     LibraryPrimitive,
     ModelBackend,
     OrgApiKey,
@@ -153,7 +152,7 @@ async def seed() -> None:
                         session.add(TeamMembership(organisation_id=org.id, team_id=t.id, user_id=m.id))
                 await session.flush()
                 teams.append(t)
-            print(f"[seed] 3 teams with memberships")
+            print("[seed] 3 teams with memberships")
 
             # ── Schemas (6) + SchemaVersions ──────────────────────────────
             schema_defs_data = [
@@ -177,7 +176,7 @@ async def seed() -> None:
                     session.add(sv)
                 await session.flush()
                 schemas.append((s, sv))
-            print(f"[seed] 6 schemas + versions")
+            print("[seed] 6 schemas + versions")
 
             # ── Model Backends (4) ────────────────────────────────────────
             mb_defs = [
@@ -192,7 +191,7 @@ async def seed() -> None:
                 session.add(mb)
                 await session.flush()
                 backends.append(mb)
-            print(f"[seed] 4 model backends")
+            print("[seed] 4 model backends")
 
             # ── Agents (8) ────────────────────────────────────────────────
             agent_defs = [
@@ -230,7 +229,7 @@ async def seed() -> None:
                 session.add(a)
                 await session.flush()
                 agents_list.append(a)
-            print(f"[seed] 8 agents")
+            print("[seed] 8 agents")
 
             # ── Pipelines (5) + edges + snapshots ─────────────────────────
             pipeline_defs = [
@@ -313,7 +312,7 @@ async def seed() -> None:
                 pipelines_list.append(pipeline)
                 snapshots_list.append(snapshot)
                 print(f"[seed] Pipeline '{pipeline.name}'")
-            print(f"[seed] 5 pipelines with edges and snapshots")
+            print("[seed] 5 pipelines with edges and snapshots")
 
             # ── Library Primitives (12) ───────────────────────────────────
             lib_primitives = [
@@ -360,7 +359,7 @@ async def seed() -> None:
             ]
             session.add_all(lib_primitives)
             await session.flush()
-            print(f"[seed] 12 library primitives")
+            print("[seed] 12 library primitives")
 
             # ── Eval Definitions (4) ──────────────────────────────────────
             eval_defs_list = []
@@ -379,7 +378,7 @@ async def seed() -> None:
                 await session.flush()
                 eval_defs_list.append(ed)
 
-            print(f"[seed] 4 eval definitions")
+            print("[seed] 4 eval definitions")
 
             # ── Connectors (3) ───────────────────────────────────────────
             for cname, ctype, cfg in [
@@ -393,7 +392,7 @@ async def seed() -> None:
                     allowed_operations=["read", "write"], visibility="org",
                 ))
             await session.flush()
-            print(f"[seed] 3 connectors")
+            print("[seed] 3 connectors")
 
             # ── Runs (15) with stages ─────────────────────────────────────
             runs_list = []
@@ -450,7 +449,7 @@ async def seed() -> None:
                         position=si, created_by=admin.id,
                     ))
                 await session.flush()
-            print(f"[seed] 15 runs + stage records")
+            print("[seed] 15 runs + stage records")
 
             # ── Primitive Ratings (5) ─────────────────────────────────────
             for ri in range(5):
@@ -460,12 +459,12 @@ async def seed() -> None:
                     comment=["Great for PR reviews!", "Works well for changelogs", "Good schema for PR data", "Release schema is solid", "Nice integration"][ri],
                 ))
             await session.flush()
-            print(f"[seed] 5 primitive ratings")
+            print("[seed] 5 primitive ratings")
 
             # ── Feedback Records (5) ──────────────────────────────────────
             # Note: FeedbackRecord model is now for HITL gate rejection tracking,
             # not generic user feedback. Skipping for now.
-            print(f"[seed] 0 feedback records")
+            print("[seed] 0 feedback records")
 
             # ── API Keys (2) ──────────────────────────────────────────────
             session.add(OrgApiKey(
@@ -479,7 +478,7 @@ async def seed() -> None:
                 role="runner", created_by=admin.id,
             ))
             await session.flush()
-            print(f"[seed] 2 API keys")
+            print("[seed] 2 API keys")
 
             # ── Eval Results (12) ─────────────────────────────────────────
             for i in range(12):
@@ -491,7 +490,7 @@ async def seed() -> None:
                 )
                 session.add(er)
             await session.flush()
-            print(f"[seed] 12 eval results")
+            print("[seed] 12 eval results")
 
             # ── Audit Events (25) ─────────────────────────────────────────
             audit_defs = [
@@ -527,7 +526,7 @@ async def seed() -> None:
                     actor_user_id=actor, resource_type=resource_type,
                     resource_id=resource_id, payload_json=payload,
                 )
-            print(f"[seed] 25 audit events")
+            print("[seed] 25 audit events")
 
             await session.commit()
             print(f"[seed] Done — {SEED_ORG_NAME} seeded with rich demo data")

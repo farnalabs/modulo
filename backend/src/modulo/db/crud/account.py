@@ -89,8 +89,11 @@ async def list_accounts(
         total = (await session.execute(count_q)).scalar() or 0
 
         query = (
-            select(Account).where(*conditions).order_by(Account.created_at)
-            .offset((page - 1) * page_size).limit(page_size)
+            select(Account)
+            .where(*conditions)
+            .order_by(Account.created_at)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
         )
         result = await session.execute(query)
         items = list(result.scalars().all())

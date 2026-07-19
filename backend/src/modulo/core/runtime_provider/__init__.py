@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """Runtime provider abstraction for agent execution environments.
 
 Supports creating ephemeral or persistent workspaces (containers, VMs,
 sandboxed processes) and executing commands within them.
 """
 
+from __future__ import annotations
 
 import logging
 import os
@@ -49,6 +48,9 @@ class ExecResult:
 class RuntimeProvider(ABC):
     """Abstract base for a runtime backend (Docker, K8s, sandbox, etc.)."""
 
+    provider_id = ""
+    provider_aliases: frozenset[str] = frozenset()
+
     @abstractmethod
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
         """Provision a new workspace and return its provider-specific reference."""
@@ -60,7 +62,7 @@ class RuntimeProvider(ABC):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,  # noqa: ASYNC109
+        timeout: int | None = None,
     ) -> ExecResult:
         """Run a command inside an existing workspace."""
         ...
@@ -83,8 +85,14 @@ class RuntimeProvider(ABC):
         """
         return False
 
-    async def close(self) -> None:  # noqa: B027
+    def matches_provider_type(self, provider_type: str) -> bool:
+        """Return whether this provider implements an explicit profile type."""
+        normalized = provider_type.strip().lower()
+        return bool(normalized) and normalized in {self.provider_id, *self.provider_aliases}
+
+    async def close(self) -> None:
         """Release provider-level resources (connections, clients, etc.)."""
+        return
 
 
 def create_default_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:

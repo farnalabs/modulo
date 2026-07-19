@@ -21,26 +21,19 @@
     border: 1px solid hsl(var(--border));
     background-color: hsl(var(--card));
     color: hsl(var(--card-foreground));
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.12);
+    box-shadow: none;
     position: relative;
   }
 
   .card-hover {
-    transition: all 200ms ease;
+    transition: box-shadow 200ms var(--ease-out), border-color 200ms var(--ease-out);
   }
 
-  .card-hover:hover {
-    border-color: hsl(var(--border));
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1);
-  }
-
-  .teal-glow {
-    box-shadow: 0 0 0 1px hsl(var(--border));
-  }
-
-  .teal-glow:focus-within,
-  .teal-glow:focus-visible {
-    box-shadow: 0 0 0 2px hsla(var(--ring) / 0.4);
+  @media (hover: hover) and (pointer: fine) {
+    .card-hover:hover {
+      border-color: hsl(var(--border));
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
   }
 
   .sidebar-section-header {
@@ -71,7 +64,7 @@
   }
 
   .input-teal {
-    transition: box-shadow 200ms ease, border-color 200ms ease;
+    transition: box-shadow 200ms var(--ease-out), border-color 200ms var(--ease-out);
   }
 
   .input-teal:focus-visible {
@@ -132,7 +125,7 @@
     border-radius: 9999px;
     background-color: hsl(var(--muted));
     border: 1px solid hsl(var(--border));
-    transition: background-color 200ms ease, border-color 200ms ease;
+    transition: background-color 200ms var(--ease-out), border-color 200ms var(--ease-out);
     flex-shrink: 0;
   }
 
@@ -144,7 +137,7 @@
     height: 0.875rem;
     border-radius: 9999px;
     background-color: hsl(var(--foreground));
-    transition: transform 200ms ease;
+    transition: transform 200ms var(--ease-out);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   }
 
@@ -158,9 +151,11 @@
     background-color: hsl(var(--primary));
   }
 
-  .page-enter-active,
+  .page-enter-active {
+    transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out);
+  }
   .page-leave-active {
-    transition: opacity 150ms ease, transform 150ms ease;
+    transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
   }
 
   .page-enter-from {
@@ -182,13 +177,15 @@
     font-size: 0.875rem;
     font-weight: 500;
     color: hsl(var(--muted-foreground));
-    transition: all 150ms ease;
+    transition: color 150ms var(--ease-out), background-color 150ms var(--ease-out);
     position: relative;
   }
 
-  .sidebar-link:hover {
-    color: hsl(var(--foreground));
-    background-color: hsl(var(--accent));
+  @media (hover: hover) and (pointer: fine) {
+    .sidebar-link:hover {
+      color: hsl(var(--foreground));
+      background-color: hsl(var(--accent));
+    }
   }
 
   .sidebar-link.active {
@@ -405,6 +402,16 @@
     color: hsl(var(--preview));
   }
 
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 @media (prefers-reduced-motion: no-preference) {
   html {
     scroll-behavior: smooth;
@@ -441,8 +448,18 @@
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
   --dot-color: rgba(255, 255, 255, 0.04);
+  --shadow-overlay: 0 4px 16px rgba(0,0,0,0.25);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --duration-micro: 100ms;
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
 }
 
+/* Light mode — values derived from the ink scale (tailwind.config.cjs)
+   --foreground = ink-900, --secondary = ink-50, --muted = ink-50,
+   --muted-foreground = ink-400, --border = ink-50, --input = ink-50 */
 .light {
   --background: 0 0% 100%;
   --foreground: 220 29% 6%;
@@ -452,11 +469,11 @@
   --popover-foreground: 220 29% 6%;
   --primary: 170 95% 26%;
   --primary-foreground: 210 40% 98%;
-  --secondary: 210 20% 93%;
+  --secondary: 210 28% 93%;
   --secondary-foreground: 220 29% 6%;
-  --muted: 210 20% 93%;
-  --muted-foreground: 212 12% 40%;
-  --accent: 210 20% 93%;
+  --muted: 210 28% 93%;
+  --muted-foreground: 211 12% 40%;
+  --accent: 210 28% 93%;
   --accent-foreground: 220 29% 6%;
   --destructive: 0 84.2% 48%;
   --destructive-foreground: 210 40% 98%;
@@ -464,11 +481,12 @@
   --warning: 38 92% 50%;
   --pending: 210 40% 60%;
   --preview: 18 60% 40%;
-  --border: 210 27.8% 92.9%;
-  --input: 210 27.8% 92.9%;
+  --border: 210 28% 93%;
+  --input: 210 28% 93%;
   --ring: 170 95% 26%;
   --accent-bright: 169 100% 50%;
   --dot-color: rgba(0, 0, 0, 0.04);
+  --shadow-overlay: 0 4px 16px rgba(0,0,0,0.1);
 }
 
 .light .bg-destructive\/10 {
@@ -531,4 +549,40 @@ body {
 select option {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
+}
+
+/* OverlayScrollbars — match sidebar design tokens */
+.os-host {
+  --os-handle-bg: hsl(var(--muted-foreground) / 0.35);
+  --os-handle-bg-hover: hsl(var(--muted-foreground) / 0.5);
+  --os-handle-bg-active: hsl(var(--muted-foreground) / 0.65);
+  --os-handle-border-radius: 4px;
+  --os-handle-size: 8px;
+  --os-track-bg: transparent;
+  --os-track-bg-hover: transparent;
+}
+
+/* Custom scrollbar styling for the entire application */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* Firefox support */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
 }

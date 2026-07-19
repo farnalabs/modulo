@@ -1,14 +1,18 @@
-﻿<template>
-  <BackLink to="/" :label="$t('views.RunDetailView.back_to_dashboard')" />
+<template>
     <div class="page-wide">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else-if="run">
+      <nav aria-label="Breadcrumb" class="mb-4 flex items-center gap-1 text-sm text-muted-foreground">
+        <router-link to="/runs" class="hover:text-foreground transition-colors">Runs</router-link>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-3.5 w-3.5"><polyline points="9 18 15 12 9 6"/></svg>
+        <span class="text-foreground font-medium">{{ run.pipeline_name || (run.run_number != null ? '#' + run.run_number : shortId(run.run_id)) }}</span>
+      </nav>
       <!-- Run Header -->
       <header class="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div class="flex items-center gap-3">
-            <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.RunDetailView.run_detail') }}</h1>
+            <PageHeader :title="$t('views.RunDetailView.run_detail')" />
             <span :class="statusBadgeClass" class="capitalize">{{ run.status }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
@@ -39,11 +43,84 @@
         </div>
       </header>
 
+      <!-- HITL Gate -->
+      <section v-if="run.status === 'awaiting_human' && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
+        <h2 class="text-base font-semibold tracking-tight mb-4">HITL Gate</h2>
+        <div v-for="gate in pendingGates" :key="gate.gate_id" class="space-y-3">
+          <div class="flex items-center gap-2 text-sm">
+            <span class="font-medium">Gate:</span>
+            <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ gate.gate_id }}</code>
+          </div>
+          <div v-if="gate.claimed_by && !claimToken" class="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
+            Claimed by {{ gate.claimed_by }}
+          </div>
+          <div v-else-if="claimLoading" class="flex justify-center py-4">
+            <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          </div>
+          <template v-else-if="claimToken">
+            <div class="space-y-3">
+              <textarea
+                v-model="hitlNotes"
+                rows="2"
+                data-testid="run-detail-hitl-notes"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="Review notes (optional)"
+              />
+              <div class="flex gap-2">
+                <button
+                  :disabled="Boolean(actioning)"
+                  data-testid="run-detail-approve"
+                  class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
+                  @click="approveGate"
+                >
+                  {{ actioning === 'approve' ? 'Approving...' : 'Approve' }}
+                </button>
+                <button
+                  :disabled="Boolean(actioning)"
+                  data-testid="run-detail-reject"
+                  class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+                  @click="rejectGate"
+                >
+                  {{ actioning === 'reject' ? 'Rejecting...' : 'Reject' }}
+                </button>
+              </div>
+            </div>
+          </template>
+          <button
+            v-else
+            :disabled="claimLoading"
+            class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            data-testid="run-detail-claim-gate"
+            @click="claimGate(gate)"
+          >
+            {{ claimLoading ? 'Claiming...' : 'Claim Gate' }}
+          </button>
+          <div v-if="hitlMessage" class="text-sm" :class="hitlMessage.type === 'error' ? 'text-destructive' : 'text-success'">
+            {{ hitlMessage.text }}
+          </div>
+        </div>
+      </section>
+
       <!-- Timestamps -->
       <div v-if="runTimestamps" class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.created') }}</span> {{ runTimestamps.created }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
+      </div>
+
+      <!-- Cancel button for running/pending runs -->
+      <div v-if="run.status === 'running' || run.status === 'pending'" class="my-4">
+        <button
+          :disabled="cancelling"
+          data-testid="run-detail-cancel"
+          class="inline-flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+          @click="cancelRun"
+        >
+          <svg v-if="cancelling" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          {{ cancelling ? 'Stopping...' : 'Stop Run' }}
+        </button>
+        <span v-if="cancelError" class="ml-3 text-xs text-destructive">{{ cancelError }}</span>
       </div>
 
       <!-- Trace ID -->
@@ -176,6 +253,35 @@
         </table>
       </section>
 
+      <!-- Workspace Lease -->
+      <section v-if="workspaceLease" class="rounded-lg border bg-card p-6">
+        <h2 class="mb-3 text-base font-semibold tracking-tight">Workspace</h2>
+        <div class="space-y-2 text-sm">
+          <div class="flex items-center gap-2">
+            <span class="font-medium">Status:</span>
+            <span
+              class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
+              :class="workspaceStatusClass"
+            >
+              <span class="h-1.5 w-1.5 rounded-full" :class="workspaceDotClass" />
+              {{ workspaceLease.status }}
+            </span>
+          </div>
+          <div v-if="workspaceLease.sandbox_id" class="flex items-center gap-2">
+            <span class="font-medium">Sandbox:</span>
+            <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ workspaceLease.sandbox_id }}</code>
+          </div>
+          <div v-if="workspaceLease.duration_seconds != null">
+            <span class="font-medium">Duration:</span>
+            <span class="ml-1 tabular-nums">{{ formatDuration(workspaceLease.duration_seconds) }}</span>
+          </div>
+          <div v-if="workspaceLease.error_message" class="text-destructive">
+            <span class="font-medium">Error:</span>
+            <span class="ml-1">{{ workspaceLease.error_message }}</span>
+          </div>
+        </div>
+      </section>
+
       <!-- Total Run Cost -->
       <section v-if="run.total_cost_usd != null" class="rounded-lg border bg-card p-6">
         <div class="flex items-center justify-between">
@@ -219,12 +325,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
-import BackLink from '../components/BackLink.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Dialog from '../components/ui/dialog/Dialog.vue'
@@ -237,7 +343,11 @@ import Button from '../components/ui/button/Button.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId, formatRun } from '../utils/format'
 
-type RunResponse = components['schemas']['RunResponse']
+type RunResponse = components['schemas']['RunResponse'] & {
+  created_at?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+}
 type RunIOResponse = components['schemas']['RunIOResponse']
 
 interface NodeTokenUsage {
@@ -258,10 +368,15 @@ interface NodeEntry {
   io: { input: unknown; output: unknown } | null
 }
 
+interface WorkspaceLeaseInfo {
+  status: string
+  sandbox_id?: string
+  duration_seconds?: number
+  error_message?: string
+}
+
 const route = useRoute()
 const { t, locale } = useI18n()
-const loading = ref(true)
-const error = ref<string | null>(null)
 const run = ref<RunResponse | null>(null)
 const runIO = ref<RunIOResponse | null>(null)
 const expandedNodes = ref(new Set<string>())
@@ -273,6 +388,16 @@ const pollInterval = ref<ReturnType<typeof setInterval> | null>(null)
 const promptLoading = ref(new Set<string>())
 const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { role: string; content: string }[]; tokenCount: number; promptAlwaysVisible: boolean }>>({})
 const selectedPrompt = ref<{ nodeName: string; prompt: string; tokenCount: number | null } | null>(null)
+const workspaceLease = ref<WorkspaceLeaseInfo | null>(null)
+const cancelling = ref(false)
+const cancelError = ref<string | null>(null)
+const pendingGates = ref<components['schemas']['GateResponse'][]>([])
+const hitlLoading = ref(false)
+const claimToken = ref<string | null>(null)
+const claimLoading = ref(false)
+const actioning = ref<string | null>(null)
+const hitlNotes = ref('')
+const hitlMessage = ref<{ type: string; text: string } | null>(null)
 
 const shareSummary = computed(() => {
   const r = run.value
@@ -344,6 +469,7 @@ async function revealPrompt(nodeName: string) {
       },
     )
     if (err || !data) {
+      if (typeof err === 'object' && err !== null && 'name' in err && (err as Record<string, unknown>).name === 'AbortError') throw err
       revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: null }
       const detail = (err as Record<string, unknown>)?.detail
       error.value = `${t('views.RunDetailView.prompt_reveal_error')} ${detail ? String(detail) : ''}`
@@ -352,7 +478,10 @@ async function revealPrompt(nodeName: string) {
     const d = data as components['schemas']['PromptRevealResponse']
     const revealed = {
       prompt: d.prompt,
-      messages: d.messages,
+      messages: d.messages.map(message => ({
+        role: message.role ?? '',
+        content: message.content ?? '',
+      })),
       tokenCount: d.token_count,
       promptAlwaysVisible: d.prompt_always_visible,
     }
@@ -469,6 +598,38 @@ const formattedOutput = computed(() => {
   return JSON.stringify(output, null, 2)
 })
 
+const workspaceStatusClass = computed(() => {
+  const s = workspaceLease.value?.status ?? ''
+  const map: Record<string, string> = {
+    running: 'bg-primary/10 text-primary',
+    pending: 'bg-warning/10 text-warning',
+    completed: 'bg-success/10 text-success',
+    failed: 'bg-destructive/10 text-destructive',
+    expired: 'bg-muted text-muted-foreground',
+  }
+  return map[s] ?? 'bg-muted text-muted-foreground'
+})
+
+const workspaceDotClass = computed(() => {
+  const s = workspaceLease.value?.status ?? ''
+  const map: Record<string, string> = {
+    running: 'bg-primary',
+    pending: 'bg-warning',
+    completed: 'bg-success',
+    failed: 'bg-destructive',
+    expired: 'bg-muted-foreground',
+  }
+  return map[s] ?? 'bg-muted-foreground'
+})
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  return `${h}h ${m}m`
+}
+
 async function copyOutput() {
   const text = formattedOutput.value
   if (!text) return
@@ -478,6 +639,114 @@ async function copyOutput() {
     setTimeout(() => { outputCopied.value = false }, 2000)
   } catch (e) {
     console.warn('Failed to copy output', e)
+  }
+}
+
+async function claimGate(gate: components['schemas']['GateResponse']) {
+  claimLoading.value = true
+  hitlMessage.value = null
+  try {
+    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/claim', {
+      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
+      body: { expiry_minutes: 15 },
+    })
+    if (err) {
+      hitlMessage.value = { type: 'error', text: `Claim failed: ${formatApiError(err)}` }
+    } else if (data) {
+      const d = data as components['schemas']['ClaimResponse']
+      claimToken.value = d.claim_token
+      hitlMessage.value = { type: 'success', text: 'Gate claimed. You can now approve or reject.' }
+      setTimeout(() => { hitlMessage.value = null }, 5000)
+    }
+  } catch (e: unknown) {
+    hitlMessage.value = { type: 'error', text: `Claim failed: ${formatApiError(e)}` }
+  } finally {
+    claimLoading.value = false
+  }
+}
+
+async function cancelRun() {
+  const runId = route.params.id as string
+  if (!runId) return
+  cancelling.value = true
+  cancelError.value = null
+  try {
+    const { error: err } = await api.POST('/api/v1/runs/{run_id}/cancel', {
+      params: { path: { run_id: runId } },
+    })
+    if (err) {
+      cancelError.value = `Failed to cancel: ${formatApiError(err)}`
+    } else {
+      if (run.value) run.value.status = 'cancelled'
+      if (pollInterval.value) {
+        clearInterval(pollInterval.value)
+        pollInterval.value = null
+      }
+    }
+  } catch (e: unknown) {
+    cancelError.value = `Failed to cancel: ${formatApiError(e)}`
+  } finally {
+    cancelling.value = false
+  }
+}
+
+async function approveGate() {
+  if (!claimToken.value || pendingGates.value.length === 0) return
+  const gate = pendingGates.value[0]
+  actioning.value = 'approve'
+  hitlMessage.value = null
+  try {
+    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/approve', {
+      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
+      body: { claim_token: claimToken.value, notes: hitlNotes.value || null },
+    })
+    if (err) {
+      hitlMessage.value = {
+        type: 'error',
+        text: `Approve failed: ${formatApiError(err)}`,
+      }
+    } else {
+      pendingGates.value = []
+      claimToken.value = null
+      hitlNotes.value = ''
+      if (run.value) run.value.status = 'running'
+      hitlMessage.value = { type: 'success', text: 'Gate approved. Pipeline resuming.' }
+      setTimeout(() => { hitlMessage.value = null }, 5000)
+    }
+  } catch (e: unknown) {
+    hitlMessage.value = { type: 'error', text: `Approve failed: ${formatApiError(e)}` }
+  } finally {
+    actioning.value = null
+  }
+}
+
+async function rejectGate() {
+  if (!claimToken.value || pendingGates.value.length === 0) return
+  const gate = pendingGates.value[0]
+  actioning.value = 'reject'
+  hitlMessage.value = null
+  try {
+    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/reject', {
+      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
+      body: { claim_token: claimToken.value, reason: hitlNotes.value || 'Rejected by reviewer' },
+    })
+    if (err) {
+      hitlMessage.value = {
+        type: 'error',
+        text: `Reject failed: ${formatApiError(err)}`,
+      }
+    } else {
+      pendingGates.value = []
+      claimToken.value = null
+      hitlNotes.value = ''
+      if (run.value) run.value.status = 'running'
+      hitlMessage.value = { type: 'success', text: 'Gate rejected. Pipeline routed to reject target.' }
+      setTimeout(() => { hitlMessage.value = null }, 5000)
+    }
+  } catch (e: unknown) {
+    hitlMessage.value = { type: 'error', text: `Reject failed: ${formatApiError(e)}` }
+  } finally {
+    actioning.value = null
   }
 }
 
@@ -513,12 +782,34 @@ const nodeEntries = computed<NodeEntry[]>(() => {
   })
 })
 
+async function fetchHitlGates(runId: string) {
+  if (hitlLoading.value) return
+  hitlLoading.value = true
+  try {
+    const { data } = await api.GET('/api/v1/runs/{run_id}/hitl/pending', {
+      params: { path: { run_id: runId } },
+    })
+    if (data) {
+      pendingGates.value = ((data as any).gates || []) as components['schemas']['GateResponse'][]
+    }
+  } catch {
+    // silently fail
+  } finally {
+    hitlLoading.value = false
+  }
+}
+
 async function fetchRunData(runId: string) {
   try {
     const { data: runData } = await api.GET('/api/v1/runs/{run_id}', {
       params: { path: { run_id: runId } },
     })
-    if (runData) run.value = runData as unknown as RunResponse
+    if (runData) {
+      run.value = runData as unknown as RunResponse
+      if (run.value.status === 'awaiting_human') {
+        fetchHitlGates(runId)
+      }
+    }
     const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
       params: { path: { run_id: runId } },
     })
@@ -539,27 +830,53 @@ function startPolling(runId: string) {
   }, 3000)
 }
 
-onMounted(async () => {
-  const runId = route.params.id as string
-  if (!runId) {
-    error.value = t('views.RunDetailView.no_run_id_provided')
-    loading.value = false
-    return
-  }
+import { useDataFetch } from '../composables/useDataFetch'
 
-  try {
-    await fetchRunData(runId)
-    if (run.value?.status === 'complete' && nodeEntries.value.length > 0) {
-      const last = nodeEntries.value[nodeEntries.value.length - 1]
-      expandedNodes.value.add(last.name)
+interface RunFetchResult {
+  run: RunResponse | null
+  io: RunIOResponse | null
+  workspace: WorkspaceLeaseInfo | null
+}
+
+const { loading, error } = useDataFetch<RunFetchResult>(
+  async () => {
+    const runId = route.params.id as string
+    if (!runId) {
+      return { data: { run: null, io: null, workspace: null }, error: { detail: t('views.RunDetailView.no_run_id_provided') } }
     }
-    startPolling(runId)
-  } catch (e: unknown) {
-    error.value = `${t('views.RunDetailView.failed_to_load_run')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-})
+
+    try {
+      const [runResp, ioResp, wsResp] = await Promise.all([
+        api.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
+        api.GET('/api/v1/runs/{run_id}/io', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
+        api.GET('/api/v1/runs/{run_id}/workspace-lease', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
+      ])
+      const runData = runResp?.data
+      const ioData = ioResp?.data
+      const wsData = wsResp?.data
+
+      if (runData) {
+        run.value = runData as unknown as RunResponse
+        if (run.value.status === 'awaiting_human') {
+          fetchHitlGates(runId)
+        }
+      }
+      if (ioData) runIO.value = ioData as unknown as RunIOResponse
+      if (wsData) workspaceLease.value = wsData as unknown as WorkspaceLeaseInfo
+
+      if (run.value?.status === 'complete' && nodeEntries.value.length > 0) {
+        const last = nodeEntries.value[nodeEntries.value.length - 1]
+        expandedNodes.value.add(last.name)
+      }
+      startPolling(runId)
+
+      return { data: { run: run.value, io: runIO.value, workspace: workspaceLease.value }, error: undefined }
+    } catch (e: unknown) {
+      return { data: undefined, error: { detail: `${t('views.RunDetailView.failed_to_load_run')} ${formatApiError(e)}` } }
+    }
+  },
+  { immediate: true },
+)
 
 onUnmounted(() => {
   if (pollInterval.value) {

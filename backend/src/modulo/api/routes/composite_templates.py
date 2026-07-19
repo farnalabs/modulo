@@ -7,12 +7,13 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.composite_template import (
     create_composite_template,
     delete_composite_template,
@@ -23,6 +24,8 @@ from modulo.db.crud.composite_template import (
 from modulo.db.rls import set_rls_org
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/composite-templates", tags=["composite-templates"])
 
@@ -58,6 +61,7 @@ class CompositeTemplateCreate(BaseModel):
     parameter_ports_json: list[ParameterPort] = Field(default_factory=list)
     input_schema_id: uuid.UUID | None = None
     output_schema_id: uuid.UUID | None = None
+    parameter_schema_id: uuid.UUID | None = None
     version: str = "1.0.0"
 
 
@@ -68,6 +72,7 @@ class CompositeTemplateUpdate(BaseModel):
     parameter_ports_json: list[ParameterPort] | None = None
     input_schema_id: uuid.UUID | None = None
     output_schema_id: uuid.UUID | None = None
+    parameter_schema_id: uuid.UUID | None = None
     version: str | None = None
 
 
@@ -80,12 +85,13 @@ class CompositeTemplateResponse(BaseModel):
     parameter_ports_json: list[dict[str, Any]]
     input_schema_id: uuid.UUID | None
     output_schema_id: uuid.UUID | None
+    parameter_schema_id: uuid.UUID | None
     version: str
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class CompositeTemplateListResponse(BaseModel):
@@ -95,23 +101,32 @@ class CompositeTemplateListResponse(BaseModel):
     page_size: int
 
 
+@handle_db_errors("composite_templates.list_composite_templates_endpoint")
 @router.get("", response_model=CompositeTemplateListResponse)
 async def list_composite_templates_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> CompositeTemplateListResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             result = await list_composite_templates(
-                session, org_id=principal.organisation_id, page=page, page_size=page_size,
+                session,
+                org_id=principal.organisation_id,
+                page=page,
+                page_size=page_size,
             )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
         ) from None
     except HTTPException:
         raise
@@ -129,11 +144,12 @@ async def list_composite_templates_endpoint(
     )
 
 
+@handle_db_errors("composite_templates.create_composite_template_endpoint")
 @router.post("", response_model=CompositeTemplateResponse, status_code=status.HTTP_201_CREATED)
 async def create_composite_template_endpoint(
     req: CompositeTemplateCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> CompositeTemplateResponse:
     try:
         async with session.begin():
@@ -148,6 +164,7 @@ async def create_composite_template_endpoint(
                 parameter_ports_json=[p.model_dump() for p in req.parameter_ports_json],
                 input_schema_id=req.input_schema_id,
                 output_schema_id=req.output_schema_id,
+                parameter_schema_id=req.parameter_schema_id,
                 version=req.version,
             )
         return CompositeTemplateResponse.model_validate(template)
@@ -155,6 +172,11 @@ async def create_composite_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
         ) from None
     except HTTPException:
         raise
@@ -166,11 +188,12 @@ async def create_composite_template_endpoint(
         ) from None
 
 
+@handle_db_errors("composite_templates.get_composite_template_endpoint")
 @router.get("/{template_id}", response_model=CompositeTemplateResponse)
 async def get_composite_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> CompositeTemplateResponse:
     try:
         async with session.begin():
@@ -180,6 +203,11 @@ async def get_composite_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
         ) from None
     except HTTPException:
         raise
@@ -194,12 +222,13 @@ async def get_composite_template_endpoint(
     return CompositeTemplateResponse.model_validate(template)
 
 
+@handle_db_errors("composite_templates.update_composite_template_endpoint")
 @router.patch("/{template_id}", response_model=CompositeTemplateResponse)
 async def update_composite_template_endpoint(
     template_id: uuid.UUID,
     req: CompositeTemplateUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> CompositeTemplateResponse:
     updates: dict[str, Any] = {}
     for k, v in req.model_dump(exclude_unset=True).items():
@@ -216,6 +245,11 @@ async def update_composite_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -229,11 +263,12 @@ async def update_composite_template_endpoint(
     return CompositeTemplateResponse.model_validate(template)
 
 
+@handle_db_errors("composite_templates.delete_composite_template_endpoint")
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_composite_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -243,6 +278,11 @@ async def delete_composite_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
         ) from None
     except HTTPException:
         raise
@@ -273,11 +313,12 @@ class EditorGraphUpdate(BaseModel):
     edges: list[dict[str, Any]] = Field(default_factory=list)
 
 
+@handle_db_errors("composite_templates.get_composite_editor_endpoint")
 @router.get("/{template_id}/editor", response_model=EditorGraphResponse)
 async def get_composite_editor_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> EditorGraphResponse:
     try:
         async with session.begin():
@@ -305,12 +346,13 @@ async def get_composite_editor_endpoint(
     )
 
 
+@handle_db_errors("composite_templates.save_composite_editor_endpoint")
 @router.put("/{template_id}/editor", response_model=EditorGraphResponse)
 async def save_composite_editor_endpoint(
     template_id: uuid.UUID,
     req: EditorGraphUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> EditorGraphResponse:
     try:
         async with session.begin():
@@ -321,13 +363,22 @@ async def save_composite_editor_endpoint(
             graph = dict(template.sub_pipeline_graph_json) if template.sub_pipeline_graph_json else {}
             graph["nodes"] = req.nodes
             graph["edges"] = req.edges
-            template = await update_composite_template(session, template_id, {
-                "sub_pipeline_graph_json": graph,
-            })
+            template = await update_composite_template(
+                session,
+                template_id,
+                {
+                    "sub_pipeline_graph_json": graph,
+                },
+            )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
         ) from None
     except HTTPException:
         raise
@@ -363,10 +414,11 @@ class DetectParamsResponse(BaseModel):
     ports: list[ParameterPort] = Field(default_factory=list)
 
 
+@handle_db_errors("composite_templates.detect_params_endpoint")
 @router.post("/detect-params", response_model=DetectParamsResponse)
 async def detect_params_endpoint(
     req: DetectParamsRequest,
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> DetectParamsResponse:
     """Scan sub-pipeline agent prompts for ``{{parameter.*}}`` placeholders.
 
@@ -400,12 +452,13 @@ class PublishResponse(BaseModel):
     published: bool
 
 
+@handle_db_errors("composite_templates.publish_composite_endpoint")
 @router.post("/{template_id}/publish", response_model=PublishResponse)
 async def publish_composite_endpoint(
     template_id: uuid.UUID,
     req: PublishRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PublishResponse:
     version = req.version or "1.0.0"
     try:
@@ -416,6 +469,11 @@ async def publish_composite_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
         ) from None
     except HTTPException:
         raise

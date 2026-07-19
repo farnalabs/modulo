@@ -10,6 +10,7 @@ from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_co
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
+
 class OpenRouterBackend(ModelBackendBase):
     """Thin adapter over ChatOpenAI targeting OpenRouter's API."""
 
@@ -42,6 +43,9 @@ class OpenRouterBackend(ModelBackendBase):
         return await self._model.ainvoke(messages, **kwargs)
 
     def stream(
-    self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
-) -> AsyncIterator[BaseMessage]:
+        self,
+        messages: list[BaseMessage],
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, tools=tools, **kwargs)

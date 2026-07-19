@@ -1,5 +1,6 @@
 """BDD step definitions: MCP OAuth 2.0 authorization code flow."""
 
+import contextlib
 import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,10 +13,8 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.rate_limiter import RateLimiterRegistry
 from tests.bdd.conftest import ORG_ID, USER_ID
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/mcp/mcp_oauth.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # --------------------------------------------------------------------------
@@ -87,75 +86,44 @@ def oauth_client_exists(client_id: str, request):
     # step can decide which principal to use.
     request.node._oauth_client_id = client_id
 
-
-
-
     request.node._oauth_client_id = client_id
     request.node._oauth_client = _make_mock_client(client_id=client_id)
 
 
-@given(
-    parsers.parse(
-        'an OAuth client exists with id "{client_id}" and redirect_uris {redirect_uris}'
-    )
-)
+@given(parsers.parse('an OAuth client exists with id "{client_id}" and redirect_uris {redirect_uris}'))
 def oauth_client_with_uris(client_id: str, redirect_uris: str, request):
     uri_list = json.loads(redirect_uris)
     request.node._oauth_client_id = client_id
-    request.node._oauth_client = _make_mock_client(
-        client_id=client_id, redirect_uris=" ".join(uri_list)
-    )
+    request.node._oauth_client = _make_mock_client(client_id=client_id, redirect_uris=" ".join(uri_list))
 
 
-@given(
-    parsers.parse(
-        'an OAuth client exists with id "{client_id}" and scopes {scopes}'
-    )
-)
+@given(parsers.parse('an OAuth client exists with id "{client_id}" and scopes {scopes}'))
 def oauth_client_with_scopes(client_id: str, scopes: str, request):
     scope_list = json.loads(scopes)
     request.node._oauth_client_id = client_id
-    request.node._oauth_client = _make_mock_client(
-        client_id=client_id, scopes=" ".join(scope_list)
-    )
+    request.node._oauth_client = _make_mock_client(client_id=client_id, scopes=" ".join(scope_list))
 
 
-@given(
-    parsers.parse(
-        'an authorization code "{code}" exists for client "{client_id}"'
-    )
-)
+@given(parsers.parse('an authorization code "{code}" exists for client "{client_id}"'))
 def auth_code_exists(code: str, client_id: str, request):
     request.node._auth_code = _make_mock_auth_code(code=code, client_id=client_id)
 
 
-@given(
-    parsers.parse(
-        'a token family "{family_id}" at sequence {seq:d} for client "{client_id}"'
-    )
-)
+@given(parsers.parse('a token family "{family_id}" at sequence {seq:d} for client "{client_id}"'))
 def token_family_exists(family_id: str, seq: int, client_id: str, request):
     request.node._token_family_id = family_id
     request.node._token_family_seq = seq
     request.node._oauth_client_id = client_id
 
 
-@given(
-    parsers.parse(
-        'an authorization code "{code}" was created with code_challenge "{challenge}"'
-    )
-)
+@given(parsers.parse('an authorization code "{code}" was created with code_challenge "{challenge}"'))
 def auth_code_with_pkce(code: str, challenge: str, request):
-    request.node._auth_code = _make_mock_auth_code(
-        code=code, code_challenge=challenge
-    )
+    request.node._auth_code = _make_mock_auth_code(code=code, code_challenge=challenge)
 
 
 @given(parsers.parse('a used authorization code "{code}" exists for client "{client_id}"'))
 def used_auth_code_exists(code: str, client_id: str, request):
-    request.node._auth_code = _make_mock_auth_code(
-        code=code, client_id=client_id, used=True
-    )
+    request.node._auth_code = _make_mock_auth_code(code=code, client_id=client_id, used=True)
 
 
 # --------------------------------------------------------------------------
@@ -163,11 +131,7 @@ def used_auth_code_exists(code: str, client_id: str, request):
 # --------------------------------------------------------------------------
 
 
-@when(
-    parsers.parse(
-        'I POST /api/v1/mcp/oauth/clients with name "{name}" and redirect_uris {uris} and scopes {scopes}'
-    )
-)
+@when(parsers.parse('I POST /api/v1/mcp/oauth/clients with name "{name}" and redirect_uris {uris} and scopes {scopes}'))
 def register_oauth_client(name: str, uris: str, scopes: str, client, request):
 
     uri_list = json.loads(uris)
@@ -244,11 +208,7 @@ def authorize_pkce(rt: str, cid: str, ru: str, scope: str, cc: str, ccm: str, st
     _store_resp(request, resp)
 
 
-@when(
-    parsers.parse(
-        'I POST /mcp/oauth/authorize with client_id "{cid}" and redirect_uri "{ru}"'
-    )
-)
+@when(parsers.parse('I POST /mcp/oauth/authorize with client_id "{cid}" and redirect_uri "{ru}"'))
 def authorize_invalid_redirect(cid: str, ru: str, client, request):
     with patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get:
         mock_get.return_value = _make_mock_client(
@@ -278,9 +238,10 @@ def authorize_invalid_redirect(cid: str, ru: str, client, request):
 )
 def token_exchange(gt: str, code: str, cid: str, secret: str, ru: str, cv: str, client, request):
     from modulo.auth.oauth import InvalidClientError, InvalidGrantError
+
     auth_code = getattr(request.node, "_auth_code", None)
     is_used = auth_code is not None and auth_code.used
-    is_unknown = cid in ("unknown_client",)
+    is_unknown = cid == "unknown_client"
     with (
         patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
         patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
@@ -297,9 +258,7 @@ def token_exchange(gt: str, code: str, cid: str, secret: str, ru: str, cv: str, 
         if is_used:
             mock_consume.side_effect = InvalidGrantError("Authorization code has already been used")
         elif not is_unknown:
-            mock_consume.return_value = _make_mock_auth_code(
-                code=code, client_id=cid, scopes="trigger:run"
-            )
+            mock_consume.return_value = _make_mock_auth_code(code=code, client_id=cid, scopes="trigger:run")
         mock_create_family.return_value = ("family_uuid", 0)
         mock_create_token.return_value = "jwt_access_token_abc"
         resp = client.post(
@@ -319,23 +278,15 @@ def token_exchange(gt: str, code: str, cid: str, secret: str, ru: str, cv: str, 
     _store_resp(request, resp)
 
 
-@when(
-    parsers.parse(
-        'the client requests a token with scope "{scope}"'
-    )
-)
+@when(parsers.parse('the client requests a token with scope "{scope}"'))
 def token_with_restricted_scope(scope: str, client, request):
     cid = getattr(request.node, "_oauth_client_id", "limited_client")
     with (
         patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
         patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
     ):
-        mock_get.return_value = _make_mock_client(
-            client_id=cid, scopes="trigger:run"
-        )
-        mock_validate.return_value = _make_mock_client(
-            client_id=cid, scopes="trigger:run"
-        )
+        mock_get.return_value = _make_mock_client(client_id=cid, scopes="trigger:run")
+        mock_validate.return_value = _make_mock_client(client_id=cid, scopes="trigger:run")
         resp = client.post(
             "/mcp/oauth/token",
             data={
@@ -394,11 +345,7 @@ def refresh_token_flow(rt: str, cid: str, secret: str, client, request):
     _store_resp(request, resp)
 
 
-@when(
-    parsers.parse(
-        'I POST /mcp/oauth/token with authorization code "{code}" and no code_verifier'
-    )
-)
+@when(parsers.parse('I POST /mcp/oauth/token with authorization code "{code}" and no code_verifier'))
 def token_exchange_no_verifier(code: str, client, request):
     with (
         patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
@@ -424,7 +371,7 @@ def token_exchange_no_verifier(code: str, client, request):
     _store_resp(request, resp)
 
 
-@when(parsers.parse('I DELETE /api/v1/mcp/oauth/clients/{client_id}'))
+@when(parsers.parse("I DELETE /api/v1/mcp/oauth/clients/{client_id}"))
 def delete_oauth_client(client_id: str, client, request):
     with (
         patch("modulo.api.routes.mcp_oauth.delete_oauth_client") as mock_delete,
@@ -435,13 +382,9 @@ def delete_oauth_client(client_id: str, client, request):
     _store_resp(request, resp)
 
 
-
-
-
 # --------------------------------------------------------------------------
 # Then steps
 # --------------------------------------------------------------------------
-
 
 
 @then("the response contains client_id")
@@ -488,15 +431,12 @@ def resp_contains_refresh_token(request):
     assert token is not None
 
 
-@then(parsers.parse('the token has scopes {expected}'))
+@then(parsers.parse("the token has scopes {expected}"))
 def token_has_scopes(expected: str, request):
     expected_list = json.loads(expected)
     data = request.node._resp.json()
     scope_field = data.get("scope", data.get("scopes", ""))
-    if isinstance(scope_field, str):
-        actual = scope_field.split()
-    else:
-        actual = scope_field
+    actual = scope_field.split() if isinstance(scope_field, str) else scope_field
     for s in expected_list:
         assert s in actual, f"Expected scope '{s}' not in {actual}"
 

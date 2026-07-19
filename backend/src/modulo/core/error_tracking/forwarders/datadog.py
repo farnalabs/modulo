@@ -1,5 +1,8 @@
+"""Datadog error forwarder."""
+
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -63,6 +66,8 @@ class DatadogErrorForwarder(BaseForwarder):
                     extra={"status": resp.status_code, "org_id": str(org_id)},
                 )
                 return False
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("datadog_forwarder.request_failed")
             return False

@@ -3,8 +3,10 @@
 import datetime
 import uuid
 from decimal import Decimal
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from celery.beat import Scheduler
 
 from modulo.core.cron_scheduler import (
@@ -53,7 +55,7 @@ class _MockSession:
         self._execute_mock = AsyncMock(side_effect=execute_side_effect or [])
         self.added: list[object] = []
 
-    async def __aenter__(self) -> "_MockSession":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *args: object) -> bool:
@@ -224,46 +226,25 @@ class TestDatabaseCronEntry:
         assert entry.args[4] == "*/5 * * * *"
         assert isinstance(entry.schedule, DatabaseCronEntry)
 
-    def test_is_due_when_past(self):
-        past = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
+    @pytest.mark.parametrize(
+        "offset,expected_due",
+        [
+            (datetime.timedelta(seconds=-10), True),
+            (datetime.timedelta(hours=1), False),
+            (datetime.timedelta(seconds=0), True),
+        ],
+    )
+    def test_is_due(self, offset, expected_due):
         entry = DatabaseCronEntry(
             trigger_id=uuid.uuid4(),
             org_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
             snapshot_id=uuid.uuid4(),
             cron_expression="* * * * *",
-            next_fire_at=past,
-        )
-        due, delay = entry.is_due()
-        assert due is True
-        assert delay.total_seconds() == 0
-
-    def test_is_not_due_when_future(self):
-        future = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
-        entry = DatabaseCronEntry(
-            trigger_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            pipeline_id=uuid.uuid4(),
-            snapshot_id=uuid.uuid4(),
-            cron_expression="0 * * * *",
-            next_fire_at=future,
-        )
-        due, delay = entry.is_due()
-        assert due is False
-        assert delay.total_seconds() > 0
-
-    def test_is_due_when_exactly_now(self):
-        now = datetime.datetime.now(datetime.UTC)
-        entry = DatabaseCronEntry(
-            trigger_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            pipeline_id=uuid.uuid4(),
-            snapshot_id=uuid.uuid4(),
-            cron_expression="* * * * *",
-            next_fire_at=now,
+            next_fire_at=datetime.datetime.now(datetime.UTC) + offset,
         )
         due, _delay = entry.is_due()
-        assert due is True
+        assert due is expected_due
 
     def test_repr(self):
         now = datetime.datetime.now(datetime.UTC)

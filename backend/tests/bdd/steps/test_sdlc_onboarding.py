@@ -1,15 +1,14 @@
 """BDD step definitions: SDLC Onboarding Path (PRD §8.16)."""
 
+import contextlib
 import uuid
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/onboarding/sdlc_onboarding.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _SDLC_STEPS = [
     "connect_tools",
@@ -41,7 +40,7 @@ def no_steps_completed(request):
 # ---------------------------------------------------------------------------
 
 
-@given(parsers.parse('I have completed the {step_id} step'))
+@given(parsers.parse("I have completed the {step_id} step"))
 def completed_step(step_id: str, request):
     if not hasattr(request.node, "_completed"):
         request.node._completed = []
@@ -133,9 +132,7 @@ def mark_step_advances(step_id: str, n: int, request):
     if step_id not in completed:
         completed.append(step_id)
     request.node._completed = completed
-    assert len(completed) == n - 1, (
-        f"Expected {n - 1} completed steps before step {n}, got {len(completed)}"
-    )
+    assert len(completed) == n - 1, f"Expected {n - 1} completed steps before step {n}, got {len(completed)}"
 
 
 # ---------------------------------------------------------------------------
@@ -211,9 +208,7 @@ def post_schema_infer(client, request):
 def response_contains_definition(request):
     body = request.node._resp.json()
     assert "definition_json" in body, f"Missing definition_json in {body}"
-    assert "properties" in body["definition_json"], (
-        f"definition_json missing properties: {body['definition_json']}"
-    )
+    assert "properties" in body["definition_json"], f"definition_json missing properties: {body['definition_json']}"
 
 
 @then(parsers.parse('I mark "{step_id}" as completed'))
@@ -477,6 +472,3 @@ def response_shows_n_completed(request, n: int):
     body = request.node._resp.json()
     completed = body.get("completed_steps", [])
     assert len(completed) == n, f"Expected {n} completed steps, got {len(completed)}: {completed}"
-
-
-

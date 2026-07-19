@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
+from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
+from modulo.core.feature_flags import CommunityTier, DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -20,6 +21,13 @@ _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
 _SCIM_TOKEN = "test-scim-token-12345"
+
+
+@pytest.fixture(autouse=True)
+def scim_feature_enabled() -> Generator[None, None, None]:
+    app.dependency_overrides[get_scim_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
+    yield
+    app.dependency_overrides.clear()
 
 
 def _make_settings() -> Settings:
@@ -34,8 +42,12 @@ def _make_settings() -> Settings:
     )
 
 
-def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+def _make_mock_session() -> MagicMock:
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
+    session.delete = AsyncMock()
+    session.rollback = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -47,7 +59,7 @@ def _make_mock_session() -> AsyncMock:
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+    async def override_session() -> AsyncGenerator[MagicMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = _make_settings
@@ -127,8 +139,6 @@ _PATCH_GROUP_ADD_MEMBER = {
 
 
 class TestAuthEdgeCases:
-    """SCIM token auth edge cases beyond 401-without-header."""
-
     def test_missing_token_returns_501(self) -> None:
         def _settings_no_scim_token() -> Settings:
             return Settings(
@@ -187,7 +197,7 @@ class TestAuthEdgeCases:
         mock_session = _make_mock_session()
         mock_session.execute = AsyncMock(return_value=AsyncMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        async def override_session() -> AsyncGenerator[MagicMock, None]:
             yield mock_session
 
         app.dependency_overrides[get_settings] = _make_settings
@@ -341,7 +351,6 @@ class TestInputValidation:
                 json=body,
                 headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
             )
-        # FastAPI does not validate schemas content; it just accepts
         assert resp.status_code == 201
 
     def test_create_group_missing_displayname_returns_422(self, client: TestClient) -> None:
@@ -357,7 +366,7 @@ class TestInputValidation:
         body = {**_GROUP_CREATE_BODY, "members": [{"value": "not-a-uuid", "type": "User"}]}
         with (
             patch("modulo.db.crud.team.get_team_by_name", return_value=None),
-            patch("modulo.db.crud.user.list_users_for_org", create=True, return_value=[_MOCK_USER]),
+            patch("modulo.db.crud.org_membership.list_memberships_for_org", return_value=[]),
             patch("modulo.api.routes.scim.scim_create_group", return_value=_MOCK_TEAM),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
@@ -372,19 +381,35 @@ class TestInputValidation:
 # ── PATCH Edge Cases ─────────────────────────────────────────────────
 
 
+def _make_mock_user(**overrides: object) -> MagicMock:
+    user = MagicMock()
+    user.id = overrides.get("id", _USER_ID)
+    user.organisation_id = overrides.get("organisation_id", _ORG_ID)
+    user.email = overrides.get("email", "jane@example.com")
+    user.display_name = overrides.get("display_name", "Jane Doe")
+    user.active = overrides.get("active", True)
+    user.org_role = overrides.get("org_role", "runner")
+    user.auth_provider = overrides.get("auth_provider", "scim")
+    user.created_at = overrides.get("created_at", _NOW)
+    user.updated_at = overrides.get("updated_at", _NOW)
+    return user
+
+
+def _make_mock_team(**overrides: object) -> MagicMock:
+    team = MagicMock()
+    team.id = overrides.get("id", _TEAM_ID)
+    team.organisation_id = overrides.get("organisation_id", _ORG_ID)
+    team.name = overrides.get("name", "Engineering")
+    team.description = overrides.get("description")
+    team.created_by = overrides.get("created_by", _USER_ID)
+    team.created_at = overrides.get("created_at", _NOW)
+    team.updated_at = overrides.get("updated_at", _NOW)
+    return team
+
+
 class TestPatchEdgeCases:
     def test_patch_user_remove_active(self, client: TestClient) -> None:
-        mock_user = MagicMock(
-            id=_USER_ID,
-            organisation_id=_ORG_ID,
-            email="jane@example.com",
-            display_name="Jane Doe",
-            active=True,
-            org_role="runner",
-            auth_provider="scim",
-            created_at=_NOW,
-            updated_at=_NOW,
-        )
+        mock_user = _make_mock_user()
         body = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
             "Operations": [{"op": "remove", "path": "active"}],
@@ -404,22 +429,22 @@ class TestPatchEdgeCases:
         assert resp.status_code == 200
         assert mock_user.active is False
 
-    def test_patch_user_unsupported_op_returns_400(self, client: TestClient) -> None:
-        mock_user = MagicMock(
-            id=_USER_ID,
-            organisation_id=_ORG_ID,
-            email="jane@example.com",
-            display_name="Jane Doe",
-            active=True,
-            org_role="runner",
-            auth_provider="scim",
-            created_at=_NOW,
-            updated_at=_NOW,
-        )
+    @pytest.mark.parametrize(
+        ("op", "expected_body_check"),
+        [
+            pytest.param("doesNotExist", None, id="unsupported_op_returns_400"),
+            pytest.param("invalidOp", "detail", id="invalid_op_returns_400"),
+        ],
+    )
+    def test_patch_user_invalid_ops(self, client: TestClient, op: str, expected_body_check: str | None) -> None:
+        mock_user = _make_mock_user()
         body = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-            "Operations": [{"op": "doesNotExist", "path": "active", "value": False}],
+            "Operations": [{"op": op}],
         }
+        if op == "doesNotExist":
+            body["Operations"][0]["path"] = "active"
+            body["Operations"][0]["value"] = False
         with (
             patch(
                 "modulo.api.routes.scim.scim_get_user",
@@ -433,51 +458,11 @@ class TestPatchEdgeCases:
                 headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
             )
         assert resp.status_code == 400
-
-    def test_patch_user_invalid_op_returns_400(self, client: TestClient) -> None:
-        mock_user = MagicMock(
-            id=_USER_ID,
-            organisation_id=_ORG_ID,
-            email="jane@example.com",
-            display_name="Jane Doe",
-            active=True,
-            org_role="runner",
-            auth_provider="scim",
-            created_at=_NOW,
-            updated_at=_NOW,
-        )
-        body = {
-            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-            "Operations": [{"op": "invalidOp"}],
-        }
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_get_user",
-                return_value=mock_user,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.patch(
-                f"/scim/v2/Users/{_USER_ID}",
-                json=body,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 400
-        data = resp.json()
-        assert "detail" in data
+        if expected_body_check:
+            assert expected_body_check in resp.json()
 
     def test_patch_user_add_username(self, client: TestClient) -> None:
-        mock_user = MagicMock(
-            id=_USER_ID,
-            organisation_id=_ORG_ID,
-            email="jane@example.com",
-            display_name="Jane Doe",
-            active=True,
-            org_role="runner",
-            auth_provider="scim",
-            created_at=_NOW,
-            updated_at=_NOW,
-        )
+        mock_user = _make_mock_user()
         body = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
             "Operations": [{"op": "add", "value": {"userName": "new-jane@example.com"}}],
@@ -498,32 +483,15 @@ class TestPatchEdgeCases:
         assert mock_user.email == "new-jane@example.com"
 
     def test_patch_group_remove_by_value_dict(self, client: TestClient) -> None:
-        """PATCH remove with value as dict (not path-based filter)."""
-        mock_team = MagicMock()
-        mock_team.id = _TEAM_ID
-        mock_team.organisation_id = _ORG_ID
-        mock_team.name = "Engineering"
-        mock_team.created_by = _USER_ID
-        mock_team.created_at = _NOW
-        mock_team.updated_at = _NOW
-
+        mock_team = _make_mock_team()
         body = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
             "Operations": [{"op": "remove", "value": {"value": str(_USER_ID)}}],
         }
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=mock_team,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_remove_group_member",
-                return_value=True,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_list_group_members",
-                return_value=[],
-            ),
+            patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_remove_group_member", return_value=True),
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=[]),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.patch(
@@ -534,32 +502,15 @@ class TestPatchEdgeCases:
         assert resp.status_code == 200
 
     def test_patch_group_remove_by_value_list(self, client: TestClient) -> None:
-        """PATCH remove with value as list of members."""
-        mock_team = MagicMock()
-        mock_team.id = _TEAM_ID
-        mock_team.organisation_id = _ORG_ID
-        mock_team.name = "Engineering"
-        mock_team.created_by = _USER_ID
-        mock_team.created_at = _NOW
-        mock_team.updated_at = _NOW
-
+        mock_team = _make_mock_team()
         body = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
             "Operations": [{"op": "remove", "value": [{"value": str(_USER_ID)}]}],
         }
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=mock_team,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_remove_group_member",
-                return_value=True,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_list_group_members",
-                return_value=[],
-            ),
+            patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_remove_group_member", return_value=True),
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=[]),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.patch(
@@ -569,27 +520,26 @@ class TestPatchEdgeCases:
             )
         assert resp.status_code == 200
 
-    def test_patch_group_unsupported_op_returns_400(self, client: TestClient) -> None:
-        mock_team = MagicMock()
-        mock_team.id = _TEAM_ID
-        mock_team.organisation_id = _ORG_ID
-        mock_team.name = "Engineering"
-        mock_team.created_by = _USER_ID
-        mock_team.created_at = _NOW
-        mock_team.updated_at = _NOW
-
+    @pytest.mark.parametrize(
+        ("op", "expected_body_check"),
+        [
+            pytest.param("doesNotExist", None, id="unsupported_op_returns_400"),
+            pytest.param("invalidOp", "detail", id="invalid_op_returns_400"),
+        ],
+    )
+    def test_patch_group_invalid_ops(self, client: TestClient, op: str, expected_body_check: str | None) -> None:
+        mock_team = _make_mock_team()
         body = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-            "Operations": [{"op": "doesNotExist"}],
+            "Operations": [{"op": op}],
         }
+        if op == "doesNotExist":
+            body["Operations"][0]["value"] = False
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=mock_team,
-            ),
+            patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
             patch(
                 "modulo.api.routes.scim.scim_list_group_members",
-                return_value=_MOCK_MEMBERSHIPS,
+                return_value=_MOCK_MEMBERSHIPS if op == "invalidOp" else [],
             ),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
@@ -599,55 +549,16 @@ class TestPatchEdgeCases:
                 headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
             )
         assert resp.status_code == 400
-
-    def test_patch_group_invalid_op_returns_400(self, client: TestClient) -> None:
-        mock_team = MagicMock()
-        mock_team.id = _TEAM_ID
-        mock_team.organisation_id = _ORG_ID
-        mock_team.name = "Engineering"
-        mock_team.created_by = _USER_ID
-        mock_team.created_at = _NOW
-        mock_team.updated_at = _NOW
-        body = {
-            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-            "Operations": [{"op": "invalidOp"}],
-        }
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=mock_team,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_list_group_members",
-                return_value=_MOCK_MEMBERSHIPS,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.patch(
-                f"/scim/v2/Groups/{_TEAM_ID}",
-                json=body,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 400
-        data = resp.json()
-        assert "detail" in data
+        if expected_body_check:
+            assert expected_body_check in resp.json()
 
     def test_replace_group_clear_members(self, client: TestClient) -> None:
-        """PUT Group with empty members list removes all members."""
-        mock_team = MagicMock()
-        mock_team.id = _TEAM_ID
-        mock_team.organisation_id = _ORG_ID
-        mock_team.name = "Engineering"
-        mock_team.created_by = _USER_ID
-        mock_team.created_at = _NOW
-        mock_team.updated_at = _NOW
-
+        mock_team = _make_mock_team()
         put_body = {
             "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
             "displayName": "Engineering",
             "members": [],
         }
-
         mock_membership = MagicMock()
         mock_membership.id = uuid.uuid4()
         mock_membership.team_id = _TEAM_ID
@@ -656,22 +567,10 @@ class TestPatchEdgeCases:
         mock_membership.created_at = _NOW
 
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=mock_team,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_update_group",
-                return_value=mock_team,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_list_group_members",
-                return_value=[mock_membership],
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_remove_group_member",
-                return_value=True,
-            ),
+            patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_update_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=[mock_membership]),
+            patch("modulo.api.routes.scim.scim_remove_group_member", return_value=True),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.put(
@@ -683,15 +582,7 @@ class TestPatchEdgeCases:
         assert resp.json()["displayName"] == "Engineering"
 
     def test_patch_group_replace_members(self, client: TestClient) -> None:
-        """PATCH replace with members array replaces all members."""
-        mock_team = MagicMock()
-        mock_team.id = _TEAM_ID
-        mock_team.organisation_id = _ORG_ID
-        mock_team.name = "Engineering"
-        mock_team.created_by = _USER_ID
-        mock_team.created_at = _NOW
-        mock_team.updated_at = _NOW
-
+        mock_team = _make_mock_team()
         new_user_id = uuid.uuid4()
         body = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
@@ -706,30 +597,12 @@ class TestPatchEdgeCases:
             ],
         }
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=mock_team,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_update_group",
-                return_value=mock_team,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_get_user",
-                return_value=_MOCK_USER,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_add_group_member",
-                return_value=None,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_list_group_members",
-                return_value=[_MOCK_MEMBERSHIP],
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_remove_group_member",
-                return_value=True,
-            ),
+            patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_update_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
+            patch("modulo.api.routes.scim.scim_add_group_member", return_value=None),
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=[_MOCK_MEMBERSHIP]),
+            patch("modulo.api.routes.scim.scim_remove_group_member", return_value=True),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.patch(
@@ -755,7 +628,6 @@ class TestServiceProviderConfig:
         assert data["patch"]["supported"] is True
 
     def test_service_provider_config_without_public_url(self, client: TestClient) -> None:
-        """ServiceProviderConfig should not crash when modulo_public_url is unset."""
         resp = client.get(
             "/scim/v2/ServiceProviderConfig",
             headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
@@ -763,7 +635,194 @@ class TestServiceProviderConfig:
         assert resp.status_code == 200
 
 
-# ── User endpoints ───────────────────────────────────────────────────
+# ── CRUD endpoints (parametrized) ──────────────────────────────────
+
+
+class TestCrudNotFound:
+    """Parametrized: 6 CRUD endpoints that return 404 when entity is not found."""
+
+    @pytest.mark.parametrize(
+        ("name", "method", "url", "mock_target", "body"),
+        [
+            pytest.param(
+                "get_user", "GET", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", None, id="get_user"
+            ),
+            pytest.param(
+                "replace_user",
+                "PUT",
+                "/scim/v2/Users/{id}",
+                "modulo.api.routes.scim.scim_get_user",
+                _USER_CREATE_BODY,
+                id="replace_user",
+            ),
+            pytest.param(
+                "patch_user",
+                "PATCH",
+                "/scim/v2/Users/{id}",
+                "modulo.api.routes.scim.scim_get_user",
+                _PATCH_USER_BODY,
+                id="patch_user",
+            ),
+            pytest.param(
+                "get_group",
+                "GET",
+                "/scim/v2/Groups/{id}",
+                "modulo.api.routes.scim.scim_get_group",
+                None,
+                id="get_group",
+            ),
+            pytest.param(
+                "replace_group",
+                "PUT",
+                "/scim/v2/Groups/{id}",
+                "modulo.api.routes.scim.scim_get_group",
+                _GROUP_CREATE_BODY,
+                id="replace_group",
+            ),
+            pytest.param(
+                "patch_group",
+                "PATCH",
+                "/scim/v2/Groups/{id}",
+                "modulo.api.routes.scim.scim_get_group",
+                _PATCH_GROUP_ADD_MEMBER,
+                id="patch_group",
+            ),
+        ],
+    )
+    def test_not_found_returns_404(
+        self, client: TestClient, name: str, method: str, url: str, mock_target: str, body: dict | None
+    ) -> None:
+        entity_id = _USER_ID if "user" in name else _TEAM_ID
+        formatted_url = url.format(id=entity_id)
+        with (
+            patch(mock_target, return_value=None),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            if method == "GET":
+                resp = client.get(formatted_url, headers=headers)
+            elif method == "PUT":
+                resp = client.put(formatted_url, json=body, headers=headers)
+            elif method == "PATCH":
+                resp = client.patch(formatted_url, json=body, headers=headers)
+        assert resp.status_code == 404
+
+    @pytest.mark.parametrize(
+        ("name", "method", "url", "mock_target", "body", "expected_status"),
+        [
+            pytest.param(
+                "delete_user_204",
+                "DELETE",
+                "/scim/v2/Users/{id}",
+                "modulo.api.routes.scim.scim_delete_user_by_id",
+                None,
+                204,
+                id="delete_user_204",
+            ),
+            pytest.param(
+                "delete_group_204",
+                "DELETE",
+                "/scim/v2/Groups/{id}",
+                "modulo.api.routes.scim.scim_delete_group_by_id",
+                None,
+                204,
+                id="delete_group_204",
+            ),
+            pytest.param(
+                "delete_user_404",
+                "DELETE",
+                "/scim/v2/Users/{id}",
+                "modulo.api.routes.scim.scim_delete_user_by_id",
+                None,
+                404,
+                id="delete_user_404",
+            ),
+            pytest.param(
+                "delete_group_404",
+                "DELETE",
+                "/scim/v2/Groups/{id}",
+                "modulo.api.routes.scim.scim_delete_group_by_id",
+                None,
+                404,
+                id="delete_group_404",
+            ),
+        ],
+    )
+    def test_delete(
+        self,
+        client: TestClient,
+        name: str,
+        method: str,
+        url: str,
+        mock_target: str,
+        body: dict | None,
+        expected_status: int,
+    ) -> None:
+        entity_id = _USER_ID if "user" in name else _TEAM_ID
+        formatted_url = url.format(id=entity_id)
+        mock_return = expected_status == 204
+        with (
+            patch(mock_target, return_value=mock_return),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            resp = client.delete(formatted_url, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+        assert resp.status_code == expected_status
+
+
+class TestCrudCreate:
+    """Parametrized: create endpoints — duplicate = 409, success = 201."""
+
+    @pytest.mark.parametrize(
+        ("name", "url", "body", "mock_duplicate_target", "duplicate_return"),
+        [
+            pytest.param(
+                "user_duplicate",
+                "/scim/v2/Users",
+                _USER_CREATE_BODY,
+                "modulo.db.crud.account.get_account_by_email",
+                _MOCK_USER,
+                id="duplicate_user_409",
+            ),
+            pytest.param(
+                "group_duplicate",
+                "/scim/v2/Groups",
+                _GROUP_CREATE_BODY,
+                "modulo.db.crud.team.get_team_by_name",
+                _MOCK_TEAM,
+                id="duplicate_group_409",
+            ),
+        ],
+    )
+    def test_duplicate_returns_409(
+        self, client: TestClient, name: str, url: str, body: dict, mock_duplicate_target: str, duplicate_return: object
+    ) -> None:
+        extra_mocks = {}
+        if "group" in name:
+            extra_mocks["modulo.api.routes.scim.set_rls_org"] = None
+        with (
+            patch(mock_duplicate_target, return_value=duplicate_return),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            resp = client.post(url, json=body, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+        assert resp.status_code == 409
+
+
+class TestCrudUnauthorized:
+    """Parametrized: list endpoints return 401 without auth header."""
+
+    @pytest.mark.parametrize(
+        ("url",),
+        [
+            pytest.param("/scim/v2/Users", id="list_users"),
+            pytest.param("/scim/v2/Groups", id="list_groups"),
+        ],
+    )
+    def test_unauthorized_returns_401(self, unauth_client: TestClient, url: str) -> None:
+        resp = unauth_client.get(url)
+        assert resp.status_code == 401
+
+
+# ── User endpoints (unique tests) ────────────────────────────────────
 
 
 class TestListUsers:
@@ -782,22 +841,12 @@ class TestListUsers:
         assert len(data["Resources"]) == 1
         assert data["Resources"][0]["userName"] == "jane@example.com"
 
-    def test_unauthorized_returns_401(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.get("/scim/v2/Users")
-        assert resp.status_code == 401
-
 
 class TestCreateUser:
     def test_returns_201(self, client: TestClient) -> None:
         with (
-            patch(
-                "modulo.api.routes.scim.scim_create_user",
-                return_value=_MOCK_USER,
-            ),
-            patch(
-                "modulo.db.crud.account.get_account_by_email",
-                return_value=None,
-            ),
+            patch("modulo.api.routes.scim.scim_create_user", return_value=_MOCK_USER),
+            patch("modulo.db.crud.account.get_account_by_email", return_value=None),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.post(
@@ -810,29 +859,11 @@ class TestCreateUser:
         assert data["userName"] == "jane@example.com"
         assert data["active"] is True
 
-    def test_duplicate_returns_409(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.account.get_account_by_email",
-                return_value=_MOCK_USER,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.post(
-                "/scim/v2/Users",
-                json=_USER_CREATE_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 409
-
 
 class TestGetUser:
     def test_returns_200(self, client: TestClient) -> None:
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_user",
-                return_value=_MOCK_USER,
-            ),
+            patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.get(
@@ -841,30 +872,13 @@ class TestGetUser:
             )
         assert resp.status_code == 200
         assert resp.json()["id"] == str(_USER_ID)
-
-    def test_not_found_returns_404(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_user", return_value=None),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get(
-                f"/scim/v2/Users/{uuid.uuid4()}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 404
 
 
 class TestReplaceUser:
     def test_returns_200(self, client: TestClient) -> None:
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_user",
-                return_value=_MOCK_USER,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_update_user",
-                return_value=_MOCK_USER,
-            ),
+            patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
+            patch("modulo.api.routes.scim.scim_update_user", return_value=_MOCK_USER),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.put(
@@ -875,40 +889,12 @@ class TestReplaceUser:
         assert resp.status_code == 200
         assert resp.json()["id"] == str(_USER_ID)
 
-    def test_not_found_returns_404(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_get_user",
-                return_value=None,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.put(
-                f"/scim/v2/Users/{uuid.uuid4()}",
-                json=_USER_CREATE_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 404
-
 
 class TestPatchUser:
     def test_returns_200(self, client: TestClient) -> None:
-        mock_user = MagicMock(
-            id=_USER_ID,
-            organisation_id=_ORG_ID,
-            email="jane@example.com",
-            display_name="Jane Doe",
-            active=True,
-            org_role="runner",
-            auth_provider="scim",
-            created_at=_NOW,
-            updated_at=_NOW,
-        )
+        mock_user = _make_mock_user()
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_user",
-                return_value=mock_user,
-            ),
+            patch("modulo.api.routes.scim.scim_get_user", return_value=mock_user),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.patch(
@@ -919,66 +905,15 @@ class TestPatchUser:
         assert resp.status_code == 200
         assert mock_user.active is False
 
-    def test_not_found_returns_404(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_get_user",
-                return_value=None,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.patch(
-                f"/scim/v2/Users/{uuid.uuid4()}",
-                json=_PATCH_USER_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 404
 
-
-class TestDeleteUser:
-    def test_returns_204(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_delete_user_by_id",
-                return_value=True,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.delete(
-                f"/scim/v2/Users/{_USER_ID}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 204
-
-    def test_not_found_returns_404(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_delete_user_by_id",
-                return_value=False,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.delete(
-                f"/scim/v2/Users/{uuid.uuid4()}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 404
-
-
-# ── Group endpoints ──────────────────────────────────────────────────
+# ── Group endpoints (unique tests) ──────────────────────────────────
 
 
 class TestListGroups:
     def test_returns_200(self, client: TestClient) -> None:
         with (
-            patch(
-                "modulo.api.routes.scim.scim_list_groups",
-                return_value=_MOCK_TEAM_LIST,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_list_group_members",
-                return_value=_MOCK_MEMBERSHIPS,
-            ),
+            patch("modulo.api.routes.scim.scim_list_groups", return_value=_MOCK_TEAM_LIST),
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=_MOCK_MEMBERSHIPS),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.get(
@@ -990,34 +925,15 @@ class TestListGroups:
         assert data["totalResults"] == 1
         assert data["Resources"][0]["displayName"] == "Engineering"
 
-    def test_unauthorized_returns_401(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.get("/scim/v2/Groups")
-        assert resp.status_code == 401
-
 
 class TestCreateGroup:
     def test_returns_201(self, client: TestClient) -> None:
         with (
-            patch(
-                "modulo.api.routes.scim.scim_create_group",
-                return_value=_MOCK_TEAM,
-            ),
-            patch(
-                "modulo.db.crud.team.get_team_by_name",
-                return_value=None,
-            ),
-            patch(
-                "modulo.db.crud.user.list_users_for_org", create=True,
-                return_value=[_MOCK_USER],
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_get_user",
-                return_value=_MOCK_USER,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_add_group_member",
-                return_value=None,
-            ),
+            patch("modulo.api.routes.scim.scim_create_group", return_value=_MOCK_TEAM),
+            patch("modulo.db.crud.team.get_team_by_name", return_value=None),
+            patch("modulo.db.crud.org_membership.list_memberships_for_org", return_value=[]),
+            patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
+            patch("modulo.api.routes.scim.scim_add_group_member", return_value=None),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.post(
@@ -1029,33 +945,12 @@ class TestCreateGroup:
         data = resp.json()
         assert data["displayName"] == "Engineering"
 
-    def test_duplicate_returns_409(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.team.get_team_by_name",
-                return_value=_MOCK_TEAM,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.post(
-                "/scim/v2/Groups",
-                json=_GROUP_CREATE_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 409
-
 
 class TestGetGroup:
     def test_returns_200(self, client: TestClient) -> None:
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=_MOCK_TEAM,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_list_group_members",
-                return_value=_MOCK_MEMBERSHIPS,
-            ),
+            patch("modulo.api.routes.scim.scim_get_group", return_value=_MOCK_TEAM),
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=_MOCK_MEMBERSHIPS),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.get(
@@ -1064,49 +959,17 @@ class TestGetGroup:
             )
         assert resp.status_code == 200
         assert resp.json()["displayName"] == "Engineering"
-
-    def test_not_found_returns_404(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=None,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get(
-                f"/scim/v2/Groups/{uuid.uuid4()}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 404
 
 
 class TestReplaceGroup:
     def test_returns_200(self, client: TestClient) -> None:
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=_MOCK_TEAM,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_update_group",
-                return_value=_MOCK_TEAM,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_list_group_members",
-                return_value=_MOCK_MEMBERSHIPS,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_get_user",
-                return_value=_MOCK_USER,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_add_group_member",
-                return_value=None,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_remove_group_member",
-                return_value=True,
-            ),
+            patch("modulo.api.routes.scim.scim_get_group", return_value=_MOCK_TEAM),
+            patch("modulo.api.routes.scim.scim_update_group", return_value=_MOCK_TEAM),
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=_MOCK_MEMBERSHIPS),
+            patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
+            patch("modulo.api.routes.scim.scim_add_group_member", return_value=None),
+            patch("modulo.api.routes.scim.scim_remove_group_member", return_value=True),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.put(
@@ -1116,49 +979,16 @@ class TestReplaceGroup:
             )
         assert resp.status_code == 200
         assert resp.json()["displayName"] == "Engineering"
-
-    def test_not_found_returns_404(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=None,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.put(
-                f"/scim/v2/Groups/{uuid.uuid4()}",
-                json=_GROUP_CREATE_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 404
 
 
 class TestPatchGroup:
     def test_add_member_returns_200(self, client: TestClient) -> None:
-        mock_team = MagicMock()
-        mock_team.id = _TEAM_ID
-        mock_team.organisation_id = _ORG_ID
-        mock_team.name = "Engineering"
-        mock_team.created_by = _USER_ID
-        mock_team.created_at = _NOW
-        mock_team.updated_at = _NOW
+        mock_team = _make_mock_team()
         with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=mock_team,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_get_user",
-                return_value=_MOCK_USER,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_add_group_member",
-                return_value=None,
-            ),
-            patch(
-                "modulo.api.routes.scim.scim_list_group_members",
-                return_value=_MOCK_MEMBERSHIPS,
-            ),
+            patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
+            patch("modulo.api.routes.scim.scim_add_group_member", return_value=None),
+            patch("modulo.api.routes.scim.scim_list_group_members", return_value=_MOCK_MEMBERSHIPS),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.patch(
@@ -1168,51 +998,6 @@ class TestPatchGroup:
             )
         assert resp.status_code == 200
         assert resp.json()["displayName"] == "Engineering"
-
-    def test_not_found_returns_404(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                return_value=None,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.patch(
-                f"/scim/v2/Groups/{uuid.uuid4()}",
-                json=_PATCH_GROUP_ADD_MEMBER,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 404
-
-
-class TestDeleteGroup:
-    def test_returns_204(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_delete_group_by_id",
-                return_value=True,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.delete(
-                f"/scim/v2/Groups/{_TEAM_ID}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 204
-
-    def test_not_found_returns_404(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_delete_group_by_id",
-                return_value=False,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.delete(
-                f"/scim/v2/Groups/{uuid.uuid4()}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        assert resp.status_code == 404
 
 
 # ── License gate ─────────────────────────────────────────────────────
@@ -1235,6 +1020,7 @@ class TestLicenseGate:
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+        app.dependency_overrides[get_scim_plan_context] = CommunityTier
         resp = TestClient(app).get(
             "/scim/v2/Users",
             headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},

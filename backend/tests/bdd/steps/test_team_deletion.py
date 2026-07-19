@@ -1,15 +1,14 @@
 """BDD step definitions: Team deletion workflow."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/team_deletion.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @pytest.fixture

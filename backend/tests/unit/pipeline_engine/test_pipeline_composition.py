@@ -70,9 +70,14 @@ class TestMakeNodeFnWithRealHub:
 
         hub = ModelBackendHub()
         await hub.__aenter__()
-        hub.register(backend_id, _StubAdapter({
-            "Hello World": json.dumps({"greeting": "Hello, World!"}),
-        }))
+        hub.register(
+            backend_id,
+            _StubAdapter(
+                {
+                    "Hello World": json.dumps({"greeting": "Hello, World!"}),
+                }
+            ),
+        )
         set_model_backend_hub(hub)
 
         state = {
@@ -108,9 +113,14 @@ class TestPipelineE2E:
 
         hub = ModelBackendHub()
         await hub.__aenter__()
-        hub.register(backend_id, _StubAdapter({
-            "What is the capital of France?": json.dumps({"answer": "Paris"}),
-        }))
+        hub.register(
+            backend_id,
+            _StubAdapter(
+                {
+                    "What is the capital of France?": json.dumps({"answer": "Paris"}),
+                }
+            ),
+        )
         set_model_backend_hub(hub)
 
         graph_json = {

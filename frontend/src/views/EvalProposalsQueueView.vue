@@ -1,5 +1,5 @@
-﻿<template>
-  <FeatureGate feature-name="eval_system" required-tier="team" show-disabled>
+<template>
+  <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
     <PageTabs :tabs="[
       { label: 'Evals', to: '/evals/editor' },
@@ -9,10 +9,7 @@
     ]" />
 
     <div class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">Eval Proposals Queue</h1>
-      <p class="mt-1 text-muted-foreground">Eval gaps detected by the feedback system — review and publish as eval definitions</p>
-    </header>
+    <PageHeader title="Eval Proposals Queue" subtitle="Eval gaps detected by the feedback system — review and publish as eval definitions" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -103,20 +100,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 import EmptyState from '../components/shared/EmptyState.vue'
+import { formatDateShortWithTime } from '../lib/formatDate'
 
-const planStore = usePlanStore()
 
 interface EvalProposalItem {
   id: string
@@ -146,9 +144,15 @@ interface ProposalsResponse {
 
 const { patch } = useApi()
 
-const proposals = ref<EvalProposalItem[]>([])
-const loading = ref(true)
-const pageError = ref<string | null>(null)
+const { loading, error: pageError, data: proposalsResp, load: loadProposals } = useDataFetch<ProposalsResponse>(
+  async () => {
+    const response = await api.GET('/api/v1/feedback/proposals')
+    return { data: response.data as unknown as ProposalsResponse | undefined, error: response.error }
+  },
+  { initialValue: { items: [] as EvalProposalItem[], total: 0, page: 1, page_size: 20 } },
+)
+
+const proposals = computed(() => proposalsResp.value?.items ?? [])
 const actioningId = ref<string | null>(null)
 const actionMessages = ref<Record<string, { type: string; text: string }>>({})
 
@@ -166,28 +170,11 @@ function statusBadgeClass(status: string): string {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return formatDateShortWithTime(d)
 }
 
 function isActionable(status: string): boolean {
   return status === 'pending' || status === 'routing'
-}
-
-async function loadProposals() {
-  loading.value = true
-  pageError.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/feedback/proposals', { params: {} as any })
-    if (err) {
-      pageError.value = `Failed to load proposals: ${formatApiError(err)}`
-    } else if (data) {
-      proposals.value = (data as unknown as ProposalsResponse).items
-    }
-  } catch (e: unknown) {
-    pageError.value = `Failed to load proposals: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
 }
 
 async function publishProposal(p: EvalProposalItem) {
@@ -196,7 +183,8 @@ async function publishProposal(p: EvalProposalItem) {
   try {
     await patch(`/api/v1/feedback/${p.id}/status`, { status: 'resolved' })
     actionMessages.value[p.id] = { type: 'success', text: 'Proposal marked as published. Eval definition creation not yet implemented.' }
-    p.feedback_status = 'resolved'
+    const idx = proposals.value.findIndex(x => x.id === p.id)
+    if (idx !== -1 && proposalsResp.value) proposalsResp.value.items[idx].feedback_status = 'resolved'
     setTimeout(() => { delete actionMessages.value[p.id] }, 3000)
   } catch (e: unknown) {
     actionMessages.value[p.id] = { type: 'error', text: `Publish failed: ${formatApiError(e)}` }
@@ -211,8 +199,8 @@ async function dismissProposal(id: string) {
   try {
     await patch(`/api/v1/feedback/${id}/status`, { status: 'dismissed' })
     actionMessages.value[id] = { type: 'success', text: 'Proposal dismissed.' }
-    const prop = proposals.value.find(p => p.id === id)
-    if (prop) prop.feedback_status = 'dismissed'
+    const idx = proposals.value.findIndex(p => p.id === id)
+    if (idx !== -1 && proposalsResp.value) proposalsResp.value.items[idx].feedback_status = 'dismissed'
     setTimeout(() => { delete actionMessages.value[id] }, 3000)
   } catch (e: unknown) {
     actionMessages.value[id] = { type: 'error', text: `Dismiss failed: ${formatApiError(e)}` }
@@ -220,7 +208,4 @@ async function dismissProposal(id: string) {
     actioningId.value = null
   }
 }
-
-onMounted(() => { planStore.fetchPlan(); loadProposals() })
 </script>
-

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Ed25519 signing utilities for the community registry — PEM/base64 API.
 
 Provides key generation, signing, verification, and trust anchor support
@@ -7,6 +5,7 @@ for the community library registry. Uses PEM-encoded keys and base64
 signatures.
 """
 
+from __future__ import annotations
 
 import base64
 import logging
@@ -62,7 +61,8 @@ def generate_keypair() -> tuple[str, str]:
 def _load_private_key(private_key_pem: str) -> Ed25519PrivateKey:
     """Load an Ed25519 private key from PEM string."""
     key = serialization.load_pem_private_key(
-        private_key_pem.encode(), password=None,
+        private_key_pem.encode(),
+        password=None,
     )
     if not isinstance(key, Ed25519PrivateKey):
         raise TypeError("Key is not an Ed25519 private key")
@@ -184,8 +184,8 @@ def verify_trust_anchor(
     if trust_anchor_public_key_pem is None:
         anchor_pem = get_trust_anchor_public_key_pem()
     elif not trust_anchor_public_key_pem:
-        logger.warning("Empty trust anchor public key provided, falling back to dev anchor")
-        anchor_pem = get_trust_anchor_public_key_pem()
+        logger.warning("Empty trust anchor public key provided, returning False")
+        return False
     else:
         anchor_pem = trust_anchor_public_key_pem
     return verify(anchor_pem, public_key_pem.encode(), signature)

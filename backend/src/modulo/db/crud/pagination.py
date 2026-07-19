@@ -27,7 +27,7 @@ T = TypeVar("T")
 _ModelT = TypeVar("_ModelT")  # bound=DeclarativeBase — omitted for pydantic compatibility
 
 
-class CursorPage(BaseModel, Generic[T]):  # noqa: UP046
+class CursorPage(BaseModel, Generic[T]):  # noqa: UP046 — needs Python 3.12+ `[T]` type param syntax
     model_config = {"arbitrary_types_allowed": True}
     items: list[T]
     next_cursor: str | None = None
@@ -123,13 +123,9 @@ class CursorPaginator:
             bound_cursor = literal(cursor_value)
             bound_id = literal(cursor_id)
             if sd == "desc":
-                stmt = stmt.where(
-                    sa_tuple(sort_col, id_col) < sa_tuple(bound_cursor, bound_id)
-                )
+                stmt = stmt.where(sa_tuple(sort_col, id_col) < sa_tuple(bound_cursor, bound_id))
             else:
-                stmt = stmt.where(
-                    sa_tuple(sort_col, id_col) > sa_tuple(bound_cursor, bound_id)
-                )
+                stmt = stmt.where(sa_tuple(sort_col, id_col) > sa_tuple(bound_cursor, bound_id))
 
         order_col = sort_col.desc() if sd == "desc" else sort_col.asc()
         id_order = id_col.desc() if sd == "desc" else id_col.asc()

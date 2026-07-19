@@ -49,13 +49,13 @@ Feature: Role-Based Access Control
     And the team has an account_id
 
   Scenario: Admin can list teams
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     When I list teams
     Then the response status is 200
     And the response contains a list of teams
 
   Scenario: Admin can get a team by ID
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     When I get team "docs-team"
     Then the response status is 200
     And the response contains a team with name "docs-team"
@@ -66,7 +66,7 @@ Feature: Role-Based Access Control
     Then the response status is 403
 
   Scenario: Duplicate team name is rejected
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     When I create a team with name "docs-team" and description "duplicate"
     Then the response status is 409
 
@@ -83,19 +83,19 @@ Feature: Role-Based Access Control
     Then the response status is 404
 
   Scenario: Admin can rename a team
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     When I rename team "docs-team" to "documentation-team"
     Then the response status is 200
     And the response contains a team with name "documentation-team"
 
   Scenario: Renaming to an already-taken name returns 409
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     And a team "legal-team" exists
     When I rename team "docs-team" to "legal-team"
     Then the response status is 409
 
   Scenario: Admin can delete an empty team
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     Given the team has no resources
     When I delete the team "docs-team"
     Then the response status is 204
@@ -103,31 +103,31 @@ Feature: Role-Based Access Control
   # ── Team membership ─────────────────────────────────────────────
 
   Scenario: Admin can add a user to a team
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     And a user "alice" exists
     When I add user "alice" to team "docs-team" with role "viewer"
     Then the response status is 201
 
   Scenario: Admin can remove a user from a team
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     And a user "alice" exists
     And user "alice" is already a member of team "docs-team"
     When I remove user "alice" from team "docs-team"
     Then the response status is 200
 
   Scenario: Adding user to non-existent team returns 404
-    And a user "alice" exists
+    Given a user "alice" exists
     When I add user "alice" to team "nonexistent" with role "viewer"
     Then the response status is 404
 
   Scenario: Adding user with role exceeding org role is rejected
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     And a user "alice" exists with org role "viewer"
     When I add user "alice" to team "docs-team" with role "operator"
     Then the response status is 422
 
   Scenario: Duplicate membership is rejected
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     And a user "alice" exists
     And user "alice" is already a member of team "docs-team"
     When I add user "alice" to team "docs-team" with role "viewer"
@@ -144,14 +144,14 @@ Feature: Role-Based Access Control
   # ── Team deletion with resources ───────────────────────────────
 
   Scenario: Team with resources cannot be deleted
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     And a pipeline "review-pipeline" is owned by team "docs-team"
     When I delete the team "docs-team"
     Then the response status is 409
     And the error indicates the team still has resources
 
   Scenario: Team with no resources can be deleted
-    And a team "docs-team" exists
+    Given a team "docs-team" exists
     Given the team has no resources
     When I delete the team "docs-team"
     Then the response status is 204

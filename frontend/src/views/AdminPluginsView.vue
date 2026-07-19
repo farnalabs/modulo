@@ -1,14 +1,11 @@
-﻿<template>
-  <FeatureGate feature-name="plugin_management">
+<template>
+  <FeatureGate feature-name="plugin_management" show-disabled>
     <div class="page-narrow">
       <header class="flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">Plugins</h1>
-          <p class="mt-1 text-muted-foreground">{{ $t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions') }}</p>
-        </div>
+        <PageHeader title="Plugins" :subtitle="$t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions')" />
         <Button
           variant="default"
-          class="btn-glow border-primary/30 hover:border-primary/60"
+           class="border-primary/30 hover:border-primary/60"
           data-testid="admin-plugins-refresh"
           @click="loadPlugins"
         >
@@ -82,11 +79,11 @@
                   </td>
                   <td class="table-cell-numeric">
                     <div class="flex items-center justify-end gap-1">
-                      <label
+                      <label for="adminpluginsview-field-1"
                         class="relative inline-flex cursor-pointer items-center"
                         :title="activeStates[plugin.PLUGIN_ID] !== false ? 'Disable plugin' : 'Enable plugin'"
                       >
-                        <input
+                        <input id="adminpluginsview-field-1"
                           type="checkbox"
                           class="sr-only peer"
                           :checked="activeStates[plugin.PLUGIN_ID] !== false"
@@ -168,8 +165,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import { reactive, computed, watch } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -187,9 +186,22 @@ interface PluginItem {
   health_checked_at: string | null
 }
 
-const plugins = ref<PluginItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { data: pluginsData, loading, error, load: loadPlugins } = useDataFetch(
+  () => (api as any).GET('/api/v1/plugins') as Promise<{ data?: PluginItem[]; error?: { detail?: string } }>,
+  { initialValue: [] as PluginItem[] }
+)
+
+const plugins = computed(() => pluginsData.value ?? [])
+
+watch(pluginsData, (newData) => {
+  if (newData) {
+    for (const p of newData) {
+      if (activeStates[p.PLUGIN_ID] === undefined) {
+        activeStates[p.PLUGIN_ID] = true
+      }
+    }
+  }
+})
 
 const activeStates = reactive<Record<string, boolean>>({})
 const expanded = reactive<Record<string, boolean>>({})
@@ -221,28 +233,4 @@ async function togglePlugin(id: string) {
   }
 }
 
-async function loadPlugins() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/plugins')
-    if (err) {
-      error.value = `Failed to load plugins: ${formatApiError(err)}`
-    } else if (data) {
-      plugins.value = data as PluginItem[]
-      for (const p of data as PluginItem[]) {
-        if (activeStates[p.PLUGIN_ID] === undefined) {
-          activeStates[p.PLUGIN_ID] = true
-        }
-      }
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load plugins: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(loadPlugins)
 </script>
-

@@ -7,19 +7,22 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, update_api_key
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/api-keys", tags=["api-keys"])
 
@@ -69,7 +72,7 @@ async def _require_team_rbac(settings: Settings, session: AsyncSession) -> None:
         )
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -77,16 +80,17 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
         )
 
 
+@handle_db_errors("api_keys.create_api_key_endpoint")
 @router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key_endpoint(
     req: ApiKeyCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> ApiKeyCreatedResponse:
     if req.role not in ("operator", "runner"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'. admin keys are prohibited.",
         )
     team_id: uuid.UUID | None = None
@@ -110,10 +114,21 @@ async def create_api_key_endpoint(
                 team_id=team_id,
                 expires_at=expires_at,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.warning("create_api_key SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
         ) from None
     except HTTPException:
         raise
@@ -134,10 +149,11 @@ async def create_api_key_endpoint(
     )
 
 
+@handle_db_errors("api_keys.list_api_keys_endpoint")
 @router.get("", response_model=list[dict[str, Any]])
 async def list_api_keys_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[dict[str, Any]]:
     try:
         async with session.begin():
@@ -149,6 +165,12 @@ async def list_api_keys_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
+    except SQLAlchemyError:
+        logger.warning("list_api_keys SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -159,17 +181,18 @@ async def list_api_keys_endpoint(
         ) from None
 
 
+@handle_db_errors("api_keys.update_api_key_endpoint")
 @router.put("/{key_id}")
 async def update_api_key_endpoint(
     key_id: uuid.UUID,
     req: ApiKeyUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     if req.role is not None and req.role not in ("operator", "runner"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'.",
         )
     team_id: uuid.UUID | None = None
@@ -193,10 +216,24 @@ async def update_api_key_endpoint(
                 team_id=team_id,
                 expires_at=expires_at,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.warning(
+            "update_api_key SQLAlchemyError",
+            extra={"org_id": str(principal.organisation_id), "key_id": str(key_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
         ) from None
     except HTTPException:
         raise
@@ -217,21 +254,36 @@ async def update_api_key_endpoint(
     }
 
 
+@handle_db_errors("api_keys.revoke_api_key_endpoint")
 @router.delete("/{key_id}", response_model=ApiKeyRevokeResponse)
 async def revoke_api_key_endpoint(
     key_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ApiKeyRevokeResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             revoked = await revoke_api_key(session, key_id, principal.organisation_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.warning(
+            "revoke_api_key SQLAlchemyError",
+            extra={"org_id": str(principal.organisation_id), "key_id": str(key_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
         ) from None
     except HTTPException:
         raise
@@ -246,10 +298,11 @@ async def revoke_api_key_endpoint(
     return ApiKeyRevokeResponse(id=key_id, revoked=True)
 
 
+@handle_db_errors("api_keys.mcp_config_endpoint")
 @router.get("/mcp-config", response_model=McpConfigResponse)
 async def mcp_config_endpoint(
     settings: Settings = Depends(get_settings),
-    _: str = Depends(get_current_user),
+    _: str = Depends(get_current_tenant_user),
 ) -> McpConfigResponse:
     """Return the MCP server URL and config snippet for Claude Desktop / Cursor."""
     try:

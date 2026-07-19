@@ -2,7 +2,8 @@
 
 import asyncio
 import json
-from typing import Any
+import random
+from typing import Any, cast
 
 import httpx
 
@@ -16,8 +17,6 @@ from modulo.connectors.base import (
 )
 
 _SLACK_API = "https://slack.com/api"
-
-_RATE_LIMITED_STATUS = 429
 
 _RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
 _MAX_RETRIES = 3
@@ -38,11 +37,14 @@ def _parse_retry_after(response: httpx.Response) -> float | None:
 def _compute_retry_delay(attempt: int, response: httpx.Response | None = None) -> float:
     retry_after = _parse_retry_after(response) if response else None
     if retry_after is not None:
-        return min(retry_after, _MAX_DELAY)
-    return min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+        return float(min(retry_after, _MAX_DELAY))
+    jitter = random.uniform(0, 1)  # noqa: S311 — non-cryptographic jitter for retry delays
+    return float(min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY))
 
 
 def _check_slack_ok(body: Any, context: str) -> None:
+    if not isinstance(body, dict):
+        raise ValueError(f"Slack API returned non-JSON-object response in {context}: {type(body).__name__}")
     if not body.get("ok"):
         raise ValueError(f"Slack API error in {context}: {body.get('error', 'unknown')}")
 
@@ -107,7 +109,7 @@ class SlackConnector(ConnectorBase):
         body = await self._parse_json(r)
         if not body.get("ok"):
             raise ValueError(f"Token validation failed: {body.get('error', 'unknown')}")
-        return body
+        return cast(dict[str, Any], body)
 
     async def health_check(self) -> HealthResult:
         try:
@@ -159,15 +161,16 @@ class SlackConnector(ConnectorBase):
         r = await self._call_api("GET", "/conversations.list", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "conversations.list")
+        meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("channels", []),
-            next_cursor=body.get("response_metadata", {}).get("next_cursor"),
+            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
         )
 
     async def _get_messages(self, q: ConnectorQuery) -> ConnectorResult:
-        channel = q.filters.get("channel")
-        if not channel:
+        if "channel" not in q.filters:
             raise ValueError("Slack messages query requires 'channel' filter")
+        channel = q.filters["channel"]
         params: dict[str, Any] = {"channel": channel, "limit": q.limit}
         if q.filters.get("oldest"):
             params["oldest"] = q.filters["oldest"]
@@ -176,9 +179,10 @@ class SlackConnector(ConnectorBase):
         r = await self._call_api("GET", "/conversations.history", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "conversations.history")
+        meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("messages", []),
-            next_cursor=body.get("response_metadata", {}).get("next_cursor"),
+            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
         )
 
     async def _list_users(self, q: ConnectorQuery) -> ConnectorResult:
@@ -188,15 +192,16 @@ class SlackConnector(ConnectorBase):
         r = await self._call_api("GET", "/users.list", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "users.list")
+        meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("members", []),
-            next_cursor=body.get("response_metadata", {}).get("next_cursor"),
+            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
         )
 
     async def _post_message(self, data: dict[str, Any]) -> dict[str, Any]:
-        channel = data.get("channel")
-        if not channel:
+        if "channel" not in data:
             raise ValueError("Missing 'channel' in message payload")
+        channel = data["channel"]
         body_data = {k: v for k, v in data.items() if k != "channel"}
         r = await self._call_api("POST", "/chat.postMessage", json={"channel": channel, **body_data})
         body: dict[str, Any] = await self._parse_json(r)
@@ -204,18 +209,18 @@ class SlackConnector(ConnectorBase):
         return body
 
     async def _get_channel_info(self, q: ConnectorQuery) -> ConnectorResult:
-        channel = q.filters.get("channel")
-        if not channel:
+        if "channel" not in q.filters:
             raise ValueError("Slack channel_info query requires 'channel' filter")
+        channel = q.filters["channel"]
         r = await self._call_api("GET", "/conversations.info", params={"channel": channel})
         body = await self._parse_json(r)
         _check_slack_ok(body, "conversations.info")
         return ConnectorResult(records=[body.get("channel", {})])
 
     async def _get_channel_members(self, q: ConnectorQuery) -> ConnectorResult:
-        channel = q.filters.get("channel")
-        if not channel:
+        if "channel" not in q.filters:
             raise ValueError("Slack channel_members query requires 'channel' filter")
+        channel = q.filters["channel"]
         params: dict[str, Any] = {"channel": channel, "limit": q.limit}
         if q.cursor:
             params["cursor"] = q.cursor
@@ -228,12 +233,12 @@ class SlackConnector(ConnectorBase):
         )
 
     async def _get_thread_replies(self, q: ConnectorQuery) -> ConnectorResult:
-        channel = q.filters.get("channel")
-        if not channel:
+        if "channel" not in q.filters:
             raise ValueError("Slack thread_replies query requires 'channel' filter")
-        thread_ts = q.filters.get("thread_ts")
-        if not thread_ts:
+        if "thread_ts" not in q.filters:
             raise ValueError("Slack thread_replies query requires 'thread_ts' filter")
+        channel = q.filters["channel"]
+        thread_ts = q.filters["thread_ts"]
         params: dict[str, Any] = {"channel": channel, "ts": thread_ts, "limit": q.limit}
         if q.filters.get("oldest"):
             params["oldest"] = q.filters["oldest"]
@@ -248,14 +253,18 @@ class SlackConnector(ConnectorBase):
         )
 
     async def _post_thread_reply(self, data: dict[str, Any]) -> dict[str, Any]:
-        channel = data.get("channel")
-        if not channel:
+        if "channel" not in data:
             raise ValueError("Missing 'channel' in thread_reply payload")
-        thread_ts = data.get("thread_ts")
-        if not thread_ts:
+        if "thread_ts" not in data:
             raise ValueError("Missing 'thread_ts' in thread_reply payload")
+        channel = data["channel"]
+        thread_ts = data["thread_ts"]
         body_data = {k: v for k, v in data.items() if k not in ("channel", "thread_ts")}
-        r = await self._call_api("POST", "/chat.postMessage", json={"channel": channel, "thread_ts": thread_ts, **body_data})
+        r = await self._call_api(
+            "POST",
+            "/chat.postMessage",
+            json={"channel": channel, "thread_ts": thread_ts, **body_data},
+        )
         body: dict[str, Any] = await self._parse_json(r)
         _check_slack_ok(body, "chat.postMessage (thread)")
         return body

@@ -1,7 +1,7 @@
 ---
 id: feat-core-runtime-provider-core
 prd: 6
-adr: [docs/adr/001-agent-environment-primitive.md]
+adr: [docs/adr/003-agent-dispatch-model.md]
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
   - backend/tests/bdd/features/workflows/binding.feature
@@ -10,9 +10,10 @@ code:
   - backend/src/modulo/db/models/environment_profile.py
   - backend/src/modulo/db/models/workspace_lease.py
   - backend/src/modulo/db/crud/environment_profile.py
+  - backend/src/modulo/api/routes/environment_profiles.py
   - backend/src/modulo/api/routes/environments.py
   - backend/src/modulo/core/graph_validator/__init__.py
-  - backend/src/modulo/db/migrations/versions/0013_environment_profiles_workspace_leases.py
+  - backend/src/modulo/db/migrations/versions/0013_add_local_provider_type.py
   - backend/src/modulo/connectors/shell/__init__.py
 unit-tests:
   - backend/tests/unit/core/runtime_provider/test_abc.py
@@ -25,9 +26,17 @@ unit-tests:
 depends-on: [feat-core-pipeline-execution]
 delivery-tasks: [task-runtime-provider-core]
 status: partial
+deprecated: true
 ---
 
 # Runtime Provider Core
+
+> **Deprecation notice (ADR 003, 2026-07-16)**: The RuntimeProvider/ShellConnector
+> abstraction was built for ADR 001's "Modulo agents run inside sandboxes" model.
+> ADR 003 supersedes this — Modulo now dispatches work to external agent runtimes
+> via the `sandbox_agent` node type. ShellConnector is deprecated.
+> E2BRuntimeProvider, WorkspaceLease, and EnvironmentProfile remain useful as
+> sandbox lifecycle primitives for the dispatch model.
 
 Agent execution environments: `RuntimeProvider` ABC, `RuntimeProviderHub` registry, `E2BRuntimeProvider` concrete backend, `EnvironmentProfile` and `WorkspaceLease` entities CRUD API, graph validator integration, and Alembic migration. Defined by `task-runtime-provider-core` in ADR-001 4.
 
@@ -56,6 +65,8 @@ Provided by existing tests: test_hub.py
 - [x] unregister nonexistent name is no-op
 - [x] list_providers() returns a copy of the registry dict (mutating copy does not affect hub)
 - [x] resolve(profile) uses provider_hint to pick matching registered provider
+- [x] resolve(profile) deterministically honours provider_type IDs `local`, `local_docker`/`docker`, and `e2b`
+- [x] resolve(profile) returns None when an explicitly requested provider type is unavailable (no cross-provider fallback)
 - [x] resolve prefers provider_hint over supports()
 - [x] resolve falls through to supports() when no hint
 - [x] resolve returns first registered provider when no hint and no supports() match
@@ -98,6 +109,7 @@ Provided by existing tests: test_docker_provider.py
 - [x] get_workspace_status: falls back to "terminated" on error (e.g. connection lost)
 - [x] close: closes underlying Docker client connection
 - [x] close: idempotent (can be called multiple times)
+- [x] LocalDockerRuntimeProvider preserves the legacy ShellConnector mapping contract through a thin adapter over DockerRuntimeProvider
 
 ### LocalRuntimeProvider (`core/runtime_provider/local.py`)
 

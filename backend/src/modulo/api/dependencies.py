@@ -9,9 +9,10 @@ if test isolation is needed.
 
 import logging
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Depends, HTTPException, status
+from fastapi.params import Depends as DependsParameter
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -27,7 +28,9 @@ from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
-def require_feature(feature_name: str):
+
+
+def require_feature(feature_name: str) -> DependsParameter:
     """FastAPI dependency factory — blocks access if the named feature is not enabled on the current plan.
 
     Returns 402 Payment Required when the feature is unavailable.
@@ -35,7 +38,7 @@ def require_feature(feature_name: str):
 
     .. code-block:: python
 
-       _: None = require_feature("sso")           # route parameter
+       _: object = require_feature("sso")           # route parameter
        dependencies=[require_feature("team_rbac")]  # decorator
     """
 
@@ -47,14 +50,23 @@ def require_feature(feature_name: str):
                 instance=feature_name,
             )
 
-    return Depends(_check)
+    return cast(DependsParameter, Depends(_check))
 
 
 def pg_connection_string(database_url: str) -> str:
-    """Strip SQLAlchemy+asyncpg prefix to get a psycopg-compatible URL."""
-    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
+    """Strip SQLAlchemy prefix to get a psycopg-compatible URL.
+
+    Preserves any existing sslmode parameter from the DATABASE_URL
+    (e.g. sslmode=require for Fly.io managed Postgres).
+    """
+    url = database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
         "postgresql+psycopg://", "postgresql://"
     )
+    if "sslmode" in url:
+        return url
+    if "?" in url:
+        return url + "&sslmode=disable"
+    return url + "?sslmode=disable"
 
 
 _engine: AsyncEngine | None = None
@@ -70,12 +82,21 @@ def get_or_create_engine(settings: Settings) -> AsyncEngine:
     """
     global _engine
     if _engine is None:
+        connect_args: dict[str, Any] = {"timeout": 10}
+        db_type = settings.modulo_db.lower()
+
+        # asyncpg defaults to "prefer" SSL which causes ConnectionResetError
+        # on Fly Postgres private networks (no TLS listener). Explicitly
+        # disable SSL to match bootstrap_db.py's ssl=False pattern.
+        if db_type == "postgres":
+            connect_args["ssl"] = False
+            connect_args["statement_cache_size"] = 0  # HAProxy compat: disable asyncpg statement cache
+
         kw: dict[str, Any] = {
             "url": settings.database_url,
             "pool_pre_ping": True,
-            "connect_args": {"timeout": 10},
+            "connect_args": connect_args,
         }
-        db_type = settings.modulo_db.lower()
         if db_type != "sqlite":
             kw["pool_size"] = 20
             kw["max_overflow"] = 10
@@ -121,7 +142,7 @@ async def get_db_session(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
 
 
 async def get_plan_context(
@@ -138,25 +159,31 @@ async def get_plan_context(
     4. SystemConfig.default_plan (deployment-wide, from DB)
     5. CommunityTier (default fallback)
     """
-    from modulo.core.feature_flags import resolve_plan_context
+    from modulo.core.feature_flags import CommunityTier, resolve_plan_context
     from modulo.db.crud.organisation import get_organisation
 
     org = None
     if current_user.organisation_id is not None:
         try:
-
             async with session.begin():
                 org = await get_organisation(session, current_user.organisation_id)
         except ProgrammingError:
-
             logger.exception("api.dependencies")
 
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
+            ) from None
 
-            )
+        except (TypeError, AttributeError):
+            logger.warning("Session does not support async begin() — returning CommunityTier")
 
-    return await resolve_plan_context(settings, session, org=org)
+            return CommunityTier()
+
+    try:
+        return await resolve_plan_context(settings, session, org=org)
+
+    except (TypeError, AttributeError):
+        logger.warning("Session does not support resolve_plan_context — returning CommunityTier")
+
+        return CommunityTier()

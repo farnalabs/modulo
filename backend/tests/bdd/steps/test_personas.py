@@ -1,5 +1,4 @@
-"""Step definitions for persona feature files (Priya Platform Engineer, Marcus CISO).
-"""
+"""Step definitions for persona feature files (Priya Platform Engineer, Marcus CISO)."""
 
 import hashlib
 import hmac
@@ -1856,6 +1855,7 @@ def modulo_app_starts(ctx):
 def sequence_of_100_audit_events(ctx):
     """Generate a mock chain of 100 audit events with valid hashes."""
     import hashlib
+
     prev_hash = None
     events = []
     for i in range(100):
@@ -1900,8 +1900,9 @@ def each_event_hash_derived_from_previous(ctx, request):
     events = ctx.get("audit_events", [])
     assert len(events) >= 2, f"Need at least 2 events for chain verification, got {len(events)}"
     for i in range(1, len(events)):
-        assert events[i]["previous_hash"] == events[i-1].get("_hash"), \
-            f"Event {i} hash chain broken: expected prev_hash={events[i-1].get('_hash')}, got {events[i]['previous_hash']}"
+        assert events[i]["previous_hash"] == events[i - 1].get("_hash"), (
+            f"Event {i}: hash chain broken — prev_hash={events[i - 1].get('_hash')}, got {events[i]['previous_hash']}"
+        )
     request.node._chain_verified = True
 
 
@@ -1909,14 +1910,13 @@ def each_event_hash_derived_from_previous(ctx, request):
 def tampering_breaks_chain(ctx, request):
     import copy
     import hashlib
+
     events = ctx.get("audit_events", [])
     assert len(events) >= 3, "Need at least 3 events to demonstrate chain break"
     # Tamper with event at index 1 — corrupt its previous_hash then recompute its _hash
     tampered = copy.deepcopy(events)
     tampered[1]["previous_hash"] = "tampered_hash_value"
-    tampered[1]["_hash"] = hashlib.sha256(
-        b"event_1_prev=tampered_hash_value"
-    ).hexdigest()
+    tampered[1]["_hash"] = hashlib.sha256(b"event_1_prev=tampered_hash_value").hexdigest()
 
     expected_prev = None
     broken_indices = []
@@ -1927,9 +1927,7 @@ def tampering_breaks_chain(ctx, request):
 
     assert len(broken_indices) >= 1, "Tampering not detected at the tampered event"
     assert 1 in broken_indices, f"Tampered event (index 1) should break chain, broken at {broken_indices}"
-    assert len(broken_indices) >= 2, (
-        f"Chain should also break at event 2 (subsequent), got breaks at {broken_indices}"
-    )
+    assert len(broken_indices) >= 2, f"Chain should also break at event 2 (subsequent), got breaks at {broken_indices}"
     assert ctx.get("chain_valid"), "Original chain should be valid before tampering"
 
 

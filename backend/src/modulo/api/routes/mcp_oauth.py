@@ -8,6 +8,7 @@ The protocol endpoints (POST /mcp/oauth/authorize, POST /mcp/oauth/token)
 live in the MCP sub-app at ``mcp_server.py``.
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,9 +16,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.oauth import (
     InvalidScopeError,
     create_oauth_client,
@@ -59,11 +61,12 @@ class DeleteOAuthClientResponse(BaseModel):
     deleted: bool
 
 
+@handle_db_errors("mcp_oauth.register_oauth_client")
 @router.post("/clients", response_model=CreateOAuthClientResponse, status_code=status.HTTP_201_CREATED)
 async def register_oauth_client(
     req: CreateOAuthClientRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> CreateOAuthClientResponse:
     if principal.org_role not in ("admin", "operator"):
@@ -98,24 +101,32 @@ async def register_oauth_client(
                 name=req.name,
                 scopes=scopes_str,
                 redirect_uris=redirect_uris_str,
-                account_id=principal.account_id,
+                created_by=principal.account_id,
             )
     except ProgrammingError:
-        _log.warning("mcp_oauth.register_oauth_client.programming_error", extra={"org_id": str(principal.organisation_id)})
+        _log.warning(
+            "mcp_oauth.register_oauth_client.programming_error", extra={"org_id": str(principal.organisation_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
-        _log.warning("mcp_oauth.register_oauth_client.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
+        _log.warning(
+            "mcp_oauth.register_oauth_client.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
-        )
+        ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
-        _log.exception("mcp_oauth.register_oauth_client.unexpected_error", extra={"org_id": str(principal.organisation_id)})
+        _log.exception(
+            "mcp_oauth.register_oauth_client.unexpected_error", extra={"org_id": str(principal.organisation_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
@@ -129,10 +140,11 @@ async def register_oauth_client(
     )
 
 
+@handle_db_errors("mcp_oauth.list_oauth_clients_endpoint")
 @router.get("/clients", response_model=list[OAuthClientItem])
 async def list_oauth_clients_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[OAuthClientItem]:
     try:
         async with session.begin():
@@ -143,17 +155,21 @@ async def list_oauth_clients_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("mcp_oauth.list_oauth_clients.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
-        )
+        ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
-        _log.exception("mcp_oauth.list_oauth_clients.unexpected_error", extra={"org_id": str(principal.organisation_id)})
+        _log.exception(
+            "mcp_oauth.list_oauth_clients.unexpected_error", extra={"org_id": str(principal.organisation_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
@@ -161,11 +177,12 @@ async def list_oauth_clients_endpoint(
     return [OAuthClientItem(**c) for c in clients]
 
 
+@handle_db_errors("mcp_oauth.remove_oauth_client")
 @router.delete("/clients/{client_id}", response_model=DeleteOAuthClientResponse)
 async def remove_oauth_client(
     client_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> DeleteOAuthClientResponse:
     if principal.org_role not in ("admin", "operator"):
         raise HTTPException(
@@ -178,21 +195,32 @@ async def remove_oauth_client(
             await set_rls_org(session, principal.organisation_id)
             deleted = await delete_oauth_client(session, client_id=client_id, org_id=principal.organisation_id)
     except ProgrammingError:
-        _log.warning("mcp_oauth.remove_oauth_client.programming_error", extra={"client_id": client_id, "org_id": str(principal.organisation_id)})
+        _log.warning(
+            "mcp_oauth.remove_oauth_client.programming_error",
+            extra={"client_id": client_id, "org_id": str(principal.organisation_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
-        _log.warning("mcp_oauth.remove_oauth_client.sqlalchemy_error", extra={"client_id": client_id, "org_id": str(principal.organisation_id)})
+        _log.warning(
+            "mcp_oauth.remove_oauth_client.sqlalchemy_error",
+            extra={"client_id": client_id, "org_id": str(principal.organisation_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
-        )
+        ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
-        _log.exception("mcp_oauth.remove_oauth_client.unexpected_error", extra={"client_id": client_id, "org_id": str(principal.organisation_id)})
+        _log.exception(
+            "mcp_oauth.remove_oauth_client.unexpected_error",
+            extra={"client_id": client_id, "org_id": str(principal.organisation_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",

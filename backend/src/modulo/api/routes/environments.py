@@ -16,8 +16,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.runtime_provider import RuntimeProvider, create_default_hub
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.db.crud.environment_profile import (
@@ -31,6 +31,7 @@ from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/environments", tags=["environments"])
 
 
@@ -49,6 +50,7 @@ def _get_hub() -> RuntimeProviderHub:
     settings = get_settings()
     return create_default_hub(max_local_concurrency=settings.modulo_max_local_concurrency)
 
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -57,24 +59,32 @@ def _get_hub() -> RuntimeProviderHub:
 class ProfileCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
-    image_ref: str = Field(..., min_length=1, max_length=500)
+    image_ref: str | None = Field(None, min_length=1, max_length=500)
+    provider_type: str = Field(default="local_docker")
     capabilities: list[str] = Field(default_factory=list)
-    egress_policy: str | None = Field(None, pattern=r"^(deny_all|allow_all|allow_listed)$")
-    timeout_seconds: int = Field(default=3600, ge=60, le=86400)
-    resource_limits: dict[str, Any] = Field(default_factory=dict)
-    persistence_policy: dict[str, Any] = Field(default_factory=dict)
+    config_json: dict[str, Any] = Field(default_factory=dict)
+    network_policy: str = Field(default="outbound")
+    initialisation_strategy: str = Field(default="git_clone")
+    secret_refs: list[str] = Field(default_factory=list)
+    persistence_policy: str = Field(default="ephemeral")
+    owner_team_id: uuid.UUID | None = None
+    visibility: str = Field(default="org")
 
 
 class ProfileUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     image_ref: str | None = Field(None, min_length=1, max_length=500)
+    provider_type: str | None = None
     capabilities: list[str] | None = None
-    egress_policy: str | None = Field(None, pattern=r"^(deny_all|allow_all|allow_listed)$")
-    timeout_seconds: int | None = Field(None, ge=60, le=86400)
-    resource_limits: dict[str, Any] | None = None
-    persistence_policy: dict[str, Any] | None = None
-    is_active: bool | None = None
+    config_json: dict[str, Any] | None = None
+    network_policy: str | None = None
+    initialisation_strategy: str | None = None
+    secret_refs: list[str] | None = None
+    persistence_policy: str | None = None
+    owner_team_id: uuid.UUID | None = None
+    visibility: str | None = None
+    status: str | None = None
 
 
 class ProfileResponse(BaseModel):
@@ -82,14 +92,17 @@ class ProfileResponse(BaseModel):
     organisation_id: str
     name: str
     description: str | None
-    image_ref: str
+    provider_type: str
+    image_ref: str | None
     capabilities: list[str]
-    egress_policy: str | None
-    timeout_seconds: int
-    resource_limits: dict[str, Any]
-    persistence_policy: dict[str, Any]
-    is_active: bool
-    created_by: str | None = Field(default=None, validation_alias="account_id")
+    config_json: dict[str, Any]
+    network_policy: str
+    initialisation_strategy: str
+    secret_refs: list[str]
+    persistence_policy: str
+    status: str
+    owner_team_id: str | None = None
+    visibility: str
     created_at: str | None
     updated_at: str | None
 
@@ -114,14 +127,17 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
         organisation_id=str(p.organisation_id),
         name=p.name,
         description=p.description,
+        provider_type=p.provider_type,
         image_ref=p.image_ref,
-        capabilities=p.capabilities,
-        egress_policy=p.egress_policy,
-        timeout_seconds=p.timeout_seconds,
-        resource_limits=p.resource_limits_json,
+        capabilities=p.capabilities_json,
+        config_json=p.config_json,
+        network_policy=p.network_policy,
+        initialisation_strategy=p.initialisation_strategy,
+        secret_refs=p.secret_refs_json,
         persistence_policy=p.persistence_policy,
-        is_active=p.is_active,
-        account_id=str(p.account_id) if p.account_id else None,
+        status=p.status or "active",
+        owner_team_id=str(p.owner_team_id) if p.owner_team_id else None,
+        visibility=p.visibility,
         created_at=p.created_at.isoformat() if p.created_at else None,
         updated_at=p.updated_at.isoformat() if p.updated_at else None,
     )
@@ -147,17 +163,17 @@ async def list_profiles(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileListResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             result = await list_environment_profiles(session, page=page, page_size=page_size)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -193,7 +209,7 @@ async def list_profiles(
 async def create_profile(
     req: ProfileCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileResponse:
     try:
         async with session.begin():
@@ -202,14 +218,18 @@ async def create_profile(
                 session,
                 org_id=principal.organisation_id,
                 name=req.name,
-                image_ref=req.image_ref,
                 account_id=principal.account_id,
                 description=req.description,
+                provider_type=req.provider_type,
+                image_ref=req.image_ref,
                 capabilities=req.capabilities,
-                egress_policy=req.egress_policy,
-                timeout_seconds=req.timeout_seconds,
-                resource_limits=req.resource_limits,
+                config_json=req.config_json,
+                network_policy=req.network_policy,
+                initialisation_strategy=req.initialisation_strategy,
+                secret_refs=req.secret_refs,
                 persistence_policy=req.persistence_policy,
+                owner_team_id=req.owner_team_id,
+                visibility=req.visibility,
             )
     except IntegrityError:
         raise HTTPException(
@@ -241,17 +261,17 @@ async def create_profile(
 async def get_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             profile = await _get_profile_or_404(session, profile_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -278,11 +298,13 @@ async def update_profile(
     profile_id: uuid.UUID,
     req: ProfileUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileResponse:
     updates = req.model_dump(exclude_unset=True)
-    if "resource_limits" in updates:
-        updates["resource_limits_json"] = updates.pop("resource_limits")
+    if "capabilities" in updates:
+        updates["capabilities_json"] = updates.pop("capabilities")
+    if "secret_refs" in updates:
+        updates["secret_refs_json"] = updates.pop("secret_refs")
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -326,17 +348,17 @@ async def update_profile(
 async def delete_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             deleted = await delete_environment_profile(session, profile_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -378,7 +400,6 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
     provider_ref: str | None = None
 
     try:
-        # Provisioning
         yield _sse_event("provisioning", "Creating sandbox...")
         await asyncio.sleep(0.5)
 
@@ -393,7 +414,6 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
         yield _sse_event("provisioned", f"Workspace created via {type(provider).__name__}: {provider_ref}")
         await asyncio.sleep(0.3)
 
-        # Run echo command
         yield _sse_event("command_start", 'Executing: echo "Hello from Modulo sandbox"')
         result = await provider.exec_command(provider_ref, ["echo", "Hello from Modulo sandbox"], timeout=30)
         yield _sse_event(
@@ -409,7 +429,6 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
         )
         await asyncio.sleep(0.3)
 
-        # Destroy
         yield _sse_event("destroying", "Destroying sandbox...")
         await provider.destroy_workspace(provider_ref)
         yield _sse_event("destroyed", "Sandbox destroyed successfully")
@@ -441,16 +460,17 @@ def _sse_event(event: str, detail: str) -> str:
 def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
     from modulo.core.runtime_provider import WorkspaceSpec
 
+    cfg = profile.config_json or {}
     return WorkspaceSpec(
         environment_profile_id=profile.id,
         organisation_id=profile.organisation_id,
         run_id=None,
-        image_ref=profile.image_ref,
-        capabilities=profile.capabilities,
-        timeout_seconds=profile.timeout_seconds,
-        resource_limits=profile.resource_limits_json,
-        egress_policy=profile.egress_policy or "deny_all",
-        persistence_policy=profile.persistence_policy,
+        image_ref=profile.image_ref or "",
+        capabilities=profile.capabilities_json or [],
+        timeout_seconds=cfg.get("timeout_seconds", 3600),
+        resource_limits=cfg,
+        egress_policy=profile.network_policy or "deny_all",
+        persistence_policy={"strategy": profile.persistence_policy},
         labels={"profile_name": profile.name},
     )
 
@@ -459,18 +479,18 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
 async def test_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> StreamingResponse:
     """Provision a sandbox from the profile, run echo, destroy it — stream events."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             profile = await _get_profile_or_404(session, profile_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

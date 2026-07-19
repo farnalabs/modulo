@@ -1,14 +1,11 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Browse', to: '/schemas' },
     { label: 'Editor', to: '/schemas/editor' },
     { label: 'Infer', to: '/schemas/infer' },
   ]" />
     <div class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">Schemas</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions') }}</p>
-    </header>
+    <PageHeader title="Schemas" :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -28,7 +25,7 @@
             <tr>
               <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.name') }}</th>
               <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.description') }}</th>
-              <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.status') }}</th>
+              <th class="px-4 py-3 font-medium capitalize">{{ $t('views.SchemaListView.status') }}</th>
               <th class="px-4 py-3 font-medium text-right">{{ $t('views.SchemaListView.actions') }}</th>
             </tr>
           </thead>
@@ -107,49 +104,39 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
-import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { useDataFetch } from '../composables/useDataFetch'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 
-const { t } = useI18n()
+type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse']
 
-type SchemaItem = components['schemas']['SchemaItem']
+interface SchemaListResponse {
+  items: SchemaItem[]
+  total: number
+  page: number
+  page_size: number
+}
 
-const schemas = ref<SchemaItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { loading, error, data: schemasResp } = useDataFetch<SchemaListResponse>(
+  () => api.GET('/api/v1/schemas', {
+    params: { query: { page: 1, page_size: 100 } },
+  }),
+  { initialValue: { items: [] as SchemaItem[], total: 0, page: 1, page_size: 100 } },
+)
+
+const schemas = computed(() => schemasResp.value?.items ?? [])
 
 const deprecateConfirmId = ref<string | null>(null)
 const deprecateConfirmName = ref('')
 const deprecating = ref(false)
 const deprecateError = ref<string | null>(null)
-
-async function loadSchemas() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/schemas', {
-      params: { query: { page: 1, page_size: 100 } },
-    })
-    if (err) {
-      error.value = err && typeof err === 'object' && 'detail' in err
-        ? `${t('views.SchemaListView.failed_to_load_schemas')} ${(err as ProblemDetail).detail}`
-        : `${t('views.SchemaListView.failed_to_load_schemas')} ${formatApiError(err)}`
-    } else if (data) {
-      schemas.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `${t('views.SchemaListView.failed_to_load_schemas')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
 
 function confirmDeprecate(schema: SchemaItem) {
   deprecateConfirmId.value = schema.id
@@ -170,7 +157,13 @@ async function deprecateSchema() {
     } else if (data) {
       const idx = schemas.value.findIndex(s => s.id === deprecateConfirmId.value)
       if (idx >= 0) {
-        schemas.value[idx] = data
+        const s = schemasResp.value
+        if (s) {
+          schemasResp.value = {
+            ...s,
+            items: s.items.map((item, itemIdx) => itemIdx === idx ? data : item),
+          }
+        }
       }
       deprecateConfirmId.value = null
     }
@@ -180,7 +173,4 @@ async function deprecateSchema() {
     deprecating.value = false
   }
 }
-
-onMounted(loadSchemas)
 </script>
-

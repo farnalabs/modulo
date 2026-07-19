@@ -1,18 +1,15 @@
 """BDD step definitions: Organisation scoping & RLS isolation."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/organisation/org_scoping.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/organisation/rls_isolation.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}"'))
@@ -47,7 +44,7 @@ def get_pipelines(client, request):
     request.node._resp = resp
 
 
-@when(parsers.parse('I GET /api/pipelines/{name}'))
+@when(parsers.parse("I GET /api/pipelines/{name}"))
 def get_pipeline_by_name(name: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),

@@ -9,9 +9,7 @@ from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
 
 
 async def get_tier(tier_id: str, session: AsyncSession) -> dict[str, Any] | None:
-    result = await session.execute(
-        select(TierCatalog).where(TierCatalog.tier_id == tier_id)
-    )
+    result = await session.execute(select(TierCatalog).where(TierCatalog.tier_id == tier_id))
     tier = result.scalar_one_or_none()
     if tier is None:
         return None
@@ -25,9 +23,7 @@ async def get_tier(tier_id: str, session: AsyncSession) -> dict[str, Any] | None
 
 
 async def list_tiers(session: AsyncSession) -> list[dict[str, Any]]:
-    result = await session.execute(
-        select(TierCatalog).order_by(TierCatalog.rank)
-    )
+    result = await session.execute(select(TierCatalog).order_by(TierCatalog.rank))
     return [
         {
             "tier_id": t.tier_id,
@@ -41,9 +37,7 @@ async def list_tiers(session: AsyncSession) -> list[dict[str, Any]]:
 
 
 async def get_feature_flag(name: str, session: AsyncSession) -> dict[str, Any] | None:
-    result = await session.execute(
-        select(FeatureFlagCatalog).where(FeatureFlagCatalog.name == name)
-    )
+    result = await session.execute(select(FeatureFlagCatalog).where(FeatureFlagCatalog.name == name))
     flag = result.scalar_one_or_none()
     if flag is None:
         return None
@@ -57,9 +51,7 @@ async def get_feature_flag(name: str, session: AsyncSession) -> dict[str, Any] |
 
 
 async def list_feature_flags(session: AsyncSession) -> list[dict[str, Any]]:
-    result = await session.execute(
-        select(FeatureFlagCatalog).order_by(FeatureFlagCatalog.name)
-    )
+    result = await session.execute(select(FeatureFlagCatalog).order_by(FeatureFlagCatalog.name))
     return [
         {
             "name": f.name,
@@ -74,9 +66,7 @@ async def list_feature_flags(session: AsyncSession) -> list[dict[str, Any]]:
 
 async def list_feature_flags_by_tier(tier_id: str, session: AsyncSession) -> list[dict[str, Any]]:
     result = await session.execute(
-        select(FeatureFlagCatalog)
-        .where(FeatureFlagCatalog.tier_id == tier_id)
-        .order_by(FeatureFlagCatalog.name)
+        select(FeatureFlagCatalog).where(FeatureFlagCatalog.tier_id == tier_id).order_by(FeatureFlagCatalog.name)
     )
     return [
         {

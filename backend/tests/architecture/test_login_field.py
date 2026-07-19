@@ -33,6 +33,5 @@ def test_login_payload_uses_email_not_username():
             violations.append(f"  {path.relative_to(TESTS.parent)}:{i}  {line.strip()[:120]}")
     assert not violations, (
         f"Found {len(violations)} login payloads using 'username' field.\n"
-        "FastAPI login endpoint expects 'email' — change to 'email'.\n"
-        + "\n".join(violations)
+        "FastAPI login endpoint expects 'email' — change to 'email'.\n" + "\n".join(violations)
     )

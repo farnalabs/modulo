@@ -8,7 +8,7 @@ export interface NotificationResponse {
   category: string
   title: string
   body: string
-  action_url: string | null
+  action_url?: string | null
   dismiss_strategy: string
   dismissible_at_scope: boolean
   created_at: string

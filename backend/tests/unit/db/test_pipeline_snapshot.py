@@ -1,5 +1,6 @@
 """Tests for immutable snapshots created from the editable live graph."""
 
+import copy
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -19,7 +20,10 @@ def _scalar_result(value: object) -> MagicMock:
 
 def _scalars_result(values: list[object]) -> MagicMock:
     result = MagicMock()
-    result.scalars.return_value = values
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = values
+    scalars_mock.__iter__.return_value = iter(values)
+    result.scalars.return_value = scalars_mock
     return result
 
 
@@ -68,6 +72,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     agent.model_backend_id = backend_id
     agent.token_budget = None
     agent.max_input_length = None
+    agent.parameter_schema_id = None
 
     connector = MagicMock()
     connector.id = connector_id
@@ -102,7 +107,12 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
 
     assert isinstance(snapshot, PipelineSnapshot)
     assert snapshot.snapshot_version == 5
-    assert snapshot.graph_json["nodes"] == pipeline.graph_nodes_json
+    expected_nodes = copy.deepcopy(pipeline.graph_nodes_json)
+    for node in expected_nodes:
+        if node.get("agent_id") is not None:
+            node.setdefault("prompt_template", "Build the artifact")
+            node.setdefault("model_backend_id", str(backend_id))
+    assert snapshot.graph_json["nodes"] == expected_nodes
     assert snapshot.graph_json["edges"] == [
         {
             "id": str(edge.id),

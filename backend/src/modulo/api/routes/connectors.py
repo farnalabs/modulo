@@ -16,10 +16,12 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.sensitive_mask import mask_config_json
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
+from modulo.connectors.base import ConnectorType
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
 from modulo.connectors.github import GitHubConnector
 from modulo.db.crud.connector_instance import (
@@ -45,8 +47,8 @@ class ConnectorCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     connector_type_id: str = Field(..., min_length=1, max_length=128)
     credentials: str = Field(..., min_length=1)
-    config_json: dict[str, Any] = {}
-    allowed_operations: list[str] = []
+    config_json: dict[str, Any] = Field(default_factory=dict)
+    allowed_operations: list[str] = Field(default_factory=list)
     visibility: str = Field(default="org")
     owner_team_id: uuid.UUID | None = None
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
@@ -101,6 +103,21 @@ class ConnectorListResponse(BaseModel):
     has_more: bool = False
 
 
+class ConnectorTypeItem(BaseModel):
+    id: str
+    display_name: str
+
+
+class ConnectorTypeListResponse(BaseModel):
+    items: list[ConnectorTypeItem]
+
+
+@router.get("/types", response_model=ConnectorTypeListResponse)
+async def list_connector_types() -> ConnectorTypeListResponse:
+    items = [ConnectorTypeItem(id=t.value, display_name=t.value.replace("_", " ").title()) for t in ConnectorType]
+    return ConnectorTypeListResponse(items=items)
+
+
 def _to_response(ci: Any) -> ConnectorResponse:
     return ConnectorResponse(
         id=ci.id,
@@ -119,13 +136,14 @@ def _to_response(ci: Any) -> ConnectorResponse:
     )
 
 
+@handle_db_errors("connectors.list_connectors_endpoint")
 @router.get("", response_model=ConnectorListResponse)
 async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ConnectorListResponse:
     try:
         async with session.begin():
@@ -136,7 +154,7 @@ async def list_connectors_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -165,11 +183,12 @@ async def list_connectors_endpoint(
     )
 
 
+@handle_db_errors("connectors.create_connector_endpoint")
 @router.post("", response_model=ConnectorResponse, status_code=status.HTTP_201_CREATED)
 async def create_connector_endpoint(
     req: ConnectorCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
     if req.connector_type_id == "github":
@@ -178,12 +197,12 @@ async def create_connector_endpoint(
             missing = await temp.verify_scopes()
         except (HTTPStatusError, RequestError, ValueError):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Cannot verify GitHub token — API call failed",
             ) from None
         if missing:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"GitHub token is missing required OAuth scopes: "
                     f"{', '.join(sorted(missing))}. "
@@ -201,7 +220,7 @@ async def create_connector_endpoint(
                 org_id=principal.organisation_id,
                 name=req.name,
                 connector_type_id=req.connector_type_id,
-                owner_id=principal.account_id,
+                account_id=principal.account_id,
                 credentials_ciphertext=ciphertext,
                 config_json=req.config_json,
                 allowed_operations=req.allowed_operations,
@@ -238,11 +257,12 @@ async def create_connector_endpoint(
     return _to_response(ci)
 
 
+@handle_db_errors("connectors.get_connector_endpoint")
 @router.get("/{connector_id}", response_model=ConnectorResponse)
 async def get_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ConnectorResponse:
     try:
         async with session.begin():
@@ -253,7 +273,7 @@ async def get_connector_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -277,12 +297,13 @@ async def get_connector_endpoint(
     return _to_response(ci)
 
 
+@handle_db_errors("connectors.update_connector_endpoint")
 @router.patch("/{connector_id}", response_model=ConnectorResponse)
 async def update_connector_endpoint(
     connector_id: uuid.UUID,
     req: ConnectorUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
@@ -302,12 +323,12 @@ async def update_connector_endpoint(
                     missing = await temp.verify_scopes()
                 except (HTTPStatusError, RequestError, ValueError):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="Cannot verify GitHub token — API call failed",
                     ) from None
                 if missing:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail=(
                             f"GitHub token is missing required OAuth scopes: "
                             f"{', '.join(sorted(missing))}. "
@@ -346,11 +367,12 @@ async def update_connector_endpoint(
     return _to_response(ci)
 
 
+@handle_db_errors("connectors.delete_connector_endpoint")
 @router.delete("/{connector_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -361,7 +383,7 @@ async def delete_connector_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

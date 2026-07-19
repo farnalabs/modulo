@@ -1,5 +1,6 @@
 """OpsgenieConnector — async Opsgenie REST API v2 connector."""
 
+import asyncio
 from typing import Any, cast
 
 import httpx
@@ -42,6 +43,8 @@ class OpsgenieConnector(ConnectorBase):
                 if resp.status_code in (401, 403):
                     return HealthResult(ok=False, detail="Invalid Opsgenie API key")
                 return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -107,7 +110,7 @@ class OpsgenieConnector(ConnectorBase):
         alert_id = q.filters.get("id")
         if not alert_id:
             raise ValueError("Opsgenie alert query requires 'id' in filters")
-        identifier = cast(str, alert_id)
+        identifier = cast("str", alert_id)
         params: dict[str, Any] = {"identifierType": "id"}
         resp = await c.get(f"/alerts/{identifier}", params=params)
         resp.raise_for_status()
@@ -119,7 +122,7 @@ class OpsgenieConnector(ConnectorBase):
         alert_id = q.filters.get("id")
         if not alert_id:
             raise ValueError("Opsgenie alert_notes query requires 'id' in filters")
-        identifier = cast(str, alert_id)
+        identifier = cast("str", alert_id)
         params: dict[str, Any] = {}
         if q.limit:
             params["limit"] = q.limit
@@ -139,7 +142,7 @@ class OpsgenieConnector(ConnectorBase):
         alert_id = q.filters.get("id")
         if not alert_id:
             raise ValueError("Opsgenie alert_logs query requires 'id' in filters")
-        identifier = cast(str, alert_id)
+        identifier = cast("str", alert_id)
         params: dict[str, Any] = {}
         if q.limit:
             params["limit"] = q.limit
@@ -190,10 +193,10 @@ class OpsgenieConnector(ConnectorBase):
         )
 
     async def _query_on_calls(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        schedule_id = q.filters.get("schedule_id")
+        schedule_id = q.filters.get("schedule_id") or q.cursor
         if not schedule_id:
             raise ValueError("Opsgenie on_calls query requires 'schedule_id' in filters or cursor")
-        identifier = cast(str, schedule_id)
+        identifier = cast("str", schedule_id)
         params: dict[str, Any] = {}
         if q.filters.get("date"):
             params["date"] = q.filters["date"]
@@ -248,8 +251,8 @@ class OpsgenieConnector(ConnectorBase):
             body["note"] = data["note"]
         resp = await c.post("/alerts", json=body)
         resp.raise_for_status()
-        result = cast(dict[str, Any], resp.json())
-        return cast(dict[str, Any], result.get("data", result))
+        result = cast("dict[str, Any]", resp.json())
+        return cast("dict[str, Any]", result.get("data", result))
 
     async def _acknowledge_alert(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -264,8 +267,8 @@ class OpsgenieConnector(ConnectorBase):
             body["source"] = data["source"]
         resp = await c.post(f"/alerts/{alert_id}/acknowledge", json=body)
         resp.raise_for_status()
-        result = cast(dict[str, Any], resp.json())
-        return cast(dict[str, Any], result.get("data", result))
+        result = cast("dict[str, Any]", resp.json())
+        return cast("dict[str, Any]", result.get("data", result))
 
     async def _close_alert(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -278,8 +281,8 @@ class OpsgenieConnector(ConnectorBase):
             body["source"] = data["source"]
         resp = await c.post(f"/alerts/{alert_id}/close", json=body)
         resp.raise_for_status()
-        result = cast(dict[str, Any], resp.json())
-        return cast(dict[str, Any], result.get("data", result))
+        result = cast("dict[str, Any]", resp.json())
+        return cast("dict[str, Any]", result.get("data", result))
 
     async def _add_alert_note(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -293,8 +296,8 @@ class OpsgenieConnector(ConnectorBase):
             body["source"] = data["source"]
         resp = await c.post(f"/alerts/{alert_id}/notes", json=body)
         resp.raise_for_status()
-        result = cast(dict[str, Any], resp.json())
-        return cast(dict[str, Any], result.get("data", result))
+        result = cast("dict[str, Any]", resp.json())
+        return cast("dict[str, Any]", result.get("data", result))
 
     async def _snooze_alert(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -310,5 +313,5 @@ class OpsgenieConnector(ConnectorBase):
             body["source"] = data["source"]
         resp = await c.post(f"/alerts/{alert_id}/snooze", json=body)
         resp.raise_for_status()
-        result = cast(dict[str, Any], resp.json())
-        return cast(dict[str, Any], result.get("data", result))
+        result = cast("dict[str, Any]", resp.json())
+        return cast("dict[str, Any]", result.get("data", result))

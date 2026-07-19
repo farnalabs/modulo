@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Notifier — dispatch webhook notifications with HMAC signing, retry, and dead-letter tracking.
 
 Event types dispatched:
@@ -19,6 +17,7 @@ For each event, the notifier:
   8. Auto-disables endpoint after ``MAX_DEAD_LETTERS`` consecutive failures.
 """
 
+from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -228,14 +227,12 @@ class Notifier:
 
         When ``team_id`` is None, returns only org-wide endpoints.
         """
+
         async def _query(team_filter: uuid.UUID | None) -> list[NotificationEndpoint]:
-            stmt = (
-                select(NotificationEndpoint)
-                .where(
-                    NotificationEndpoint.organisation_id == org_id,
-                    NotificationEndpoint.team_id.is_(team_filter),
-                    NotificationEndpoint.auto_disabled.is_(False),
-                )
+            stmt = select(NotificationEndpoint).where(
+                NotificationEndpoint.organisation_id == org_id,
+                NotificationEndpoint.team_id.is_(team_filter),
+                NotificationEndpoint.auto_disabled.is_(False),
             )
             async with self._session_factory() as session:
                 result = await session.execute(stmt)
@@ -304,16 +301,22 @@ class Notifier:
         # Create in-app notification record alongside webhook dispatches
         try:
             from modulo.core.notifier.event_mapper import NotificationEventMapper
+
             mapper = NotificationEventMapper()
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await mapper.create_from_event(
-                    session, org_id=org_id, event_type=event_type, payload=payload,
+                    session,
+                    org_id=org_id,
+                    event_type=event_type,
+                    payload=payload,
                 )
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception("notifier.in_app_notification_failed", extra={"event_type": event_type, "org_id": str(org_id)})
+            _log.exception(
+                "notifier.in_app_notification_failed", extra={"event_type": event_type, "org_id": str(org_id)}
+            )
 
         return results
 
@@ -367,7 +370,7 @@ class Notifier:
                         "last_error": last_error,
                     },
                 )
-                if response_code == 429:
+                if response_code == 429 and resp is not None:
                     retry_after = resp.headers.get("Retry-After")
                     if retry_after is not None:
                         try:
@@ -538,8 +541,10 @@ class Notifier:
 
     async def close(self) -> None:
         """Close the underlying HTTP client, if one was created."""
+        client: httpx.AsyncClient | None = None
         async with self._http_client_lock:
-            client = self._http_client
-            if client is not None and not client.is_closed:
+            if self._http_client is not None and not self._http_client.is_closed:
+                client = self._http_client
                 self._http_client = None
-                await client.aclose()
+        if client is not None:
+            await client.aclose()

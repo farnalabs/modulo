@@ -1,9 +1,9 @@
 import vue from '@vitejs/plugin-vue'
-import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import { defineConfig } from 'vitest/config'
 import { fileURLToPath, URL } from 'node:url'
-import { resolve, dirname } from 'node:path'
 import { createRequire } from 'node:module'
+import tailwindcss from 'tailwindcss'
+import autoprefixer from 'autoprefixer'
 
 const require = createRequire(import.meta.url)
 
@@ -26,9 +26,6 @@ function yamlPlugin() {
 export default defineConfig({
   plugins: [
     vue(),
-    VueI18nPlugin({
-      include: [resolve(dirname(fileURLToPath(import.meta.url)), './src/locales/*.js')],
-    }),
     yamlPlugin(),
   ],
   resolve: {
@@ -41,12 +38,22 @@ export default defineConfig({
     exclude: ['tests/e2e/**', 'node_modules/**'],
     setupFiles: ['./src/__tests__/setup.ts'],
   },
+  css: {
+    postcss: {
+      plugins: [tailwindcss(), autoprefixer()],
+    },
+  },
+  build: {
+    rolldownOptions: {
+      checks: { pluginTimings: false },
+    },
+  },
   optimizeDeps: {
     exclude: ['vue-i18n'],
   },
   server: {
     port: 5173,
-    allowedHosts: ['local-frontend.modulo.run'],
+    allowedHosts: ['local-frontend.modulo.run', 'local.modulo.run'],
     proxy: {
       '/api': process.env.VITE_API_URL || 'http://localhost:8000',
       '/ws': { target: process.env.VITE_API_URL?.replace('http', 'ws') || 'ws://localhost:8000', ws: true },

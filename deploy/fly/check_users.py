@@ -1,4 +1,6 @@
-import asyncio, asyncpg, os, sys
+import asyncio
+import asyncpg
+import os
 url = os.environ.get("DATABASE_URL", "")
 url = url.replace("postgresql+asyncpg://", "postgres://").split("?")[0]
 print(f"URL: {url[:60]}...")

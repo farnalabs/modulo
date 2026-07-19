@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Notification event mapping — maps platform events to in-app Notification records.
 
 Event categories and their notification config:
@@ -14,6 +12,7 @@ Event categories and their notification config:
   - eval_blocked      → level: error,  scope: org
 """
 
+from __future__ import annotations
 
 import logging
 import uuid
@@ -126,13 +125,13 @@ _TITLE_TEMPLATES: dict[str, str] = {
 }
 
 _BODY_TEMPLATES: dict[str, str] = {
-    EVENT_HITL_AWAITING: "Pipeline \"{pipeline_name}\" is waiting for human review.",
-    EVENT_RUN_FAILED: "Run for \"{pipeline_name}\" failed with error: {error_code}.",
-    EVENT_BUDGET_EXCEEDED: "Run for \"{pipeline_name}\" exceeded its token budget.",
-    EVENT_CLAIM_EXPIRED: "A HITL claim on \"{pipeline_name}\" has expired.",
-    EVENT_HITL_OVERDUE: "Pipeline \"{pipeline_name}\" has been awaiting human review for {minutes_overdue} minutes.",
-    EVENT_EVAL_REGRESSION: "Eval pass rate dropped for agent \"{agent_name}\".",
-    EVENT_EVAL_BLOCKED: "An eval check blocked pipeline \"{pipeline_name}\".",
+    EVENT_HITL_AWAITING: 'Pipeline "{pipeline_name}" is waiting for human review.',
+    EVENT_RUN_FAILED: 'Run for "{pipeline_name}" failed with error: {error_code}.',
+    EVENT_BUDGET_EXCEEDED: 'Run for "{pipeline_name}" exceeded its token budget.',
+    EVENT_CLAIM_EXPIRED: 'A HITL claim on "{pipeline_name}" has expired.',
+    EVENT_HITL_OVERDUE: 'Pipeline "{pipeline_name}" has been awaiting human review for {minutes_overdue} minutes.',
+    EVENT_EVAL_REGRESSION: 'Eval pass rate dropped for agent "{agent_name}".',
+    EVENT_EVAL_BLOCKED: 'An eval check blocked pipeline "{pipeline_name}".',
     EVENT_FEEDBACK_PENDING: "A feedback record is pending your review.",
     EVENT_SYSTEM_ANNOUNCEMENT: "{message}",
 }

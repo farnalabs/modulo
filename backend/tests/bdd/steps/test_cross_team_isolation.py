@@ -1,15 +1,14 @@
 """BDD step definitions: Cross-team isolation."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/cross_team_isolation.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -30,9 +29,7 @@ def team_exists(name: str, ctx) -> None:
     ctx["teams"][name] = {"id": str(uuid.uuid4()), "name": name}
 
 
-@given(
-    parsers.parse('a pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"')
-)
+@given(parsers.parse('a pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
 def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["pipelines"][name] = {
@@ -43,9 +40,7 @@ def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> N
     }
 
 
-@given(
-    parsers.parse('connector "{name}" is owned by team "{team_name}" with visibility "{visibility}"')
-)
+@given(parsers.parse('connector "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
 def connector_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["connectors"][name] = {
@@ -56,9 +51,7 @@ def connector_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> 
     }
 
 
-@given(
-    parsers.parse('connector "{name}" has visibility "{visibility}"')
-)
+@given(parsers.parse('connector "{name}" has visibility "{visibility}"'))
 def connector_has_visibility(name: str, visibility: str, ctx) -> None:
     if name in ctx["connectors"]:
         ctx["connectors"][name]["visibility"] = visibility
@@ -111,9 +104,7 @@ def user_requests_pipeline_list(username: str, request, ctx) -> None:
     request.node._resp = resp
 
 
-@when(
-    parsers.parse('user "{username}" requests GET /api/connectors/{connector_name}')
-)
+@when(parsers.parse('user "{username}" requests GET /api/connectors/{connector_name}'))
 def user_requests_connector(username: str, connector_name: str, request, ctx) -> None:
     connector = ctx["connectors"].get(connector_name)
     is_member = username in ctx.get("memberships", {})
@@ -128,9 +119,7 @@ def user_requests_connector(username: str, connector_name: str, request, ctx) ->
     request.node._resp = resp
 
 
-@when(
-    parsers.parse('I bind connector "{connector_name}" to a node in pipeline "{pipeline_name}"')
-)
+@when(parsers.parse('I bind connector "{connector_name}" to a node in pipeline "{pipeline_name}"'))
 def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, ctx) -> None:
     connector = ctx["connectors"].get(connector_name)
     pipeline = ctx["pipelines"].get(pipeline_name)
@@ -187,4 +176,3 @@ def total_excludes_private(request, ctx) -> None:
     total = data.get("total", 0)
     visible_pipelines = [p for p in ctx.get("pipelines", {}).values() if p.get("visibility") != "team"]
     assert total <= len(visible_pipelines)
-

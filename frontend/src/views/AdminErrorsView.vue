@@ -1,88 +1,40 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />
   <div class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminErrorsView.error_dashboard') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminErrorsView.error_dashboard')" :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')" />
 
-    <div class="card p-4">
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Level</label>
-          <select
-            v-model="filterLevel"
-            aria-label="Level"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminErrorsView.all_levels') }}</option>
-            <option value="error">Error</option>
-            <option value="warning">Warning</option>
-            <option value="critical">Critical</option>
-          </select>
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
-          <select
-            v-model="filterStatus"
-            aria-label="Status"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminErrorsView.all_statuses') }}</option>
-            <option value="new">New</option>
-            <option value="acknowledged">Acknowledged</option>
-            <option value="resolved">Resolved</option>
-            <option value="archived">Archived</option>
-          </select>
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Source</label>
-          <select
-            v-model="filterSource"
-            aria-label="Source"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminErrorsView.all_sources') }}</option>
-            <option value="backend">Backend</option>
-            <option value="frontend">Frontend</option>
-            <option value="celery">Celery</option>
-          </select>
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Environment</label>
-          <input
-            v-model="filterEnvironment"
-            type="text"
-            :placeholder="$t('views.AdminErrorsView.eg_production')"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
-      </div>
-      <div class="mt-3 flex items-center gap-2">
-        <div class="flex-1">
-          <input
-            v-model="filterSearch"
-            type="text"
-            :placeholder="$t('views.AdminErrorsView.search_error_messages')"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
-        <Button
-          variant="default"
-          @click="applyFilters"
-        >
-          Apply Filters
-        </Button>
-        <button
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-          @click="resetFilters"
-        >
-          Reset
-        </button>
-      </div>
-    </div>
+    <FilterBar
+      :search="{ placeholder: $t('views.AdminErrorsView.search_error_messages') }"
+      :search-value="filterSearch"
+      :filters="[
+        { key: 'level', label: 'Level', options: [
+          { value: 'error', label: 'Error' },
+          { value: 'warning', label: 'Warning' },
+          { value: 'critical', label: 'Critical' },
+        ]},
+        { key: 'status', label: 'Status', options: [
+          { value: 'new', label: 'New' },
+          { value: 'acknowledged', label: 'Acknowledged' },
+          { value: 'resolved', label: 'Resolved' },
+          { value: 'archived', label: 'Archived' },
+        ]},
+        { key: 'source', label: 'Source', options: [
+          { value: 'backend', label: 'Backend' },
+          { value: 'frontend', label: 'Frontend' },
+          { value: 'celery', label: 'Celery' },
+        ]},
+      ]"
+      :filter-values="{ level: filterLevel, status: filterStatus, source: filterSource }"
+      @update:search="filterSearch = $event"
+      @update:filter="handleFilterUpdate"
+    >
+      <template #after>
+        <Button variant="default" @click="applyFilters">Apply Filters</Button>
+        <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">Reset</button>
+      </template>
+    </FilterBar>
 
     <LoadingSpinner v-if="loading" />
 
@@ -96,60 +48,42 @@
 
     <template v-else>
       <div class="table-wrapper">
-        <table class="w-full">
-          <thead>
-            <tr>
-              <th class="table-header">Level</th>
-              <th class="table-header">Message</th>
-              <th class="table-header table-cell-numeric">Count</th>
-              <th class="table-header">{{ $t('views.AdminErrorDetailView.first_seen') }}</th>
-              <th class="table-header">{{ $t('views.AdminErrorDetailView.last_seen') }}</th>
-              <th class="table-header">Status</th>
-              <th class="table-header">Assignee</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y">
-            <tr
-              v-for="group in groups"
-              :key="group.id"
-              class="cursor-pointer transition-colors hover:bg-muted/30"
-              role="button"
-              tabindex="0"
-              @click="navigateToDetail(group.id)"
-              @keydown.enter="navigateToDetail(group.id)"
-              @keydown.space.prevent="navigateToDetail(group.id)"
-            >
-              <td class="table-cell">
-                <span :class="levelBadgeClass(group.level_peak)">
-                  {{ group.level_peak }}
-                </span>
-              </td>
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <td class="table-cell max-w-xs truncate font-medium">{{ group.sample_message || '(no message)' }}</td>
-                </TooltipTrigger>
-                <TooltipContent side="top" class="max-w-xs">
-                  <p>{{ group.sample_message || '(no message)' }}</p>
-                </TooltipContent>
-              </Tooltip>
-              <td class="table-cell-numeric">{{ group.count }}</td>
-              <td class="table-cell whitespace-nowrap text-muted-foreground">
-                {{ formatDate(group.first_seen) }}
-              </td>
-              <td class="table-cell whitespace-nowrap text-muted-foreground">
-                {{ formatDate(group.last_seen) }}
-              </td>
-              <td class="table-cell">
-                <span :class="statusBadgeClass(group.status)">
-                  {{ group.status }}
-                </span>
-              </td>
-              <td class="table-cell text-xs text-muted-foreground font-mono">
-                {{ group.assigned_to ? shortId(group.assigned_to) : '—' }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <DataTable
+          :columns="[
+            { key: 'level_peak', label: 'Level' },
+            { key: 'sample_message', label: 'Message' },
+            { key: 'count', label: 'Count', numeric: true },
+            { key: 'first_seen', label: $t('views.AdminErrorDetailView.first_seen') },
+            { key: 'last_seen', label: $t('views.AdminErrorDetailView.last_seen') },
+            { key: 'status', label: 'Status' },
+            { key: 'assignee', label: 'Assignee' },
+          ]"
+          :rows="groups"
+          @row-click="(row: any) => navigateToDetail(row.id)"
+        >
+          <template #cell-level_peak="{ value }">
+            <span :class="levelBadgeClass(value as string)">
+              {{ value }}
+            </span>
+          </template>
+          <template #cell-sample_message="{ value }">
+            <span class="max-w-xs truncate font-medium">{{ value || '(no message)' }}</span>
+          </template>
+          <template #cell-first_seen="{ value }">
+            <span class="whitespace-nowrap text-muted-foreground">{{ formatDate(value as string) }}</span>
+          </template>
+          <template #cell-last_seen="{ value }">
+            <span class="whitespace-nowrap text-muted-foreground">{{ formatDate(value as string) }}</span>
+          </template>
+          <template #cell-status="{ value }">
+            <span :class="statusBadgeClass(value as string)">
+              {{ value }}
+            </span>
+          </template>
+          <template #cell-assignee="{ row }">
+            <span class="text-xs text-muted-foreground font-mono">{{ (row as any).assigned_to ? shortId((row as any).assigned_to) : '—' }}</span>
+          </template>
+        </DataTable>
       </div>
 
       <div class="flex items-center justify-between">
@@ -181,31 +115,37 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { fetchErrorGroups, type ErrorGroupSummary, type FetchErrorGroupsParams } from '../lib/api/errors'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '../components/ui/tooltip'
 import { formatApiError } from "../lib/api/formatError"
 import { Button } from '@/components/ui/button'
+import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 
 const router = useRouter()
 
-const groups = ref<ErrorGroupSummary[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const total = ref(0)
 const limit = ref(20)
 const offset = ref(0)
 const currentPage = ref(1)
+
+const { data: groupsData, loading, error, load: loadGroups } = useDataFetch<{ items: ErrorGroupSummary[]; total: number }>(
+  () => fetchErrorGroups(buildParams()).then(
+    d => ({ data: d }),
+    e => ({ error: { detail: `Failed to load error groups: ${formatApiError(e)}` } }),
+  ),
+  { initialValue: { items: [] as ErrorGroupSummary[], total: 0 } },
+)
+
+const groups = computed(() => groupsData.value?.items ?? [])
+const total = computed(() => groupsData.value?.total ?? 0)
 
 const filterLevel = ref('')
 const filterStatus = ref('')
@@ -213,10 +153,14 @@ const filterSource = ref('')
 const filterEnvironment = ref('')
 const filterSearch = ref('')
 
-function buildParams(offs?: number): FetchErrorGroupsParams {
-  const params: FetchErrorGroupsParams = { limit: limit.value }
-  if (offs !== undefined) params.offset = offs
-  else params.offset = offset.value
+function handleFilterUpdate(key: string, value: string) {
+  if (key === 'level') filterLevel.value = value
+  else if (key === 'status') filterStatus.value = value
+  else if (key === 'source') filterSource.value = value
+}
+
+function buildParams(): FetchErrorGroupsParams {
+  const params: FetchErrorGroupsParams = { limit: limit.value, offset: offset.value }
   if (filterLevel.value) params.level = filterLevel.value
   if (filterStatus.value) params.status = filterStatus.value
   if (filterSource.value) params.source = filterSource.value
@@ -225,24 +169,10 @@ function buildParams(offs?: number): FetchErrorGroupsParams {
   return params
 }
 
-async function loadGroups(offs?: number) {
-  loading.value = true
-  error.value = null
-  try {
-    const data = await fetchErrorGroups(buildParams(offs))
-    groups.value = data.items
-    total.value = data.total
-  } catch (e: unknown) {
-    error.value = `Failed to load error groups: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
 function applyFilters() {
   currentPage.value = 1
   offset.value = 0
-  loadGroups(0)
+  loadGroups()
 }
 
 function resetFilters() {
@@ -253,7 +183,7 @@ function resetFilters() {
   filterSearch.value = ''
   currentPage.value = 1
   offset.value = 0
-  loadGroups(0)
+  loadGroups()
 }
 
 function nextPage() {
@@ -261,7 +191,7 @@ function nextPage() {
   if (newOffset >= total.value) return
   currentPage.value++
   offset.value = newOffset
-  loadGroups(newOffset)
+  loadGroups()
 }
 
 function prevPage() {
@@ -269,7 +199,7 @@ function prevPage() {
   if (newOffset === offset.value) return
   currentPage.value--
   offset.value = newOffset
-  loadGroups(newOffset)
+  loadGroups()
 }
 
 function navigateToDetail(id: string) {
@@ -301,7 +231,5 @@ function formatDate(dateStr: string): string {
   })
 }
 
-onMounted(() => loadGroups(0))
+/* onMounted handled by useDataFetch */
 </script>
-
-

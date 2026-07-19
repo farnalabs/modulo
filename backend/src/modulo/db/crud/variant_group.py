@@ -13,6 +13,8 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import count_active_runs_for_pipeline, create_run
+from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.variant_group import VariantGroup
 
 _log = logging.getLogger(__name__)
@@ -67,7 +69,7 @@ async def list_variant_groups(
     try:
         total = (await session.execute(count_q)).scalar_one()
     except ProgrammingError:
-        _log.warning("variant_group table not found — returning empty list")
+        _log.warning("variant_group table not found — returning empty list", exc_info=True)
         return [], 0
     items = list(
         (await session.execute(q.order_by(VariantGroup.created_at.desc()).offset(offset).limit(page_size))).scalars()
@@ -115,9 +117,7 @@ async def delete_variant_group(session: AsyncSession, group_id: uuid.UUID) -> bo
 
 
 async def increment_run_count(session: AsyncSession, group_id: uuid.UUID) -> VariantGroup | None:
-    result = await session.execute(
-        select(VariantGroup).where(VariantGroup.id == group_id).with_for_update()
-    )
+    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group_id).with_for_update())
     group = result.scalar_one_or_none()
     if group is None:
         return None
@@ -179,9 +179,7 @@ async def run_variant_weighted(
     Returns dict with run_id, variant, merged_payload, or None if quota exceeded.
     Locks the variant group row to prevent concurrent quota races.
     """
-    result = await session.execute(
-        select(VariantGroup).where(VariantGroup.id == group.id).with_for_update()
-    )
+    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group.id).with_for_update())
     locked = result.scalar_one_or_none()
     if locked is None:
         return None
@@ -237,8 +235,6 @@ async def get_coverage_gaps(
     Returns a list of gaps: [{variant: …, missing_evals: [str, …]}, …].
     """
     if eval_def_ids is None:
-        from modulo.db.models.eval_definition import EvalDefinition
-
         result = await session.execute(select(EvalDefinition).where(EvalDefinition.pipeline_id == group.pipeline_id))
         eval_defs = list(result.scalars())
         eval_def_ids = [e.id for e in eval_defs]
@@ -280,8 +276,6 @@ async def get_prompt_diffs(
     if not snapshot_ids:
         return []
 
-    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-
     result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id.in_(snapshot_ids)))
     snapshots = {s.id: s for s in result.scalars()}
 
@@ -293,9 +287,7 @@ async def get_prompt_diffs(
 
     base_sids = set(base_snapshot_ids or [])
     base_variants = [v for v in group.variants if _snapshot_uuid(v) in base_sids]
-    comparison_variants = [
-        v for v in group.variants if _snapshot_uuid(v) not in base_sids
-    ]
+    comparison_variants = [v for v in group.variants if _snapshot_uuid(v) not in base_sids]
 
     diffs: list[dict[str, Any]] = []
     for cv in comparison_variants:
@@ -311,8 +303,7 @@ async def get_prompt_diffs(
                 raw = snapshot.prompt_pins_json
                 if not isinstance(raw, list):
                     return {}
-                return {p.get("agent_id"): p.get("prompt_version_hash")
-                        for p in raw if p.get("agent_id")}
+                return {p.get("agent_id"): p.get("prompt_version_hash") for p in raw if p.get("agent_id")}
 
             bv_pins = _pins(bv_snapshot)
             cv_pins = _pins(cv_snapshot)

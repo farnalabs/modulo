@@ -1,5 +1,6 @@
 """BDD step definitions: Team CRUD operations."""
 
+import contextlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -11,10 +12,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.conftest import make_settings
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/team_crud.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
@@ -30,10 +29,8 @@ def patches():
     collectors = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 def _make_mock_team(**overrides: Any) -> MagicMock:
@@ -112,6 +109,7 @@ def create_team(name: str, description: str, request, ctx) -> None:
 def list_teams(request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -139,6 +137,7 @@ def list_teams(request, ctx) -> None:
 def get_team_by_name(team_name: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -157,6 +156,7 @@ def get_team_by_name(team_name: str, request, ctx) -> None:
 def get_team_by_uuid(team_id: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -174,6 +174,7 @@ def get_team_by_uuid(team_id: str, request, ctx) -> None:
 def rename_team(old_name: str, new_name: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -216,6 +217,7 @@ def rename_team(old_name: str, new_name: str, request, ctx) -> None:
 def delete_team(team_name: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -244,6 +246,7 @@ def delete_team(team_name: str, request, ctx) -> None:
 def delete_team_by_id(team_id: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}

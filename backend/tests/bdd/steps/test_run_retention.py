@@ -1,5 +1,6 @@
 """Step definitions for run retention features: TTL-based cleanup, nightly purge job, admin manual purge."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -10,10 +11,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/operations/run_retention.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants matching conftest.py
@@ -198,9 +197,9 @@ def only_old_runs_deleted(date: str, ctx: dict[str, Any]) -> None:
     assert mock_purge is not None, "purge_runs was not called"
     mock_purge.assert_awaited_once()
     call_args = mock_purge.call_args.kwargs
-    assert "older_than" in call_args or any(
-        date in str(a) for a in mock_purge.call_args.args
-    ), "Purge was not called with the expected date filter"
+    assert "older_than" in call_args or any(date in str(a) for a in mock_purge.call_args.args), (
+        "Purge was not called with the expected date filter"
+    )
 
 
 # ===========================================================================

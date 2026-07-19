@@ -4,6 +4,7 @@ Covers: discovery listing, health checks, startup discovery,
 manifest validation, and capability advertisement.
 """
 
+import contextlib
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -13,10 +14,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.plugin_registry import PluginHealth
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/plugins/plugin_registry.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Test data
@@ -117,10 +116,8 @@ def patches():
     collectors: list[Any] = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 # ===========================================================================
@@ -149,14 +146,8 @@ def _plugin_is_registered(plugin_id: str, request: pytest.FixtureRequest) -> Non
     request.node._plugin_data = [data]
 
 
-@given(
-    parsers.parse(
-        'a plugin "{plugin_id}" is registered with connector type "{connector_type}"'
-    )
-)
-def _plugin_with_connector(
-    plugin_id: str, connector_type: str, request: pytest.FixtureRequest
-) -> None:
+@given(parsers.parse('a plugin "{plugin_id}" is registered with connector type "{connector_type}"'))
+def _plugin_with_connector(plugin_id: str, connector_type: str, request: pytest.FixtureRequest) -> None:
     data = {
         "PLUGIN_ID": plugin_id,
         "display_name": plugin_id.replace("-", " ").title(),
@@ -193,9 +184,7 @@ def _get_plugins(
     plugin_data: list[dict[str, Any]] = getattr(request.node, "_plugin_data", [])
     mock_registry = _make_mock_registry(plugin_data)
 
-    patcher = patch(
-        "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-    )
+    patcher = patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry)
     patcher.start()
     patches.append(patcher)
 
@@ -214,9 +203,7 @@ def _get_plugin_detail(
     plugin_data: list[dict[str, Any]] = getattr(request.node, "_plugin_data", [])
     mock_registry = _make_mock_registry(plugin_data)
 
-    patcher = patch(
-        "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-    )
+    patcher = patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry)
     patcher.start()
     patches.append(patcher)
 
@@ -235,9 +222,7 @@ def _get_plugin_health(
     plugin_data: list[dict[str, Any]] = getattr(request.node, "_plugin_data", [])
     mock_registry = _make_mock_registry(plugin_data)
 
-    patcher = patch(
-        "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-    )
+    patcher = patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry)
     patcher.start()
     patches.append(patcher)
 
@@ -246,18 +231,14 @@ def _get_plugin_health(
 
 
 @when("the plugin registry discovers plugins")
-def _discover_plugins(
-    request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+def _discover_plugins(request: pytest.FixtureRequest, patches: list[Any]) -> None:
     from modulo.core.plugin_registry import PluginRegistry
 
     registry = PluginRegistry()
 
     broken = getattr(request.node, "_broken_ep", False)
     if broken:
-        with patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points"
-        ) as mock_eps:
+        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
             mock_ep = MagicMock()
             mock_ep.name = "slack"
             mock_ep.dist = None  # No distribution → manifest rejected
@@ -266,9 +247,7 @@ def _discover_plugins(
             )
             discovered = registry.discover_plugins()
     else:
-        with patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points"
-        ) as mock_eps:
+        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
             mock_ep = MagicMock()
             mock_ep.name = "slack"
             mock_dist = MagicMock()
@@ -295,9 +274,7 @@ def _discover_plugins(
 
 
 @then(parsers.parse("the response contains {count:d} plugins"))
-def _response_contains_n_plugins(
-    request: pytest.FixtureRequest, count: int
-) -> None:
+def _response_contains_n_plugins(request: pytest.FixtureRequest, count: int) -> None:
     body = request.node._resp.json()
     assert isinstance(body, list), f"Expected list, got {type(body)}"
     assert len(body) == count, f"Expected {count} plugins, got {len(body)}"
@@ -314,15 +291,11 @@ def _each_plugin_has_required_fields(request: pytest.FixtureRequest) -> None:
 
 
 @then(parsers.parse('the response has PLUGIN_ID "{expected}"'))
-def _response_has_plugin_id(
-    request: pytest.FixtureRequest, expected: str
-) -> None:
+def _response_has_plugin_id(request: pytest.FixtureRequest, expected: str) -> None:
     body = request.node._resp.json()
     if isinstance(body, list):
         body = body[0]
-    assert body.get("PLUGIN_ID") == expected, (
-        f"Expected PLUGIN_ID {expected!r}, got {body.get('PLUGIN_ID')!r}"
-    )
+    assert body.get("PLUGIN_ID") == expected, f"Expected PLUGIN_ID {expected!r}, got {body.get('PLUGIN_ID')!r}"
 
 
 @then("the response includes display_name, description, version, and capabilities")
@@ -345,29 +318,19 @@ def _response_has_health_fields(request: pytest.FixtureRequest) -> None:
 
 
 @then(parsers.parse('the response detail says "{message}"'))
-def _response_detail_says(
-    request: pytest.FixtureRequest, message: str
-) -> None:
+def _response_detail_says(request: pytest.FixtureRequest, message: str) -> None:
     body = request.node._resp.json()
     detail = body.get("detail", "")
     assert message in detail, f"Expected detail containing {message!r}, got {detail!r}"
 
 
-@then(
-    parsers.parse(
-        'entry points in "{group1}" and "{group2}" are scanned'
-    )
-)
-def _entry_points_scanned(
-    request: pytest.FixtureRequest, group1: str, group2: str
-) -> None:
+@then(parsers.parse('entry points in "{group1}" and "{group2}" are scanned'))
+def _entry_points_scanned(request: pytest.FixtureRequest, group1: str, group2: str) -> None:
     registry: Any = getattr(request.node, "_registry_state", None)
     assert registry is not None, "No registry state — the When step must set _registry_state"
     plugins = registry.list_plugins()
     assert len(plugins) > 0, "No plugins were discovered"
-    assert all(
-        isinstance(pid, str) for pid in plugins
-    ), "Plugin IDs should be strings"
+    assert all(isinstance(pid, str) for pid in plugins), "Plugin IDs should be strings"
 
 
 @then("discovered plugins are available via list_plugins")
@@ -382,9 +345,7 @@ def _plugin_health_false(request: pytest.FixtureRequest) -> None:
     registry: Any = getattr(request.node, "_registry_state", None)
     assert registry is not None
     healths = registry.health_check()
-    assert any(
-        not h.ok for h in healths.values()
-    ), "Expected at least one plugin with health_ok false"
+    assert any(not h.ok for h in healths.values()), "Expected at least one plugin with health_ok false"
 
 
 @then("the detail describes the failure")
@@ -398,17 +359,11 @@ def _detail_describes_failure(request: pytest.FixtureRequest) -> None:
         assert health.detail, f"Plugin {pid} has health_ok false but empty detail"
 
 
-@then(
-    "the response includes a plugin with capabilities containing "
-    '"connector_type"'
-)
+@then('the response includes a plugin with capabilities containing "connector_type"')
 def _response_includes_connector_capability(
     request: pytest.FixtureRequest,
 ) -> None:
     body = request.node._resp.json()
     assert isinstance(body, list), f"Expected list, got {type(body)}"
-    found = any(
-        "connector_type" in p.get("capabilities", set())
-        for p in body
-    )
+    found = any("connector_type" in p.get("capabilities", set()) for p in body)
     assert found, "No plugin with connector_type capability found in response"

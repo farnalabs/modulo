@@ -1,7 +1,7 @@
 # MariaDB switch: run `docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d`.
 # When using the MariaDB override, the backend automatically gets these values:
 #   MODULO_DB=mariadb
-#   DATABASE_URL=mysql+asyncmy://modulo:modulo@db:3306/modulo
+#   DATABASE_URL=mysql+aiomysql://modulo:modulo@db:3306/modulo
 
 services:
   db:
@@ -31,13 +31,15 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://modulo:modulo@db:5432/modulo
+      DATABASE_URL: postgresql+asyncpg://modulo_app:modulo@db:5432/modulo
+      DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:modulo@db:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
       FERNET_KEY: modulo-docker-compose-fernet-key-min-32-bytes!!
       REDIS_URL: redis://redis:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
+      MODULO_DEMO_MODE: "true"
     ports:
       - "8000:8000"
     volumes:
@@ -57,6 +59,7 @@ services:
       - VITE_AUTO_LOGIN_USERNAME=admin
       - VITE_AUTO_LOGIN_PASSWORD=admin
       - VITE_API_URL=http://backend:8000
+      - VITE_DEMO_MODE=true
 
 volumes:
   pgdata:

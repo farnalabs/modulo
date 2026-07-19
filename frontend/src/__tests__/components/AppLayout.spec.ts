@@ -56,10 +56,10 @@ describe('AppLayout', () => {
     await nextTick()
 
     expect(wrapper.text()).toContain('Community')
-    expect(wrapper.text()).not.toContain('Enterprise')
+    expect(wrapper.text()).not.toContain('V1')
   })
 
-  it('shows Enterprise plan badge when store is enterprise', async () => {
+  it('shows V1 plan badge when store is v1', async () => {
     const pinia = createPinia()
     const wrapper = mount(AppLayout, {
       global: {
@@ -68,12 +68,12 @@ describe('AppLayout', () => {
       },
     })
     const store = usePlanStore()
-    store.currentTier = 'enterprise'
+    store.currentTier = 'v1'
     store.expiresAt = '2026-12-31T23:59:59Z'
     await nextTick()
     await nextTick()
 
-    expect(wrapper.text()).toContain('Enterprise')
+    expect(wrapper.text()).toContain('V1')
   })
 
   it('renders MCP link in sidebar', async () => {
@@ -100,6 +100,8 @@ describe('AppLayout', () => {
         stubs: { LogoMark: true },
       },
     })
+    const store = usePlanStore()
+    store.currentTier = 'team'
     await nextTick()
 
     const licenseBadgeLinks = wrapper.findAll('a[href="/settings/license"]')

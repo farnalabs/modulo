@@ -135,3 +135,16 @@ status: partial
 - Product map: added 9 new behaviour checkboxes ([x]), 7 new error path checkboxes ([x]), 2 new Known Gaps.
 
 **Status:** partial (7 known gaps remain)
+
+### 2026-07-12 — R2 improve-architecture
+
+- Removed dead code: redundant `if table not in _CREDENTIALS_TABLES` guard inside `_export_credentials_references_sync` (the loop already iterates over `_CREDENTIALS_TABLES`, so the check was always True).
+- Fixed `E402` import order: moved module docstring before `from __future__ import annotations` to comply with PEP 8.
+- Verified B904 compliance (all re-raises use `from exc`), no CancelledError concerns (sync CLI code), frontmatter clean, known gaps genuine.
+- All ruff checks pass.
+
+### 2026-07-12 — R3 improve-architecture
+
+- Removed dead code: redundant `if table not in _CREDENTIALS_TABLES` guard inside `_re_encrypt_credentials_sync` (outer loop already skips unknown tables with `continue` at line 373, so the inner check was never reachable).
+- Verified B904 compliance for all 4 entries, exc_info=True patterns, frontmatter integrity, and known gaps. No other issues found.
+- All ruff checks pass.

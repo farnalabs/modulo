@@ -1,16 +1,13 @@
-﻿<template>
-  <FeatureGate feature-name="webhook_trigger" required-tier="team" show-disabled>
+<template>
+  <FeatureGate feature-name="webhook_trigger" required-tier="community" show-disabled>
 
-    <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+    <div data-theme="agent" class="page-wide">
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Triggers</h1>
-        <p class="mt-1 text-muted-foreground">Automate pipeline execution with schedules (cron), webhooks, polling, or inter-pipeline signals. Each trigger launches a pipeline run when its conditions are met.</p>
-      </div>
+      <PageHeader title="Triggers" subtitle="Automate pipeline execution with schedules (cron), webhooks, polling, or inter-pipeline signals. Each trigger launches a pipeline run when its conditions are met." />
       <Button
         data-testid="settings-triggers-create"
         variant="default"
-        class="btn-glow border-primary/30 hover:border-primary/60"
+           class="border-primary/30 hover:border-primary/60"
         @click="openCreateDialog"
       >
         Create Trigger
@@ -71,36 +68,13 @@
                 </button>
               </td>
               <td class="px-4 py-3 text-muted-foreground">
-                {{ formatTimestamp(t.last_fired_at) }}
+                {{ formatTimestamp(t.last_fired_at ?? null) }}
               </td>
               <td class="px-4 py-3 text-muted-foreground">
-                {{ formatTimestamp(t.next_fire_at) }}
+                {{ formatTimestamp(t.next_fire_at ?? null) }}
               </td>
               <td class="px-4 py-3 text-right">
-                <div class="flex items-center justify-end gap-1">
-                  <button
-                    class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    data-testid="settings-triggers-edit"
-                    :aria-label="'Edit trigger'"
-                    title="Edit trigger"
-                    @click="openEditDialog(t)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                    </svg>
-                  </button>
-                  <button
-                    class="rounded p-1 text-destructive hover:bg-destructive/10"
-                    data-testid="settings-triggers-delete"
-                    :aria-label="'Delete trigger'"
-                    title="Delete trigger"
-                    @click="confirmDelete(t)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    </svg>
-                  </button>
-                </div>
+                <TableActions :actions="triggerActions(t)" />
               </td>
             </tr>
           </tbody>
@@ -108,279 +82,253 @@
       </div>
     </template>
 
-    <!-- Create / Edit Dialog -->
-    <Dialog :open="dialogOpen" @update:open="dialogOpen = false">
-      <DialogContent class="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{{ editingId ? 'Edit Trigger' : 'Create Trigger' }}</DialogTitle>
-          <DialogDescription>
-            {{ editingId ? 'Update the trigger configuration.' : 'Configure a new trigger for your pipeline.' }}
-          </DialogDescription>
-        </DialogHeader>
+    <FormDialog
+      :open="dialogOpen"
+      @update:open="dialogOpen = false"
+      :title="editingId ? 'Edit Trigger' : 'Create Trigger'"
+      :description="editingId ? 'Update the trigger configuration.' : 'Configure a new trigger for your pipeline.'"
+      :confirmText="editingId ? 'Update' : 'Create'"
+      :loading="saving"
+      @confirm="saveTrigger"
+    >
+      <form @submit.prevent="saveTrigger" class="space-y-4">
+        <div>
+          <label for="settingstriggersview-pipeline" class="mb-1 block text-sm font-medium">Pipeline</label>
+          <Select v-model="form.pipeline_id">
+            <SelectTrigger id="settingstriggersview-pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Pipeline" data-testid="settings-triggers-form-pipeline">
+              <SelectValue placeholder="Select pipeline" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
 
-        <form @submit.prevent="saveTrigger" class="space-y-4">
+        <div v-if="!editingId">
+          <label for="settingstriggersview-trigger-type" class="mb-1 block text-sm font-medium">Trigger Type</label>
+          <Select v-model="form.trigger_type">
+            <SelectTrigger id="settingstriggersview-trigger-type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Trigger type" data-testid="settings-triggers-form-type">
+              <SelectValue placeholder="Select type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="webhook">Webhook</SelectItem>
+              <SelectItem value="cron">Cron</SelectItem>
+              <SelectItem value="polling">Polling</SelectItem>
+              <SelectItem value="agent_signal">Agent Signal</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div v-else class="text-sm text-muted-foreground">
+          Type: <span class="font-medium">{{ typeLabel(editingType) }}</span>
+        </div>
+
+        <!-- Webhook config -->
+        <template v-if="form.trigger_type === 'webhook'">
           <div>
-            <label class="mb-1 block text-sm font-medium">Pipeline</label>
-            <select
-              v-model="form.pipeline_id"
+            <label for="settingstriggersview-field-13" class="mb-1 block text-sm font-medium">URL</label>
+            <input id="settingstriggersview-field-13"
+              v-model="form.webhook_url"
+              type="url"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              data-testid="settings-triggers-form-pipeline"
-              aria-label="Pipeline"
-              required
-            >
-              <option value="" disabled>Select pipeline</option>
-              <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
-            </select>
+              placeholder="https://example.com/webhook"
+              data-testid="settings-triggers-form-webhook-url"
+            />
           </div>
+          <div>
+            <label for="settingstriggersview-http-method" class="mb-1 block text-sm font-medium">HTTP Method</label>
+            <Select v-model="form.webhook_method">
+              <SelectTrigger id="settingstriggersview-http-method" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="HTTP method" data-testid="settings-triggers-form-webhook-method">
+                <SelectValue placeholder="Select method" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="POST">POST</SelectItem>
+                <SelectItem value="GET">GET</SelectItem>
+                <SelectItem value="PUT">PUT</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label for="settingstriggersview-field-11" class="mb-1 block text-sm font-medium">Headers (JSON)</label>
+            <textarea id="settingstriggersview-field-11"
+              v-model="form.webhook_headers"
+              rows="3"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+              placeholder='{ "X-Custom-Header": "value" }'
+              data-testid="settings-triggers-form-webhook-headers"
+            />
+          </div>
+        </template>
 
-          <div v-if="!editingId">
-            <label class="mb-1 block text-sm font-medium">Trigger Type</label>
-            <select
-              v-model="form.trigger_type"
+        <!-- Cron config -->
+        <template v-if="form.trigger_type === 'cron'">
+          <div>
+            <label for="settingstriggersview-field-10" class="mb-1 block text-sm font-medium">Cron Expression</label>
+            <input id="settingstriggersview-field-10"
+              v-model="form.cron_expression"
+              type="text"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+              placeholder="*/5 * * * *"
+              data-testid="settings-triggers-form-cron-expr"
+            />
+          </div>
+          <div>
+            <label for="settingstriggersview-field-9" class="mb-1 block text-sm font-medium">Timezone</label>
+            <input id="settingstriggersview-field-9"
+              v-model="form.cron_timezone"
+              type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              data-testid="settings-triggers-form-type"
-              aria-label="Trigger type"
-              required
-            >
-              <option value="" disabled>Select type</option>
-              <option value="webhook">Webhook</option>
-              <option value="cron">Cron</option>
-              <option value="polling">Polling</option>
-              <option value="agent_signal">Agent Signal</option>
-            </select>
+              placeholder="UTC"
+              data-testid="settings-triggers-form-cron-tz"
+            />
           </div>
-          <div v-else class="text-sm text-muted-foreground">
-            Type: <span class="font-medium">{{ typeLabel(editingType) }}</span>
+          <div>
+            <label for="settingstriggersview-field-8" class="mb-1 block text-sm font-medium">Input Template (JSON)</label>
+            <textarea id="settingstriggersview-field-8"
+              v-model="form.input_template"
+              rows="3"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+              placeholder='{ "key": "value" }'
+              data-testid="settings-triggers-form-cron-input"
+            />
           </div>
+        </template>
 
-          <!-- Webhook config -->
-          <template v-if="form.trigger_type === 'webhook'">
-            <div>
-              <label class="mb-1 block text-sm font-medium">URL</label>
-              <input
-                v-model="form.webhook_url"
-                type="url"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                placeholder="https://example.com/webhook"
-                data-testid="settings-triggers-form-webhook-url"
-              />
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium">HTTP Method</label>
-              <select
-                v-model="form.webhook_method"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                data-testid="settings-triggers-form-webhook-method"
-                aria-label="HTTP method"
-              >
-                <option value="POST">POST</option>
-                <option value="GET">GET</option>
-                <option value="PUT">PUT</option>
-              </select>
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium">Headers (JSON)</label>
-              <textarea
-                v-model="form.webhook_headers"
-                rows="3"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-                placeholder='{ "X-Custom-Header": "value" }'
-                data-testid="settings-triggers-form-webhook-headers"
-              />
-            </div>
-          </template>
-
-          <!-- Cron config -->
-          <template v-if="form.trigger_type === 'cron'">
-            <div>
-              <label class="mb-1 block text-sm font-medium">Cron Expression</label>
-              <input
-                v-model="form.cron_expression"
-                type="text"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-                placeholder="*/5 * * * *"
-                data-testid="settings-triggers-form-cron-expr"
-              />
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium">Timezone</label>
-              <input
-                v-model="form.cron_timezone"
-                type="text"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                placeholder="UTC"
-                data-testid="settings-triggers-form-cron-tz"
-              />
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium">Input Template (JSON)</label>
-              <textarea
-                v-model="form.input_template"
-                rows="3"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-                placeholder='{ "key": "value" }'
-                data-testid="settings-triggers-form-cron-input"
-              />
-            </div>
-          </template>
-
-          <!-- Polling config -->
-          <template v-if="form.trigger_type === 'polling'">
-            <div>
-              <label class="mb-1 block text-sm font-medium">Connector Instance ID</label>
-              <input
-                v-model="form.connector_instance_id"
-                type="text"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-                placeholder="uuid"
-                data-testid="settings-triggers-form-polling-connector"
-              />
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium">Query</label>
-              <textarea
-                v-model="form.poll_query"
-                rows="3"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-                placeholder="SELECT * FROM table WHERE status = 'pending'"
-                data-testid="settings-triggers-form-polling-query"
-              />
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium">Poll Interval (seconds)</label>
-              <input
-                v-model="form.poll_interval"
-                type="number"
-                min="10"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                placeholder="60"
-                data-testid="settings-triggers-form-polling-interval"
-              />
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
-              <input
-                v-model="form.condition_expression"
-                type="text"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-                placeholder="length(@) > `0`"
-                data-testid="settings-triggers-form-polling-condition"
-              />
-            </div>
-          </template>
-
-          <!-- Agent Signal config -->
-          <template v-if="form.trigger_type === 'agent_signal'">
-            <div>
-              <label class="mb-1 block text-sm font-medium">Source Pipeline</label>
-              <select
-                v-model="form.signal_source_pipeline"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                data-testid="settings-triggers-form-signal-pipeline"
-                aria-label="Source pipeline"
-              >
-                <option value="" disabled>Select source pipeline</option>
-                <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
-              </select>
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium">Source Node ID</label>
-              <input
-                v-model="form.signal_source_node"
-                type="text"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-                placeholder="node_abc123"
-                data-testid="settings-triggers-form-signal-node"
-              />
-            </div>
-          </template>
-
-          <div class="flex items-center gap-2">
-            <label class="flex items-center gap-2 text-sm">
-              <input
-                v-model="form.active"
-                type="checkbox"
-                class="rounded border-input"
-                data-testid="settings-triggers-form-active"
-              />
-              Active
-            </label>
+        <!-- Polling config -->
+        <template v-if="form.trigger_type === 'polling'">
+          <div>
+            <label for="settingstriggersview-field-7" class="mb-1 block text-sm font-medium">Connector Instance ID</label>
+            <input id="settingstriggersview-field-7"
+              v-model="form.connector_instance_id"
+              type="text"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+              placeholder="uuid"
+              data-testid="settings-triggers-form-polling-connector"
+            />
           </div>
+          <div>
+            <label for="settingstriggersview-field-6" class="mb-1 block text-sm font-medium">Query</label>
+            <textarea id="settingstriggersview-field-6"
+              v-model="form.poll_query"
+              rows="3"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+              placeholder="SELECT * FROM table WHERE status = 'pending'"
+              data-testid="settings-triggers-form-polling-query"
+            />
+          </div>
+          <div>
+            <label for="settingstriggersview-field-5" class="mb-1 block text-sm font-medium">Poll Interval (seconds)</label>
+            <input id="settingstriggersview-field-5"
+              v-model="form.poll_interval"
+              type="number"
+              min="10"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              placeholder="60"
+              data-testid="settings-triggers-form-polling-interval"
+            />
+          </div>
+          <div>
+            <label for="settingstriggersview-field-4" class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
+            <input id="settingstriggersview-field-4"
+              v-model="form.condition_expression"
+              type="text"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+              placeholder="length(@) > `0`"
+              data-testid="settings-triggers-form-polling-condition"
+            />
+          </div>
+        </template>
 
-          <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
-          <DialogFooter>
-            <button
-              type="button"
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-              data-testid="settings-triggers-form-cancel"
-              @click="dialogOpen = false"
-            >
-              Cancel
-            </button>
-            <Button
-              :disabled="saving"
-              type="submit"
-              variant="default"
-              data-testid="settings-triggers-form-submit"
-            >
-              {{ saving ? 'Saving...' : (editingId ? 'Update' : 'Create') }}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+        <!-- Agent Signal config -->
+        <template v-if="form.trigger_type === 'agent_signal'">
+          <div>
+            <label for="settingstriggersview-source-pipeline" class="mb-1 block text-sm font-medium">Source Pipeline</label>
+            <Select v-model="form.signal_source_pipeline">
+              <SelectTrigger id="settingstriggersview-source-pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Source pipeline" data-testid="settings-triggers-form-signal-pipeline">
+                <SelectValue placeholder="Select source pipeline" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label for="settingstriggersview-field-2" class="mb-1 block text-sm font-medium">Source Node ID</label>
+            <input id="settingstriggersview-field-2"
+              v-model="form.signal_source_node"
+              type="text"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+              placeholder="node_abc123"
+              data-testid="settings-triggers-form-signal-node"
+            />
+          </div>
+        </template>
 
-    <!-- Delete confirmation dialog -->
-    <Dialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = false">
-      <DialogContent class="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Delete Trigger</DialogTitle>
-          <DialogDescription>
-            Are you sure you want to delete this trigger? This action cannot be undone.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <button
-            type="button"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-            data-testid="settings-triggers-delete-cancel"
-            @click="deleteDialogOpen = false"
-          >
-            Cancel
-          </button>
-            <Button
-              :disabled="deleting"
-              type="button"
-              variant="destructive"
-              data-testid="settings-triggers-delete-confirm"
-              @click="deleteTrigger"
-          >
-              {{ deleting ? 'Deleting...' : 'Delete' }}
-            </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <div class="flex items-center gap-2">
+          <label for="settingstriggersview-field-1" class="flex items-center gap-2 text-sm">
+            <input id="settingstriggersview-field-1"
+              v-model="form.active"
+              type="checkbox"
+              class="rounded border-input"
+              data-testid="settings-triggers-form-active"
+            />
+            Active
+          </label>
+        </div>
+
+        <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
+      </form>
+    </FormDialog>
+
+    <FormDialog
+      :open="deleteDialogOpen"
+      @update:open="deleteDialogOpen = false"
+      title="Delete Trigger"
+      description="Are you sure you want to delete this trigger? This action cannot be undone."
+      confirmText="Delete"
+      :loading="deleting"
+      @confirm="deleteTrigger"
+    />
   </div>
   </FeatureGate>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
+import FormDialog from '../components/shared/FormDialog.vue'
+import TableActions from '../components/shared/TableActions.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 const planStore = usePlanStore()
 
-type TriggerItem = components['schemas']['TriggerItem']
-type PipelineItem = components['schemas']['PipelineItem']
+interface TriggerItem {
+  id: string
+  pipeline_id: string
+  trigger_type: string
+  active: boolean
+  config_json: Record<string, unknown>
+  cron_expression?: string | null
+  cron_timezone?: string | null
+  last_fired_at?: string | null
+  next_fire_at?: string | null
+}
+type PipelineItem = components['schemas']['PipelineResponse']
 
 interface TriggerForm {
   pipeline_id: string
@@ -400,10 +348,19 @@ interface TriggerForm {
   signal_source_node: string
 }
 
-const items = ref<TriggerItem[]>([])
-const pipelines = ref<PipelineItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { loading, error, data: triggersData, load: loadTriggers } = useDataFetch(
+  () => api.GET('/api/v1/triggers', { params: { query: { page: 1, page_size: 100 } } }),
+)
+const { data: pipelinesData, load: loadPipelines } = useDataFetch(
+  () => api.GET('/api/v1/pipelines', {}),
+  { immediate: false }
+)
+const items = computed<TriggerItem[]>(() =>
+  ((triggersData.value as { items?: TriggerItem[] } | null)?.items ?? []),
+)
+const pipelines = computed<PipelineItem[]>(() =>
+  ((pipelinesData.value as { items?: PipelineItem[] } | null)?.items ?? []),
+)
 
 const dialogOpen = ref(false)
 const deleteDialogOpen = ref(false)
@@ -655,39 +612,26 @@ async function toggleActive(trigger: TriggerItem) {
   }
 }
 
-async function loadTriggers() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/triggers', {
-      params: { query: { page: 1, page_size: 100 } },
-    })
-    if (err) {
-      error.value = `Failed to load triggers: ${formatApiError(err)}`
-    } else if (data) {
-      items.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load triggers: ${formatApiError(e)}`
-  }
-}
-
-async function loadPipelines() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/pipelines', {})
-    if (!err && data) {
-      pipelines.value = data.items
-    }
-  } catch (e) {
-    console.warn('Failed to load pipelines', e)
-  }
-}
-
 async function loadAll() {
-  loading.value = true
-  error.value = null
   await Promise.all([loadTriggers(), loadPipelines()])
-  loading.value = false
+}
+
+function triggerActions(trigger: TriggerItem) {
+  return [
+    {
+      key: 'edit',
+      label: 'Edit',
+      onClick: () => openEditDialog(trigger),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(trigger),
+      danger: true,
+    },
+  ]
 }
 
 onMounted(() => { planStore.fetchPlan(); loadAll() })
-</script>
 
+</script>

@@ -32,14 +32,17 @@ from modulo.db.models.trigger import Trigger
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
-_VALID_TS = int(time.time())
+_VALID_TS: int
+
+
+@pytest.fixture(autouse=True)
+def refresh_valid_timestamp() -> None:
+    global _VALID_TS
+    _VALID_TS = int(time.time())
 
 
 def _sha256_sig(body: bytes, secret: str, timestamp: int | None = None) -> str:
-    if timestamp is not None:
-        payload = f"{timestamp}.".encode() + body
-    else:
-        payload = body
+    payload = f"{timestamp}.".encode() + body if timestamp is not None else body
     return "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
@@ -105,6 +108,7 @@ def _make_session(
     # Replace AsyncMock get_bind with sync MagicMock (Python 3.13+ AsyncMock returns coroutines)
     bind_mock = MagicMock()
     bind_mock.dialect.name = "postgresql"
+    session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=bind_mock)
 
     nested_cm = AsyncMock()
@@ -130,11 +134,26 @@ _VALID_32 = "a" * 32
 
 @pytest.fixture()
 def webhook_client() -> Generator[TestClient, None, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.settings import Settings, get_settings
+    import sys
+    import types
+
+    # Mock langchain_google_vertexai to prevent the import chain from
+    # hanging on google.cloud.aiplatform file I/O during app import.
+    _mock_lgv = types.ModuleType("langchain_google_vertexai")
+    _mock_lgv.ChatVertexAI = type("ChatVertexAI", (), {})
+    _was_in_sys = "langchain_google_vertexai" in sys.modules
+    if not _was_in_sys:
+        sys.modules["langchain_google_vertexai"] = _mock_lgv
+
+    try:
+        from modulo.api.dependencies import _get_engine, get_db_session
+        from modulo.api.main import app
+        from modulo.auth.dependencies import get_current_user
+        from modulo.auth.jwt import AuthenticatedPrincipal
+        from modulo.settings import Settings, get_settings
+    finally:
+        if not _was_in_sys:
+            sys.modules.pop("langchain_google_vertexai", None)
 
     _fake_org_id = uuid.uuid4()
     _fake_user_id = uuid.uuid4()
@@ -145,6 +164,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
             secret_key=_VALID_32,
             fernet_key=_VALID_32,
             modulo_admin_password="pw",
+            redis_url="",
         )
 
     def _principal() -> AuthenticatedPrincipal:
@@ -155,7 +175,27 @@ def webhook_client() -> Generator[TestClient, None, None]:
             org_role="admin",
         )
 
+    trigger_mock = MagicMock()
+    trigger_mock.id = uuid.uuid4()
+    trigger_mock.pipeline_id = uuid.uuid4()
+    trigger_mock.active = True
+    trigger_mock.config_json = {}
+    trigger_mock.max_concurrent_runs = 5
+
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = trigger_mock
+    execute_result.scalar_one.return_value = trigger_mock
+
+    snapshot_mock = MagicMock()
+    snapshot_mock.id = uuid.uuid4()
+
     session = AsyncMock()
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock(return_value=bind)
+    session.info = {}
+    session.execute = AsyncMock(return_value=execute_result)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -169,7 +209,11 @@ def webhook_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = _principal
 
-    yield TestClient(app, raise_server_exceptions=False)
+    with (
+        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", return_value=snapshot_mock),
+        patch("modulo.core.rate_limiter.RateLimiterRegistry.check", return_value=True),
+    ):
+        yield TestClient(app, raise_server_exceptions=False)
 
     app.dependency_overrides.clear()
 
@@ -189,79 +233,61 @@ def test_sha256_hex_is_deterministic() -> None:
     assert _sha256_hex(b"x") == _sha256_hex(b"x")
 
 
-def test_verify_timestamp_valid() -> None:
-    ts = str(int(time.time()))
-    result = _verify_timestamp(ts)
-    assert isinstance(result, int)
+class TestVerifyTimestamp:
+    @pytest.mark.parametrize(
+        "timestamp_input,expect_raises",
+        [
+            (lambda: str(int(time.time())), False),
+            (lambda: str(int(time.time()) - 600), True),
+            (lambda: str(int(time.time()) + 600), True),
+            (lambda: None, True),
+            (lambda: "not-a-number", True),
+        ],
+    )
+    def test_verify_timestamp(self, timestamp_input, expect_raises) -> None:
+        ts = timestamp_input() if callable(timestamp_input) else timestamp_input
+        if expect_raises:
+            with pytest.raises(TimestampExpiredError):
+                _verify_timestamp(ts)
+        else:
+            result = _verify_timestamp(ts)
+            assert isinstance(result, int)
 
 
-def test_verify_timestamp_expired_past() -> None:
-    ts = str(int(time.time()) - 600)
-    with pytest.raises(TimestampExpiredError):
-        _verify_timestamp(ts)
+@pytest.mark.parametrize(
+    "secret,body,sig_maker,expected",
+    [
+        ("my-secret", b"payload", lambda b, s: (_sha256_sig(b, s, timestamp=int(time.time())), int(time.time())), True),
+        ("my-secret", b"payload", lambda b, s: (_sha256_sig(b, s), None), True),
+        ("secret", b"payload", lambda b, s: ("sha256=wrong", int(time.time())), False),
+        ("secret", b"payload", lambda b, s: (None, int(time.time())), False),
+        (
+            "s",
+            b"x",
+            lambda b, s: (
+                hmac.new(s.encode(), f"{int(time.time())}.".encode() + b, hashlib.sha256).hexdigest(),
+                int(time.time()),
+            ),
+            False,
+        ),
+    ],
+)
+def test_verify_hmac(secret, body, sig_maker, expected) -> None:
+    sig, ts = sig_maker(body, secret)
+    assert _verify_hmac(body, secret, sig, timestamp=ts) is expected
 
 
-def test_verify_timestamp_expired_future() -> None:
-    ts = str(int(time.time()) + 600)
-    with pytest.raises(TimestampExpiredError):
-        _verify_timestamp(ts)
-
-
-def test_verify_timestamp_none_raises() -> None:
-    with pytest.raises(TimestampExpiredError):
-        _verify_timestamp(None)
-
-
-def test_verify_timestamp_non_int_raises() -> None:
-    with pytest.raises(TimestampExpiredError):
-        _verify_timestamp("not-a-number")
-
-
-def test_verify_hmac_correct_signature_with_timestamp() -> None:
-    secret = "my-secret"
-    body = b"payload"
-    ts = int(time.time())
-    sig = _sha256_sig(body, secret, timestamp=ts)
-    assert _verify_hmac(body, secret, sig, timestamp=ts) is True
-
-
-def test_verify_hmac_correct_signature_without_timestamp() -> None:
-    secret = "my-secret"
-    body = b"payload"
-    sig = _sha256_sig(body, secret)
-    assert _verify_hmac(body, secret, sig) is True
-
-
-def test_verify_hmac_wrong_signature() -> None:
-    assert _verify_hmac(b"payload", "secret", "sha256=wrong", timestamp=int(time.time())) is False
-
-
-def test_verify_hmac_missing_signature() -> None:
-    assert _verify_hmac(b"payload", "secret", None, timestamp=int(time.time())) is False
-
-
-def test_verify_hmac_missing_prefix() -> None:
-    secret = "s"
-    body = b"x"
-    ts = int(time.time())
-    raw_hex = hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
-    assert _verify_hmac(body, secret, raw_hex, timestamp=ts) is False
-
-
-def test_extract_field_top_level() -> None:
-    assert _extract_field({"a": 1}, "a") == 1
-
-
-def test_extract_field_nested() -> None:
-    assert _extract_field({"a": {"b": {"c": "deep"}}}, "a.b.c") == "deep"
-
-
-def test_extract_field_missing_returns_none() -> None:
-    assert _extract_field({"a": 1}, "b") is None
-
-
-def test_extract_field_non_dict_returns_none() -> None:
-    assert _extract_field({"a": "not-a-dict"}, "a.b") is None
+@pytest.mark.parametrize(
+    "data,field_path,expected",
+    [
+        ({"a": 1}, "a", 1),
+        ({"a": {"b": {"c": "deep"}}}, "a.b.c", "deep"),
+        ({"a": 1}, "b", None),
+        ({"a": "not-a-dict"}, "a.b", None),
+    ],
+)
+def test_extract_field(data, field_path, expected) -> None:
+    assert _extract_field(data, field_path) == expected
 
 
 def test_apply_payload_mapping_empty_returns_raw() -> None:
@@ -354,7 +380,7 @@ async def test_handle_webhook_applies_payload_mapping() -> None:
         patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
         patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
     ):
-        await TriggerEngine().handle_webhook(
+        _, _, input_payload = await TriggerEngine().handle_webhook(
             session,
             trigger_id=trigger.id,
             org_id=_ORG,
@@ -367,32 +393,7 @@ async def test_handle_webhook_applies_payload_mapping() -> None:
 
     called_payload = mock_create.call_args.kwargs["input_payload"]
     assert called_payload == {"action": "opened", "pr_num": 42}
-
-
-async def test_handle_webhook_returns_mapped_input_payload() -> None:
-    mapping = {"pr_num": "number"}
-    trigger = _make_trigger(payload_mapping=mapping)
-    session = _make_session(trigger=trigger, active_run_count=0)
-
-    run_mock = MagicMock()
-    run_mock.id = uuid.uuid4()
-
-    with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
-    ):
-        _, _, input_payload = await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=str(_VALID_TS),
-            snapshot_id=_SNAP,
-        )
-
-    assert input_payload == {"pr_num": 42}
+    assert input_payload == called_payload
 
 
 # ---------------------------------------------------------------------------
@@ -400,192 +401,96 @@ async def test_handle_webhook_returns_mapped_input_payload() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_handle_webhook_trigger_not_found_raises() -> None:
-    session = _make_session(trigger=None)
-    with pytest.raises(TriggerNotFoundError):
+@pytest.mark.parametrize(
+    "trigger_overrides,session_overrides,hmac_sig,mod_ts_factory,expected_exc,extra_assert",
+    [
+        ({}, {"trigger": None}, None, lambda: str(int(time.time())), TriggerNotFoundError, None),
+        ({"active": False}, {}, None, lambda: str(int(time.time())), TriggerInactiveError, None),
+        ({}, {}, None, lambda: None, TimestampExpiredError, None),
+        ({"hmac_secret": "secret"}, {}, "sha256=wrong", lambda: str(int(time.time())), HmacValidationError, None),
+        ({"hmac_secret": "secret"}, {}, None, lambda: str(int(time.time())), HmacValidationError, None),
+        ({}, {"dedup_exists": True}, None, lambda: str(int(time.time())), DuplicateWebhookError, None),
+        (
+            {"max_concurrent_runs": 2},
+            {"active_run_count": 2},
+            None,
+            lambda: str(int(time.time())),
+            ConcurrentRunLimitError,
+            lambda e: e.value.limit == 2,
+        ),
+    ],
+)
+async def test_handle_webhook_validation_raises(
+    trigger_overrides, session_overrides, hmac_sig, mod_ts_factory, expected_exc, extra_assert
+) -> None:
+    session_kwargs = dict(session_overrides)
+    session_trigger = session_kwargs.pop("trigger", None)
+    trigger = _make_trigger(**trigger_overrides)
+    if session_trigger is None and "trigger" in session_overrides:
+        session = _make_session(trigger=None, **session_kwargs)
+        trigger_id = uuid.uuid4()
+    else:
+        session = _make_session(trigger=trigger, **session_kwargs)
+        trigger_id = trigger.id
+    mod_ts = mod_ts_factory() if callable(mod_ts_factory) else mod_ts_factory
+    with pytest.raises(expected_exc) as exc_info:
         await TriggerEngine().handle_webhook(
             session,
-            trigger_id=uuid.uuid4(),
+            trigger_id=trigger_id,
             org_id=_ORG,
             raw_body=_RAW_BODY,
             raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=str(_VALID_TS),
+            hmac_signature=hmac_sig,
+            modulo_timestamp=mod_ts,
             snapshot_id=_SNAP,
         )
+    if extra_assert is not None:
+        assert extra_assert(exc_info)
 
 
-async def test_handle_webhook_inactive_trigger_raises() -> None:
-    trigger = _make_trigger(active=False)
-    session = _make_session(trigger=trigger)
-    with pytest.raises(TriggerInactiveError):
+@pytest.mark.parametrize(
+    "trigger_overrides,session_overrides,hmac_sig,mod_ts_factory,expected_exc,expected_vr",
+    [
+        ({}, {}, None, lambda: str(int(time.time()) - 600), TimestampExpiredError, "timestamp_expired"),
+        (
+            {"hmac_secret": "secret"},
+            {},
+            "sha256=bad",
+            lambda: str(int(time.time())),
+            HmacValidationError,
+            "hmac_failed",
+        ),
+        ({}, {"dedup_exists": True}, None, lambda: str(int(time.time())), DuplicateWebhookError, "deduplicated"),
+        (
+            {"max_concurrent_runs": 1},
+            {"active_run_count": 1},
+            None,
+            lambda: str(int(time.time())),
+            ConcurrentRunLimitError,
+            "concurrency_limit_reached",
+        ),
+    ],
+)
+async def test_handle_webhook_logs_trigger_event(
+    trigger_overrides, session_overrides, hmac_sig, mod_ts_factory, expected_exc, expected_vr
+) -> None:
+    trigger = _make_trigger(**trigger_overrides)
+    session = _make_session(trigger=trigger, **session_overrides)
+    mod_ts = mod_ts_factory() if callable(mod_ts_factory) else mod_ts_factory
+    with pytest.raises(expected_exc):
         await TriggerEngine().handle_webhook(
             session,
             trigger_id=trigger.id,
             org_id=_ORG,
             raw_body=_RAW_BODY,
             raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=str(_VALID_TS),
-            snapshot_id=_SNAP,
-        )
-
-
-async def test_handle_webhook_missing_timestamp_raises() -> None:
-    trigger = _make_trigger()
-    session = _make_session(trigger=trigger)
-    with pytest.raises(TimestampExpiredError):
-        await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=None,
-            snapshot_id=_SNAP,
-        )
-
-
-async def test_handle_webhook_invalid_hmac_raises() -> None:
-    trigger = _make_trigger(hmac_secret="secret")
-    session = _make_session(trigger=trigger)
-    with pytest.raises(HmacValidationError):
-        await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature="sha256=wrong",
-            modulo_timestamp=str(_VALID_TS),
-            snapshot_id=_SNAP,
-        )
-
-
-async def test_handle_webhook_missing_hmac_raises() -> None:
-    trigger = _make_trigger(hmac_secret="secret")
-    session = _make_session(trigger=trigger)
-    with pytest.raises(HmacValidationError):
-        await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=str(_VALID_TS),
-            snapshot_id=_SNAP,
-        )
-
-
-async def test_handle_webhook_duplicate_raises() -> None:
-    trigger = _make_trigger()
-    session = _make_session(trigger=trigger, dedup_exists=True)
-    with pytest.raises(DuplicateWebhookError):
-        await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=str(_VALID_TS),
-            snapshot_id=_SNAP,
-        )
-
-
-async def test_handle_webhook_concurrency_limit_raises() -> None:
-    trigger = _make_trigger(max_concurrent_runs=2)
-    session = _make_session(trigger=trigger, active_run_count=2)
-    with pytest.raises(ConcurrentRunLimitError) as exc_info:
-        await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=str(_VALID_TS),
-            snapshot_id=_SNAP,
-        )
-    assert exc_info.value.limit == 2
-
-
-async def test_handle_webhook_logs_trigger_event_on_timestamp_expired() -> None:
-    trigger = _make_trigger()
-    session = _make_session(trigger=trigger)
-    with pytest.raises(TimestampExpiredError):
-        await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=str(int(time.time()) - 600),
+            hmac_signature=hmac_sig,
+            modulo_timestamp=mod_ts,
             snapshot_id=_SNAP,
         )
     session.add.assert_called()
-    added = session.add.call_args[0][0]
-    assert added.validation_result == "timestamp_expired"
-
-
-async def test_handle_webhook_logs_trigger_event_on_hmac_failure() -> None:
-    trigger = _make_trigger(hmac_secret="secret")
-    session = _make_session(trigger=trigger)
-    with pytest.raises(HmacValidationError):
-        await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature="sha256=bad",
-            modulo_timestamp=str(_VALID_TS),
-            snapshot_id=_SNAP,
-        )
-    session.add.assert_called()
-    added = session.add.call_args[0][0]
-    assert added.validation_result == "hmac_failed"
-
-
-async def test_handle_webhook_logs_trigger_event_on_duplicate() -> None:
-    trigger = _make_trigger()
-    session = _make_session(trigger=trigger, dedup_exists=True)
-    with pytest.raises(DuplicateWebhookError):
-        await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=str(_VALID_TS),
-            snapshot_id=_SNAP,
-        )
-    session.add.assert_called()
-    added = session.add.call_args[0][0]
-    assert added.validation_result == "deduplicated"
-
-
-async def test_handle_webhook_logs_trigger_event_on_concurrency_limit() -> None:
-    trigger = _make_trigger(max_concurrent_runs=1)
-    session = _make_session(trigger=trigger, active_run_count=1)
-    with pytest.raises(ConcurrentRunLimitError):
-        await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=str(_VALID_TS),
-            snapshot_id=_SNAP,
-        )
-    session.add.assert_called()
-    trigger_event_call = [a for a in session.add.call_args_list if hasattr(a[0][0], "validation_result")]
-    assert any(getattr(c[0][0], "validation_result", None) == "concurrency_limit_reached" for c in trigger_event_call)
+    found = any(getattr(c[0][0], "validation_result", None) == expected_vr for c in session.add.call_args_list)
+    assert found
 
 
 # ---------------------------------------------------------------------------
@@ -593,133 +498,82 @@ async def test_handle_webhook_logs_trigger_event_on_concurrency_limit() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_webhook_route_returns_404_on_missing_trigger(webhook_client: TestClient) -> None:
+@pytest.mark.parametrize(
+    "patch_target,mock_factory,expected_status,extra_headers,body_kwargs",
+    [
+        (
+            "handle_webhook",
+            lambda tid, eid: AsyncMock(side_effect=TriggerNotFoundError(tid)),
+            404,
+            {},
+            {"json": {"action": "ping"}},
+        ),
+        (
+            "handle_webhook",
+            lambda: AsyncMock(side_effect=TimestampExpiredError()),
+            400,
+            {},
+            {"json": {"action": "push"}},
+        ),
+        (
+            "handle_webhook",
+            lambda: AsyncMock(side_effect=HmacValidationError()),
+            401,
+            {"X-Modulo-Webhook-Secret": "sha256=bad"},
+            {"json": {"action": "push"}},
+        ),
+        (
+            "handle_webhook",
+            lambda: AsyncMock(side_effect=DuplicateWebhookError("abc123")),
+            400,
+            {},
+            {"json": {"action": "push"}},
+        ),
+        (
+            "handle_webhook",
+            lambda tid, eid: AsyncMock(side_effect=ConcurrentRunLimitError(tid, 3)),
+            429,
+            {},
+            {"json": {"action": "push"}},
+        ),
+        (None, None, 400, {"Content-Type": "application/json"}, {"content": b"not-json"}),
+        (
+            "handle_webhook",
+            lambda: AsyncMock(return_value=(MagicMock(), MagicMock(), {"key": "val"})),
+            202,
+            {},
+            {"json": {"action": "push"}},
+        ),
+        ("replay_event", lambda: AsyncMock(return_value=(MagicMock(), MagicMock(), {"key": "val"})), 202, {}, {}),
+        ("replay_event", lambda tid, eid: AsyncMock(side_effect=ReplayNotFoundError(eid)), 404, {}, {}),
+    ],
+)
+def test_webhook_route(
+    webhook_client: TestClient, patch_target, mock_factory, expected_status, extra_headers, body_kwargs
+) -> None:
     tid = uuid.uuid4()
-    with patch(
-        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
-        new=AsyncMock(side_effect=TriggerNotFoundError(tid)),
-    ):
-        resp = webhook_client.post(
-            f"/api/v1/triggers/{tid}/webhook",
-            json={"action": "ping"},
-            headers={"X-Modulo-Timestamp": str(_VALID_TS)},
-        )
-    assert resp.status_code == 404
+    eid = uuid.uuid4() if patch_target == "replay_event" else None
 
+    if "content" in body_kwargs:
+        headers = {"X-Modulo-Timestamp": str(int(time.time()))} | extra_headers
+        request_kwargs = {"content": body_kwargs["content"], "headers": headers}
+    elif "json" in body_kwargs:
+        headers = {"X-Modulo-Timestamp": str(int(time.time()))} | extra_headers
+        request_kwargs = {"json": body_kwargs["json"], "headers": headers}
+    else:
+        request_kwargs = {"headers": dict(extra_headers)}
 
-def test_webhook_route_returns_400_on_expired_timestamp(webhook_client: TestClient) -> None:
-    tid = uuid.uuid4()
-    with patch(
-        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
-        new=AsyncMock(side_effect=TimestampExpiredError()),
-    ):
-        resp = webhook_client.post(
-            f"/api/v1/triggers/{tid}/webhook",
-            json={"action": "push"},
-            headers={"X-Modulo-Timestamp": str(int(time.time()) - 600)},
-        )
-    assert resp.status_code == 400
+    url_suffix = f"/replay/{eid}" if eid else ""
 
+    if patch_target is None:
+        resp = webhook_client.post(f"/api/v1/triggers/{tid}/webhook{url_suffix}", **request_kwargs)
+    else:
+        nargs = mock_factory.__code__.co_argcount
+        mock_obj = mock_factory(tid, eid) if nargs == 2 else mock_factory()
+        with patch(f"modulo.api.routes.webhooks._trigger_engine.{patch_target}", new=mock_obj):
+            resp = webhook_client.post(f"/api/v1/triggers/{tid}/webhook{url_suffix}", **request_kwargs)
 
-def test_webhook_route_returns_401_on_hmac_failure(webhook_client: TestClient) -> None:
-    tid = uuid.uuid4()
-    with patch(
-        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
-        new=AsyncMock(side_effect=HmacValidationError()),
-    ):
-        resp = webhook_client.post(
-            f"/api/v1/triggers/{tid}/webhook",
-            json={"action": "push"},
-            headers={
-                "X-Modulo-Timestamp": str(_VALID_TS),
-                "X-Modulo-Webhook-Secret": "sha256=bad",
-            },
-        )
-    assert resp.status_code == 401
-
-
-def test_webhook_route_returns_400_on_duplicate(webhook_client: TestClient) -> None:
-    tid = uuid.uuid4()
-    with patch(
-        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
-        new=AsyncMock(side_effect=DuplicateWebhookError("abc123")),
-    ):
-        resp = webhook_client.post(
-            f"/api/v1/triggers/{tid}/webhook",
-            json={"action": "push"},
-            headers={"X-Modulo-Timestamp": str(_VALID_TS)},
-        )
-    assert resp.status_code == 400
-
-
-def test_webhook_route_returns_429_on_concurrency_limit(webhook_client: TestClient) -> None:
-    trigger_id = uuid.uuid4()
-    with patch(
-        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
-        new=AsyncMock(side_effect=ConcurrentRunLimitError(trigger_id, 3)),
-    ):
-        resp = webhook_client.post(
-            f"/api/v1/triggers/{trigger_id}/webhook",
-            json={"action": "push"},
-            headers={"X-Modulo-Timestamp": str(_VALID_TS)},
-        )
-    assert resp.status_code == 429
-
-
-def test_webhook_route_returns_400_on_non_json_object(webhook_client: TestClient) -> None:
-    resp = webhook_client.post(
-        f"/api/v1/triggers/{uuid.uuid4()}/webhook",
-        content=b"not-json",
-        headers={
-            "Content-Type": "application/json",
-            "X-Modulo-Timestamp": str(_VALID_TS),
-        },
-    )
-    assert resp.status_code == 400
-
-
-def test_webhook_route_returns_202_on_success(webhook_client: TestClient) -> None:
-    tid = uuid.uuid4()
-    run_mock = MagicMock()
-    run_mock.id = uuid.uuid4()
-    with patch(
-        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
-        new=AsyncMock(return_value=(run_mock, MagicMock(), {"key": "val"})),
-    ):
-        resp = webhook_client.post(
-            f"/api/v1/triggers/{tid}/webhook",
-            json={"action": "push"},
-            headers={"X-Modulo-Timestamp": str(_VALID_TS)},
-        )
-    assert resp.status_code == 202
-
-
-def test_webhook_replay_returns_202(webhook_client: TestClient) -> None:
-    tid = uuid.uuid4()
-    eid = uuid.uuid4()
-    run_mock = MagicMock()
-    run_mock.id = uuid.uuid4()
-    with patch(
-        "modulo.api.routes.webhooks._trigger_engine.replay_event",
-        new=AsyncMock(return_value=(run_mock, MagicMock(), {"key": "val"})),
-    ):
-        resp = webhook_client.post(
-            f"/api/v1/triggers/{tid}/webhook/replay/{eid}",
-        )
-    assert resp.status_code == 202
-
-
-def test_webhook_replay_returns_404_on_missing_event(webhook_client: TestClient) -> None:
-    tid = uuid.uuid4()
-    eid = uuid.uuid4()
-    with patch(
-        "modulo.api.routes.webhooks._trigger_engine.replay_event",
-        new=AsyncMock(side_effect=ReplayNotFoundError(eid)),
-    ):
-        resp = webhook_client.post(
-            f"/api/v1/triggers/{tid}/webhook/replay/{eid}",
-        )
-    assert resp.status_code == 404
+    assert resp.status_code == expected_status
 
 
 # ---------------------------------------------------------------------------

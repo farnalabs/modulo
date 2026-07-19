@@ -28,6 +28,7 @@ def mock_sandbox() -> MagicMock:
     sbx.sandbox_id = "sbx-e2b-test-001"
     sbx.commands = MagicMock()
     sbx.commands.run = AsyncMock()
+    sbx.kill = AsyncMock()
     return sbx
 
 

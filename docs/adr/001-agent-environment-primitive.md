@@ -1,7 +1,7 @@
 # ADR 001 — Agent Execution Environment as a V1 Primitive
 
-**Date**: 2026-06-23  
-**Status**: Active — delivering in phase-7a, before the rest of v1
+**Date**: 2026-06-23
+**Status**: Implemented — delivered incrementally, core infrastructure on main. ShellConnector + Local Docker provider on main. E2B second-citizen provider deferred.
 
 ---
 
@@ -79,6 +79,16 @@ Example profiles: `python-dev`, `node-monorepo`, `modulo-itself`.
 - Kubernetes (future)
 
 Registered in a `RuntimeProviderHub`, parallel to ConnectorHub and ModelBackendHub.
+
+`EnvironmentProfile.provider_type` is authoritative during resolution. The
+persisted IDs are `local_docker` and `e2b`; `local` and `docker` are accepted
+as defensive configuration aliases. If the requested provider is unavailable,
+resolution fails instead of silently running on a different provider.
+
+The hub-facing provider contract is `WorkspaceSpec` in and `ExecResult` out.
+`LocalDockerRuntimeProvider` remains a compatibility adapter for the older
+ShellConnector dictionary contract; it delegates to `DockerRuntimeProvider`
+and does not contain a second Docker implementation.
 
 **WorkspaceLease** — a per-run realisation of an EnvironmentProfile:
 - Concrete sandbox/container ID issued by the provider

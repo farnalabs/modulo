@@ -20,12 +20,13 @@
         >
           Save as composite
         </button>
-        <button
-          class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+        <Button
+          variant="default"
+          size="xs"
           @click="showPortPanel = !showPortPanel"
         >
           {{ showPortPanel ? 'Hide Ports' : 'Ports' }}
-        </button>
+        </Button>
         <button
           class="rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-500"
           @click="showPublishFlow = true"
@@ -80,7 +81,7 @@
     </template>
 
     <!-- Save as composite dialog -->
-    <div
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
       v-if="showSaveAsComposite"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       @click.self="showSaveAsComposite = false"
@@ -89,16 +90,16 @@
         <h3 class="mb-4 text-base font-semibold">Save as Composite</h3>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="compositeeditorview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="compositeeditorview-field-2"
               v-model="saveAsName"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               placeholder="My Composite"
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
+            <label for="compositeeditorview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <textarea id="compositeeditorview-field-1"
               v-model="saveAsDescription"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               rows="3"
@@ -115,9 +116,9 @@
             >
               Cancel
             </button>
-            <button
+            <Button
               :disabled="!saveAsName || saving"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              variant="default"
               @click="handleSaveAs"
             >
               {{ saving ? 'Saving...' : 'Save' }}
@@ -139,7 +140,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -147,20 +148,19 @@ import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import BackLink from '../../components/BackLink.vue'
-import { useApi } from '../../composables/useApi'
+import { useDataFetch } from '../../composables/useDataFetch'
 import { shortId } from '../../utils/format'
 import PortDefinitionPanel from '../../components/pipeline/composite/PortDefinitionPanel.vue'
 import PublishCompositeFlow from '../../components/pipeline/composite/PublishCompositeFlow.vue'
 import type { ParameterPort } from '../../types/pipeline'
 import { formatApiError } from '../../lib/api/formatError'
+import { api } from '../../lib/api/client'
+import { Button } from '@/components/ui/button'
 
-const { get, post } = useApi()
 const route = useRoute()
 const router = useRouter()
 const compositeId = route.params.id as string
 
-const loading = ref(true)
-const pageError = ref<string | null>(null)
 const compositeName = ref('')
 const flowNodes = ref<any[]>([])
 const flowEdges = ref<any[]>([])
@@ -199,14 +199,24 @@ function convertBackendEdge(e: any, i: number): any {
   }
 }
 
-async function loadEditor() {
-  try {
-    const [template, editor] = await Promise.all([
-      get<any>(`/api/v1/composite-templates/${compositeId}`),
-      get<any>(`/api/v1/composite-templates/${compositeId}/editor`),
+const { loading, error: pageError } = useDataFetch(
+  async () => {
+    const [templateResp, editorResp] = await Promise.all([
+      api.GET('/api/v1/composite-templates/{template_id}', {
+        params: { path: { template_id: compositeId } },
+      }).catch(() => ({ data: null })),
+      api.GET('/api/v1/composite-templates/{template_id}/editor', {
+        params: { path: { template_id: compositeId } },
+      }).catch(() => ({ data: null })),
     ])
-    compositeName.value = template.name
-    ports.value = (template.parameter_ports_json || []).map((p: any) => ({
+    const templateData = templateResp?.data ?? null
+    const editorData = editorResp?.data ?? null
+
+    const template = templateData as any
+    const editor = editorData as any
+
+    compositeName.value = template?.name ?? ''
+    ports.value = (template?.parameter_ports_json ?? []).map((p: any) => ({
       id: p.id,
       name: p.name,
       label: p.label,
@@ -215,14 +225,15 @@ async function loadEditor() {
       required: p.required || false,
       default: p.default_value,
     }))
-    rawNodes.value = editor.nodes || []
-    rawEdges.value = editor.edges || []
+    rawNodes.value = editor?.nodes ?? []
+    rawEdges.value = editor?.edges ?? []
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
-  } catch (e: unknown) {
-    pageError.value = `Failed to load composite: ${formatApiError(e)}`
-  }
-}
+
+    return {}
+  },
+  { initialValue: {} },
+)
 
 function onNodeClick() {
   // Node selection handled by parent if needed
@@ -245,27 +256,32 @@ async function handleSaveAs() {
   saving.value = true
   saveAsError.value = null
   try {
-    await post<{ id: string }>(`/api/v1/composite-templates`, {
-      name: saveAsName.value,
-      description: saveAsDescription.value || null,
-      sub_pipeline_graph_json: {
-        nodes: rawNodes.value,
-        edges: rawEdges.value,
-      },
-      parameter_ports_json: ports.value.map(p => ({
-        id: p.id,
-        name: p.name,
-        label: p.label,
-        description: p.description || null,
-        type: p.type,
-        required: p.required,
-        default_value: p.default ?? null,
-        target_injection: {
-          mode: 'prompt_replace',
-          node_id: '',
-          injection_point: 'prompt_template',
+    await api.POST('/api/v1/composite-templates', {
+      body: {
+        name: saveAsName.value,
+        description: saveAsDescription.value || null,
+        version: '1.0.0',
+        sub_pipeline_graph_json: {
+          nodes: rawNodes.value,
+          edges: rawEdges.value,
         },
-      })),
+        parameter_ports_json: ports.value.map(p => ({
+          id: p.id,
+          name: p.name,
+          label: p.label,
+          description: p.description || null,
+          type: p.type,
+          required: p.required,
+          default_value: p.default_value ?? null,
+          multiline: p.multiline,
+          options: p.options ?? null,
+          target_injection: {
+            mode: 'prompt_replace',
+            node_id: '',
+            injection_point: 'prompt_template',
+          },
+        })),
+      },
     })
     showSaveAsComposite.value = false
     router.push({ name: 'library' })
@@ -281,8 +297,4 @@ function onPublished() {
   router.push({ name: 'library' })
 }
 
-onMounted(async () => {
-  await loadEditor()
-  loading.value = false
-})
 </script>

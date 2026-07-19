@@ -4,36 +4,25 @@ Uses Playwright's Page fixture. Every interactive element has a data-testid.
 Never uses waitForTimeout — always waits for '[data-loading="false"]'.
 """
 
+import contextlib
 from typing import Any
 
 import pytest
 from playwright.sync_api import Page
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/theme_switching.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/real_time_updates.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/run_detail.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/org_settings.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/pipeline_builder.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/eval_dashboard.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ============================================================================
@@ -355,9 +344,7 @@ def _run_detail_updated_statuses(page: Page) -> None:
     node = page.locator('[data-testid^="node-status-"]').first
     if node.is_visible():
         text = node.text_content().lower()
-        assert "complete" in text or "running" in text or "success" in text, (
-            f"Unexpected node status: '{text}'"
-        )
+        assert "complete" in text or "running" in text or "success" in text, f"Unexpected node status: '{text}'"
 
 
 @given("I am on the run detail page for a running run")
@@ -676,6 +663,4 @@ def _see_empty_state(page: Page) -> None:
     empty = page.locator('[data-testid="empty-state"]')
     if not empty.is_visible():
         placeholder = page.locator("text=no eval")
-        assert placeholder.count() > 0 or empty.count() > 0, (
-            "Expected empty state message when no evals exist"
-        )
+        assert placeholder.count() > 0 or empty.count() > 0, "Expected empty state message when no evals exist"

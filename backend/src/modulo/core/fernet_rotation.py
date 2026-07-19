@@ -1,10 +1,9 @@
-from __future__ import annotations
-
 """Fernet key rotation service — re-encrypts all encrypted data stores with a new key.
 
 No-downtime: during rotation, reads fall back to the old key if the new key fails.
 """
 
+from __future__ import annotations
 
 import json
 import logging
@@ -21,6 +20,7 @@ _log = logging.getLogger(__name__)
 @dataclass
 class RotationResult:
     """Result of a full rotation pass across all encrypted stores."""
+
     tables_processed: list[str] = field(default_factory=list)
     total_rows_reencrypted: int = 0
     details: dict[str, int] = field(default_factory=dict)

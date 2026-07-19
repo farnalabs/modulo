@@ -8,6 +8,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -113,9 +114,17 @@ class TestHumanOnlyGateBypass:
 
     @pytest.fixture(autouse=True)
     def _patch_auth(self) -> Generator[None, None, None]:
-        """Mock validate_current_auth to return True so the tool handler runs."""
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
-            yield
+        """Mock validate_current_auth and set tenant context so the tool handler runs."""
+        import modulo.api.mcp_server as _ms
+
+        org_token = _ms._ctx_org_id.set(uuid.UUID(_FAKE_ID))
+        user_token = _ms._ctx_user_id.set(uuid.UUID(_FAKE_ID))
+        try:
+            with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+                yield
+        finally:
+            _ms._ctx_user_id.reset(user_token)
+            _ms._ctx_org_id.reset(org_token)
 
     async def test_human_only_approve_rejected_via_mcp(self) -> None:
         from modulo.api.mcp_server import _ctx_role as _role
@@ -149,9 +158,7 @@ class TestHumanOnlyGateBypass:
                 claim_token="test-token",
             )
 
-        assert result.get("error") == "human_only_gate", (
-            f"Expected human_only_gate error, got {result}"
-        )
+        assert result.get("error") == "human_only_gate", f"Expected human_only_gate error, got {result}"
 
     async def test_non_human_only_approve_proceeds(self) -> None:
         """A gate without human_only=true should not be blocked."""
@@ -182,9 +189,7 @@ class TestHumanOnlyGateBypass:
             with patch("modulo.api.mcp_server.HITLManager") as mock_mgr:
                 mock_mgr_instance = AsyncMock()
                 mock_mgr.return_value = mock_mgr_instance
-                mock_mgr_instance.approve = AsyncMock(
-                    return_value=MagicMock(status="approved")
-                )
+                mock_mgr_instance.approve = AsyncMock(return_value=MagicMock(status="approved"))
 
                 result = await _rh(
                     run_id=_FAKE_ID,
@@ -193,9 +198,7 @@ class TestHumanOnlyGateBypass:
                     claim_token="test-token",
                 )
 
-        assert result.get("error") != "human_only_gate", (
-            f"Non-human_only gate should not be blocked: {result}"
-        )
+        assert result.get("error") != "human_only_gate", f"Non-human_only gate should not be blocked: {result}"
 
     async def test_human_only_bypass_fails_for_runner_role(self) -> None:
         """Runner role claiming a human_only gate should work, but approve blocked by scope."""

@@ -5,6 +5,22 @@ import { useRemyStream } from '../composables/useRemyStream'
 
 vi.mock('@/lib/api/client', () => ({
   getAccessToken: vi.fn(() => 'mock-token'),
+  getAuthHeaders: vi.fn(() => ({ Authorization: 'Bearer mock-token' })),
+}))
+
+vi.mock('../stores/planStore', () => ({
+  usePlanStore: vi.fn(() => ({
+    featureEnabled: vi.fn((name: string) => {
+      if (name === 'remy_ui_driving') return true
+      return false
+    }),
+  })),
+}))
+
+vi.mock('../composables/useUiCommandExecutor', () => ({
+  executeCommandBatch: vi.fn(() => Promise.resolve([{ name: 'get_url', success: true }])),
+  isPaused: vi.fn(() => false),
+  resumeUiCommands: vi.fn(),
 }))
 
 function createMockSSEStream(events: Array<{ event: string; data: unknown }>): ReadableStream<Uint8Array> {
@@ -77,7 +93,7 @@ describe('useRemyStream', () => {
   })
 
   it('ui_command_batch event executes commands and POSTs results', async () => {
-    const store = setupStore()
+    setupStore()
     let postedBody: any = null
     global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
       if (url === '/api/v1/remy/sessions/session-1/stream') {

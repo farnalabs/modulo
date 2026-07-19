@@ -80,9 +80,20 @@ class TestAuditOrmImmutability:
     async def _register_guard(self) -> None:
         register_append_only_guard()
 
+    async def _seed_org(self, db_session: AsyncSession, org_id: uuid.UUID, suffix: str = "") -> None:
+        await db_session.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
+            ),
+            {"id": str(org_id), "name": f"Audit Immutability Org{suffix}", "slug": f"audit-imm-{org_id.hex[:8]}"},
+        )
+        await db_session.commit()
+
     async def test_orm_update_raises_append_only(self, db_session: AsyncSession) -> None:
         event_id = uuid.uuid4()
         org_id = uuid.uuid4()
+        await self._seed_org(db_session, org_id, "-update")
         await db_session.execute(
             text("""
                 INSERT INTO audit_events
@@ -104,6 +115,7 @@ class TestAuditOrmImmutability:
     async def test_orm_delete_raises_append_only(self, db_session: AsyncSession) -> None:
         event_id = uuid.uuid4()
         org_id = uuid.uuid4()
+        await self._seed_org(db_session, org_id, "-delete")
         await db_session.execute(
             text("""
                 INSERT INTO audit_events
@@ -125,6 +137,7 @@ class TestAuditOrmImmutability:
     async def test_event_survives_failed_delete(self, db_session: AsyncSession) -> None:
         event_id = uuid.uuid4()
         org_id = uuid.uuid4()
+        await self._seed_org(db_session, org_id, "-survive")
         await db_session.execute(
             text("""
                 INSERT INTO audit_events
@@ -157,10 +170,12 @@ _MUTATING_METHODS = frozenset({"post", "put", "patch", "delete"})
 # Known exceptions to the "every mutating route must emit an audit event" rule.
 # These are routes that mutate state but do not record audit events by design.
 # Any new route file added here must have a documented reason.
-_AUDIT_EXEMPT_FILES: frozenset[str] = frozenset({
-    "admin_runtime_config.py",  # Runtime config reload — no audit trail for config overrides
-    "viewmodel.py",             # Saved views — meta-level, not core domain events
-})
+_AUDIT_EXEMPT_FILES: frozenset[str] = frozenset(
+    {
+        "admin_runtime_config.py",  # Runtime config reload — no audit trail for config overrides
+        "viewmodel.py",  # Saved views — meta-level, not core domain events
+    }
+)
 
 
 class TestEveryMutatingRouteEmitsAuditEvent:
@@ -215,8 +230,14 @@ class TestMcpToolsAuditCoverage:
     def test_mcp_mutating_tools_exist(self) -> None:
         """Verify each MCP tool that changes state exists in the server."""
         source = self.mcp_server_path.read_text()
-        tools = ["create_pipeline", "update_pipeline_graph", "trigger_pipeline",
-                 "create_model_backend", "review_hitl", "copy_library_primitive"]
+        tools = [
+            "create_pipeline",
+            "update_pipeline_graph",
+            "trigger_pipeline",
+            "create_model_backend",
+            "review_hitl",
+            "copy_library_primitive",
+        ]
         for tool in tools:
             assert tool in source, f"MCP tool {tool} must exist in mcp_server.py"
 
@@ -229,13 +250,20 @@ class TestMcpToolsAuditCoverage:
 class TestAuditChainIntegrity:
     """Prove the audit chain is not corrupted by failed mutation attempts."""
 
-    async def test_chain_verify_passes_after_failed_mutation(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_chain_verify_passes_after_failed_mutation(self, db_session: AsyncSession) -> None:
         """After a failed DELETE attempt, chain verification must still pass."""
         from modulo.core.audit_logger import append_audit_event, verify_chain
 
         org_id = uuid.uuid4()
+        await db_session.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
+            ),
+            {"id": str(org_id), "name": "Chain Test Org", "slug": f"chain-{org_id.hex[:8]}"},
+        )
+        await db_session.commit()
+
         for i in range(3):
             await append_audit_event(
                 session=db_session,
@@ -266,6 +294,4 @@ class TestAuditChainIntegrity:
         await db_session.rollback()
 
         result_after = await verify_chain(db_session, org_id)
-        assert result_after["valid"] is True, (
-            f"Chain invalid after failed mutation: {result_after}"
-        )
+        assert result_after["valid"] is True, f"Chain invalid after failed mutation: {result_after}"

@@ -1,9 +1,6 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsEmailView.email_settings') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsEmailView.configure_smtp_provider_for_transactional_emails') }}</p>
-    </header>
+    <PageHeader :title="$t('views.SettingsEmailView.email_settings')" :subtitle="$t('views.SettingsEmailView.configure_smtp_provider_for_transactional_emails')" />
 
     <FeatureGate feature-name="email_config" required-tier="team" show-disabled>
 
@@ -15,8 +12,8 @@
         <div class="rounded-lg border bg-card shadow-sm">
           <div class="p-6 space-y-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_host') }}</label>
-              <input
+              <label for="settingsemailview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_host') }}</label>
+              <input id="settingsemailview-field-5"
                 v-model="form.smtp_host"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -24,8 +21,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_port') }}</label>
-              <input
+              <label for="settingsemailview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_port') }}</label>
+              <input id="settingsemailview-field-4"
                 v-model.number="form.smtp_port"
                 type="number"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -33,8 +30,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_username') }}</label>
-              <input
+              <label for="settingsemailview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_username') }}</label>
+              <input id="settingsemailview-field-3"
                 v-model="form.smtp_username"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -42,8 +39,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_password') }}</label>
-              <input
+              <label for="settingsemailview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_password') }}</label>
+              <input id="settingsemailview-field-2"
                 v-model="form.smtp_password"
                 type="password"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -51,8 +48,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.email_from') }}</label>
-              <input
+              <label for="settingsemailview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.email_from') }}</label>
+              <input id="settingsemailview-field-1"
                 v-model="form.email_from"
                 type="email"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -61,14 +58,14 @@
             </div>
 
             <div class="flex items-center gap-3 pt-2">
-              <button
+              <Button
                 type="button"
+                variant="default"
                 :disabled="saving"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 @click="saveSettings"
               >
                 {{ saving ? $t('views.SettingsEmailView.saving') : $t('views.SettingsEmailView.save') }}
-              </button>
+              </Button>
               <button
                 type="button"
                 :disabled="testing"
@@ -100,12 +97,15 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import { api } from '../lib/api/client'
 import FeatureGate from '../components/FeatureGate.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { Button } from '@/components/ui/button'
 
 interface EmailForm {
   smtp_host: string
@@ -117,8 +117,24 @@ interface EmailForm {
 
 const planStore = usePlanStore()
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { loading, error: loadError, load: loadSettings } = useDataFetch(
+  async () => {
+    const orgId = planStore.orgId
+    if (!orgId) return { error: { detail: 'Organisation ID not available' } }
+    const res = await (api as any).GET('/api/v1/admin/org/{org_id}/email-settings', {
+      params: { path: { org_id: orgId } },
+    })
+    if (res.data) {
+      form.smtp_host = res.data.smtp_host || ''
+      form.smtp_port = res.data.smtp_port || 587
+      form.smtp_username = res.data.smtp_username || ''
+      form.smtp_password = ''
+      form.email_from = res.data.email_from || ''
+    }
+    return res
+  },
+  { immediate: false }
+)
 const saving = ref(false)
 const testing = ref(false)
 const successMessage = ref<string | null>(null)
@@ -135,36 +151,6 @@ const form = reactive<EmailForm>({
 
 function getOrgId(): string | null {
   return planStore.orgId
-}
-
-async function loadSettings() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const orgId = getOrgId()
-    if (!orgId) {
-      loadError.value = 'Organisation ID not available'
-      return
-    }
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/org/{org_id}/email-settings', {
-      params: { path: { org_id: orgId } },
-    })
-    if (err) {
-      loadError.value = err && typeof err === 'object' && 'detail' in err
-        ? `Failed to load email settings: ${(err as ProblemDetail).detail}`
-        : `Failed to load email settings: ${formatApiError(err)}`
-    } else if (data) {
-      form.smtp_host = data.smtp_host || ''
-      form.smtp_port = data.smtp_port || 587
-      form.smtp_username = data.smtp_username || ''
-      form.smtp_password = ''
-      form.email_from = data.email_from || ''
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load email settings: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
 }
 
 async function saveSettings() {
@@ -243,9 +229,6 @@ onMounted(async () => {
   if (promise) await promise
   if (planStore.featureEnabled('email_config')) {
     loadSettings()
-  } else {
-    loading.value = false
   }
 })
 </script>
-

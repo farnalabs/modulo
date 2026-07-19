@@ -1,6 +1,7 @@
 """Step definitions for JWT security feature — access tokens, refresh tokens, token family invalidation."""
 
 import base64
+import contextlib
 import json as json_mod
 import time as time_mod
 import uuid
@@ -9,9 +10,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jwt as pyjwt
 import pytest
 from fastapi.testclient import TestClient
-from jose import jwt as jose_jwt
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.rate_limiter import AuthRateLimiter
@@ -20,10 +21,8 @@ from modulo.settings import Settings
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/jwt_security.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -154,7 +153,7 @@ def valid_jwt(request: Any, org: str) -> None:
         "iat": now - timedelta(minutes=5),
         "exp": now + timedelta(hours=1),
     }
-    token = str(jose_jwt.encode(payload, _VALID_32, algorithm="HS256"))
+    token = str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
     request.node._jwt_token = token
 
 
@@ -169,7 +168,7 @@ def expired_jwt(request: Any, org: str) -> None:
         "iat": now - timedelta(hours=48),
         "exp": now - timedelta(hours=1),
     }
-    token = str(jose_jwt.encode(payload, _VALID_32, algorithm="HS256"))
+    token = str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
     request.node._jwt_token = token
 
 
@@ -184,7 +183,7 @@ def tampered_jwt(request: Any, org: str) -> None:
         "iat": now - timedelta(minutes=5),
         "exp": now + timedelta(hours=1),
     }
-    token = str(jose_jwt.encode(payload, _VALID_32, algorithm="HS256"))
+    token = str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
     parts = token.split(".")
     parts[2] = "tampered"
     request.node._jwt_token = ".".join(parts)
@@ -362,9 +361,7 @@ def refresh_again_same_token(request: Any, ctx: dict[str, Any], token_client: Te
 def error_suspected_theft(request: Any) -> None:
     body = request.node.response.json()
     detail = body.get("detail", "")
-    assert "theft" in detail.lower() or "revoked" in detail.lower(), (
-        f"Expected theft-related error, got: {detail}"
-    )
+    assert "theft" in detail.lower() or "revoked" in detail.lower(), f"Expected theft-related error, got: {detail}"
 
 
 # ===========================================================================
@@ -372,7 +369,7 @@ def error_suspected_theft(request: Any) -> None:
 # ===========================================================================
 
 
-@when(parsers.parse('I POST /api/auth/logout with my refresh token'))
+@when(parsers.parse("I POST /api/auth/logout with my refresh token"))
 def logout(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("login_refresh_token")
     with patch("modulo.api.routes.auth.blacklist_family", new=AsyncMock(return_value=True)):
@@ -392,5 +389,3 @@ def refresh_rejected_after_logout(request: Any, ctx: dict[str, Any], token_clien
             json={"refresh_token": refresh_token},
         )
         assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
-
-

@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from jose import JWTError
+from jwt import InvalidTokenError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import (
@@ -85,7 +85,7 @@ def test_create_ws_token_expires_quickly():
         account_id=str(_USER_ID),
         org_role="admin",
     )
-    from jose import jwt
+    import jwt
 
     payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
     exp = datetime.fromtimestamp(payload["exp"], tz=UTC)
@@ -104,7 +104,7 @@ def test_create_ws_token_has_purpose_claim():
         account_id=str(_USER_ID),
         org_role="admin",
     )
-    from jose import jwt
+    import jwt
 
     payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
     assert payload.get("purpose") == "ws"
@@ -176,7 +176,10 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
@@ -218,7 +221,7 @@ def test_ws_token_jwt_expiry_matches_settings(client: TestClient) -> None:
     body = resp.json()
     token = body["ws_token"]
     settings = _make_settings()
-    from jose import jwt
+    import jwt
 
     payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
     exp = datetime.fromtimestamp(payload["exp"], tz=UTC)

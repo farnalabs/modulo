@@ -1,5 +1,6 @@
 """Step definitions for DOM sensitive data masking and reveal (PRD §6.17)."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,10 +15,8 @@ from modulo.api.middleware.sensitive_mask import (
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/security/dom_sensitive_data.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -29,6 +28,7 @@ USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _store_response(request: Any, resp: Any) -> None:
     request.node._resp = resp
 
@@ -36,6 +36,7 @@ def _store_response(request: Any, resp: Any) -> None:
 # ===========================================================================
 # Scenario: Credentials masked in API response
 # ===========================================================================
+
 
 @given(
     parsers.parse('a connector with config_json containing "{key}" set to "{value}"'),
@@ -101,6 +102,7 @@ def check_field_preserved(request: Any, field: str) -> None:
 # Scenario: Sensitive key detection / Non-sensitive key detection
 # ===========================================================================
 
+
 @given(parsers.parse('a key named "{key_name}"'), target_fixture="key_name")
 def a_key_named(key_name: str) -> str:
     return key_name
@@ -124,6 +126,7 @@ def result_is_false(sensitivity_result: bool) -> None:
 # ===========================================================================
 # Scenario: Admin reveals SSO client secret / 30-second expiry
 # ===========================================================================
+
 
 @given(parsers.parse('an SSO provider with client_secret "{secret}"'))
 def sso_provider_with_secret(
@@ -168,13 +171,9 @@ def request_reveal_sso(
             "modulo.api.middleware.sensitive_mask.Redis.from_url",
             return_value=mock_redis,
         ):
-            resp = target_client.post(
-                "/api/v1/admin/sensitive/reveal", json=kwargs
-            )
+            resp = target_client.post("/api/v1/admin/sensitive/reveal", json=kwargs)
     else:
-        resp = target_client.post(
-            "/api/v1/admin/sensitive/reveal", json=kwargs
-        )
+        resp = target_client.post("/api/v1/admin/sensitive/reveal", json=kwargs)
 
     _store_response(request, resp)
 
@@ -198,9 +197,7 @@ def request_reveal_resource_type(
 @then(parsers.parse('I receive the plaintext value "{expected}"'))
 def check_revealed_value(request: Any, expected: str) -> None:
     body = request.node._resp.json()
-    assert body["value"] == expected, (
-        f"Expected value {expected!r}, got {body['value']!r}"
-    )
+    assert body["value"] == expected, f"Expected value {expected!r}, got {body['value']!r}"
 
 
 @then("the response includes a reveal token")
@@ -215,6 +212,4 @@ def check_reveal_token(request: Any) -> None:
 @then(parsers.parse('the response declares "{field}" as {value:d}'))
 def check_response_field_int(request: Any, field: str, value: int) -> None:
     body = request.node._resp.json()
-    assert body[field] == value, (
-        f"Expected {field}={value}, got {body.get(field)!r}"
-    )
+    assert body[field] == value, f"Expected {field}={value}, got {body.get(field)!r}"

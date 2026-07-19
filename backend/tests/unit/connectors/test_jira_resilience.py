@@ -25,9 +25,11 @@ def connector():
 
 # --- Backoff and jitter tests ---
 
+
 def test_compute_delay_includes_jitter():
     """Verify _compute_delay adds random jitter to the backoff."""
     from modulo.connectors.jira import _compute_delay
+
     random.seed(42)
     delays = {_compute_delay(0) for _ in range(100)}
     # With jitter (0-1), each call produces a different value
@@ -37,6 +39,7 @@ def test_compute_delay_includes_jitter():
 def test_compute_delay_exponential():
     """Verify _compute_delay increases with attempt number."""
     from modulo.connectors.jira import _compute_delay
+
     d0 = _compute_delay(0)
     d1 = _compute_delay(1)
     d2 = _compute_delay(2)
@@ -46,6 +49,7 @@ def test_compute_delay_exponential():
 def test_compute_delay_capped():
     """Verify _compute_delay is capped at _MAX_DELAY (30s)."""
     from modulo.connectors.jira import _MAX_DELAY, _compute_delay
+
     d = _compute_delay(10)  # would be ~1024s without cap
     assert d <= _MAX_DELAY
 
@@ -53,6 +57,7 @@ def test_compute_delay_capped():
 def test_compute_delay_respects_retry_after():
     """Verify _compute_delay returns Retry-After value when present."""
     from modulo.connectors.jira import _compute_delay
+
     resp = httpx.Response(429, headers={"Retry-After": "5"})
     delay = _compute_delay(0, resp)
     assert delay == 5.0
@@ -61,12 +66,14 @@ def test_compute_delay_respects_retry_after():
 def test_compute_delay_retry_after_capped():
     """Verify _compute_delay caps Retry-After at _MAX_DELAY."""
     from modulo.connectors.jira import _MAX_DELAY, _compute_delay
+
     resp = httpx.Response(429, headers={"Retry-After": "60"})
     delay = _compute_delay(0, resp)
     assert delay == _MAX_DELAY
 
 
 # --- Retry behavior tests ---
+
 
 @respx.mock
 async def test_retry_502_then_success(connector):
@@ -106,9 +113,7 @@ async def test_retry_504_then_success(connector):
 
 @respx.mock
 async def test_retry_429_exhausted_via_query(connector):
-    respx.get(f"{_BASE}/issue/PROJ-123").mock(
-        side_effect=[httpx.Response(429)] * 4
-    )
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(side_effect=[httpx.Response(429)] * 4)
     with pytest.raises(ValueError, match="HTTP 429"):
         await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
 
@@ -149,6 +154,7 @@ async def test_health_check_connection_error_returns_ok_false(connector):
 
 
 # --- Required field validation edge cases ---
+
 
 @respx.mock
 async def test_issue_comment_empty_body_rejected(connector):

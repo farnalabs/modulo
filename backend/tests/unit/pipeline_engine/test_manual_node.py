@@ -12,10 +12,19 @@ import uuid
 from typing import Any
 
 import pytest
-from langgraph.errors import NodeInterrupt
+from langgraph.errors import GraphInterrupt
+from langgraph.types import Interrupt
 
 from modulo.core.pipeline_engine.graph_cache import _CACHE, build_graph_from_json
 from modulo.core.pipeline_engine.node_runner import make_manual_node_fn
+
+
+@pytest.fixture(autouse=True)
+def _interrupt_without_graph_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_interrupt(value: object) -> None:
+        raise GraphInterrupt((Interrupt(value=value),))
+
+    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.interrupt", raise_interrupt)
 
 
 def _clear_cache() -> None:
@@ -156,11 +165,11 @@ def test_default_node_type_is_agent():
 
 
 async def test_manual_node_first_call_raises_interrupt():
-    """A manual node should raise NodeInterrupt on first invocation."""
+    """A manual node should raise GraphInterrupt on first invocation."""
     node_def = {"id": "manual-unit-1", "node_type": "manual"}
     node_fn = make_manual_node_fn(node_def)
 
-    with pytest.raises(NodeInterrupt) as exc_info:
+    with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn({"artifacts": []})
 
     interrupt_list = exc_info.value.args[0]
@@ -178,7 +187,7 @@ async def test_manual_node_awaiting_human_sets_artifact():
     node_fn = make_manual_node_fn(node_def)
 
     state: dict[str, Any] = {"artifacts": []}
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(state)
 
     # State mutation should record awaiting_human before interrupt
@@ -306,7 +315,7 @@ async def test_manual_node_with_output_schema_id():
     }
     node_fn = make_manual_node_fn(node_def)
 
-    with pytest.raises(NodeInterrupt) as exc_info:
+    with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn({"artifacts": []})
 
     interrupt_list = exc_info.value.args[0]

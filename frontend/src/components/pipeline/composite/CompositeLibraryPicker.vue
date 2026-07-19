@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { onMounted } from "vue";
 import { useCompositeStore } from "../../../stores/compositeStore";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../ui/card";

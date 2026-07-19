@@ -1,6 +1,6 @@
 """NotionConnector — async Notion REST API v1 connector."""
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -71,7 +71,10 @@ class NotionConnector(ConnectorBase):
             results = body.get("results", [])
             return HealthResult(ok=True, detail=f"{len(results)} users accessible")
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"Notion API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False,
+                detail=f"Notion API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Notion API timeout")
         except httpx.ConnectError:
@@ -193,7 +196,7 @@ class NotionConnector(ConnectorBase):
                 case "database":
                     r = await client.post("/databases", json=payload.data)
                     r.raise_for_status()
-                    return r.json()
+                    return cast(dict[str, Any], r.json())
 
                 case "block_append":
                     block_id = payload.data.get("block_id")
@@ -205,7 +208,7 @@ class NotionConnector(ConnectorBase):
                         json={"children": children},
                     )
                     r.raise_for_status()
-                    return r.json()
+                    return cast(dict[str, Any], r.json())
 
                 case "page_update":
                     page_id = payload.data.get("id")
@@ -217,9 +220,7 @@ class NotionConnector(ConnectorBase):
                         json={"properties": properties},
                     )
                     r.raise_for_status()
-                    return r.json()
+                    return cast(dict[str, Any], r.json())
 
                 case _:
-                    raise ValueError(
-                        f"Unsupported Notion write resource: {payload.resource!r}"
-                    )
+                    raise ValueError(f"Unsupported Notion write resource: {payload.resource!r}")

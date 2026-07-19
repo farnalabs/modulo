@@ -1,45 +1,42 @@
-﻿<template>
+<template>
     <div class="page-wide">
-    <header>
-      <h1 data-testid="admin-notification-log-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminNotificationDeliveryLogView.notification_delivery_log') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries')" data-test-id="admin-notification-log-title" />
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
-          <select
-            v-model="filterStatus"
-            data-testid="admin-notification-log-status"
-            aria-label="Status"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminErrorsView.all_statuses') }}</option>
-            <option value="delivered">Delivered</option>
-            <option value="failed">Failed</option>
-            <option value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</option>
-            <option value="pending">Pending</option>
-          </select>
+          <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
+          <Select v-model="filterStatus">
+            <SelectTrigger data-testid="admin-notification-log-status" aria-label="Status" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+              <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
+              <SelectItem value="delivered">Delivered</SelectItem>
+              <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
-          <select
-            v-model="filterEventType"
-            data-testid="admin-notification-log-event-type"
-            aria-label="Event Type"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
-            <option value="hitl_awaiting">{{ $t('views.AdminNotificationDeliveryLogView.hitl_awaiting') }}</option>
-            <option value="run_failed">{{ $t('views.AdminNotificationDeliveryLogView.run_failed') }}</option>
-            <option value="claim_expired">{{ $t('views.AdminNotificationDeliveryLogView.claim_expired') }}</option>
-            <option value="hitl_overdue">{{ $t('views.AdminNotificationDeliveryLogView.hitl_overdue') }}</option>
-          </select>
+          <label for="adminnotificationdeliverylogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
+          <Select v-model="filterEventType">
+            <SelectTrigger data-testid="admin-notification-log-event-type" aria-label="Event Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+              <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.all_types')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
+              <SelectItem value="hitl_awaiting">{{ $t('views.AdminNotificationDeliveryLogView.hitl_awaiting') }}</SelectItem>
+              <SelectItem value="run_failed">{{ $t('views.AdminNotificationDeliveryLogView.run_failed') }}</SelectItem>
+              <SelectItem value="claim_expired">{{ $t('views.AdminNotificationDeliveryLogView.claim_expired') }}</SelectItem>
+              <SelectItem value="hitl_overdue">{{ $t('views.AdminNotificationDeliveryLogView.hitl_overdue') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
-          <input
+          <label for="adminnotificationdeliverylogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
+          <input id="adminnotificationdeliverylogview-field-2"
             v-model="filterDateFrom"
             type="date"
             data-testid="admin-notification-log-date-from"
@@ -47,8 +44,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
-          <input
+          <label for="adminnotificationdeliverylogview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
+          <input id="adminnotificationdeliverylogview-field-1"
             v-model="filterDateTo"
             type="date"
             data-testid="admin-notification-log-date-to"
@@ -249,28 +246,54 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
-import type { components } from '../lib/api/client'
+import type { components, paths } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
+interface DeliveryLogPage {
+  items: DeliveryLogEntry[]
+  total: number
+  next_cursor: string | null
+  prev_cursor?: string | null
+}
+type DeliveryLogQuery = NonNullable<paths['/api/v1/admin/notifications/deliveries']['get']>['parameters']['query']
 
-const items = ref<DeliveryLogEntry[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const total = ref(0)
-const nextCursor = ref<string | null>(null)
-const prevCursor = ref<string | null>(null)
-const currentCursor = ref<string | null>(null)
-
-const filterStatus = ref('')
-const filterEventType = ref('')
+const cursor = ref<string | null>(null)
+const filterStatus = ref('__all__')
+const filterEventType = ref('__all__')
 const filterDateFrom = ref('')
 const filterDateTo = ref('')
+
+const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFetch<DeliveryLogPage>(
+  async () => {
+    const params: DeliveryLogQuery = { limit: 50 }
+    if (cursor.value) params.cursor = cursor.value
+    if (filterStatus.value !== '__all__') params.status = filterStatus.value
+    if (filterEventType.value !== '__all__') params.event_type = filterEventType.value
+    if (filterDateFrom.value) params.from = filterDateFrom.value
+    if (filterDateTo.value) params.to = filterDateTo.value
+    const response = await api.GET('/api/v1/admin/notifications/deliveries', { params: { query: params } })
+    return { data: response.data as unknown as DeliveryLogPage | undefined, error: response.error }
+  },
+  { initialValue: { items: [] as DeliveryLogEntry[], total: 0, next_cursor: null as string | null, prev_cursor: null as string | null } }
+)
+
+const items = computed(() => deliveriesData.value?.items ?? [])
+const total = computed(() => deliveriesData.value?.total ?? 0)
+const nextCursor = computed(() => deliveriesData.value?.next_cursor ?? null)
+const prevCursor = computed(() => {
+  const dc = deliveriesData.value
+  if (!dc?.prev_cursor) return null
+  return dc.prev_cursor
+})
 
 const expandedId = ref<string | null>(null)
 const retryingId = ref<string | null>(null)
@@ -310,60 +333,37 @@ function toggleRow(id: string) {
   expandedId.value = expandedId.value === id ? null : id
 }
 
-async function loadDeliveries(cursor?: string | null) {
-  loading.value = true
-  error.value = null
+function goToPage(c: string | null) {
+  if (!c) return
+  cursor.value = c
   retrySuccessMessage.value = null
-  try {
-    const params: Record<string, unknown> = { limit: 50 }
-    if (cursor) params.cursor = cursor
-    if (filterStatus.value) params.status = filterStatus.value
-    if (filterEventType.value) params.event_type = filterEventType.value
-    if (filterDateFrom.value) params.from = filterDateFrom.value
-    if (filterDateTo.value) params.to = filterDateTo.value
-    const { data, error: err } = await api.GET('/api/v1/admin/notifications/deliveries', {
-      params: { query: params as any },
-    })
-    if (err) {
-      error.value = `Failed to load delivery logs: ${formatApiError(err)}`
-    } else if (data) {
-      items.value = data.items
-      total.value = data.total
-      nextCursor.value = data.next_cursor
-      prevCursor.value = cursor ?? null
-      currentCursor.value = cursor ?? null
-      expandedId.value = null
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load delivery logs: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
-function goToPage(cursor: string | null) {
-  if (!cursor) return
-  loadDeliveries(cursor)
+  loadDeliveries()
 }
 
 function applyFilters() {
-  loadDeliveries(null)
+  cursor.value = null
+  retrySuccessMessage.value = null
+  loadDeliveries()
 }
 
 function resetFilters() {
-  filterStatus.value = ''
-  filterEventType.value = ''
+  filterStatus.value = '__all__'
+  filterEventType.value = '__all__'
   filterDateFrom.value = ''
   filterDateTo.value = ''
-  loadDeliveries(null)
+  cursor.value = null
+  retrySuccessMessage.value = null
+  loadDeliveries()
 }
 
 function showDeadLettered() {
   filterStatus.value = 'dead_lettered'
-  filterEventType.value = ''
+  filterEventType.value = '__all__'
   filterDateFrom.value = ''
   filterDateTo.value = ''
-  loadDeliveries(null)
+  cursor.value = null
+  retrySuccessMessage.value = null
+  loadDeliveries()
 }
 
 async function retryDelivery(entry: DeliveryLogEntry) {
@@ -390,10 +390,10 @@ async function retryDelivery(entry: DeliveryLogEntry) {
       retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${formatApiError(err)}` }
     } else if (data) {
       if (data.success) {
-        await loadDeliveries(currentCursor.value)
+        await loadDeliveries()
         retryMessages.value[entry.id] = { type: 'success', text: 'Retry succeeded' }
       } else {
-        await loadDeliveries(currentCursor.value)
+        await loadDeliveries()
         retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${data.error || `HTTP ${data.status_code}`}` }
       }
     }
@@ -414,9 +414,10 @@ async function retryAllFailed() {
     if (err) {
       error.value = `Retry all failed: ${formatApiError(err)}`
     } else if (data) {
-      await loadDeliveries(currentCursor.value)
-      const msg = `Retried ${data.retried} deliver${data.retried === 1 ? 'y' : 'ies'}`
-      retrySuccessMessage.value = data.success ? msg : `${msg} with ${data.errors?.length || 0} error(s)`
+      await loadDeliveries()
+      const result = data as unknown as { retried: number; success: boolean; errors?: unknown[] }
+      const msg = `Retried ${result.retried} deliver${result.retried === 1 ? 'y' : 'ies'}`
+      retrySuccessMessage.value = result.success ? msg : `${msg} with ${result.errors?.length || 0} error(s)`
     }
   } catch (e: unknown) {
     error.value = `Retry all request failed: ${formatApiError(e)}`
@@ -425,6 +426,5 @@ async function retryAllFailed() {
   }
 }
 
-onMounted(() => loadDeliveries(null))
+/* onMounted handled by useDataFetch */
 </script>
-

@@ -76,13 +76,24 @@ class TestGetChildNodes:
 
 
 class TestSetParentNode:
+    def _execute_result(self, scalar_return: object) -> MagicMock:
+        """Build a mock that mirrors session.execute -> scalar_one_or_none()."""
+        items_result = MagicMock()
+        items_result.scalar_one_or_none.return_value = scalar_return
+        return items_result
+
     async def test_sets_parent_node_id(self, session: AsyncMock) -> None:
         node_id = uuid.uuid4()
         parent_id = uuid.uuid4()
         node = _make_node(id=node_id)
         parent = _make_node(id=parent_id)
 
-        session.get = AsyncMock(side_effect=[node, parent])
+        session.execute = AsyncMock(
+            side_effect=[
+                self._execute_result(node),
+                self._execute_result(parent),
+            ]
+        )
 
         result = await set_parent_node(session, node_id, parent_id)
 
@@ -94,7 +105,7 @@ class TestSetParentNode:
         node_id = uuid.uuid4()
         node = _make_node(id=node_id, parent_node_id=uuid.uuid4())
 
-        session.get = AsyncMock(return_value=node)
+        session.execute = AsyncMock(return_value=self._execute_result(node))
 
         result = await set_parent_node(session, node_id, None)
 
@@ -103,7 +114,7 @@ class TestSetParentNode:
         session.flush.assert_awaited_once()
 
     async def test_returns_none_when_node_not_found(self, session: AsyncMock) -> None:
-        session.get = AsyncMock(return_value=None)
+        session.execute = AsyncMock(return_value=self._execute_result(None))
 
         result = await set_parent_node(session, uuid.uuid4(), uuid.uuid4())
 
@@ -114,7 +125,12 @@ class TestSetParentNode:
         node_id = uuid.uuid4()
         node = _make_node(id=node_id)
 
-        session.get = AsyncMock(side_effect=[node, None])
+        session.execute = AsyncMock(
+            side_effect=[
+                self._execute_result(node),
+                self._execute_result(None),
+            ]
+        )
 
         result = await set_parent_node(session, node_id, uuid.uuid4())
 

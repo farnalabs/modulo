@@ -1,5 +1,6 @@
 """BDD step definitions: Team pipeline visibility."""
 
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,10 +11,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/team_pipeline_visibility.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -33,15 +32,11 @@ def patches():
     collectors = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
-@given(
-    parsers.parse('I am authenticated as a team operator of team "{team_name}"')
-)
+@given(parsers.parse('I am authenticated as a team operator of team "{team_name}"'))
 def auth_team_operator(team_name: str, ctx) -> None:
     ctx["auth_role"] = "team_operator"
     ctx["auth_team_name"] = team_name
@@ -57,25 +52,19 @@ def user_exists(username: str, ctx) -> None:
     ctx["users"][username] = {"id": str(uuid.uuid4()), "username": username}
 
 
-@given(
-    parsers.parse('user "{username}" is a member of team "{team_name}"')
-)
+@given(parsers.parse('user "{username}" is a member of team "{team_name}"'))
 def user_is_member(username: str, team_name: str, ctx) -> None:
     ctx["users"].get(username, {}).get("id", str(uuid.uuid4()))
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["memberships"][username] = {"team_id": team_id, "role": "operator"}
 
 
-@given(
-    parsers.parse('user "{username}" is not a member of team "{team_name}"')
-)
+@given(parsers.parse('user "{username}" is not a member of team "{team_name}"'))
 def user_not_member(username: str, team_name: str, ctx) -> None:
     pass
 
 
-@given(
-    parsers.parse('a pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"')
-)
+@given(parsers.parse('a pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
 def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["pipelines"][name] = {
@@ -86,9 +75,7 @@ def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> N
     }
 
 
-@when(
-    parsers.parse('I create a pipeline named "{name}" with visibility "{visibility}" owned by team "{team_name}"')
-)
+@when(parsers.parse('I create a pipeline named "{name}" with visibility "{visibility}" owned by team "{team_name}"'))
 def create_team_pipeline(name: str, visibility: str, team_name: str, request, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     mock_pipeline = {
@@ -126,9 +113,7 @@ def user_requests_pipeline_list(username: str, request, ctx) -> None:
         request.node._resp = resp
 
 
-@when(
-    parsers.parse('user "{username}" requests GET /api/pipelines/{pipeline_name}')
-)
+@when(parsers.parse('user "{username}" requests GET /api/pipelines/{pipeline_name}'))
 def user_requests_specific_pipeline(username: str, pipeline_name: str, request, ctx) -> None:
     from modulo.api.main import app
 
@@ -198,4 +183,3 @@ def response_not_contains_pipeline(name: str, request) -> None:
     pipelines = data.get("items", data.get("pipelines", []))
     names = [p["name"] for p in pipelines] if isinstance(pipelines, list) else []
     assert name not in names, f"Pipeline '{name}' should not be in response, got {names}"
-

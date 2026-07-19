@@ -165,25 +165,29 @@ class TestEffectiveAutonomyLevel:
 
 
 class TestShouldSkipHitlGate:
-    def test_fully_autonomous_skips(self) -> None:
-        assert should_skip_hitl_gate(AutonomyLevel.FULLY_AUTONOMOUS) is True
-
-    def test_manual_approval_does_not_skip(self) -> None:
-        assert should_skip_hitl_gate(AutonomyLevel.MANUAL_APPROVAL) is False
-
-    def test_notify_on_complete_does_not_skip(self) -> None:
-        assert should_skip_hitl_gate(AutonomyLevel.NOTIFY_ON_COMPLETE) is False
+    @pytest.mark.parametrize(
+        ("level", "expected"),
+        [
+            (AutonomyLevel.FULLY_AUTONOMOUS, True),
+            (AutonomyLevel.MANUAL_APPROVAL, False),
+            (AutonomyLevel.NOTIFY_ON_COMPLETE, False),
+        ],
+    )
+    def test_skip_hitl_gate(self, level: AutonomyLevel, expected: bool) -> None:
+        assert should_skip_hitl_gate(level) is expected
 
 
 class TestShouldNotifyOnComplete:
-    def test_notify_on_complete_returns_true(self) -> None:
-        assert should_notify_on_complete(AutonomyLevel.NOTIFY_ON_COMPLETE) is True
-
-    def test_fully_autonomous_returns_false(self) -> None:
-        assert should_notify_on_complete(AutonomyLevel.FULLY_AUTONOMOUS) is False
-
-    def test_manual_approval_returns_false(self) -> None:
-        assert should_notify_on_complete(AutonomyLevel.MANUAL_APPROVAL) is False
+    @pytest.mark.parametrize(
+        ("level", "expected"),
+        [
+            (AutonomyLevel.NOTIFY_ON_COMPLETE, True),
+            (AutonomyLevel.FULLY_AUTONOMOUS, False),
+            (AutonomyLevel.MANUAL_APPROVAL, False),
+        ],
+    )
+    def test_notify(self, level: AutonomyLevel, expected: bool) -> None:
+        assert should_notify_on_complete(level) is expected
 
 
 class TestAutonomyChangePayload:

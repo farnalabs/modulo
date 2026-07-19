@@ -16,8 +16,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
+from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
 from modulo.settings import Settings, get_settings
 
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
@@ -40,6 +39,7 @@ _MOCK_USER.created_at = _NOW
 _MOCK_USER.updated_at = _NOW
 
 _PROGRAMMING_ERROR = ProgrammingError("mock statement", [], Exception("mock table does not exist"))
+_SQLALCHEMY_ERROR = SQLAlchemyError("mock", "connection error", Exception("mock connection failure"))
 
 
 def _make_settings() -> Settings:
@@ -54,8 +54,12 @@ def _make_settings() -> Settings:
     )
 
 
-def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+def _make_mock_session() -> MagicMock:
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
+    session.delete = AsyncMock()
+    session.rollback = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -63,17 +67,38 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
+class _AllFeatures:
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+    def list_enabled_features(self) -> list:
+        return []
+
+    def tier(self) -> str:
+        return "enterprise"
+
+    def has_license_key(self) -> bool:
+        return True
+
+
+async def _override_plan_context() -> _AllFeatures:
+    return _AllFeatures()
+
+
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
+    from modulo.api.main import app
+
     mock_session = _make_mock_session()
 
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+    async def override_session() -> AsyncGenerator[MagicMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+    app.dependency_overrides[get_scim_plan_context] = _override_plan_context
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -97,461 +122,89 @@ _PATCH_BODY = {
     "Operations": [{"op": "replace", "path": "active", "value": False}],
 }
 
+_SCIM_ROUTES: list[tuple[str, str, str, str | None, object]] = [
+    ("list_users", "GET", "/scim/v2/Users", "modulo.api.routes.scim.scim_list_users", None),
+    ("create_user", "POST", "/scim/v2/Users", "modulo.db.crud.account.get_account_by_email", _USER_CREATE_BODY),
+    ("get_user", "GET", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", None),
+    ("replace_user", "PUT", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", _USER_CREATE_BODY),
+    ("patch_user", "PATCH", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", _PATCH_BODY),
+    ("delete_user", "DELETE", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_delete_user_by_id", None),
+    ("list_groups", "GET", "/scim/v2/Groups", "modulo.api.routes.scim.scim_list_groups", None),
+    ("create_group", "POST", "/scim/v2/Groups", "modulo.db.crud.team.get_team_by_name", _GROUP_CREATE_BODY),
+    ("get_group", "GET", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", None),
+    ("replace_group", "PUT", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", _GROUP_CREATE_BODY),
+    ("patch_group", "PATCH", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", _PATCH_BODY),
+    ("delete_group", "DELETE", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_delete_group_by_id", None),
+]
 
-def _assert_501(resp):
-    assert resp.status_code == 501, f"Expected 501, got {resp.status_code}"
-    detail = resp.json().get("detail", "")
-    assert "migrations" in detail.lower(), f"Expected detail mentioning migrations, got: {detail}"
+_ENTITY_IDS: dict[str, uuid.UUID | None] = {
+    "list_users": None,
+    "create_user": None,
+    "get_user": _USER_ID,
+    "replace_user": _USER_ID,
+    "patch_user": _USER_ID,
+    "delete_user": _USER_ID,
+    "list_groups": None,
+    "create_group": None,
+    "get_group": _TEAM_ID,
+    "replace_group": _TEAM_ID,
+    "patch_group": _TEAM_ID,
+    "delete_group": _TEAM_ID,
+}
 
 
-class TestListUsersProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
+class TestScimDatabaseErrors:
+    """Parametrized: 12 routes with 3 error types = 36 cases collapsed into one test."""
+
+    @pytest.mark.parametrize(
+        ("route_name", "error_type", "expected_status", "detail_check"),
+        [pytest.param(r, "programming", 501, "migrations", id=f"{r}_501") for r, _, _, _, _ in _SCIM_ROUTES]
+        + [pytest.param(r, "sqlalchemy", 503, "database error", id=f"{r}_503") for r, _, _, _, _ in _SCIM_ROUTES]
+        + [pytest.param(r, "exception", 500, None, id=f"{r}_500") for r, _, _, _, _ in _SCIM_ROUTES],
+    )
+    def test_error_returns_expected_status(
+        self,
+        client: TestClient,
+        route_name: str,
+        error_type: str,
+        expected_status: int,
+        detail_check: str | None,
+    ) -> None:
+        route_info = {r[0]: r for r in _SCIM_ROUTES}[route_name]
+        _, method, url_template, mock_target, body = route_info
+        entity_id = _ENTITY_IDS[route_name]
+
+        if error_type == "programming":
+            side_effect = _PROGRAMMING_ERROR
+        elif error_type == "sqlalchemy":
+            side_effect = _SQLALCHEMY_ERROR
+        else:
+            side_effect = ValueError("mock ValueError")
+
+        url = url_template.format(id=entity_id) if entity_id else url_template
+
         with (
-            patch("modulo.api.routes.scim.scim_list_users", side_effect=_PROGRAMMING_ERROR),
+            patch(mock_target, side_effect=side_effect),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.get(
-                "/scim/v2/Users",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestCreateUserProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.account.get_account_by_email",
-                side_effect=_PROGRAMMING_ERROR,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.post(
-                "/scim/v2/Users",
-                json=_USER_CREATE_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestGetUserProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_user", side_effect=_PROGRAMMING_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get(
-                f"/scim/v2/Users/{_USER_ID}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestReplaceUserProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_user", side_effect=_PROGRAMMING_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.put(
-                f"/scim/v2/Users/{_USER_ID}",
-                json=_USER_CREATE_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestPatchUserProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_user", side_effect=_PROGRAMMING_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.patch(
-                f"/scim/v2/Users/{_USER_ID}",
-                json=_PATCH_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestDeleteUserProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_delete_user_by_id",
-                side_effect=_PROGRAMMING_ERROR,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.delete(
-                f"/scim/v2/Users/{_USER_ID}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestListGroupsProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_list_groups",
-                side_effect=_PROGRAMMING_ERROR,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get(
-                "/scim/v2/Groups",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestCreateGroupProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.team.get_team_by_name",
-                side_effect=_PROGRAMMING_ERROR,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.post(
-                "/scim/v2/Groups",
-                json=_GROUP_CREATE_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestGetGroupProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                side_effect=_PROGRAMMING_ERROR,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get(
-                f"/scim/v2/Groups/{_TEAM_ID}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestReplaceGroupProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                side_effect=_PROGRAMMING_ERROR,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.put(
-                f"/scim/v2/Groups/{_TEAM_ID}",
-                json=_GROUP_CREATE_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestPatchGroupProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_get_group",
-                side_effect=_PROGRAMMING_ERROR,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.patch(
-                f"/scim/v2/Groups/{_TEAM_ID}",
-                json=_PATCH_BODY,
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-class TestDeleteGroupProgrammingError:
-    def test_returns_501(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.api.routes.scim.scim_delete_group_by_id",
-                side_effect=_PROGRAMMING_ERROR,
-            ),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.delete(
-                f"/scim/v2/Groups/{_TEAM_ID}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        _assert_501(resp)
-
-
-# ── SQLAlchemyError → 503 tests ─────────────────────────────────
-
-
-_SQLALCHEMY_ERROR = SQLAlchemyError("mock", "connection error", Exception("mock connection failure"))
-
-
-def _assert_503(resp):
-    assert resp.status_code == 503, f"Expected 503, got {resp.status_code}"
-    detail = resp.json().get("detail", "")
-    assert "database error" in detail.lower(), f"Expected detail mentioning database error, got: {detail}"
-
-
-class TestListUsersSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_list_users", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get("/scim/v2/Users", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestCreateUserSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.db.crud.account.get_account_by_email", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.post("/scim/v2/Users", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestGetUserSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_user", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get(f"/scim/v2/Users/{_USER_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestReplaceUserSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_user", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.put(f"/scim/v2/Users/{_USER_ID}", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestPatchUserSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_user", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.patch(f"/scim/v2/Users/{_USER_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestDeleteUserSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_delete_user_by_id", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.delete(f"/scim/v2/Users/{_USER_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestListGroupsSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_list_groups", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get("/scim/v2/Groups", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestCreateGroupSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.db.crud.team.get_team_by_name", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.post("/scim/v2/Groups", json=_GROUP_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestGetGroupSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_group", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get(f"/scim/v2/Groups/{_TEAM_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestReplaceGroupSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_group", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.put(f"/scim/v2/Groups/{_TEAM_ID}", json=_GROUP_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestPatchGroupSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_group", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.patch(f"/scim/v2/Groups/{_TEAM_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-class TestDeleteGroupSQLAlchemyError:
-    def test_returns_503(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_delete_group_by_id", side_effect=_SQLALCHEMY_ERROR),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.delete(f"/scim/v2/Groups/{_TEAM_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_503(resp)
-
-
-# ── Exception → 500 tests ──────────────────────────────────────
-
-
-def _assert_500(resp):
-    assert resp.status_code == 500, f"Expected 500, got {resp.status_code}"
-
-
-class TestListUsersException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_list_users", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get("/scim/v2/Users", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestCreateUserException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.db.crud.account.get_account_by_email", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.post("/scim/v2/Users", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestGetUserException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_user", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get(f"/scim/v2/Users/{_USER_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestReplaceUserException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_user", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.put(f"/scim/v2/Users/{_USER_ID}", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestPatchUserException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_user", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.patch(f"/scim/v2/Users/{_USER_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestDeleteUserException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_delete_user_by_id", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.delete(f"/scim/v2/Users/{_USER_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestListGroupsException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_list_groups", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get("/scim/v2/Groups", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestCreateGroupException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.db.crud.team.get_team_by_name", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.post("/scim/v2/Groups", json=_GROUP_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestGetGroupException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_group", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.get(f"/scim/v2/Groups/{_TEAM_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestReplaceGroupException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_group", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.put(f"/scim/v2/Groups/{_TEAM_ID}", json=_GROUP_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestPatchGroupException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_get_group", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.patch(f"/scim/v2/Groups/{_TEAM_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-class TestDeleteGroupException:
-    def test_returns_500(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.scim.scim_delete_group_by_id", side_effect=ValueError("mock ValueError")),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            resp = client.delete(f"/scim/v2/Groups/{_TEAM_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        _assert_500(resp)
-
-
-# ===========================================================================
-# _get_base_url raises 500 when MODULO_PUBLIC_URL is unset
-# ===========================================================================
+            if method == "GET":
+                resp = client.get(url, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            elif method == "POST":
+                resp = client.post(url, json=body, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            elif method == "PUT":
+                resp = client.put(url, json=body, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            elif method == "PATCH":
+                resp = client.patch(url, json=body, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            elif method == "DELETE":
+                resp = client.delete(url, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+
+        assert resp.status_code == expected_status, f"Expected {expected_status}, got {resp.status_code}"
+        if detail_check:
+            detail = resp.json().get("detail", "")
+            assert detail_check in detail.lower(), f"Expected detail mentioning '{detail_check}', got: {detail}"
+
+
+# ── _get_base_url tests (unique setup — no scim token configured) ─────────
 
 
 def _make_settings_no_public_url() -> Settings:
@@ -566,43 +219,42 @@ def _make_settings_no_public_url() -> Settings:
     )
 
 
-class TestGetBaseUrlMissing:
-    """_get_base_url should raise 500 when modulo_public_url is not configured."""
+class TestGetBaseUrl:
+    """_get_base_url raises 500 when modulo_public_url is not configured."""
 
-    def test_list_users_returns_500(self) -> None:
+    def _setup(self) -> TestClient:
+        from modulo.api.main import app
+
         app.dependency_overrides[get_settings] = _make_settings_no_public_url
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+        app.dependency_overrides[get_scim_plan_context] = _override_plan_context
+        return TestClient(app)
 
+    def _teardown(self) -> None:
+        from modulo.api.main import app
+
+        app.dependency_overrides.clear()
+
+    def test_list_users_returns_500(self) -> None:
+        client = self._setup()
         with (
             patch("modulo.api.routes.scim.scim_list_users", return_value=([_MOCK_USER], 1)),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = TestClient(app).get(
-                "/scim/v2/Users",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        app.dependency_overrides.clear()
+            resp = client.get("/scim/v2/Users", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+        self._teardown()
         assert resp.status_code == 500
-        detail = resp.json().get("detail", "")
-        assert "MODULO_PUBLIC_URL" in detail, f"Expected mention of MODULO_PUBLIC_URL, got: {detail}"
+        assert "MODULO_PUBLIC_URL" in resp.json().get("detail", "")
 
     def test_get_user_returns_500(self) -> None:
-        app.dependency_overrides[get_settings] = _make_settings_no_public_url
-        app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
-        app.dependency_overrides[_get_engine] = lambda: MagicMock()
-        app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
-
+        client = self._setup()
         with (
             patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = TestClient(app).get(
-                f"/scim/v2/Users/{_USER_ID}",
-                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
-            )
-        app.dependency_overrides.clear()
+            resp = client.get(f"/scim/v2/Users/{_USER_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+        self._teardown()
         assert resp.status_code == 500
-        detail = resp.json().get("detail", "")
-        assert "MODULO_PUBLIC_URL" in detail
+        assert "MODULO_PUBLIC_URL" in resp.json().get("detail", "")

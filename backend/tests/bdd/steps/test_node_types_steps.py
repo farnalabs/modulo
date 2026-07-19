@@ -3,16 +3,15 @@
 Covers node_types.feature — standard agent, manual, and HITL gate nodes.
 """
 
+import contextlib
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.conftest import make_mock_pipeline
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/pipelines/node_types.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @pytest.fixture

@@ -140,7 +140,7 @@ describe('AdminOrgSettingsView', () => {
     input.dispatchEvent(new Event('input'))
     await nextTick()
 
-    const confirmBtn = document.querySelector('button[data-testid="org-delete-confirm-button"]') as HTMLButtonElement
+    const confirmBtn = Array.from(document.querySelectorAll('button')).find(button => button.textContent?.includes('Permanently Delete')) as HTMLButtonElement
     expect(confirmBtn.disabled).toBe(true)
 
     input.value = 'Test Org'

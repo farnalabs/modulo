@@ -7,6 +7,7 @@ Dual-layer enforcement:
    business logic layer, preventing bypass if the middleware has a bug.
 """
 
+import types
 from logging import getLogger
 
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
@@ -29,7 +30,7 @@ class MCPConfigurationError(Exception):
     """Raised when a scope-requirement configuration error is detected."""
 
 
-TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
+_TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "runner",
     "cancel_run": "runner",
     "review_hitl": "operator",
@@ -42,15 +43,28 @@ TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "get_trigger_events": "runner",
     "create_pipeline": "operator",
     "update_pipeline_graph": "operator",
+    "bind_connector_to_node": "operator",
     "create_model_backend": "operator",
+    "list_runs": "runner",
+    "get_run_evals": "runner",
+    "list_eval_definitions": "runner",
+    "list_triggers": "runner",
+    "list_housekeeping": "runner",
+    "perform_housekeeping": "operator",
+    "create_connector": "operator",
+    "create_trigger": "operator",
+    "delete_pipeline": "operator",
+    "create_agent": "operator",
+    "infer_schema": "operator",
 }
 
+TOOL_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_TOOL_SCOPE_REQUIREMENTS)
+
 _VALID_ROLES = frozenset(ORG_ROLE_HIERARCHY)
-for tool, role in TOOL_SCOPE_REQUIREMENTS.items():
+for tool, role in _TOOL_SCOPE_REQUIREMENTS.items():
     if role not in _VALID_ROLES:
         raise MCPConfigurationError(
-            f"Misconfigured scope requirement for '{tool}': "
-            f"role '{role}' is not in the role hierarchy",
+            f"Misconfigured scope requirement for '{tool}': role '{role}' is not in the role hierarchy",
         )
 
 
@@ -93,7 +107,8 @@ def check_tool_scope(
         if required is None:
             return
 
-    current_level = org_role_level(current_role)
+    current_role_normalized = current_role.strip().lower()
+    current_level = org_role_level(current_role_normalized)
     required_level = ORG_ROLE_HIERARCHY[required]
 
     if current_level < 0:
@@ -103,9 +118,10 @@ def check_tool_scope(
     if current_level < required_level:
         _log.warning(
             "Insufficient scope for '%s': requires '%s' role, got '%s'",
-            tool_name, required, current_role,
+            tool_name,
+            required,
+            current_role,
         )
         raise MCPAuthorizationError(
-            f"Insufficient scope for '{tool_name}': "
-            f"requires '{required}' role, got '{current_role}'",
+            f"Insufficient scope for '{tool_name}': requires '{required}' role, got '{current_role}'",
         )

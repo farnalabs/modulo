@@ -1,5 +1,6 @@
 """Step definitions for HITL (Human-In-The-Loop) Approval Gate features."""
 
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,26 +11,16 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/hitl/claim.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/hitl/approve.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/hitl/feedback_handler.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/hitl/manual_node.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/hitl/deliver_manual.feature")
-except (FileNotFoundError, OSError):
-    pass
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -386,9 +377,7 @@ def post_feedback(request, reason: str, client, ctx):
 @then('the feedback record status is "pending"')
 def feedback_status_pending(request):
     body = request.node._resp.json()
-    assert body.get("feedback_status") == "pending", (
-        f"Expected pending, got {body.get('feedback_status')}"
-    )
+    assert body.get("feedback_status") == "pending", f"Expected pending, got {body.get('feedback_status')}"
 
 
 @when("I GET /api/v1/feedback")
@@ -513,12 +502,11 @@ def review_feedback(request, action: str, client, ctx):
 def correction_run_spawned(ctx):
     assert ctx.get("correction_run_spawned"), "Expected a correction run to be spawned"
 
+
 @then('the feedback status becomes "correcting"')
 def feedback_status_correcting(request):
     body = request.node._resp.json()
-    assert body.get("feedback_status") == "correcting", (
-        f"Expected correcting, got {body.get('feedback_status')}"
-    )
+    assert body.get("feedback_status") == "correcting", f"Expected correcting, got {body.get('feedback_status')}"
 
 
 # ============================================================================
@@ -534,11 +522,7 @@ def i_have_claimed_gate(gate_id: str, ctx):
         ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
 
 
-@when(
-    parsers.parse(
-        "I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with claim_token and manual output"
-    )
-)
+@when(parsers.parse("I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with claim_token and manual output"))
 def post_deliver_manual_success(request, run_id, gate_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -575,11 +559,7 @@ def post_deliver_manual_success(request, run_id, gate_id, ctx, client):
     ctx["run_status"] = "running"
 
 
-@when(
-    parsers.parse(
-        "I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with no claim_token and manual output"
-    )
-)
+@when(parsers.parse("I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with no claim_token and manual output"))
 def post_deliver_manual_no_token(request, run_id, gate_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -601,9 +581,7 @@ def post_deliver_manual_no_token(request, run_id, gate_id, ctx, client):
 
 
 @when(
-    parsers.parse(
-        "I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with expired claim_token and manual output"
-    )
+    parsers.parse("I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with expired claim_token and manual output")
 )
 def post_deliver_manual_expired(request, run_id, gate_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
@@ -625,11 +603,7 @@ def post_deliver_manual_expired(request, run_id, gate_id, ctx, client):
         request.node._resp_status = 410
 
 
-@when(
-    parsers.parse(
-        "I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with claim_token and empty output"
-    )
-)
+@when(parsers.parse("I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with claim_token and empty output"))
 def post_deliver_manual_empty(request, run_id, gate_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -703,9 +677,7 @@ def run_reaches_manual_node(ctx):
 
 @then("the run pauses and waits for manual data submission")
 def run_pauses_for_manual_data(ctx):
-    assert ctx["run_status"] == "awaiting_human", (
-        f"Expected awaiting_human, got {ctx['run_status']}"
-    )
+    assert ctx["run_status"] == "awaiting_human", f"Expected awaiting_human, got {ctx['run_status']}"
 
 
 @given(parsers.parse('a run is waiting at manual node "{node_id}"'))
@@ -790,4 +762,3 @@ def run_status_becomes(status: str, ctx):
     if expected is None:
         return
     assert expected == status, f"Expected run status {status!r}, got {expected!r}"
-

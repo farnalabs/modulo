@@ -268,7 +268,9 @@ async def test_write_delete_item_missing_item(connector: OnePasswordConnector) -
 
 @respx.mock
 async def test_write_archive_item(connector: OnePasswordConnector) -> None:
-    respx.delete(f"{BASE_URL}/v1/vaults/v1/items/i1").mock(return_value=httpx.Response(204))
+    respx.patch(f"{BASE_URL}/v1/vaults/v1/items/i1", json={"state": "archived"}).mock(
+        return_value=httpx.Response(200, json={"state": "archived"})
+    )
     result = await connector.write(ConnectorPayload(resource="item_archive", data={"vault_id": "v1", "item_id": "i1"}))
     assert result["status"] == "archived"
 

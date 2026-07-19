@@ -1,3 +1,5 @@
+"""Abstract base for error forwarders."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -19,5 +21,4 @@ class BaseForwarder(ABC):
         error_group: Any,
         error_event: Any,
         config: dict[str, Any],
-    ) -> bool:
-        ...
+    ) -> bool: ...

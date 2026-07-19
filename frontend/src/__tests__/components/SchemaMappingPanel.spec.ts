@@ -55,6 +55,25 @@ vi.mock('../../composables/useApi', () => ({
 
 import SchemaMappingPanel from '../../components/pipeline/composite/SchemaMappingPanel.vue'
 import { useCompositeStore } from '../../stores/compositeStore'
+import type { CompositeDefinition } from '../../types/pipeline'
+
+function composite(overrides: Partial<CompositeDefinition> = {}): CompositeDefinition {
+  return {
+    id: 'comp-1',
+    name: 'Test Composite',
+    description: null,
+    version: '1.0.0',
+    sub_pipeline_graph_json: {},
+    parameter_ports_json: [],
+    input_schema_id: null,
+    output_schema_id: null,
+    organisation_id: 'org-1',
+    created_by: 'user-1',
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+    ...overrides,
+  }
+}
 
 describe('SchemaMappingPanel', () => {
   let pinia: ReturnType<typeof createPinia>
@@ -68,16 +87,10 @@ describe('SchemaMappingPanel', () => {
   it('renders without crashing', async () => {
     const store = useCompositeStore()
     store.composites = [
-      {
-        id: 'comp-1',
-        name: 'Test Composite',
-        version: '1.0.0',
-        ports: [],
+      composite({
         input_schema_id: 'schema-1',
         output_schema_id: 'schema-2',
-        created_at: '2024-01-01T00:00:00Z',
-        updated_at: '2024-01-01T00:00:00Z',
-      },
+      }),
     ]
 
     const wrapper = mount(SchemaMappingPanel, {
@@ -117,14 +130,7 @@ describe('SchemaMappingPanel', () => {
   it('shows JSON preview section', async () => {
     const store = useCompositeStore()
     store.composites = [
-      {
-        id: 'comp-1',
-        name: 'Test Composite',
-        version: '1.0.0',
-        ports: [],
-        created_at: '2024-01-01T00:00:00Z',
-        updated_at: '2024-01-01T00:00:00Z',
-      },
+      composite(),
     ]
 
     const wrapper = mount(SchemaMappingPanel, {
@@ -146,16 +152,10 @@ describe('SchemaMappingPanel', () => {
   it('renders with mapping tab visible', async () => {
     const store = useCompositeStore()
     store.composites = [
-      {
-        id: 'comp-1',
-        name: 'Test Composite',
-        version: '1.0.0',
-        ports: [],
+      composite({
         input_schema_id: 'schema-1',
         output_schema_id: 'schema-2',
-        created_at: '2024-01-01T00:00:00Z',
-        updated_at: '2024-01-01T00:00:00Z',
-      },
+      }),
     ]
 
     const wrapper = mount(SchemaMappingPanel, {

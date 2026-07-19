@@ -209,11 +209,8 @@ The following behaviours are tracked in dedicated product map entries:
 **Product map updates:**
 - Added `except Exception → 500` and `SQLAlchemyError → 503` error handling checkboxes
 - Added `test_teams_exception_guard.py` to unit-tests frontmatter
-- Added QA History section
 
 **Status:** partial (11 known gaps unchanged)
-
-## QA History
 
 ### 2026-07-08 — Cross-cutting QA (improve-architecture index 311)
 

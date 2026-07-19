@@ -1,13 +1,13 @@
 """Tests for the admin org management API."""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -55,6 +55,9 @@ def mock_session():
 @pytest.fixture
 def client_admin(mock_session):
     """Test client with admin auth + mock DB."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: ADMIN_PRINCIPAL
     transport = ASGITransport(app=app)
@@ -66,6 +69,9 @@ def client_admin(mock_session):
 @pytest.fixture
 def client_viewer(mock_session):
     """Test client with viewer auth."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: VIEWER_PRINCIPAL
     transport = ASGITransport(app=app)
@@ -77,6 +83,9 @@ def client_viewer(mock_session):
 @pytest.fixture
 def client_system_admin(mock_session):
     """Test client with system admin auth."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: SYSTEM_ADMIN_PRINCIPAL
     transport = ASGITransport(app=app)
@@ -99,14 +108,13 @@ async def test_create_org_success(client_system_admin, mock_session):
     original_create = admin_orgs.create_organisation
 
     async def mock_create_org(session, *, name, slug, created_by, plan_id=None):
-        org = Organisation(
+        return Organisation(
             id=uuid4(),
             name=name,
             slug=slug,
             status="active",
             created_at=datetime.now(UTC),
         )
-        return org
 
     admin_orgs.create_organisation = mock_create_org
 
@@ -153,7 +161,7 @@ async def test_create_org_invalid_slug(client_system_admin):
         "/api/v1/admin/orgs",
         json={"name": "Test Org", "slug": "UPPERCASE-SLUG"},
     )
-    assert resp.status_code in (422,)
+    assert resp.status_code == 422
 
 
 @pytest.mark.anyio
@@ -234,7 +242,7 @@ async def test_create_org_user_success(client_system_admin):
     original_create_account = admin_orgs.create_account
 
     async def mock_create_account(session, *, email, display_name, password_hash, auth_provider="local"):
-        account = Account(
+        return Account(
             id=uuid4(),
             email=email,
             display_name=display_name,
@@ -242,7 +250,6 @@ async def test_create_org_user_success(client_system_admin):
             auth_provider=auth_provider,
             created_at=datetime.now(UTC),
         )
-        return account
 
     admin_orgs.create_account = mock_create_account
 

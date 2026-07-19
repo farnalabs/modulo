@@ -70,7 +70,6 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import DashboardView from '../views/DashboardView.vue'
-import { usePlanStore } from '../stores/planStore'
 
 function setupDefaultMocks() {
   mockGet.mockImplementation((url: string) => {
@@ -121,7 +120,7 @@ describe('DashboardView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('142')
     expect(wrapper.text()).toContain('Total Runs')
-    expect(wrapper.text()).toContain('Active Pipelines')
+    expect(wrapper.text()).toContain('Pipelines')
     expect(wrapper.text()).toContain('Running')
     expect(wrapper.text()).toContain('Awaiting Human')
     expect(wrapper.text()).toContain('Failed')
@@ -232,13 +231,13 @@ describe('DashboardView', () => {
     expect(errorEl.exists()).toBe(true)
   })
 
-  it('shows empty state CTA for fresh orgs', async () => {
+  it('shows empty state messages for fresh orgs', async () => {
     setupEmptyMocks()
     const wrapper = mount(DashboardView)
     await flushPromises()
-    expect(wrapper.text()).toContain('Welcome to Modulo')
-    expect(wrapper.text()).toContain('Create Pipeline')
-    expect(wrapper.text()).toContain('Browse Templates')
+    expect(wrapper.text()).toContain('No runs yet')
+    expect(wrapper.text()).toContain('No data yet')
+    expect(wrapper.text()).toContain('Run a Pipeline')
   })
 
   it('shows no eval data for null pass rate', async () => {

@@ -15,6 +15,9 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.schema import SchemaDeletionProtectedError
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
+
+_SCHEMA_PATCH_PREFIX = "modulo.api.routes.schemas."
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -63,6 +66,7 @@ def _make_schema_version(schema_id: uuid.UUID) -> MagicMock:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -108,72 +112,94 @@ def unauth_client() -> Generator[TestClient, None, None]:
 # ---------------------------------------------------------------------------
 
 
-def test_list_schemas_returns_200(client: TestClient) -> None:
-    page_result = MagicMock(items=[_make_schema()], total=1, page=1, page_size=20)
-    with (
-        patch("modulo.api.routes.schemas.list_schemas", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.get("/api/v1/schemas")
-    assert resp.status_code == 200
-    assert resp.json()["total"] == 1
+def _schema_crud_cases() -> list[dict[str, object]]:
+    updated = _make_schema()
+    updated.name = "Updated"
+    return [
+        {
+            "id": "list",
+            "method": "GET",
+            "url": "/api/v1/schemas",
+            "body": None,
+            "patches": [("list_schemas", MagicMock(items=[_make_schema()], total=1, page=1, page_size=20))],
+            "expected_status": 200,
+        },
+        {
+            "id": "create",
+            "method": "POST",
+            "url": "/api/v1/schemas",
+            "body": {"name": "Test Schema"},
+            "patches": [("create_schema", _make_schema())],
+            "expected_status": 201,
+        },
+        {
+            "id": "get",
+            "method": "GET",
+            "url": f"/api/v1/schemas/{_SCHEMA_ID}",
+            "body": None,
+            "patches": [("get_schema", _make_schema())],
+            "expected_status": 200,
+        },
+        {
+            "id": "get_not_found",
+            "method": "GET",
+            "url": f"/api/v1/schemas/{uuid.uuid4()}",
+            "body": None,
+            "patches": [("get_schema", None)],
+            "expected_status": 404,
+        },
+        {
+            "id": "update",
+            "method": "PATCH",
+            "url": f"/api/v1/schemas/{_SCHEMA_ID}",
+            "body": {"name": "Updated"},
+            "patches": [("update_schema", updated)],
+            "expected_status": 200,
+        },
+        {
+            "id": "delete",
+            "method": "DELETE",
+            "url": f"/api/v1/schemas/{_SCHEMA_ID}",
+            "body": None,
+            "patches": [("delete_schema", True)],
+            "expected_status": 204,
+        },
+        {
+            "id": "delete_not_found",
+            "method": "DELETE",
+            "url": f"/api/v1/schemas/{uuid.uuid4()}",
+            "body": None,
+            "patches": [("delete_schema", False)],
+            "expected_status": 404,
+        },
+    ]
 
 
-def test_create_schema_returns_201(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.schemas.create_schema", return_value=_make_schema()),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.post("/api/v1/schemas", json={"name": "Test Schema"})
-    assert resp.status_code == 201
-    assert resp.json()["name"] == "Test Schema"
-
-
-def test_get_schema_returns_200(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.get(f"/api/v1/schemas/{_SCHEMA_ID}")
-    assert resp.status_code == 200
-
-
-def test_get_schema_not_found_returns_404(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=None),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.get(f"/api/v1/schemas/{uuid.uuid4()}")
-    assert resp.status_code == 404
-
-
-def test_update_schema_returns_200(client: TestClient) -> None:
-    schema = _make_schema()
-    schema.name = "Updated"
-    with (
-        patch("modulo.api.routes.schemas.update_schema", return_value=schema),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.patch(f"/api/v1/schemas/{_SCHEMA_ID}", json={"name": "Updated"})
-    assert resp.status_code == 200
-
-
-def test_delete_schema_returns_204(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.schemas.delete_schema", return_value=True),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.delete(f"/api/v1/schemas/{_SCHEMA_ID}")
-    assert resp.status_code == 204
-
-
-def test_delete_schema_not_found_returns_404(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.schemas.delete_schema", return_value=False),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.delete(f"/api/v1/schemas/{uuid.uuid4()}")
-    assert resp.status_code == 404
+@pytest.mark.parametrize("case", _schema_crud_cases(), ids=lambda c: c["id"])
+def test_schema_crud(client: TestClient, case: dict[str, object]) -> None:
+    method = case["method"]
+    url = case["url"]
+    body = case.get("body")
+    expected_status = case["expected_status"]
+    patchers = [patch(f"{_SCHEMA_PATCH_PREFIX}{fn}", return_value=ret) for fn, ret in case["patches"]]
+    patchers.append(patch(f"{_SCHEMA_PATCH_PREFIX}set_rls_org"))
+    for p in patchers:
+        p.start()
+    try:
+        if method == "GET":
+            resp = client.get(url)
+        elif method == "POST":
+            resp = client.post(url, json=body or {})
+        elif method == "PATCH":
+            resp = client.patch(url, json=body or {})
+        elif method == "DELETE":
+            resp = client.delete(url)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+        assert resp.status_code == expected_status, f"Expected {expected_status}, got {resp.status_code}: {resp.text}"
+    finally:
+        for p in patchers:
+            p.stop()
 
 
 def test_delete_schema_deletion_protected_returns_409(client: TestClient) -> None:
@@ -226,61 +252,79 @@ def test_delete_schema_force_skips_protection(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_list_schema_versions_returns_200(client: TestClient) -> None:
+def _schema_version_crud_cases() -> list[dict[str, object]]:
     schema = _make_schema()
     sv = _make_schema_version(_SCHEMA_ID)
     page_result = MagicMock(items=[sv], total=1, page=1, page_size=20)
-    with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=schema),
-        patch("modulo.api.routes.schemas.list_schema_versions", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.get(f"/api/v1/schemas/{_SCHEMA_ID}/versions")
-    assert resp.status_code == 200
-    assert resp.json()["total"] == 1
+    return [
+        {
+            "id": "list",
+            "method": "GET",
+            "url": f"/api/v1/schemas/{_SCHEMA_ID}/versions",
+            "body": None,
+            "patches": [("get_schema", schema), ("list_schema_versions", page_result)],
+            "expected_status": 200,
+        },
+        {
+            "id": "list_not_found",
+            "method": "GET",
+            "url": f"/api/v1/schemas/{uuid.uuid4()}/versions",
+            "body": None,
+            "patches": [("get_schema", None)],
+            "expected_status": 404,
+        },
+        {
+            "id": "create",
+            "method": "POST",
+            "url": f"/api/v1/schemas/{_SCHEMA_ID}/versions",
+            "body": {"version": "1.0", "version_number": 1, "definition_json": {"type": "object"}},
+            "patches": [("get_schema", schema), ("create_schema_version", sv)],
+            "expected_status": 201,
+        },
+        {
+            "id": "get",
+            "method": "GET",
+            "url": f"/api/v1/schemas/{_SCHEMA_ID}/versions/1.0",
+            "body": None,
+            "patches": [("get_schema_version", sv)],
+            "expected_status": 200,
+        },
+        {
+            "id": "get_not_found",
+            "method": "GET",
+            "url": f"/api/v1/schemas/{_SCHEMA_ID}/versions/99.0",
+            "body": None,
+            "patches": [("get_schema_version", None)],
+            "expected_status": 404,
+        },
+    ]
 
 
-def test_list_schema_versions_schema_not_found_returns_404(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=None),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.get(f"/api/v1/schemas/{uuid.uuid4()}/versions")
-    assert resp.status_code == 404
-
-
-def test_create_schema_version_returns_201(client: TestClient) -> None:
-    schema = _make_schema()
-    sv = _make_schema_version(_SCHEMA_ID)
-    with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=schema),
-        patch("modulo.api.routes.schemas.create_schema_version", return_value=sv),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.post(
-            f"/api/v1/schemas/{_SCHEMA_ID}/versions",
-            json={"version": "1.0", "version_number": 1, "definition_json": {"type": "object"}},
-        )
-    assert resp.status_code == 201
-
-
-def test_get_schema_version_returns_200(client: TestClient) -> None:
-    sv = _make_schema_version(_SCHEMA_ID)
-    with (
-        patch("modulo.api.routes.schemas.get_schema_version", return_value=sv),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.get(f"/api/v1/schemas/{_SCHEMA_ID}/versions/1.0")
-    assert resp.status_code == 200
-
-
-def test_get_schema_version_not_found_returns_404(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.schemas.get_schema_version", return_value=None),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-    ):
-        resp = client.get(f"/api/v1/schemas/{_SCHEMA_ID}/versions/99.0")
-    assert resp.status_code == 404
+@pytest.mark.parametrize("case", _schema_version_crud_cases(), ids=lambda c: c["id"])
+def test_schema_version_crud(client: TestClient, case: dict[str, object]) -> None:
+    method = case["method"]
+    url = case["url"]
+    body = case.get("body")
+    expected_status = case["expected_status"]
+    patchers = [patch(f"{_SCHEMA_PATCH_PREFIX}{fn}", return_value=ret) for fn, ret in case["patches"]]
+    patchers.append(patch(f"{_SCHEMA_PATCH_PREFIX}set_rls_org"))
+    for p in patchers:
+        p.start()
+    try:
+        if method == "GET":
+            resp = client.get(url)
+        elif method == "POST":
+            resp = client.post(url, json=body or {})
+        elif method == "PATCH":
+            resp = client.patch(url, json=body or {})
+        elif method == "DELETE":
+            resp = client.delete(url)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+        assert resp.status_code == expected_status, f"Expected {expected_status}, got {resp.status_code}: {resp.text}"
+    finally:
+        for p in patchers:
+            p.stop()
 
 
 def test_list_schemas_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:

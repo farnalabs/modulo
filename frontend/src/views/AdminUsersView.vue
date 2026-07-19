@@ -1,10 +1,7 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <div class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Users</h1>
-        <p class="text-muted-foreground mt-1">{{ $t('views.AdminUsersView.manage_user_accounts_and_permissions') }}</p>
-      </div>
+      <PageHeader title="Users" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
       <Button
         variant="default"
         class="border-primary/30"
@@ -55,19 +52,17 @@
               </div>
             </td>
             <td class="table-cell">
-              <select
-                v-model="u.org_role"
-                :data-testid="`admin-users-role-${u.id}`"
-                aria-label="User role"
-                class="text-xs border border-input bg-background rounded-md px-2 py-1"
-                @change="updateRole(u)"
-                @focus="captureRole(u.org_role)"
-              >
-                <option value="admin">Admin</option>
-                <option value="operator">Operator</option>
-                <option value="runner">Runner</option>
-                <option value="viewer">Viewer</option>
-              </select>
+              <Select :model-value="u.org_role" @update:model-value="updateRole(u, $event)">
+                <SelectTrigger class="text-xs border border-input bg-background rounded-md px-2 py-1" aria-label="User role" :data-testid="`admin-users-role-${u.id}`">
+                  <SelectValue placeholder="Select role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="operator">Operator</SelectItem>
+                  <SelectItem value="runner">Runner</SelectItem>
+                  <SelectItem value="viewer">Viewer</SelectItem>
+                </SelectContent>
+              </Select>
             </td>
             <td class="table-cell">
               <span v-if="u.is_active" class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success">
@@ -81,37 +76,10 @@
             </td>
             <td class="table-cell text-xs text-muted-foreground">{{ u.auth_provider }}</td>
             <td class="table-cell-numeric text-xs text-muted-foreground">
-              {{ u.created_at ? new Date(u.created_at).toLocaleDateString() : '—' }}
+              {{ u.created_at ? formatDateShort(new Date(u.created_at)) : '—' }}
             </td>
             <td class="table-cell-numeric">
-              <div class="flex items-center justify-end gap-2">
-                <button
-                  :data-testid="`admin-users-reset-password-${u.id}`"
-                  @click="resetPassword(u)"
-                  :disabled="actionLoading[u.id]"
-                  class="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-30"
-                >
-                  {{ actionLoading[u.id] ? '...' : 'Reset Password' }}
-                </button>
-                <button
-                  v-if="u.is_active"
-                  :data-testid="`admin-users-deactivate-${u.id}`"
-                  @click="deactivate(u)"
-                  :disabled="actionLoading[u.id]"
-                  class="text-xs text-destructive hover:underline disabled:opacity-30"
-                >
-                  {{ actionLoading[u.id] ? '...' : 'Deactivate' }}
-                </button>
-                <button
-                  v-else
-                  :data-testid="`admin-users-reactivate-${u.id}`"
-                  @click="reactivate(u)"
-                  :disabled="actionLoading[u.id]"
-                  class="text-xs text-success hover:underline disabled:opacity-30"
-                >
-                  {{ actionLoading[u.id] ? '...' : 'Reactivate' }}
-                </button>
-              </div>
+              <TableActions :actions="rowActions(u)" />
             </td>
           </tr>
         </tbody>
@@ -144,46 +112,55 @@
       {{ flashMessage.text }}
     </div>
 
-    <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreate = false">
-      <div class="bg-background rounded-xl border shadow-lg p-6 w-full max-w-md mx-4 space-y-4">
-        <h2 class="text-base font-semibold">{{ $t('views.AdminUsersView.create_user') }}</h2>
-        <form @submit.prevent="createUser">
-          <div>
-            <label class="block text-sm font-medium mb-1">Email</label>
-            <input v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
-            <input v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Password</label>
-            <input v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Role</label>
-            <select v-model="newUser.org_role" data-testid="admin-users-create-role" aria-label="Role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
-              <option value="runner">Runner</option>
-              <option value="operator">Operator</option>
-              <option value="admin">Admin</option>
-              <option value="viewer">Viewer</option>
-            </select>
-          </div>
-          <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
-          <div class="flex justify-end gap-2 pt-2">
-            <button type="button" @click="showCreate = false" data-testid="admin-users-cancel" class="px-4 py-2 border border-input bg-background rounded-lg text-sm">Cancel</button>
-            <Button type="submit" variant="default" data-testid="admin-users-create">Create</Button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <FormDialog
+      :open="showCreate"
+      @update:open="showCreate = false"
+      title="Create User"
+      confirmText="Create"
+      :loading="createLoading"
+      :confirmDisabled="createLoading"
+      @confirm="createUser"
+    >
+      <form @submit.prevent="createUser">
+        <div>
+          <label for="adminusersview-field-4" class="block text-sm font-medium mb-1">Email</label>
+          <input id="adminusersview-field-4" v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+        </div>
+        <div>
+          <label for="adminusersview-field-3" class="block text-sm font-medium mb-1">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
+          <input id="adminusersview-field-3" v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+        </div>
+        <div>
+          <label for="adminusersview-field-2" class="block text-sm font-medium mb-1">Password</label>
+          <input id="adminusersview-field-2" v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
+        </div>
+        <div>
+          <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">Role</label>
+          <Select v-model="newUser.org_role">
+            <SelectTrigger class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" aria-label="Role" data-testid="admin-users-create-role">
+              <SelectValue placeholder="Select role" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="runner">Runner</SelectItem>
+              <SelectItem value="operator">Operator</SelectItem>
+              <SelectItem value="admin">Admin</SelectItem>
+              <SelectItem value="viewer">Viewer</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
+        <button type="submit" hidden>{{ $t('common.create') }}</button>
+      </form>
+    </FormDialog>
 
-    <div v-if="showResetDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showResetDialog = false">
-      <div class="bg-background rounded-xl border shadow-lg p-6 w-full max-w-md mx-4 space-y-4">
-        <h2 class="text-base font-semibold">{{ $t('views.AdminUsersView.password_reset') }}</h2>
+    <Dialog :open="showResetDialog" @update:open="showResetDialog = false">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ $t('views.AdminUsersView.password_reset') }}</DialogTitle>
+      </DialogHeader>
         <p class="text-sm text-muted-foreground">
           A temporary password has been generated for <strong>{{ resetUserEmail }}</strong>.
-          Share this password with the user � they will be prompted to change it on next login.
+          Share this password with the user - they will be prompted to change it on next login.
         </p>
         <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3">
           <code class="flex-1 text-sm font-mono break-all">{{ tempPassword }}</code>
@@ -196,7 +173,7 @@
             {{ copied ? 'Copied!' : 'Copy' }}
           </Button>
         </div>
-        <div class="flex justify-end pt-2">
+        <DialogFooter class="gap-2 sm:justify-end">
           <Button
             variant="default"
             data-testid="admin-users-reset-done"
@@ -204,18 +181,31 @@
           >
             Done
           </Button>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { Button } from '@/components/ui/button'
 import EmptyState from '../components/shared/EmptyState.vue'
+import FormDialog from '../components/shared/FormDialog.vue'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog'
+import TableActions from '../components/shared/TableActions.vue'
+import { formatDateShort } from '../lib/formatDate'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 interface UserItem {
   id: string
@@ -237,14 +227,19 @@ interface UserListResponse {
 
 const { get, put: httpPut, post } = useApi()
 
-const users = ref<UserItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
 const page = ref(1)
 const pageSize = ref(50)
-const total = ref(0)
+
+const { data: usersResp, loading, error, load: loadUsers } = useDataFetch(
+  () => get<UserListResponse>(`/api/v1/admin/users?page=${page.value}&page_size=${pageSize.value}`).then(d => ({ data: d })),
+  { initialValue: { items: [] as UserItem[], total: 0, page: 1, page_size: 50 } as UserListResponse }
+)
+
+const users = computed(() => usersResp.value?.items ?? [])
+const total = computed(() => usersResp.value?.total ?? 0)
 const showCreate = ref(false)
 const createError = ref('')
+const createLoading = ref(false)
 const newUser = ref({ email: '', display_name: '', password: '', org_role: 'runner' })
 const showResetDialog = ref(false)
 const tempPassword = ref('')
@@ -270,35 +265,13 @@ function updateUserInList(data: UserItem) {
   if (idx !== -1) users.value[idx] = data
 }
 
-async function loadUsers() {
-  loading.value = true
-  error.value = null
-  try {
-    const data = await get<UserListResponse>(`/api/v1/admin/users?page=${page.value}&page_size=${pageSize.value}`)
-    if (data && Array.isArray(data.items)) {
-      users.value = data.items
-      total.value = data.total ?? 0
-    } else {
-      users.value = []
-      total.value = 0
-    }
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load users'
-  } finally {
-    loading.value = false
-  }
-}
-
-const selectedRole = ref<string>('')
-function captureRole(role: string) {
-  selectedRole.value = role
-}
-
-async function updateRole(u: UserItem) {
-  const prevRole = selectedRole.value
+async function updateRole(u: UserItem, newRole: unknown) {
+  const prevRole = u.org_role
+  if (prevRole === String(newRole)) return
+  u.org_role = String(newRole)
   actionLoading.value[u.id] = true
   try {
-    const data = await httpPut<UserItem>(`/api/v1/admin/users/${u.id}`, { org_role: u.org_role })
+    const data = await httpPut<UserItem>(`/api/v1/admin/users/${u.id}`, { org_role: newRole })
     updateUserInList(data)
     showFlash('success', `Role changed to ${data.org_role} for ${u.email}`)
   } catch (e) {
@@ -350,6 +323,34 @@ async function resetPassword(u: UserItem) {
   }
 }
 
+function rowActions(u: UserItem) {
+  const actions: { key: string; label: string; onClick: () => void; disabled?: boolean; danger?: boolean }[] = [
+    {
+      key: 'reset-password',
+      label: 'Reset Password',
+      onClick: () => resetPassword(u),
+      disabled: actionLoading.value[u.id],
+    },
+  ]
+  if (u.is_active) {
+    actions.push({
+      key: 'deactivate',
+      label: 'Deactivate',
+      onClick: () => deactivate(u),
+      disabled: actionLoading.value[u.id],
+      danger: true,
+    })
+  } else {
+    actions.push({
+      key: 'reactivate',
+      label: 'Reactivate',
+      onClick: () => reactivate(u),
+      disabled: actionLoading.value[u.id],
+    })
+  }
+  return actions
+}
+
 function copyPassword() {
   navigator.clipboard.writeText(tempPassword.value)
   copied.value = true
@@ -376,6 +377,7 @@ async function createUser() {
     createError.value = 'Password must contain at least one uppercase letter, one lowercase letter, and one digit'
     return
   }
+  createLoading.value = true
   try {
     await post('/api/v1/admin/users', newUser.value)
     showCreate.value = false
@@ -384,6 +386,8 @@ async function createUser() {
     loadUsers()
   } catch (e: any) {
     createError.value = e instanceof Error ? e.message : 'Failed to create user'
+  } finally {
+    createLoading.value = false
   }
 }
 
@@ -391,5 +395,5 @@ onBeforeUnmount(() => {
   if (copyTimeout) clearTimeout(copyTimeout)
   if (flashTimeout) clearTimeout(flashTimeout)
 })
-onMounted(loadUsers)
+/* onMounted handled by useDataFetch */
 </script>

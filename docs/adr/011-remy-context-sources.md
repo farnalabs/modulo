@@ -1,6 +1,6 @@
 # ADR 011 — Remy Context Sources: Configurable Knowledge Domains with Progressive Disclosure
 
-**Date**: 2026-07-04  
+**Date**: 2026-07-04
 **Status**: Active
 
 ---

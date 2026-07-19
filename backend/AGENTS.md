@@ -44,6 +44,13 @@
 
 - Every API endpoint that runs database queries needs BOTH `except SQLAlchemyError:` (for SQL failures) AND `except Exception:` (for Python-level errors like `TypeError`, `AttributeError`, `ValueError` from data processing). Without the generic catch, non-SQL errors propagate to the CatchAllMiddleware and produce an opaque 500 with no structured detail.
 
+- Every `except SQLAlchemyError:` and `except Exception:` handler must log the exception with `_log.exception()` before returning the error response. Without logging, a SQLAlchemyError (like a trigger function crashing on a non-UUID column) produces an opaque 503 with no traceback, making root-cause investigation impossible. The pattern is:
+  ```python
+  except SQLAlchemyError:
+      _log.exception("agents.create_agent")  # <-- always log
+      raise HTTPException(status_code=503, detail="Database temporarily unavailable.")
+  ```
+
 - `model_validate()` error handlers must never use bare `raise` — always raise a structured `HTTPException` instead. A bare `raise` inside an `except Exception` block propagates the original exception to the CatchAllMiddleware, producing an opaque 500 with no structured detail. Pattern: `except Exception: raise HTTPException(status_code=500, detail="...") from None`.
 
 - PATCH endpoint `model_dump(exclude_none=True)` → use `exclude_unset=True`. `exclude_none=True` prevents clearing nullable fields because keys with `None` values are omitted from the dump, so setting a field to `None` becomes a no-op instead of a NULL update.
@@ -171,3 +178,77 @@ In-memory fallbacks exist at many call sites (rate limiter `core/rate_limiter.py
 - Setting `self._initialised = True` at the end of an async `initialise()` method WITHOUT a lock creates a race window. Two concurrent coroutines can both pass the `if self._initialised: return` guard (the check is between the flag being False and being set), then interleave their state mutations into `self._connectors`. Fix: use `asyncio.Lock()` with a double-checked locking pattern — check the flag outside the lock for fast-path return, then re-check inside the lock before the write path. Found in `ConnectorHub.initialise()` at `backend/src/modulo/core/connector_hub/__init__.py`.
 
 The Remy in-memory event registries (`_pending_ui_results`, `_pending_permissions`, `_session_approvals` in `remy.py:93-97`) have NO fallback at all — they are process-local `asyncio.Event` objects. Any deploy restart destroys in-flight Remy conversations. A Redis pub/sub replacement for these registries is the highest-priority follow-up.
+
+### `set_rls_org` must be called inside `session.begin()`
+
+- `set_rls_org(session, org_id)` calls `_ensure_active_transaction()` which raises `RuntimeError` if there is no active transaction. With `session.autobegin=False` (the DI default), calling `set_rls_org` before `async with session.begin():` will always crash. Always place `set_rls_org` inside the `async with session.begin():` block, never before it.
+
+### PostgreSQL trigger functions casting non-UUID columns crash on VARCHAR values
+
+- `enforce_same_organisation()` trigger function used `(to_jsonb(NEW) ->> TG_ARGV[1])::uuid` which casts EVERY column value to UUID, regardless of column type. For VARCHAR columns like `agents.input_schema_version` (value `"latest"`), this raises `invalid input syntax for type uuid` which surfaces as a 503 (`SQLAlchemyError`). Always check `information_schema.columns.data_type` before casting in a trigger function:
+  ```sql
+  SELECT data_type INTO col_type FROM information_schema.columns
+  WHERE table_name = TG_TABLE_NAME AND column_name = TG_ARGV[1];
+  IF col_type IS DISTINCT FROM 'uuid' THEN
+    RETURN NEW;
+  END IF;
+  ```
+
+### MCP `auth_principal` fields must be consistent across all auth paths
+
+- The MCP auth middleware sets `request.scope["auth_principal"]` with different field sets depending on the auth path (API key, OAuth, JWT). Missing fields in one path (e.g. `user_id` missing from JWT path) cause `KeyError` in downstream middleware like `RateLimitMiddleware._client_key()`. When adding a field to `auth_principal` in any auth path, verify all other auth paths set the same field — or use `.get()` with defaults in consumers.
+
+### MCP Starlette sub-apps need custom exception handlers for visibility
+
+- `Starlette` adds `ServerErrorMiddleware` automatically, which catches unhandled exceptions and returns a plain text `"Internal Server Error"` with **no logging**. When building a Starlette sub-app (like the MCP server), always add `exception_handlers={Exception: handler}` with `_log.exception()` so production errors are visible in logs instead of silently swallowed.
+
+### Module docstring must precede `from __future__ import annotations` (E402)
+
+- Placing the module docstring AFTER `from __future__ import annotations` causes the triple-quoted string to be treated as a bare expression statement (not a docstring), triggering ruff E402 on ALL subsequent imports ("module-level import not at top of file"). The fix is always: docstring → `from __future__ import annotations` → other imports. This was the single most common finding across the QA sweep (~200+ occurrences in error_tracking, pipeline_engine, connectors, model_backends, otel_bridge, secrets_backend, and many more modules).
+
+### Tests using `require_feature` routers must override `get_plan_context`
+
+- When a FastAPI route uses `dependencies=[require_feature("error_forwarders")]` (or any feature name), the `require_feature` dependency runs before the route handler. If the test mocks a DB query to produce e.g. `ProgrammingError`, the mock returns `None` for feature checks, causing a 402 `FEATURE_REQUIRED` instead of the expected 501/503. Fix: override `get_plan_context` in the test app's `dependency_overrides` to return a `PlanContext` that enables all features:
+  ```python
+  class _AllFeatures:
+      def feature_enabled(self, name: str) -> bool: return True
+      def list_enabled_features(self) -> list: return []
+      def tier(self) -> str: return "enterprise"
+      def has_license_key(self) -> bool: return True
+  async def _override_plan_context() -> _AllFeatures:
+      return _AllFeatures()
+  app.dependency_overrides[get_plan_context] = _override_plan_context
+  ```
+
+### Health check API keys must use headers, not URL query parameters
+
+- When a backend passes its API key as a URL query parameter (`?key=...` or `params={"key": self._api_key}`), the credential is exposed in server logs, proxy logs, and error messages via `str(exc)`. Always use header-based auth (`Authorization: Bearer` or provider-specific header like `x-goog-api-key`). Found in the Gemini model backend during R2 QA.
+
+### Docker on Windows: NTFS junctions are not followed in build context
+
+- Docker for Windows does NOT follow NTFS junctions/reparse points when resolving files in a build context. If you create a junction at `backend/frontend/ → ../frontend`, the Docker build (`build: ./backend`) will not see `frontend/src/manifest.yaml` through the junction — COPY fails with "not found". Fix: either (a) remove the COPY from the Dockerfile and rely on runtime volume mount (the compose file already has `./frontend/src/manifest.yaml:/app/manifest.yaml`), or (b) change the build context to the repo root and adjust COPY paths accordingly.
+
+### Module-level raises for optional deps block the entire application
+
+- Never `raise ImportError(...)` at module level for an optional dependency. A module-level raise prevents the module from loading, which cascades up to crash the entire uvicorn process (or any caller that imports the module). Instead, use a graceful fallback pattern: catch `ImportError`, set a boolean flag (e.g. `CELERY_AVAILABLE = False`), and replace the imported class with a stub (`_CeleryTask = object`). Guard the optional-class definition behind the flag, and let consumers check `CELERY_AVAILABLE` at call time. Found in `webhook_dedup_cleanup.py` where `from celery import Task` raised at import time, blocking uvicorn startup.
+
+### SQL: `FOR UPDATE` is not allowed with aggregate functions
+
+- `SELECT max(run_number) ... FOR UPDATE` raises `asyncpg.exceptions.FeatureNotSupportedError` — PostgreSQL explicitly forbids `FOR UPDATE` on aggregate queries. `FOR UPDATE` locks rows, but aggregates operate on the result set as a whole. Only use `FOR UPDATE` on queries that select individual rows (e.g. `SELECT ... FROM pipelines WHERE id = :pid FOR UPDATE`). Found in `db/crud/run.py:create_run()` where the `SELECT max(run_number)` for the next run number had a dangling `.with_for_update()`. The error surfaced as a generic 503 ("Database temporarily unavailable") because:
+  1. The aggregate `FOR UPDATE` raised `FeatureNotSupportedError` (subclass of `SQLAlchemyError`)
+  2. Route handlers and MCP tools caught `except SQLAlchemyError` / `except Exception` and returned opaque error messages
+  3. The `_log.exception()` output was invisible in Fly logs (JSON-structured logging format not rendered by `fly logs`)
+
+### Exception handlers must log the full traceback — generic catch blocks hide root causes
+
+- Every `except SQLAlchemyError:` and `except Exception:` handler that returns a generic error message (503, internal_error) MUST call `_log.exception()` with the full traceback BEFORE returning. Without logging, the actual error (e.g. `FeatureNotSupportedError: FOR UPDATE is not allowed with aggregate functions`) is lost behind an opaque "Database temporarily unavailable." After deploying with detailed error messaging (`print(f"ERROR: {e}\n{traceback.format_exc()}", flush=True)`), the real cause was visible. Without it, the error looked like a connection pool issue for hours.
+
+- `_log.exception()` output using the structured `JsonFormatter` may NOT appear in `fly logs` output — Fly's log shipper doesn't reliably render JSON-formatted log lines. For guaranteed visibility during debugging, use `print(f"ERROR: ...", flush=True)` to stderr or stdout. Remove debug prints before merging to release.
+
+### MCP `trigger_pipeline` creates run records but does NOT execute them
+
+- The MCP `trigger_pipeline` tool creates a `Run` record with `status="pending"` and returns immediately. The run stays `pending` forever because the MCP tool doesn't start LangGraph execution. Only the REST API route (`POST /api/v1/runs`) calls `background_tasks.add_task(_run_in_background, executor, ...)` which actually runs the pipeline. The MCP tool should either start execution itself or clearly document that the run requires a separate execution step. As of July 2026, use the REST API to trigger executable runs.
+
+### Route auth: admin-only routes must use `get_current_user`, not `get_current_tenant_user`
+
+- When a route checks admin permissions internally (via `_require_admin` or `is_system_admin`), use `Depends(get_current_user)` for the auth dependency — NOT `Depends(get_current_tenant_user)`. The tenant user dependency requires `organisation_id` and `org_role` to be non-None, which system admins may not have (they can be admin without org membership). Using `get_current_tenant_user` causes a 403 "Organisation membership required" before the admin check even runs. The `_require_admin` guard is the sole gate needed for system-admin routes. Found in the feature-flag org-override endpoints.

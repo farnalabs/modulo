@@ -1,32 +1,25 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
-      <header>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AgentOutputDiffView.agent_output_diff') }}</h1>
-        <p class="mt-1 text-muted-foreground">
-          Compare agent outputs across two pipeline runs
-        </p>
-      </header>
+      <PageHeader :title="$t('views.AgentOutputDiffView.agent_output_diff')" subtitle="Compare agent outputs across two pipeline runs" />
 
       <div class="flex flex-wrap items-end gap-4 rounded-lg border bg-card p-6">
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">Run A</span>
           <div class="flex gap-2">
-            <select
-              data-testid="diff-recent-runs-a"
-              aria-label="Select run A"
-              class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              @change="onSelectRunA"
-            >
-              <option v-if="loadingRuns" value="" disabled>Loading...</option>
-              <option v-else value="" disabled>Select recent run...</option>
-              <option v-for="run in recentRuns" :key="run.id" :value="run.id">
-                {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
-              </option>
-            </select>
-            <input
+            <Select v-model="runIdA">
+              <SelectTrigger data-testid="diff-recent-runs-a" aria-label="Select run A" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <SelectValue :placeholder="loadingRuns ? 'Loading...' : 'Select recent run...'" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="run in recentRuns" :key="run.id" :value="run.id">
+                  {{ run.pipeline_name }} — <span class="capitalize">{{ run.status }}</span> ({{ run.created_at }})
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <input aria-label="Paste a run ID (or select from dropdown)"
               v-model="runIdA"
               data-testid="diff-run-id-a"
               type="text"
@@ -35,9 +28,9 @@
             />
           </div>
         </div>
-        <label class="flex flex-col gap-1.5">
+        <label for="agentoutputdiffview-field-1" class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.node_id') }}</span>
-          <input
+          <input id="agentoutputdiffview-field-1"
             v-model="nodeId"
             data-testid="diff-node-id"
             type="text"
@@ -48,19 +41,17 @@
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">Run B</span>
           <div class="flex gap-2">
-            <select
-              data-testid="diff-recent-runs-b"
-              aria-label="Select run B"
-              class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              @change="onSelectRunB"
-            >
-              <option v-if="loadingRuns" value="" disabled>Loading...</option>
-              <option v-else value="" disabled>Select recent run...</option>
-              <option v-for="run in recentRuns" :key="run.id" :value="run.id">
-                {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
-              </option>
-            </select>
-            <input
+            <Select v-model="runIdB">
+              <SelectTrigger data-testid="diff-recent-runs-b" aria-label="Select run B" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <SelectValue :placeholder="loadingRuns ? 'Loading...' : 'Select recent run...'" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="run in recentRuns" :key="run.id" :value="run.id">
+                  {{ run.pipeline_name }} — <span class="capitalize">{{ run.status }}</span> ({{ run.created_at }})
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <input aria-label="Paste a run ID (or select from dropdown)"
               v-model="runIdB"
               data-testid="diff-run-id-b"
               type="text"
@@ -74,7 +65,7 @@
           data-testid="diff-compare-btn"
           variant="default"
           class="px-5 py-2"
-          @click="compare"
+          @click="handleCompare"
         >
           Compare
         </Button>
@@ -147,13 +138,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
+import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
+import { useMutation } from '../composables/useMutation'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
-import { formatApiError } from '../lib/api/formatError'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 type NodeOutputDiffResponse = components['schemas']['NodeOutputDiffResponse']
 type NodeOutputDiffLine = components['schemas']['NodeOutputDiffLine']
@@ -161,8 +157,6 @@ type NodeOutputDiffLine = components['schemas']['NodeOutputDiffLine']
 const runIdA = ref('')
 const nodeId = ref('')
 const runIdB = ref('')
-const loading = ref(false)
-const error = ref<string | null>(null)
 const result = ref<NodeOutputDiffResponse | null>(null)
 
 interface RecentRun {
@@ -172,40 +166,15 @@ interface RecentRun {
   created_at: string
 }
 
-const recentRuns = ref<RecentRun[]>([])
-const loadingRuns = ref(false)
+const { get: getUntyped } = useApi()
+const { loading: loadingRuns, data: summaryResp } = useDataFetch(
+  async () => ({ data: await getUntyped<{ recent_runs: RecentRun[] }>('/api/v1/admin/dashboard/summary') }),
+  { immediate: true },
+)
 
-async function fetchRecentRuns() {
-  loadingRuns.value = true
-  try {
-    const { data, error: err } = await api.GET('/api/v1/admin/dashboard/summary')
-    if (!err && data) {
-      recentRuns.value = (data as any).recent_runs ?? []
-    }
-  } catch (e) {
-    console.warn('Failed to fetch recent runs', e)
-  } finally {
-    loadingRuns.value = false
-  }
-}
+const recentRuns = computed(() => ((summaryResp.value as any)?.recent_runs ?? []) as RecentRun[])
 
-onMounted(() => {
-  fetchRecentRuns()
-})
 
-function onSelectRunA(event: Event) {
-  const target = event.target as HTMLSelectElement
-  if (target.value) {
-    runIdA.value = target.value
-  }
-}
-
-function onSelectRunB(event: Event) {
-  const target = event.target as HTMLSelectElement
-  if (target.value) {
-    runIdB.value = target.value
-  }
-}
 
 const canCompare = computed(() => {
   return runIdA.value.trim() && nodeId.value.trim() && runIdB.value.trim()
@@ -243,31 +212,26 @@ function diffMarker(line: NodeOutputDiffLine): string {
   return ' '
 }
 
-async function compare() {
-  if (!canCompare.value) return
-  loading.value = true
-  error.value = null
-  result.value = null
+const { loading, error, mutate: compare } = useMutation(async () => {
+  const { data, error: apiError } = await api.POST('/api/v1/runs/diff', {
+    body: {
+      run_id_a: runIdA.value.trim(),
+      node_id_a: nodeId.value.trim(),
+      run_id_b: runIdB.value.trim(),
+      node_id_b: nodeId.value.trim(),
+    },
+  })
+  if (apiError) throw new Error(formatApiError(apiError))
+  result.value = data as unknown as NodeOutputDiffResponse
+  return data
+})
 
+async function handleCompare() {
   try {
-    const { data, error: err } = await api.POST('/api/v1/runs/diff', {
-      body: {
-        run_id_a: runIdA.value.trim(),
-        node_id_a: nodeId.value.trim(),
-        run_id_b: runIdB.value.trim(),
-        node_id_b: nodeId.value.trim(),
-      },
-    })
-    if (err) {
-      error.value = `Diff failed: ${JSON.stringify(err)}`
-      return
-    }
-    result.value = data as unknown as NodeOutputDiffResponse
-  } catch (e: unknown) {
-    error.value = `Failed to compare outputs: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
+    await compare()
+  } catch (e) {
+    // useMutation exposes the error for the page-level alert.
+    console.warn('Compare failed', e)
   }
 }
 </script>
-

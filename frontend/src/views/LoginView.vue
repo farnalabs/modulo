@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="relative mx-auto flex min-h-screen max-w-md items-center justify-center p-6">
     <div
       class="pointer-events-none fixed inset-0 -z-10"
@@ -28,10 +28,10 @@
         {{ error }}
       </div>
 
-      <form @submit.prevent="login" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
+      <form @submit.prevent="() => login()" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
         <div class="space-y-2">
-          <label class="text-sm font-medium">{{ $t('common.email') }}</label>
-          <input
+          <label for="loginview-field-2" class="text-sm font-medium">{{ $t('common.email') }}</label>
+          <input id="loginview-field-2"
             v-model="email"
             type="text"
             class="input-teal w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -41,8 +41,8 @@
           />
         </div>
         <div class="space-y-2">
-          <label class="text-sm font-medium">{{ $t('common.password') }}</label>
-          <input
+          <label for="loginview-field-1" class="text-sm font-medium">{{ $t('common.password') }}</label>
+          <input id="loginview-field-1"
             v-model="password"
             type="password"
             class="input-teal w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -55,7 +55,7 @@
           type="submit"
           :disabled="loading"
           variant="default"
-          class="btn-glow w-full border-primary/30 hover:border-primary/60 px-4 py-2.5"
+           class="w-full border-primary/30 hover:border-primary/60 px-4 py-2.5"
           data-testid="login-submit"
         >
           {{ loading ? $t('common.signing_in') : $t('common.sign_in') }}
@@ -69,38 +69,27 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
+import { useMutation } from '../composables/useMutation'
 import { setAccessToken, setRefreshToken } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
 
 const router = useRouter()
 const email = ref('')
 const password = ref('')
-const loading = ref(false)
-const error = ref<string | null>(null)
 
-async function login() {
-  loading.value = true
-  error.value = null
-  try {
-    const res = await fetch('/api/v1/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email.value, password: password.value }),
-    })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      error.value = body.detail || res.statusText
-      return
-    }
-    const data = await res.json()
-    setAccessToken(data.access_token)
-    if (data.refresh_token) setRefreshToken(data.refresh_token)
-    router.push('/')
-  } catch (e: unknown) {
-    error.value = `Login failed: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
+const { loading, error, mutate: login } = useMutation(async () => {
+  const res = await fetch('/api/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.value, password: password.value }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.detail || res.statusText)
   }
-}
+  const data = await res.json()
+  setAccessToken(data.access_token)
+  if (data.refresh_token) setRefreshToken(data.refresh_token)
+  router.push('/')
+  return data
+})
 </script>
-

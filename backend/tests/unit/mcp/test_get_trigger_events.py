@@ -3,7 +3,7 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import get_trigger_events
+from modulo.api.mcp_server import list_trigger_events
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -61,8 +61,8 @@ class TestGetTriggerEventsAuth:
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
-        result = await get_trigger_events()
-        assert result["error"] == "internal_error"
+        result = await list_trigger_events()
+        assert result["error"] == "auth_expired"
         assert "revoked" in result.get("detail", "").lower() or "expired" in result.get("detail", "").lower()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -82,7 +82,7 @@ class TestGetTriggerEventsAuth:
         mock_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session.return_value = mock_cm
 
-        result = await get_trigger_events()
+        result = await list_trigger_events()
         assert result["error"] == "insufficient_scope"
 
 
@@ -140,19 +140,20 @@ class TestGetTriggerEventsSuccess:
 
         execute_result = MagicMock()
         execute_result.scalars.return_value.all.return_value = [event1, event2]
+        execute_result.scalar_one_or_none.return_value = 2
         mock_sesh.execute = AsyncMock(return_value=execute_result)
 
-        result = await get_trigger_events()
+        result = await list_trigger_events()
 
-        assert result["count"] == 2
-        assert len(result["events"]) == 2
-        assert result["events"][0]["id"] == str(event1.id)
-        assert result["events"][0]["trigger_id"] == str(trigger_id)
-        assert result["events"][0]["trigger_type"] == "webhook"
-        assert result["events"][0]["validation_result"] == "accepted"
-        assert result["events"][0]["run_id"] == str(run_id)
-        assert result["events"][1]["id"] == str(event2.id)
-        assert result["events"][1]["run_id"] is None
+        assert result["total"] == 2
+        assert len(result["data"]) == 2
+        assert result["data"][0]["id"] == str(event1.id)
+        assert result["data"][0]["trigger_id"] == str(trigger_id)
+        assert result["data"][0]["trigger_type"] == "webhook"
+        assert result["data"][0]["validation_result"] == "accepted"
+        assert result["data"][0]["run_id"] == str(run_id)
+        assert result["data"][1]["id"] == str(event2.id)
+        assert result["data"][1]["run_id"] is None
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -172,12 +173,13 @@ class TestGetTriggerEventsSuccess:
 
         execute_result = MagicMock()
         execute_result.scalars.return_value.all.return_value = [event]
+        execute_result.scalar_one_or_none.return_value = 1
         mock_sesh.execute = AsyncMock(return_value=execute_result)
 
-        result = await get_trigger_events(trigger_id=str(target_trigger_id))
+        result = await list_trigger_events(trigger_id=str(target_trigger_id))
 
-        assert result["count"] == 1
-        assert result["events"][0]["trigger_id"] == str(target_trigger_id)
+        assert result["total"] == 1
+        assert result["data"][0]["trigger_id"] == str(target_trigger_id)
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -197,11 +199,12 @@ class TestGetTriggerEventsSuccess:
 
         execute_result = MagicMock()
         execute_result.scalars.return_value.all.return_value = [event]
+        execute_result.scalar_one_or_none.return_value = 1
         mock_sesh.execute = AsyncMock(return_value=execute_result)
 
-        result = await get_trigger_events(pipeline_id=str(pipeline_id))
+        result = await list_trigger_events(pipeline_id=str(pipeline_id))
 
-        assert result["count"] == 1
+        assert result["total"] == 1
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -220,12 +223,12 @@ class TestGetTriggerEventsSuccess:
 
         execute_result = MagicMock()
         execute_result.scalars.return_value.all.return_value = events
+        execute_result.scalar_one_or_none.return_value = 5
         mock_sesh.execute = AsyncMock(return_value=execute_result)
 
-        result = await get_trigger_events(limit=5)
+        result = await list_trigger_events(limit=5)
 
-        assert result["count"] == 5
-        assert result["limit"] == 5
+        assert result["total"] == 5
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -242,9 +245,10 @@ class TestGetTriggerEventsSuccess:
 
         execute_result = MagicMock()
         execute_result.scalars.return_value.all.return_value = []
+        execute_result.scalar_one_or_none.return_value = 0
         mock_sesh.execute = AsyncMock(return_value=execute_result)
 
-        result = await get_trigger_events(trigger_id=str(uuid.uuid4()))
+        result = await list_trigger_events(trigger_id=str(uuid.uuid4()))
 
-        assert result["count"] == 0
-        assert result["events"] == []
+        assert result["total"] == 0
+        assert result["data"] == []

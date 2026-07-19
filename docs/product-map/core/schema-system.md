@@ -21,6 +21,7 @@ unit-tests:
   - backend/tests/unit/core/composite_engine/test_schema_mapping.py
 code:
   - backend/src/modulo/api/routes/schemas.py
+  - backend/src/modulo/api/routes/parameter_schemas.py
   - backend/src/modulo/db/crud/schema.py
   - backend/src/modulo/db/models/schema.py
   - backend/src/modulo/core/schema_registry/__init__.py

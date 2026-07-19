@@ -1,10 +1,12 @@
-from __future__ import annotations
-
 """Library service — CRUD and community primitives for library_primitives."""
 
+from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -26,7 +28,7 @@ from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
-_log = logging.getLogger(__name__)
+
 
 __all__ = [
     "CONTRIBUTION_DRAFT",
@@ -287,243 +289,6 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         tags=["test_fixture", "example", "prd"],
     ),
     # -----------------------------------------------------------------------
-    # Modulo dogfood pipeline primitives (schemas, agents, workflow)
-    # -----------------------------------------------------------------------
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000050",
-        primitive_type="schema",
-        name="GitHub Issue Input Schema",
-        slug="github-issue-input",
-        description="Schema for a GitHub issue to be processed by the Modulo dogfood pipeline.",
-        content_json={
-            "fields": [
-                {"name": "issue_number", "type": "integer", "required": True},
-                {"name": "title", "type": "string", "required": True},
-                {"name": "body", "type": "string", "required": True},
-                {"name": "labels", "type": "array", "items": "string", "required": False},
-                {"name": "repo", "type": "string", "required": True},
-            ]
-        },
-        tags=["schema", "github", "issue", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000051",
-        primitive_type="schema",
-        name="Structured Requirements Schema",
-        slug="structured-requirements",
-        description="Structured requirements extracted from a GitHub issue for code generation.",
-        content_json={
-            "fields": [
-                {"name": "agent_task", "type": "string", "required": True},
-                {"name": "feature_area", "type": "string", "required": True},
-                {"name": "spec_summary", "type": "string", "required": True},
-                {"name": "files_to_change", "type": "array", "items": "string", "required": False},
-                {"name": "implementation_notes", "type": "string", "required": False},
-            ]
-        },
-        tags=["schema", "requirements", "spec", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000052",
-        primitive_type="schema",
-        name="Code Diff Output Schema",
-        slug="code-diff-output",
-        description="Generated code changes as a list of file diffs.",
-        content_json={
-            "fields": [
-                {
-                    "name": "files",
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string"},
-                            "content": {"type": "string"},
-                        },
-                    },
-                    "required": True,
-                },
-            ]
-        },
-        tags=["schema", "code", "diff", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000053",
-        primitive_type="schema",
-        name="Test Result Output Schema",
-        slug="test-result-output",
-        description="Result of running tests against generated code.",
-        content_json={
-            "fields": [
-                {"name": "passed", "type": "boolean", "required": True},
-                {"name": "failed", "type": "boolean", "required": True},
-                {"name": "output", "type": "string", "required": True},
-                {"name": "duration_ms", "type": "integer", "required": False},
-            ]
-        },
-        tags=["schema", "test", "result", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000054",
-        primitive_type="schema",
-        name="PR Output Schema",
-        slug="pr-output",
-        description="Result of creating a pull request.",
-        content_json={
-            "fields": [
-                {"name": "pr_url", "type": "string", "required": True},
-                {"name": "pr_number", "type": "integer", "required": True},
-                {"name": "success", "type": "boolean", "required": True},
-            ]
-        },
-        tags=["schema", "pr", "github", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000060",
-        primitive_type="agent",
-        name="Issue Reader Agent",
-        slug="issue-reader",
-        description="Reads a GitHub issue via GitHubConnector and extracts a structured spec for code generation.",
-        content_json={
-            "input_schema": "github-issue-input",
-            "output_schema": "structured-requirements",
-            "prompt_template": (
-                "You are a technical product manager. Read the following GitHub issue "
-                "and extract a structured specification for implementation.\n\n"
-                "Issue:\n{{ input }}"
-            ),
-            "connector_type_refs": [{"connector_type": "github", "capabilities": ["issue_read"]}],
-            "required_environment_capabilities": ["egress:github.com"],
-            "model_backend_id": None,
-            "retry_policy": {},
-            "token_budget": None,
-        },
-        tags=["agent", "github", "issue-reader", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000061",
-        primitive_type="agent",
-        name="Code Generator Agent",
-        slug="code-generator",
-        description="Generates code changes from structured requirements as file diffs.",
-        content_json={
-            "input_schema": "structured-requirements",
-            "output_schema": "code-diff-output",
-            "prompt_template": (
-                "You are a senior software engineer. Given the following structured requirements, "
-                "generate the necessary code changes. Output a list of files with their full content.\n\n"
-                "Requirements:\n{{ input }}"
-            ),
-            "connector_type_refs": [],
-            "required_environment_capabilities": [],
-            "model_backend_id": None,
-            "retry_policy": {},
-            "token_budget": None,
-        },
-        tags=["agent", "code-generation", "llm", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000062",
-        primitive_type="agent",
-        name="Code Applier Agent",
-        slug="code-applier",
-        description="Writes generated code files to the workspace via ShellConnector.",
-        content_json={
-            "input_schema": "code-diff-output",
-            "output_schema": "code-diff-output",
-            "prompt_template": (
-                "You are a build engineer. Apply the following code changes to the workspace "
-                "by writing each file to disk.\n\n"
-                "Changes:\n{{ input }}"
-            ),
-            "connector_type_refs": [{"connector_type": "shell", "capabilities": ["write"]}],
-            "required_environment_capabilities": ["filesystem:write"],
-            "model_backend_id": None,
-            "retry_policy": {},
-            "token_budget": None,
-        },
-        tags=["agent", "code-applier", "shell", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000063",
-        primitive_type="agent",
-        name="Test Runner Agent",
-        slug="test-runner",
-        description="Runs unit tests in the workspace via ShellConnector and reports results.",
-        content_json={
-            "input_schema": "code-diff-output",
-            "output_schema": "test-result-output",
-            "prompt_template": (
-                "You are a QA engineer. Run the unit tests at the workspace root "
-                "using the command 'uv run pytest tests/unit -x -q' and report the results.\n\n"
-                "Code changes applied:\n{{ input }}"
-            ),
-            "connector_type_refs": [{"connector_type": "shell", "capabilities": ["read", "write"]}],
-            "required_environment_capabilities": ["shell:exec", "python3.12", "uv"],
-            "model_backend_id": None,
-            "retry_policy": {},
-            "token_budget": None,
-        },
-        tags=["agent", "test-runner", "shell", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000064",
-        primitive_type="agent",
-        name="PR Creator Agent",
-        slug="pr-creator",
-        description="Creates a pull request on GitHub with the generated changes and test summary.",
-        content_json={
-            "input_schema": "test-result-output",
-            "output_schema": "pr-output",
-            "prompt_template": (
-                "You are a release engineer. Create a pull request on GitHub with the changes "
-                "that were made and include the test results in the PR body.\n\n"
-                "Test results:\n{{ input }}"
-            ),
-            "connector_type_refs": [{"connector_type": "github", "capabilities": ["create_pr"]}],
-            "required_environment_capabilities": ["egress:github.com"],
-            "model_backend_id": None,
-            "retry_policy": {},
-            "token_budget": None,
-        },
-        tags=["agent", "pr-creator", "github", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000070",
-        primitive_type="workflow",
-        name="Modulo Dogfood Pipeline",
-        slug="modulo-dogfood-pipeline",
-        description=(
-            "End-to-end pipeline that builds Modulo from a GitHub issue: reads spec, "
-            "generates code, applies changes, runs tests, and creates a PR with HITL review."
-        ),
-        content_json={
-            "nodes": [
-                {"id": "issue-reader", "agent": "issue-reader"},
-                {"id": "code-generator", "agent": "code-generator"},
-                {"id": "code-applier", "agent": "code-applier"},
-                {"id": "test-runner", "agent": "test-runner"},
-                {"id": "pr-creator", "agent": "pr-creator"},
-            ],
-            "edges": [
-                {"source": "issue-reader", "target": "code-generator"},
-                {"source": "code-generator", "target": "code-applier"},
-                {"source": "code-applier", "target": "test-runner"},
-                {
-                    "source": "test-runner",
-                    "target": "pr-creator",
-                    "hitl_gate_config": {
-                        "human_only": False,
-                        "gate_id": "review_before_pr",
-                        "overdue_threshold_minutes": 60,
-                    },
-                },
-            ],
-            "entry": "issue-reader",
-        },
-        tags=["workflow", "dogfood", "modulo", "pipeline"],
-    ),
-    # -----------------------------------------------------------------------
     # Simplest Workflow primitives (agent + workflow)
     # -----------------------------------------------------------------------
     _make_modulo(
@@ -590,17 +355,22 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         description="Binary approval gate. Output starts with APPROVED or REJECTED. Self-corrects on failure.",
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions for what to approve/reject",
-                 "default_value": (
-                     "You are an approver. Respond with APPROVED or REJECTED"
-                     " as the first word, followed by your reasoning."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "decision-agent",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "system_prompt",
+                    "label": "System Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "Instructions for what to approve/reject",
+                    "default_value": (
+                        "You are an approver. Respond with APPROVED or REJECTED"
+                        " as the first word, followed by your reasoning."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "decision-agent",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [{"id": "decision-agent", "node_type": "agent", "label": "Decision Agent"}],
@@ -616,12 +386,14 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "required": ["result"],
             },
             "output_validation": {
-                "eval_definitions": [{
-                    "name": "first_word_approved_rejected",
-                    "type": "regex",
-                    "config": {"pattern": "^(APPROVED|REJECTED)\\b", "field": "result"},
-                    "failure_behaviour": "retry",
-                }],
+                "eval_definitions": [
+                    {
+                        "name": "first_word_approved_rejected",
+                        "type": "regex",
+                        "config": {"pattern": "^(APPROVED|REJECTED)\\b", "field": "result"},
+                        "failure_behaviour": "retry",
+                    }
+                ],
                 "max_validation_retries": 2,
             },
         },
@@ -635,17 +407,22 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         description="Forces TRUE or FALSE decision. First word is forced. Useful for conditional routing.",
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions for what to evaluate as true or false",
-                 "default_value": (
-                     "You are a boolean evaluator. Respond with TRUE"
-                     " or FALSE as the first word, followed by your reasoning."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "decision-agent",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "system_prompt",
+                    "label": "System Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "Instructions for what to evaluate as true or false",
+                    "default_value": (
+                        "You are a boolean evaluator. Respond with TRUE"
+                        " or FALSE as the first word, followed by your reasoning."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "decision-agent",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [{"id": "decision-agent", "node_type": "agent", "label": "Decision Agent"}],
@@ -661,12 +438,14 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "required": ["result"],
             },
             "output_validation": {
-                "eval_definitions": [{
-                    "name": "first_word_true_false",
-                    "type": "regex",
-                    "config": {"pattern": "^(TRUE|FALSE)\\b", "field": "result"},
-                    "failure_behaviour": "retry",
-                }],
+                "eval_definitions": [
+                    {
+                        "name": "first_word_true_false",
+                        "type": "regex",
+                        "config": {"pattern": "^(TRUE|FALSE)\\b", "field": "result"},
+                        "failure_behaviour": "retry",
+                    }
+                ],
                 "max_validation_retries": 2,
             },
         },
@@ -683,46 +462,65 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         ),
         content_json={
             "parameter_ports": [
-                {"name": "position", "label": "Position to Challenge", "type": "string", "required": True,
-                 "description": "The plan, argument, or decision to scrutinise",
-                 "default_value": "We should migrate our monolith to microservices.",
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "advocate-for",
-                     "injection_point": "prompt_template",
-                 }},
-                {"name": "advocate_prompt", "label": "Advocate Instructions", "type": "string", "required": False,
-                 "description": "Prompt shaping how the pro side argues",
-                 "default_value": (
-                     "You are an advocate. Argue strongly in favour of this position:"
-                     " {{parameter.position}}"
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "advocate-for",
-                     "injection_point": "prompt_template",
-                 }},
-                {"name": "critic_prompt", "label": "Critic Instructions", "type": "string", "required": False,
-                 "description": "Prompt shaping how the con side argues",
-                 "default_value": "You are a critic. Argue strongly against this position: {{parameter.position}}",
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "advocate-against",
-                     "injection_point": "prompt_template",
-                 }},
-                {"name": "mediator_prompt", "label": "Mediator Instructions", "type": "string", "required": False,
-                 "description": "Prompt shaping how the mediator synthesises",
-                 "default_value": (
-                     "You are a mediator. Below are two arguments about: {{parameter.position}}"
-                     "\n\n--- PRO ---\n{{nodes.advocate-for.output}}"
-                     "\n\n--- CON ---\n{{nodes.advocate-against.output}}"
-                     "\n\nSynthesise both sides into balanced, actionable advice."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "mediator",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "position",
+                    "label": "Position to Challenge",
+                    "type": "string",
+                    "required": True,
+                    "description": "The plan, argument, or decision to scrutinise",
+                    "default_value": "We should migrate our monolith to microservices.",
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "advocate-for",
+                        "injection_point": "prompt_template",
+                    },
+                },
+                {
+                    "name": "advocate_prompt",
+                    "label": "Advocate Instructions",
+                    "type": "string",
+                    "required": False,
+                    "description": "Prompt shaping how the pro side argues",
+                    "default_value": (
+                        "You are an advocate. Argue strongly in favour of this position: {{parameter.position}}"
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "advocate-for",
+                        "injection_point": "prompt_template",
+                    },
+                },
+                {
+                    "name": "critic_prompt",
+                    "label": "Critic Instructions",
+                    "type": "string",
+                    "required": False,
+                    "description": "Prompt shaping how the con side argues",
+                    "default_value": "You are a critic. Argue strongly against this position: {{parameter.position}}",
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "advocate-against",
+                        "injection_point": "prompt_template",
+                    },
+                },
+                {
+                    "name": "mediator_prompt",
+                    "label": "Mediator Instructions",
+                    "type": "string",
+                    "required": False,
+                    "description": "Prompt shaping how the mediator synthesises",
+                    "default_value": (
+                        "You are a mediator. Below are two arguments about: {{parameter.position}}"
+                        "\n\n--- PRO ---\n{{nodes.advocate-for.output}}"
+                        "\n\n--- CON ---\n{{nodes.advocate-against.output}}"
+                        "\n\nSynthesise both sides into balanced, actionable advice."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "mediator",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [
@@ -756,22 +554,27 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         description="Classifies into BUG, FEATURE, INFRA, DOCS. First word is forced to one of the four.",
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions for the triage classification",
-                 "default_value": (
-                     "You are a triage classifier. Respond with one of"
-                     " BUG, FEATURE, INFRA, or DOCS as the first word,"
-                     " followed by your reasoning."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "classifier-agent",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "system_prompt",
+                    "label": "System Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "Instructions for the triage classification",
+                    "default_value": (
+                        "You are a triage classifier. Respond with one of"
+                        " BUG, FEATURE, INFRA, or DOCS as the first word,"
+                        " followed by your reasoning."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "classifier-agent",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [{"id": "classifier-agent", "node_type": "agent", "label": "Classifier Agent"}],
-                "edges": []
+                "edges": [],
             },
             "input_schema_id": None,
             "output_schema": {
@@ -783,12 +586,14 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "required": ["result"],
             },
             "output_validation": {
-                "eval_definitions": [{
-                    "name": "first_word_category",
-                    "type": "regex",
-                    "config": {"pattern": "^(BUG|FEATURE|INFRA|DOCS)\\b", "field": "result"},
-                    "failure_behaviour": "retry",
-                }],
+                "eval_definitions": [
+                    {
+                        "name": "first_word_category",
+                        "type": "regex",
+                        "config": {"pattern": "^(BUG|FEATURE|INFRA|DOCS)\\b", "field": "result"},
+                        "failure_behaviour": "retry",
+                    }
+                ],
                 "max_validation_retries": 2,
             },
         },
@@ -805,30 +610,45 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         ),
         content_json={
             "parameter_ports": [
-                {"name": "council_prompt", "label": "Council Prompt", "type": "string", "required": True,
-                 "description": "The prompt each council member responds to",
-                 "default_value": "Analyse the following and provide your best recommendation.",
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "member-1",
-                     "injection_point": "prompt_template",
-                 }},
-                {"name": "member_count", "label": "Number of Members", "type": "number", "required": True,
-                 "description": "How many LLM calls to run in parallel (1-5)",
-                 "default_value": 3,
-                 "target_injection": {"mode": "run_context_key", "key": "council_member_count"}},
-                {"name": "mediator_instructions", "label": "Mediator Instructions", "type": "string", "required": False,
-                 "description": "How the mediator should combine responses",
-                 "default_value": (
-                     "Below are {{council_member_count}} responses from different AI council"
-                     " members.\n\n{{nodes.council.output}}\n\nSynthesise them into a single"
-                     " coherent recommendation, noting areas of agreement and disagreement."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "council-mediator",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "council_prompt",
+                    "label": "Council Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "The prompt each council member responds to",
+                    "default_value": "Analyse the following and provide your best recommendation.",
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "member-1",
+                        "injection_point": "prompt_template",
+                    },
+                },
+                {
+                    "name": "member_count",
+                    "label": "Number of Members",
+                    "type": "number",
+                    "required": True,
+                    "description": "How many LLM calls to run in parallel (1-5)",
+                    "default_value": 3,
+                    "target_injection": {"mode": "run_context_key", "key": "council_member_count"},
+                },
+                {
+                    "name": "mediator_instructions",
+                    "label": "Mediator Instructions",
+                    "type": "string",
+                    "required": False,
+                    "description": "How the mediator should combine responses",
+                    "default_value": (
+                        "Below are {{council_member_count}} responses from different AI council"
+                        " members.\n\n{{nodes.council.output}}\n\nSynthesise them into a single"
+                        " coherent recommendation, noting areas of agreement and disagreement."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "council-mediator",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [
@@ -869,17 +689,22 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         ),
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions describing how to structure the output",
-                 "default_value": (
-                     "Restructure the input text into the required JSON format."
-                     " Ensure all required fields are present and correctly typed."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "structurer",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "system_prompt",
+                    "label": "System Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "Instructions describing how to structure the output",
+                    "default_value": (
+                        "Restructure the input text into the required JSON format."
+                        " Ensure all required fields are present and correctly typed."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "structurer",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [{"id": "structurer", "node_type": "agent", "label": "Structurer"}],
@@ -895,21 +720,23 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "required": ["structured"],
             },
             "output_validation": {
-                "eval_definitions": [{
-                    "name": "valid_json_schema",
-                    "type": "json_schema",
-                    "config": {
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "structured": {"type": "object"},
-                                "original": {"type": "string"},
+                "eval_definitions": [
+                    {
+                        "name": "valid_json_schema",
+                        "type": "json_schema",
+                        "config": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "structured": {"type": "object"},
+                                    "original": {"type": "string"},
+                                },
+                                "required": ["structured"],
                             },
-                            "required": ["structured"],
                         },
-                    },
-                    "failure_behaviour": "retry",
-                }],
+                        "failure_behaviour": "retry",
+                    }
+                ],
                 "max_validation_retries": 3,
             },
         },
@@ -926,18 +753,23 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         ),
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions describing what to estimate complexity for",
-                 "default_value": (
-                     "Analyse the following work item and estimate its complexity."
-                     " Respond with exactly one of XS, S, M, L, or XL as the first word,"
-                     " followed by your reasoning."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "estimator",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "system_prompt",
+                    "label": "System Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "Instructions describing what to estimate complexity for",
+                    "default_value": (
+                        "Analyse the following work item and estimate its complexity."
+                        " Respond with exactly one of XS, S, M, L, or XL as the first word,"
+                        " followed by your reasoning."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "estimator",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [{"id": "estimator", "node_type": "agent", "label": "Estimator"}],
@@ -953,12 +785,14 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "required": ["result"],
             },
             "output_validation": {
-                "eval_definitions": [{
-                    "name": "valid_complexity_size",
-                    "type": "regex",
-                    "config": {"pattern": "^(XS|S|M|L|XL)\\b", "field": "result"},
-                    "failure_behaviour": "retry",
-                }],
+                "eval_definitions": [
+                    {
+                        "name": "valid_complexity_size",
+                        "type": "regex",
+                        "config": {"pattern": "^(XS|S|M|L|XL)\\b", "field": "result"},
+                        "failure_behaviour": "retry",
+                    }
+                ],
                 "max_validation_retries": 2,
             },
         },
@@ -974,13 +808,13 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
 def _bump_version(version: str) -> str:
     """Increment the last segment of a version string."""
     if not version:
-        _log.warning("_bump_version called with empty string, defaulting to 1.0")
+        logger.warning("_bump_version called with empty string, defaulting to 1.0")
         return "1.0"
     parts = version.split(".")
     try:
         parts[-1] = str(int(parts[-1]) + 1)
     except ValueError:
-        _log.warning("_bump_version: non-numeric last segment in '%s', defaulting to 1.0", version)
+        logger.warning("_bump_version: non-numeric last segment in '%s', defaulting to 1.0", version)
         parts = ["1", "0"]
     return ".".join(parts)
 
@@ -1008,7 +842,9 @@ def _filter_primitives(
     if search:
         term = search.strip().lower()
         if term:
-            primitives = [p for p in primitives if term in p.name.lower() or term in (p.description or "").lower()]
+            primitives = [
+                p for p in primitives if term in (p.name or "").lower() or term in (p.description or "").lower()
+            ]
     return primitives
 
 
@@ -1017,7 +853,10 @@ def _filter_modulo(
     primitive_type: str | None,
     search: str | None,
 ) -> list[LibraryPrimitive]:
-    return _filter_primitives(_MODULO_PRIMITIVES, primitive_type=primitive_type, search=search)
+    items = _MODULO_PRIMITIVES
+    if os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
+        items = [*items, *_ensure_dogfood_primitives()]
+    return _filter_primitives(items, primitive_type=primitive_type, search=search)
 
 
 # ---------------------------------------------------------------------------
@@ -1049,7 +888,7 @@ async def list_primitives(
     """
     if excluded_tiers is None:
         excluded_tiers = ["in_dev"]
-    org_page = PageResult(items=[], total=0, page=page, page_size=page_size)
+    org_page: PageResult[LibraryPrimitive] = PageResult(items=[], total=0, page=page, page_size=page_size)
     db_community: list[LibraryPrimitive] = []
     try:
         async with session.begin():
@@ -1066,13 +905,17 @@ async def list_primitives(
             )
             if include_community and (source is None or source == "community"):
                 db_community = await _fetch_published_community_from_db(
-                    session, org_id, primitive_type=primitive_type, search=search,
+                    session,
+                    org_id,
+                    primitive_type=primitive_type,
+                    search=search,
                 )
     except ProgrammingError:
-        _log.warning("list_primitives — DB not migrated for org %s", org_id)
-    except Exception:
-        _log.exception("list_primitives — DB query failed for org %s", org_id)
+        logger.warning("list_primitives — DB not migrated for org %s", org_id)
+    except asyncio.CancelledError:
         raise
+    except Exception:
+        logger.exception("list_primitives — DB query failed for org %s", org_id)
 
     org_items = list(org_page.items)
     org_total = org_page.total
@@ -1129,14 +972,19 @@ async def get_primitive(
                 await set_rls_org(session, org_id)
                 item = await get_library_primitive(session, primitive_id)
     except ProgrammingError:
-        _log.warning("get_primitive — DB not migrated or table missing for %s", primitive_id)
+        logger.warning("get_primitive — DB not migrated or table missing for %s", primitive_id)
         return None
     except SQLAlchemyError:
-        _log.exception("get_primitive — DB error for %s", primitive_id)
+        logger.exception("get_primitive — DB error for %s", primitive_id)
         raise
     if item is not None:
         return item
-    return _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
+    result = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
+    if result is None and os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
+        for p in _ensure_dogfood_primitives():
+            if p.id == primitive_id:
+                return p
+    return result
 
 
 async def get_primitive_by_slug(
@@ -1169,14 +1017,19 @@ async def get_primitive_by_slug(
                 result = await session.execute(stmt)
                 item = result.scalar_one_or_none()
     except ProgrammingError:
-        _log.warning("get_primitive_by_slug — DB not migrated for %s/%s", primitive_type, slug)
+        logger.warning("get_primitive_by_slug — DB not migrated for %s/%s", primitive_type, slug)
         return None
     except SQLAlchemyError:
-        _log.exception("get_primitive_by_slug — DB error for %s/%s", primitive_type, slug)
+        logger.exception("get_primitive_by_slug — DB error for %s/%s", primitive_type, slug)
         raise
     if item is not None:
         return item
-    return _MODULO_BY_SLUG.get((primitive_type, slug)) or _COMMUNITY_BY_SLUG.get((primitive_type, slug))
+    fallback = _MODULO_BY_SLUG.get((primitive_type, slug)) or _COMMUNITY_BY_SLUG.get((primitive_type, slug))
+    if fallback is None and os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
+        for p in _ensure_dogfood_primitives():
+            if p.primitive_type == primitive_type and p.slug == slug:
+                return p
+    return fallback
 
 
 async def copy_to_adapt(
@@ -1204,7 +1057,6 @@ async def copy_to_adapt(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             if created_by is not None:
@@ -1215,6 +1067,11 @@ async def copy_to_adapt(
             refreshed = await get_library_primitive(session, primitive_id)
             if refreshed is None:
                 refreshed = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
+            if refreshed is None and os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
+                for p in _ensure_dogfood_primitives():
+                    if p.id == primitive_id:
+                        refreshed = p
+                        break
             if refreshed is None:
                 raise LookupError(f"Primitive {primitive_id} not found for org {org_id} during copy")
             new_version = _bump_version(refreshed.version)
@@ -1252,15 +1109,11 @@ async def copy_to_adapt(
                 auto_update=True,
             )
 
-
-    # ---------------------------------------------------------------------------
-    # Starter pipeline templates
-
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
+
 
 _PR_TEMPLATE_AGENTS = [
     {
@@ -1652,9 +1505,55 @@ _MODULO_PRIMITIVES.extend(
 
 # Indexes for O(1) community lookup
 _MODULO_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _MODULO_PRIMITIVES}
-_MODULO_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {
-    (p.primitive_type, p.slug): p for p in _MODULO_PRIMITIVES
-}
+_MODULO_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {(p.primitive_type, p.slug): p for p in _MODULO_PRIMITIVES}
+
+# ---------------------------------------------------------------------------
+# Dogfood primitives (loaded from MODULO_DOGFOOD_JSON_B64 env var).
+# Source of truth: Repos/devtools/dogfood/dogfood-primitives.json.
+# Only loaded when MODULO_DOGFOOD_ENABLED is true.
+# ---------------------------------------------------------------------------
+
+_DOGFOOD_PRIMITIVES: list[LibraryPrimitive] | None = None
+
+
+def _ensure_dogfood_primitives() -> list[LibraryPrimitive]:
+    global _DOGFOOD_PRIMITIVES
+    if _DOGFOOD_PRIMITIVES is not None:
+        return _DOGFOOD_PRIMITIVES
+    if os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() not in ("true", "1"):
+        _DOGFOOD_PRIMITIVES = []
+        return []
+    encoded = os.environ.get("MODULO_DOGFOOD_JSON_B64", "")
+    if not encoded:
+        _DOGFOOD_PRIMITIVES = []
+        return []
+    try:
+        decoded = base64.b64decode(encoded).decode("utf-8")
+        data = json.loads(decoded)
+        result: list[LibraryPrimitive] = []
+        seen: set[uuid.UUID] = set()
+        for entry in data:
+            pid = uuid.UUID(entry["pid"])
+            if pid in seen:
+                continue
+            seen.add(pid)
+            result.append(
+                _make_modulo(
+                    pid=entry["pid"],
+                    primitive_type=entry["primitive_type"],
+                    name=entry["name"],
+                    slug=entry["slug"],
+                    description=entry["description"],
+                    content_json=entry["content_json"],
+                    tags=entry["tags"],
+                )
+            )
+        _DOGFOOD_PRIMITIVES = result
+    except Exception:
+        logger.warning("Failed to load dogfood primitives from MODULO_DOGFOOD_JSON_B64", exc_info=True)
+        _DOGFOOD_PRIMITIVES = []
+    return _DOGFOOD_PRIMITIVES
+
 
 # ---------------------------------------------------------------------------
 # Community database — opinionated, narrower example pipelines contributed
@@ -1770,6 +1669,7 @@ def _filter_community(
 ) -> list[LibraryPrimitive]:
     return _filter_primitives(_COMMUNITY_PRIMITIVES, primitive_type=primitive_type, search=search)
 
+
 async def _fetch_published_community_from_db(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -1804,10 +1704,12 @@ async def _fetch_published_community_from_db(
             if saved_tenant is not None:
                 session.info["org_id"] = saved_tenant
     except ProgrammingError:
-        _log.warning("_fetch_published_community_from_db: ProgrammingError — missing DB table or migration")
+        logger.warning("_fetch_published_community_from_db: ProgrammingError — missing DB table or migration")
         return []
+    except asyncio.CancelledError:
+        raise
     except Exception:
-        _log.exception("_fetch_published_community_from_db: unexpected error")
+        logger.exception("_fetch_published_community_from_db: unexpected error")
         return []
 
 
@@ -1841,7 +1743,6 @@ async def contribute_fixture(
     }
 
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             prim = await create_library_primitive(
@@ -1876,7 +1777,6 @@ async def contribute_fixture(
             if update is None:
                 raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -1904,7 +1804,6 @@ async def contribute_primitive(
     An admin can review and publish it to the community library.
     """
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             prim = await create_library_primitive(
@@ -1939,7 +1838,6 @@ async def contribute_primitive(
             if update is None:
                 raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -1960,7 +1858,6 @@ async def submit_contribution_for_review(
     Raises ContributionInvalidTransitionError if the primitive is not in draft status.
     """
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             prim = await get_library_primitive(session, primitive_id)
@@ -1982,7 +1879,6 @@ async def submit_contribution_for_review(
             if updated is None:
                 raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2004,7 +1900,6 @@ async def publish_contribution(
     for all users. Accepts contributions in either 'draft' or 'review_queue' status.
     """
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             prim = await get_library_primitive(session, primitive_id)
@@ -2033,7 +1928,6 @@ async def publish_contribution(
 
         # Add to in-memory community cache so it appears in community listings immediately.
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2060,7 +1954,6 @@ async def list_contributions(
 ) -> PageResult[LibraryPrimitive]:
     """List fixture contributions scoped to the org."""
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             result = await list_library_primitives(
@@ -2070,7 +1963,6 @@ async def list_contributions(
                 primitive_type="test_fixture",
             )
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2091,7 +1983,6 @@ async def list_org_contributions(
 ) -> PageResult[LibraryPrimitive]:
     """List contributions submitted by the org, optionally filtered by status."""
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             result = await list_library_primitives(
@@ -2100,7 +1991,6 @@ async def list_org_contributions(
                 page_size=page_size,
             )
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2144,7 +2034,6 @@ async def submit_contribution_version(
     }
 
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             existing = await get_library_primitive(session, primitive_id)
@@ -2205,7 +2094,6 @@ async def submit_contribution_version(
             if update is None:
                 raise ContributionNotFoundError(f"Contribution version {prim.id} not found after creation")
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2220,7 +2108,6 @@ async def list_contribution_versions(
 ) -> list[LibraryPrimitive]:
     """Return all versions for a contribution primitive, newest first."""
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             prim = await get_library_primitive(session, primitive_id)
@@ -2237,7 +2124,6 @@ async def list_contribution_versions(
         # its own id) — it won't appear in the version-group query because it
         # may not yet have the version_group_id set if it predates the feature.
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2290,6 +2176,10 @@ async def notify_importers_of_update(
                         {"update_available_version_id": prim.id},
                     )
                 except SQLAlchemyError:
-                    _log.exception("notify_importers_of_update: failed to update copy %s", copy.id)
+                    logger.exception("notify_importers_of_update: failed to update copy %s", copy.id)
     except ProgrammingError:
-        _log.warning("notify_importers_of_update failed (DB not migrated): %s", primitive_id)
+        logger.warning("notify_importers_of_update failed (DB not migrated): %s", primitive_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("notify_importers_of_update: unexpected error for primitive %s", primitive_id)

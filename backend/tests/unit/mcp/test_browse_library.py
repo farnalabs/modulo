@@ -191,8 +191,8 @@ class TestBrowseLibrary:
             result = await browse_library()
 
         assert result == {
-            "error": "internal_error",
-            "detail": "Token revoked or expired — re-authenticate",
+            "error": "auth_expired",
+            "detail": "Token revoked or expired - re-authenticate",
         }
 
     async def test_no_scope_check_needed(self) -> None:
@@ -232,5 +232,5 @@ class TestBrowseLibrary:
 
         assert result == {
             "error": "internal_error",
-            "detail": "Failed to browse library",
+            "detail": "Failed to search library",
         }

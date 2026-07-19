@@ -1,28 +1,23 @@
 """Cleanup job that removes old webhook trigger events to prevent table bloat."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.pool import NullPool
 
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
 
 try:
-    from celery import Task  # type: ignore[import-untyped]
+    from celery import Task as _CeleryTask
 except ImportError:
-    import typing
-
-    if typing.TYPE_CHECKING:
-        from celery import Task
-    else:
-        raise ImportError(
-            "Celery is required for modulo.cleanup.webhook_dedup. "
-            "Install it with: pip install celery"
-        ) from None
+    _CeleryTask = object
 
 _log = logging.getLogger(__name__)
 
@@ -49,14 +44,18 @@ async def cleanup_old_webhook_events(
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
 
     result = await db_session.execute(
-        select(TriggerEvent.id).where(TriggerEvent.created_at < cutoff).limit(BATCH_SIZE)
+        select(TriggerEvent.id).where(TriggerEvent.created_at < cutoff).order_by(TriggerEvent.id).limit(BATCH_SIZE)
     )
     ids = result.scalars().all()
     if not ids:
         return 0
 
     await db_session.execute(delete(TriggerEvent).where(TriggerEvent.id.in_(ids)))
-    await db_session.commit()
+    try:
+        await db_session.commit()
+    except Exception:
+        _log.exception("Failed to commit webhook dedup cleanup for %d events", len(ids))
+        raise
 
     _log.info("Cleaned up %d old webhook trigger events", len(ids))
     return len(ids)
@@ -66,31 +65,22 @@ async def cleanup_old_webhook_events(
 # Celery task — wraps cleanup_old_webhook_events for Celery beat
 # ---------------------------------------------------------------------------
 
-CELERY_APP_GLOBAL: Any = None
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+_ENGINE_GLOBAL: AsyncEngine | None = None
 
 
-def get_celery_app() -> Any:
-    global CELERY_APP_GLOBAL
-    if CELERY_APP_GLOBAL is None:
-        from modulo.celery_app import get_celery_app as _get_celery_app
-
-        CELERY_APP_GLOBAL = _get_celery_app()
-    return CELERY_APP_GLOBAL
-
-
-_ENGINE_GLOBAL: Any = None
-
-
-def _get_engine() -> Any:
+def _get_engine() -> AsyncEngine:
     global _ENGINE_GLOBAL
     if _ENGINE_GLOBAL is None:
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        _ENGINE_GLOBAL = create_async_engine(get_settings().database_url)
+        _ENGINE_GLOBAL = create_async_engine(get_settings().database_url, poolclass=NullPool)
     return _ENGINE_GLOBAL
 
 
-class WebhookDedupCleanupTask(Task):  # type: ignore[misc]
+class WebhookDedupCleanupTask(_CeleryTask):  # type: ignore[misc]
     """Celery task that runs the webhook dedup cleanup once per hour."""
 
     name = "modulo.cleanup.webhook_dedup"
@@ -125,12 +115,14 @@ async def _run_cleanup() -> dict[str, Any]:
 _CLEANUP_INTERVAL_SECONDS = 3600  # run once per hour
 
 
-async def cleanup_scheduler_loop(factory: async_sessionmaker) -> None:
+async def cleanup_scheduler_loop(factory: async_sessionmaker[AsyncSession]) -> None:
     """Periodic background loop that purges old webhook trigger events.
 
-    Runs every ``_CLEANUP_INTERVAL_SECONDS``. Intended to be started as an
-    ``asyncio.Task`` alongside the cron/polling scheduler loops.
+    Runs every ``_CLEANUP_INTERVAL_SECONDS`` with exponential backoff on
+    failure. Intended to be started as an ``asyncio.Task`` alongside the
+    cron/polling scheduler loops.
     """
+    backoff = 1
     while True:
         try:
             total = 0
@@ -142,8 +134,11 @@ async def cleanup_scheduler_loop(factory: async_sessionmaker) -> None:
                         break
             if total > 0:
                 _log.info("Scheduled cleanup removed %d old webhook trigger events", total)
+            backoff = 1
             await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             break
         except Exception:
             _log.exception("Webhook dedup cleanup loop error")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _CLEANUP_INTERVAL_SECONDS)

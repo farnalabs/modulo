@@ -14,9 +14,24 @@ class CompositeTemplate(OrgScoped):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     sub_pipeline_graph_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     parameter_ports_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
-    input_schema_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
-    output_schema_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    input_schema_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        ForeignKey("schemas.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    output_schema_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        ForeignKey("schemas.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    parameter_schema_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        ForeignKey("parameter_schemas.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     version: Mapped[str] = mapped_column(String(50), nullable=False, default="1.0.0")
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False,
+        Uuid(),
+        ForeignKey("accounts.id", ondelete="RESTRICT"),
+        nullable=False,
     )

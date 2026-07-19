@@ -1,5 +1,6 @@
 """Minimal /api/v1/me endpoint — delegates to auth's /me logic."""
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -21,8 +22,8 @@ from modulo.api.routes.admin_remy import (
 )
 from modulo.api.routes.auth import MeResponse
 from modulo.api.routes.auth import me as _me_handler
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength, verify_password
 from modulo.core.remy.context_source_service import (
     ContextSourceResponseItem,
@@ -31,15 +32,18 @@ from modulo.core.remy.context_source_service import (
 from modulo.db.crud.account import get_account_by_id, update_account_preferences
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.remy_skill import RemySkill
+from modulo.db.rls import set_rls_org
 
 logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1", tags=["user"])
 
 
 @router.get("/me", response_model=MeResponse)
 @handle_db_errors("me.current_user_profile")
 async def current_user_profile(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MeResponse:
     return await _me_handler(current_user, session)
@@ -58,24 +62,18 @@ class SettingsUpdate(BaseModel):
 @router.get("/me/settings", response_model=SettingsResponse)
 @handle_db_errors("me.get_user_settings")
 async def get_user_settings(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
-
         async with session.begin():
             account = await get_account_by_id(session, current_user.account_id)
     except ProgrammingError:
-
         logger.exception("routes.me")
-
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
@@ -89,51 +87,38 @@ SUPPORTED_LOCALES = {"en-US"}
 @handle_db_errors("me.update_user_settings")
 async def update_user_settings(
     req: SettingsUpdate | None = None,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     if req is None:
         try:
-
             async with session.begin():
                 account = await get_account_by_id(session, current_user.account_id)
         except ProgrammingError:
-
             logger.exception("routes.me")
-
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
-
-            )
+            ) from None
 
         if account is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
         return account.preferences
-    prefs = {}
+    prefs: dict[str, object] = {}
     if req.theme is not None:
         prefs["theme"] = req.theme
     if req.locale is not None:
         prefs["locale"] = req.locale
     try:
-
         async with session.begin():
             return await update_account_preferences(session, current_user.account_id, prefs)
-
-
     except ProgrammingError:
-
         logger.exception("routes.me")
-
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
 
-        )
 
 class PasswordChangeRequest(BaseModel):
     current_password: str = Field(min_length=1)
@@ -144,11 +129,10 @@ class PasswordChangeRequest(BaseModel):
 @handle_db_errors("me.change_password")
 async def change_password(
     req: PasswordChangeRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, str]:
     try:
-
         async with session.begin():
             account = await get_account_by_id(session, current_user.account_id)
             if account is None:
@@ -160,7 +144,7 @@ async def change_password(
             try:
                 validate_password_strength(req.new_password)
             except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
             account.password_hash = hash_password(req.new_password)
             session.add(account)
@@ -168,23 +152,23 @@ async def change_password(
             families = await list_families_for_account(session, current_user.account_id)
             for family in families:
                 try:
-                    await blacklist_family(session, family.family_id)
+                    await blacklist_family(session, family.family_id, current_user.account_id)
                 except HTTPException:
                     raise
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
-                    logging.getLogger(__name__).warning("Failed to blacklist previous token family during password change for account %s", current_user.account_id)
+                    logging.getLogger(__name__).warning(
+                        "Failed to blacklist previous token family during password change for account %s",
+                        current_user.account_id,
+                    )
 
     except ProgrammingError:
-
         logger.exception("routes.me")
-
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return {"detail": "Password changed successfully"}
 
@@ -195,24 +179,19 @@ async def change_password(
 @router.get("/me/remy/skills", response_model=list[SkillResponse])
 @handle_db_errors("me.list_user_skills")
 async def list_user_skills(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SkillResponse]:
     try:
-
         async with session.begin():
-            skills = await get_user_skills(session, current_user.account_id)
+            await set_rls_org(session, current_user.organisation_id)
+            skills = await get_user_skills(session, current_user.account_id, current_user.organisation_id)
     except ProgrammingError:
-
         logger.exception("routes.me")
-
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return [_skill_to_response(s) for s in skills]
 
@@ -221,12 +200,12 @@ async def list_user_skills(
 @handle_db_errors("me.create_user_skill")
 async def create_user_skill(
     req: SkillCreate,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
     try:
-
         async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
             skill = RemySkill(
                 id=uuid.uuid4(),
                 organisation_id=None,
@@ -240,16 +219,11 @@ async def create_user_skill(
             session.add(skill)
             await session.flush()
     except ProgrammingError:
-
         logger.exception("routes.me")
-
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return _skill_to_response(skill)
 
@@ -259,12 +233,12 @@ async def create_user_skill(
 async def update_user_skill(
     skill_id: uuid.UUID,
     req: SkillUpdate,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
     try:
-
         async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
             skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
             if req.name is not None:
                 skill.name = req.name
@@ -278,16 +252,11 @@ async def update_user_skill(
                 skill.active = req.active
             await session.flush()
     except ProgrammingError:
-
         logger.exception("routes.me")
-
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return _skill_to_response(skill)
 
@@ -296,30 +265,24 @@ async def update_user_skill(
 @handle_db_errors("me.delete_user_skill")
 async def delete_user_skill(
     skill_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
-
         async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
             skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
             await session.delete(skill)
 
-
     # ── User-level Context Sources ─────────────────────────────────────────
 
-
     except ProgrammingError:
-
         logger.exception("routes.me")
-
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
 
-        )
 
 class ContextSourceModeUpdate(BaseModel):
     source_mode: str = Field(..., pattern=r"^(always_on|tool|off)$")
@@ -328,30 +291,20 @@ class ContextSourceModeUpdate(BaseModel):
 @router.get("/me/remy/context-sources")
 @handle_db_errors("me.get_user_context_sources")
 async def get_user_context_sources(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ContextSourceResponseItem]:
     try:
-
         async with session.begin():
             service = RemyContextSourceService(session)
-            config = await service.get_effective_config(
-                current_user.organisation_id, current_user.account_id
-            )
-            user_overrides = await service.get_user_overrides(
-                current_user.organisation_id, current_user.account_id
-            )
+            config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
+            user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
-
         logger.exception("routes.me")
-
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return service.build_effective_items(config.context_sources, user_overrides)
 
@@ -361,11 +314,10 @@ async def get_user_context_sources(
 async def set_user_context_source(
     source_key: str,
     req: ContextSourceModeUpdate,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ContextSourceResponseItem]:
     try:
-
         async with session.begin():
             service = RemyContextSourceService(session)
             await service.set_user_override(
@@ -374,23 +326,14 @@ async def set_user_context_source(
                 source_key,
                 req.source_mode,
             )
-            config = await service.get_effective_config(
-                current_user.organisation_id, current_user.account_id
-            )
-            user_overrides = await service.get_user_overrides(
-                current_user.organisation_id, current_user.account_id
-            )
+            config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
+            user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
-
         logger.exception("routes.me")
-
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return service.build_effective_items(config.context_sources, user_overrides)
 
@@ -398,29 +341,19 @@ async def set_user_context_source(
 @router.delete("/me/remy/context-sources", status_code=status.HTTP_200_OK)
 @handle_db_errors("me.reset_user_context_sources")
 async def reset_user_context_sources(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ContextSourceResponseItem]:
     try:
-
         async with session.begin():
             service = RemyContextSourceService(session)
-            await service.reset_user_overrides(
-                current_user.organisation_id, current_user.account_id
-            )
-            config = await service.get_effective_config(
-                current_user.organisation_id, current_user.account_id
-            )
+            await service.reset_user_overrides(current_user.organisation_id, current_user.account_id)
+            config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
-
         logger.exception("routes.me")
-
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return service.build_effective_items(config.context_sources, {})

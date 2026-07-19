@@ -1,6 +1,7 @@
 """Step definitions for PyPI Connector BDD scenarios."""
 
 import asyncio
+import contextlib
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,10 +14,8 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/pypi.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @pytest.fixture
@@ -50,10 +49,19 @@ def step_pypi_connector(ctx):
                 if not version:
                     raise ValueError("PyPI package_version query requires 'version' in filters")
                 return ConnectorResult(
-                    records=[{
-                        "info": {"name": pkg, "version": version},
-                        "releases": {version: [{"filename": f"{pkg}-{version}.tar.gz", "url": f"https://files.pythonhosted.org/packages/{pkg}-{version}.tar.gz"}]},
-                    }],
+                    records=[
+                        {
+                            "info": {"name": pkg, "version": version},
+                            "releases": {
+                                version: [
+                                    {
+                                        "filename": f"{pkg}-{version}.tar.gz",
+                                        "url": f"https://files.pythonhosted.org/packages/{pkg}-{version}.tar.gz",
+                                    }
+                                ]
+                            },
+                        }
+                    ],
                     total=1,
                 )
             case "search":
@@ -76,8 +84,16 @@ def step_pypi_connector(ctx):
                     raise ValueError("PyPI package_files query requires 'version' in filters")
                 return ConnectorResult(
                     records=[
-                        {"filename": f"{pkg}-{version}.tar.gz", "size": 102400, "url": f"https://files.pythonhosted.org/packages/{pkg}-{version}.tar.gz"},
-                        {"filename": f"{pkg}-{version}-py3-none-any.whl", "size": 51200, "url": f"https://files.pythonhosted.org/packages/{pkg}-{version}-py3-none-any.whl"},
+                        {
+                            "filename": f"{pkg}-{version}.tar.gz",
+                            "size": 102400,
+                            "url": f"https://files.pythonhosted.org/packages/{pkg}-{version}.tar.gz",
+                        },
+                        {
+                            "filename": f"{pkg}-{version}-py3-none-any.whl",
+                            "size": 51200,
+                            "url": f"https://files.pythonhosted.org/packages/{pkg}-{version}-py3-none-any.whl",
+                        },
                     ],
                     total=2,
                 )
@@ -120,9 +136,7 @@ def step_pypi_health_check(ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query PyPI resource "{resource}" with package "{pkg}"')
-)
+@when(parsers.parse('I query PyPI resource "{resource}" with package "{pkg}"'))
 def step_pypi_query_package(resource, pkg, ctx):
     q = ConnectorQuery(resource=resource, filters={"package": pkg})
     try:
@@ -134,9 +148,7 @@ def step_pypi_query_package(resource, pkg, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query PyPI resource "{resource}" with package "{pkg}" and version "{version}"')
-)
+@when(parsers.parse('I query PyPI resource "{resource}" with package "{pkg}" and version "{version}"'))
 def step_pypi_query_version(resource, pkg, version, ctx):
     q = ConnectorQuery(resource=resource, filters={"package": pkg, "version": version})
     try:
@@ -148,9 +160,7 @@ def step_pypi_query_version(resource, pkg, version, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query PyPI resource "{resource}" with text "{text}" and limit {limit:d}')
-)
+@when(parsers.parse('I query PyPI resource "{resource}" with text "{text}" and limit {limit:d}'))
 def step_pypi_query_search(resource, text, limit, ctx):
     q = ConnectorQuery(resource=resource, filters={"text": text}, limit=limit)
     try:
@@ -162,9 +172,7 @@ def step_pypi_query_search(resource, text, limit, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I write to PyPI resource "{resource}"')
-)
+@when(parsers.parse('I write to PyPI resource "{resource}"'))
 def step_pypi_write(resource, ctx):
     payload = ConnectorPayload(resource=resource, data={})
     try:

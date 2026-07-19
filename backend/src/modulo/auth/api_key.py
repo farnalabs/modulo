@@ -127,9 +127,7 @@ async def validate_api_key(
     ]
     if org_id is not None:
         filters.append(OrgApiKey.organisation_id == org_id)
-    result = await session.execute(
-        select(OrgApiKey).where(*filters)
-    )
+    result = await session.execute(select(OrgApiKey).where(*filters))
     keys = list(result.scalars())
     if not keys:
         _log.info("api_key.not_found", extra={"prefix": prefix, "org_id": str(org_id) if org_id else None})

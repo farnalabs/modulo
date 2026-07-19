@@ -2,6 +2,44 @@
 
 Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files → fix the conflict.
 
+## Diagnostic Order (MANDATORY — database/connection issues)
+
+When encountering ANY database connection error (`ConnectionResetError`, `ConnectionDoesNotExistError`, timeout, 503), follow this order BEFORE making code changes:
+
+1. **Check DB health** — `fly checks list --app modulo-app-db` (or the relevant DB app). If `pg` or `role` checks are critical/passing, the DB is fine. If critical, SSH in and restart: `fly ssh console --app <db-app> --machine <id> --command "su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'"`. The `check-db-health.ps1` watchdog runs every 5 minutes as a scheduled task — check its log first.
+
+2. **Check app health** — `fly status --app app-modulo`. Look at VERSION and CHECKS columns. Machines on the latest version with "passing" are healthy. Machines on old versions are stale and can be cleaned up.
+
+3. **Check machine logs** — `fly logs --app app-modulo --no-tail | Select-Object -Last 20`. Look for the actual exception type — this determines the root cause.
+
+4. **Check whether the handover framed the issue** — the previous handover may contain diagnostic bias. Always verify the DB is healthy before accepting "SSL issue" or "network issue" diagnoses.
+
+The most common root cause (July 2026): Postgres process crashes silently, new connection pools can't form, but old pools keep serving. Health check passes on old machines, fails on new ones. Fix is always: restart Postgres + bluegreen deploy.
+
+## Non-Negotiable Enforcement Gates
+
+The following enforcement mechanisms are STRUCTURALLY PROTECTED. Any agent observed weakening, bypassing, or removing any of these will be blocked with a violation. These rules exist because every previous gap (continue-on-error, WARN-only checks, skippable integration tests, no E2E in gate) was exploited by rot.
+
+### Gate rules (modify only with explicit human approval)
+1. **`continue-on-error: true` is FORBIDDEN** in all CI workflow files (`.github/workflows/*.yml`). Every job must fail CI when it fails. Legitimate uses require a post-step `if: failure()` aggregate that reports the collected failure.
+2. **`verify-main.ps1` must use `Fail` (not `Warn`) for all test, lint, type-check, and audit checks.** No check may log a warning and continue — every check must block with `$script:exitCode = 1`.
+3. **`gate.ps1` must run Playwright @smoke E2E tests** after the merge, from the main worktree. No merge completes without browser-level verification.
+4. **`gate.ps1` integration tests must run by default** (no `-SkipIntegration` opt-out). Integration tests may only be skipped when Docker is unavailable, and the skip must be documented.
+5. **`-SkipTests` in `gate.ps1` may ONLY be used for frontend-only changes where node_modules is unavailable in a worktree.** The Conductor must verify post-merge via `gate.ps1` without `-SkipTests`.
+
+### What counts as a violation
+- Adding `continue-on-error: true` to any CI job
+- Changing a `Fail` to `Warn` in `verify-main.ps1`
+- Removing or commenting out the Playwright @smoke step from `gate.ps1`
+- Adding a new skip parameter that bypasses test enforcement
+- Any change that makes a passing test no longer block the merge
+
+### How to verify gates are intact
+Run these checks before completing any session:
+- `Select-String -Pattern "continue-on-error: true" -Path ".github/workflows/*.yml"` — must not match product-map-validate or manifest-validate jobs
+- `Select-String -Pattern "Warn ""vue-tsc""" -Path "../devtools/harness/tools/verify-main.ps1"` — must not find it (should be `Fail`)
+- `Select-String -Pattern "playwright|@smoke" -Path "../devtools/harness/tools/gate.ps1"` — must find at least one match
+
 ## Git Workflow
 
 **Always use `git worktree` when branching.** Never check out branches in the main working tree — it must stay on `main`. Worktrees live under `.agents/worktrees/<branch-name>/`.
@@ -16,13 +54,32 @@ git worktree remove .agents/worktrees/<branch-name>
 git branch -d <branch-name>
 ```
 
-**Gate script:** `..\..\..\..\devtools\harness\tools\gate.ps1` runs the local CI suite (migration-collision check, backend pytest unit + architecture tests, frontend vitest, vue-tsc type-check, frontend build, eslint, ruff), bumps the semver in both version files AND their lockfiles, and merges the worktree branch to local main on success — does NOT push to remote. From the worktree root:
+**PR-based delivery (standard):** Create a worktree branch, implement, commit, then push and create a PR:
 ```powershell
-..\..\..\..\devtools\harness\tools\gate.ps1 -Branch <branch-name>
+# From worktree root:
+git push origin <branch-name>
+gh pr create --title "feat(<scope>): <summary>" --fill
 ```
-Accepts `-Semver patch|minor|major` (default patch) and `-SkipTests` (migration-collision check still runs). There is no `-Fast` or `-Yes` parameter.
+GitHub CI (ci.yml) validates the PR automatically. The `merge-to-main.yml` workflow
+squash-merges when all checks pass and the threshold is met. Track with:
+```powershell
+..\..\..\..\devtools\harness\tools\wait-for-pr.ps1 -PRNumber <N> -WaitForCI
+```
 
-**Publish:** A Windows scheduled task runs `publish.ps1` every 4 hours — it tests local main and pushes to remote only if clean. Remote main is always green.
+**Legacy gate.ps1** (local-only skills only [`find-and-fix`, `explore-deployment`]):
+`..\..\..\..\devtools\harness\tools\gate.ps1 -Branch <branch-name>` runs local CI
+and merges to local main. Accepts `-Semver patch|minor|major` (default patch),
+`-SkipTests` (migration-collision check still runs), and `-PushAndPR` to skip
+local merge and push+create PR instead.
+
+**New scripts (PR-based flow):**
+- `create-pr.ps1` - push branch + create PR from any worktree
+- `wait-for-pr.ps1` - poll a PR until it is merged (or timeout)
+- `pr-flow-config.ps1` - shared configuration for the PR-based delivery flow
+
+**Publish:** The scheduled `publish.ps1` is now verify-only (no push). Pushing to
+remote is handled by the GitHub `merge-to-main.yml` workflow when PRs are merged.
+If you see a CI failure on main, fix it immediately - do not merge on top of it.
 
 ### Subagent pattern (mandatory)
 
@@ -131,7 +188,7 @@ modulo/
 
 ## Stack (quick reference)
 
-- **Backend**: Python 3.12, uv, FastAPI, LangGraph, SQLAlchemy 2 async + asyncpg/aiosqlite/asyncmy, Alembic
+- **Backend**: Python 3.12, uv, FastAPI, LangGraph, SQLAlchemy 2 async + asyncpg/aiosqlite/aiomysql, Alembic
 - **Frontend**: Vue 3 (Composition API), Pinia, shadcn-vue + Radix Vue, Vue Flow, Tailwind, Playwright
 - **API types**: FastAPI OpenAPI → `openapi-typescript` → typed `openapi-fetch` client at `src/lib/api/schema.d.ts`
 - **Lint**: ruff, mypy --strict, bandit, semgrep, import-linter, gitleaks
@@ -143,17 +200,19 @@ modulo/
 
 ### Database
 - `SET LOCAL app.organisation_id = :org_id` **inside a transaction** — never bare `SET`. Semgrep-enforced.
-- All async DB uses `asyncpg` (Postgres), `aiosqlite` (SQLite), or `asyncmy` (MariaDB/MySQL). No `psycopg2`/`sqlite3` in async path. Semgrep-enforced.
+- All async DB uses `asyncpg` (Postgres), `aiosqlite` (SQLite), or `aiomysql` (MariaDB/MySQL). No `psycopg2`/`sqlite3` in async path. Semgrep-enforced.
 - Alembic `upgrade head` runs before `AsyncPostgresSaver.setup()` on startup. Postgres advisory lock for multi-worker startup.
 
 ### Multi-backend DB support
 
-Modulo supports three database backends, configurable via `MODULO_DB` env var:
+> **MariaDB is deprecated (2026-07-11).** MariaDB support was added as premature generality (see architecture critique 2026-07-09). Production and demo run on Postgres (Supabase). References are preserved for backward compatibility but MariaDB is not actively tested or maintained.
+
+Modulo nominally supports three database backends, configurable via `MODULO_DB` env var:
 
 | Backend | `MODULO_DB` | Driver | Default `DATABASE_URL` |
 |---|---|---|---|
 | PostgreSQL | `postgres` (default) | `asyncpg` | `postgresql+asyncpg://modulo:modulo@localhost:5432/modulo` |
-| MariaDB/MySQL | `mariadb` / `mysql` | `asyncmy` | `mysql+asyncmy://modulo:modulo@localhost:5435/modulo` |
+| MariaDB/MySQL | `mariadb` / `mysql` | `aiomysql` | `mysql+aiomysql://modulo:modulo@localhost:5435/modulo` |
 | SQLite | `sqlite` | `aiosqlite` | `sqlite+aiosqlite:///./modulo.db` |
 
 On non-Postgres backends, tenant isolation works via an auto-injected `WHERE organisation_id = :oid` clause instead of Postgres RLS (`set_config`). The `do_orm_execute` listener in `db/rls.py` handles this transparently — **zero changes** needed to CRUD functions or route handlers.
@@ -170,7 +229,7 @@ On non-Postgres backends, tenant isolation works via an auto-injected `WHERE org
 To run with MariaDB locally:
 ```powershell
 docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
-# Sets MODULO_DB=mariadb, DATABASE_URL=mysql+asyncmy://modulo:modulo@db:3306/modulo
+# Sets MODULO_DB=mariadb, DATABASE_URL=mysql+aiomysql://modulo:modulo@db:3306/modulo
 ```
 
 Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
@@ -428,9 +487,7 @@ npm run generate:api
 This runs `scripts/generate-api-types.ps1` which imports the backend, dumps the OpenAPI
 schema as JSON, and feeds it to `openapi-typescript` to produce the typed client.
 
-A pre-commit hook triggers this automatically whenever any file under `backend/src/` changes.
-If the generated `schema.ts` differs from what's staged, the commit fails — stage the
-updated `schema.ts` and retry.
+There is no pre-commit hook for this — the pre-commit framework runs `generate-api-types` as a manual-stage hook only (`gate.ps1` Phase 1d). You must regenerate manually or run `pre-commit run generate-api-types` when the backend API changes. If CI fails because `schema.ts` is out of date, run `npm run generate:api`, commit the updated file, and retry.
 
 ---
 
@@ -520,7 +577,105 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ## Lessons Learned
 
-### Deployment: checkpointer init silently fails when pg_connection_string strips sslmode
+#
+## Pre-commit hooks (appended from root AGENTS.md)
+
+`pre-commit` (4.6.0) is installed as a global uv tool and configured in
+`Repos/modulo/.pre-commit-config.yaml`. The framework manages the hook at
+`Repos/modulo/.git/hooks/pre-commit` and runs every commit.
+
+**Hooks are split into two stages:**
+
+| Runs on every commit (default) | Runs in gate.ps1 only (`stages: [manual]`) |
+|---|---|
+| `ruff --fix` (staged .py) | `mypy --strict src/` |
+| `ruff-format` (staged .py) | `vue-tsc type-check` |
+| `bandit -r backend/src/` | `pip-audit` (deps scan) |
+| `semgrep --config=.semgrep/` | `generate-api-types` |
+| `gitleaks` (secret scan) | |
+| `import-linter` | |
+| `eslint` (staged .vue/.ts) | |
+| `check-migration-heads` (if migrations staged) | |
+| `graph-validate` (if product-map changed) | |
+| `pre-commit-checks.ps1` (pattern scan) | |
+| `check-merge-conflict` | |
+| `check-yaml` / `check-toml` / `check-json` | |
+| `end-of-file-fixer` | |
+| `trailing-whitespace` | |
+| `no-commit-to-branch main` | |
+
+The split keeps per-commit hooks fast (<5s typical). Heavy hooks (mypy,
+vue-tsc, pip-audit) run when you gate via `gate.ps1`, which calls
+`pre-commit run --all-files --hook-stage manual` as Phase 1d.
+
+Migration collision check (`check-migration-heads.ps1`) runs both in
+pre-commit (when migration files staged) and in gate.ps1 Phase 0 (even
+with `-SkipTests`). If blocked: renumber your migration to the next free
+sequential number and fix its `down_revision` to point at the current head.
+
+### Rebasing: only when another branch merged first � and how to resolve conflicts
+
+In general, **no pre-rebase is needed** � the worktree branch is based on
+main and the PR flow handles merging. If another PR merged first (changing
+shared files), rebase to catch up.
+
+If the rebase produces conflicts, resolve them inline:
+
+1. Read all three versions: base, main (ours), worktree (theirs)
+2. Understand the intent of each side's change
+3. Produce a merged version that satisfies both intents � never silently
+   discard either side
+4. `git add` the resolved file and `git rebase --continue`
+
+**Do not rely on `-X theirs` or `-X ours` strategy flags.** These silently
+drop one side's changes. Inspect each conflict and produce a correct merge
+of both intents.
+
+After a successful rebase (all conflicts resolved), push and create a PR:
+```powershell
+..\..\..\..\devtools\harness\tools\create-pr.ps1 -Branch <worktree-branch> -TaskId <id>
+..\..\..\..\devtools\harness\tools\wait-for-pr.ps1 -PRNumber <N> -WaitForCI
+```
+
+### Test suites
+
+**Backend** � from `Repos/modulo/backend/`:
+```
+pytest tests/unit/ --tb=short -q --timeout=120
+```
+The backend suite takes ~35-40 min (14700+ tests). Frontend � from `Repos/modulo/frontend/`:
+```
+npm run test:unit
+```
+(478 tests, ~4 min). Both must pass before reporting "tests pass" or proceeding with any merge.
+
+### Frontend worktrees and node_modules
+
+`git worktree add` creates a new working tree with no installed dependencies.
+Frontend Workers cannot reliably run `npm run lint`, `npx vue-tsc`, or `npm test`
+inside worktrees. Workers implement and commit without frontend tooling;
+verification happens via GitHub CI on the PR.
+
+### Systemic patterns: apply as bulk sweeps, not per-feature QA
+
+When a pattern appears in multiple QA findings across different areas, stop
+iterating per-feature and write a systemic sweep instead. Run it as a Worker
+sub-agent in a single worktree branch, apply the pattern to all matching files,
+and merge once. This is faster, more complete, and cheaper in CI.
+
+### Test rot: fix it once across all files
+
+When a recurring test-rot pattern is identified (e.g. `created_by` ? `account_id`,
+`MagicMock` ? `AsyncMock`), fix it once across all test files as a standalone
+sweep rather than discovering it N times.
+
+### Parallel Workers and overlapping files
+
+When using `/distribute` with parallel Workers, check if any two groups'
+file footprints overlap. If they do, merge the groups or accept that the
+Conductor will resolve the conflict. When resolving, never silently discard
+either side's changes.
+## Deployment: checkpointer init silently fails when pg_connection_string strips sslmode
 
 `pg_connection_string()` had `.split("?")[0]` which stripped `?sslmode=require` from Fly.io's DATABASE_URL. psycopg's `AsyncConnection.connect()` needs SSL on Fly.io Postgres, so without sslmode the connection fails silently (exception is caught and logged as a warning). This means the `checkpoint_migrations` table is never created, which causes the health check to fail, which blocks bluegreen deployments.
 
@@ -689,6 +844,20 @@ If a UI element needs multi-line text (like a textarea placeholder with multiple
 
 - **Lost git stashes can be recovered via `git reflog` + `git stash store`.** The `git stash drop` command (or a trap handler that pops the wrong stash) only removes the `refs/stash` reference — the commit object remains in `.git/objects/` until garbage collection. Find the stash commit SHA via `git reflog --all | Select-String "stash"`, verify with `git cat-file -t <SHA>`, then restore with `git stash store <SHA>`. The stash will reappear at `stash@{0}`.
 
+- **Wrap every lifespan seed/init call in try/except — no single boot-time failure should block the app from starting.** The FastAPI lifespan runs migrations, seeds default data, and initialises the checkpointer. Any of these can crash from transient DB issues (SSL param changes, connection timeouts, schema drift from parallel branch merges). A single failed seed function in the lifespan crashes uvicorn at startup, which makes bluegreen deployments fail health checks and keeps stale machines running. Each call that isn't a hard prerequisite for the app to function (user seeds, demo data, environment profiles, checkpointer init, SSO providers, runtime config store) must be wrapped in `try/except` with `exc_info=True` logging so it's debuggable without blocking the deploy. Found during the ADR 001 staging deploy where `_seed_environment_profiles()` crashed from a DATABASE_URL SSL param issue.
+
+- **Before deploying, run `npm run build` locally to catch frontend build errors early.** The Docker build lacks interactivity and hides errors behind 10-minute retries. Common issues caught: Rolldown parser errors from Vue template syntax, missing dependencies imported but not in `package.json`, duplicate manifest.yaml keys from parallel distributed work. The local frontend build may fail due to a corrupted `lightningcss.win32-x64-msvc.node` binary (native module, Windows-specific). If that happens, delete `node_modules` and re-run `npm install` to regenerate the native binary.
+
+- **`package-lock.json` must be regenerated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions — it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `npm install <package> --save` and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports — this is a manual check. For CI, add a step that runs `node -e "require('./package.json').dependencies"` and cross-references against imports in `src/`.
+
+### entrypoint.sh: migration revision IDs must match actual Alembic filenames
+
+`backend/entrypoint.sh` referenced `alembic upgrade 0001_initial_schema` but the actual revision ID is `0001_v2_identity_org` (post-squash). Alembic hangs (doesn't error) when it can't find the target revision, causing the Docker backend container to never start. When renaming or squashing migrations, update `entrypoint.sh` to match.
+
+### Fix Workers must be scoped to specific files only
+
+The fix/pipelines-copy Worker touched files that were already modified by other Workers (LibraryView.vue, ABTestModelsView.vue, VariantCompareView.vue), causing merge conflicts on sequential merges. Worker prompts must explicitly list which files to modify and instruct the Worker not to touch any others. If a Worker needs to also fix related files, it should be split into a separate batch.
+
 ### Eval Engine / Error Handling Audit
 
 - **StrEnum validates at the Pydantic model level, not at the engine level.** `EvalType` is a `StrEnum`, so passing `"nonexistent_type"` to `EvalDefinition(eval_type="nonexistent_type")` raises `ValidationError` at construction, never reaching the `UnknownEvalTypeError` handler in the engine's `match/case` dispatch. The `UnknownEvalTypeError` is dead code for normal usage through the Pydantic model — it would only trigger if someone bypasses Pydantic (e.g. `object.__setattr__(eval_def, "eval_type", "bad")`). Tests for unknown-type dispatch must bypass Pydantic validation with `object.__setattr__`.
@@ -700,3 +869,47 @@ If a UI element needs multi-line text (like a textarea placeholder with multiple
 ### Ops / Database (Fly Postgres)
 
 - **Unmanaged Fly Postgres (`fly postgres create`) does NOT auto-restart on crash.** When PostgreSQL on a Flex Postgres machine crashes (e.g. OOM, disk full, segfault), the monitoring agent and `repmgrd` keep running but the `postgres` process stays down. There is no systemd unit to restart it. To recover: SSH into the DB machine (`fly ssh console --app <db-app>`) and run `su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'`. Consider adding a cron job or health check that restarts PostgreSQL if the process is missing. For production-critical DBs, migrate to Managed Postgres (`fly mpg create`).
+
+### ADR 003 supersedes ADR 001 — Modulo dispatches, it doesn't run agents
+
+The original ADR 001 "Agent Execution Environment" assumed Modulo agents would
+run inside sandboxed environments (E2B, Docker) with shell access via
+ShellConnector. This was the wrong strategy: established agent runtimes (Claude
+Code, opencode, Cursor) are far better at tool-using execution loops. Modulo
+should not compete with them.
+
+ADR 003 establishes the **Agent Dispatch Model**:
+- Modulo dispatches work to external agent runtimes in E2B sandboxes
+- The `sandbox_agent` node type provisions a sandbox, writes prompt + context,
+  runs the agent, collects structured output, and tears down
+- Modulo owns: dispatch, auth, audit, cost tracking, eval gates, HITL
+- The external agent runtime owns: the tool-using loop, file operations, git
+- Wall-clock time and exit code are captured natively on every dispatch
+- ShellConnector is deprecated — Modulo agents don't run inside sandboxes
+- Post-hoc eval of agent output is a separate Modulo pipeline (code review, etc.)
+
+When creating new pipeline features, prefer the `sandbox_agent` node type for
+code-generation tasks. The `agent` node type (single-shot LLM call) remains
+valid for non-coding tasks (classification, summarization, analysis).
+
+### Fly --strategy immediate desyncs the proxy routing table
+
+\lyctl deploy --strategy immediate\ replaces machines immediately, which desynchronizes Fly's edge proxy routing table from actual machine state. The machines remain healthy (health checks pass at 200), but the proxy returns 503 with "no known healthy instances found for route tcp/443" because old routing entries reference stale machines.
+
+**Symptoms:**
+- \lyctl status\ shows machines "started" with "1 total, 1 passing" health checks
+- Edge proxy returns 503
+- Individual restarts (\lyctl machine restart\, \lyctl apps restart\) do NOT fix it
+- The error message hints: "are you using the 'immediate' strategy?"
+
+**Fix � scale-to-zero then scale-up:**
+\\\powershell
+flyctl scale count 0 --yes -a app-modulo
+flyctl scale count 2 --yes -a app-modulo
+\\\
+This destroys all machines and creates fresh ones that register correctly with the proxy routing table.
+
+**Prevention:**
+- \[deploy] strategy = 'rolling'\ is set in \ly.toml\ and \ly.staging.toml\
+- Always use the deploy pipeline or \deploy.ps1\ � never \lyctl deploy\ directly
+- Never pass \--strategy immediate\ � rolling/canary/bluegreen are the safe options

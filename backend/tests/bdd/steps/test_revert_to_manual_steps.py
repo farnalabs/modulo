@@ -37,7 +37,8 @@ def set_node_back_to_manual(node_id: str, node_type: str, ctx, client, request):
     ctx["node_type"] = node_type
 
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph",
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
             return_value={"nodes": [{"id": node_id, "node_type": node_type}]},
         ),
     ):
@@ -132,6 +133,4 @@ def pipeline_matches_pre_agent_state(ctx, request):
     nodes = restored.graph_json.get("nodes", [])
     qa_node = next((n for n in nodes if n.get("id") == "qa-review"), None)
     assert qa_node is not None, "Expected qa-review node in restored snapshot"
-    assert qa_node.get("node_type") == "manual", (
-        f"Expected manual type, got {qa_node.get('node_type')}"
-    )
+    assert qa_node.get("node_type") == "manual", f"Expected manual type, got {qa_node.get('node_type')}"

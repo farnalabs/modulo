@@ -10,9 +10,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.pipeline import create_pipeline
 from modulo.db.crud.template import (
     _agent_count_from_content,
@@ -24,6 +25,8 @@ from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["templates"])
 
@@ -71,6 +74,7 @@ class FromTemplateResponse(BaseModel):
     edge_count: int
 
 
+@handle_db_errors("templates.list_templates_endpoint")
 @router.get("/templates", response_model=TemplateListResponse)
 async def list_templates_endpoint(
     page: int = Query(1, ge=1),
@@ -78,7 +82,7 @@ async def list_templates_endpoint(
     category: str | None = None,
     search: str | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> TemplateListResponse:
     try:
         async with session.begin():
@@ -98,18 +102,22 @@ async def list_templates_endpoint(
         )
     except HTTPException:
         raise
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
-    except ProgrammingError:
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="This feature is not available. Run database migrations to enable it.")
+        ) from exc
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from exc
     except Exception as e:
         logger.error("Unexpected error in list_templates_endpoint: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
+@handle_db_errors("templates.create_pipeline_from_template_endpoint")
 @router.post(
     "/pipelines/from-template/{template_id}",
     response_model=FromTemplateResponse,
@@ -118,7 +126,7 @@ async def list_templates_endpoint(
 async def create_pipeline_from_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> FromTemplateResponse:
     try:
         async with session.begin():
@@ -225,13 +233,16 @@ async def create_pipeline_from_template_endpoint(
         )
     except HTTPException:
         raise
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
-    except ProgrammingError:
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="This feature is not available. Run database migrations to enable it.")
+        ) from exc
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from exc
     except Exception as e:
         logger.error("Unexpected error in create_pipeline_from_template_endpoint: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e

@@ -1,8 +1,8 @@
 """Graph expansion engine — expands composite nodes inline into sub-pipeline nodes."""
 
+import asyncio
 import logging
 import re
-import time
 from typing import Any
 
 import jsonschema  # type: ignore[import-untyped]
@@ -118,6 +118,8 @@ def run_output_validation(
                     if not raw.get("passed"):
                         detail = raw.get("detail", "llm_judge evaluated as failed")
                         failures.append(_eval_fail(name, detail))
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     failures.append(_eval_fail(name, f"llm_judge raised: {exc}"))
 
@@ -127,7 +129,7 @@ def run_output_validation(
     return ValidationResult(passed=len(failures) == 0, failures=failures)
 
 
-def execute_composite_with_retry(
+async def execute_composite_with_retry(
     node_def: dict[str, Any],
     composite_template: dict[str, Any],
     parameter_values: dict[str, Any] | None = None,
@@ -211,7 +213,7 @@ def execute_composite_with_retry(
             len(result.failures),
         )
         if attempt_count < max_retries:
-            time.sleep(0.5 * (attempt_count + 1))
+            await asyncio.sleep(0.5 * (attempt_count + 1))
 
     raise CompositeValidationError(result.failures, max_retries)
 

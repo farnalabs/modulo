@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="remy-sessions">
     <div class="flex items-center justify-between p-3 border-b">
       <h3
@@ -11,7 +11,7 @@
         size="icon"
         @click="handleNewSession"
         :title="$t('components.remy.RemySessionDrawer.new_session')"
-        :aria-label="$t('remy.new_session')"
+        :aria-label="$t('components.remy.new_session')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -61,7 +61,7 @@
             class="remy-session-delete shrink-0"
             @click.stop="handleDelete(session.id)"
             title="Delete"
-            :aria-label="$t('remy.delete_session')"
+            :aria-label="$t('components.remy.delete_session')"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -97,6 +97,7 @@
 import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { Button } from "@/components/ui/button";
+import { formatDateShort } from "@/lib/formatDate";
 
 const emit = defineEmits<{
   close: [];
@@ -143,7 +144,7 @@ function formatTime(iso: string): string {
   if (diffHr < 24) return `${diffHr}h ago`;
   const diffDay = Math.floor(diffHr / 24);
   if (diffDay < 7) return `${diffDay}d ago`;
-  return d.toLocaleDateString();
+  return formatDateShort(d);
 }
 </script>
 

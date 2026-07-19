@@ -466,7 +466,13 @@ class TestMaxConcurrentRunsEnforcement:
     ) -> None:
         ctx = await self._make_private_trigger(db_engine, test_org, test_user, max_concurrent=5)
         await self._fill_active_runs(
-            db_engine, test_org, ctx["pipeline_id"], ctx["snapshot_id"], ctx["trigger_id"], 5, "reject",
+            db_engine,
+            test_org,
+            ctx["pipeline_id"],
+            ctx["snapshot_id"],
+            ctx["trigger_id"],
+            5,
+            "reject",
         )
 
         engine = TriggerEngine()
@@ -520,7 +526,13 @@ class TestMaxConcurrentRunsEnforcement:
     ) -> None:
         ctx = await self._make_private_trigger(db_engine, test_org, test_user, max_concurrent=3)
         await self._fill_active_runs(
-            db_engine, test_org, ctx["pipeline_id"], ctx["snapshot_id"], ctx["trigger_id"], 3, "lower",
+            db_engine,
+            test_org,
+            ctx["pipeline_id"],
+            ctx["snapshot_id"],
+            ctx["trigger_id"],
+            3,
+            "lower",
         )
 
         engine = TriggerEngine()

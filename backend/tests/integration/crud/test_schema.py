@@ -37,7 +37,9 @@ async def test_create_schema(rls_session: AsyncSession, test_org: uuid.UUID, tes
 
 
 async def test_get_schema_returns_existing(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     s = await create_schema(rls_session, org_id=test_org, name="FetchSchema", account_id=test_user)
     fetched = await get_schema(rls_session, s.id)
@@ -84,7 +86,9 @@ async def test_delete_schema_unknown_returns_false(rls_session: AsyncSession) ->
 
 
 async def test_delete_schema_protected_by_agent_reference(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     """delete_schema must raise SchemaDeletionProtectedError when an agent references it."""
     from modulo.db.crud.agent import create_agent
@@ -150,7 +154,9 @@ async def test_deprecate_schema(rls_session: AsyncSession, test_org: uuid.UUID, 
 
 
 async def test_deprecate_schema_twice_is_idempotent(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     s = await create_schema(rls_session, org_id=test_org, name="DeprecateTwice", account_id=test_user)
     first = await deprecate_schema(rls_session, s.id)
@@ -185,7 +191,9 @@ async def test_create_schema_version(rls_session: AsyncSession, test_org: uuid.U
 
 
 async def test_get_schema_version_returns_existing(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     s = await create_schema(rls_session, org_id=test_org, name=f"SVFetch-{uuid.uuid4().hex[:6]}", account_id=test_user)
     await create_schema_version(
@@ -203,7 +211,9 @@ async def test_get_schema_version_returns_existing(
 
 
 async def test_get_schema_version_returns_none_for_unknown(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     s = await create_schema(rls_session, org_id=test_org, name=f"SVMiss-{uuid.uuid4().hex[:6]}", account_id=test_user)
     assert await get_schema_version(rls_session, s.id, "99.0") is None

@@ -49,10 +49,15 @@ class RemyConfig(BaseModel):
     auto_execute_threshold: float = 0.8
     rate_limit_max_actions: int = 15
     rate_limit_window_seconds: int = 60
-    allowed_selectors: list[str] = Field(default_factory=list,
-        description="If non-empty, Remy can only interact with elements matching these CSS selectors or data-testid prefixes")  # noqa: E501
-    allowed_page_patterns: list[str] = Field(default_factory=list,
-        description="If non-empty, Remy can only navigate to pages matching these URL patterns")
+    allowed_selectors: list[str] = Field(
+        default_factory=list,
+        description=(
+            "If non-empty, Remy can only interact with elements matching these CSS selectors or data-testid prefixes"
+        ),
+    )
+    allowed_page_patterns: list[str] = Field(
+        default_factory=list, description="If non-empty, Remy can only navigate to pages matching these URL patterns"
+    )
     context_sources: dict[str, str] = Field(
         default_factory=lambda: {
             "page_context": "always_on",
@@ -69,7 +74,24 @@ class RemyConfig(BaseModel):
 _CONFIG_KEY_PREFIX = "remy_config:"
 
 PERMISSION_MODE_PRESETS: dict[str, dict[str, str]] = {
-    "full_auto": dict.fromkeys(["navigate", "click", "fill", "select", "extract", "extract_all", "get_page_interactables", "wait", "go_back", "get_url", "press"], "always_allowed"),
+    "full_auto": dict.fromkeys(
+        [
+            "navigate",
+            "click",
+            "fill",
+            "select",
+            "extract",
+            "extract_all",
+            "get_page_interactables",
+            "wait",
+            "go_back",
+            "get_url",
+            "press",
+            "get_manifest",
+            "undo_last_action",
+        ],
+        "always_allowed",
+    ),
     "safe": {
         "press": "requires_approval",
     },
@@ -80,6 +102,8 @@ PERMISSION_MODE_PRESETS: dict[str, dict[str, str]] = {
         "get_page_interactables": "always_allowed",
         "wait": "always_allowed",
         "get_url": "always_allowed",
+        "get_manifest": "always_allowed",
+        "undo_last_action": "always_allowed",
         "click": "requires_approval",
         "fill": "requires_approval",
         "select": "requires_approval",
@@ -125,9 +149,8 @@ class RemyConfigService:
                 key=f"{_CONFIG_KEY_PREFIX}{org_id}",
                 value=config.model_dump(),
             )
-            await self._session.commit()
+            await self._session.flush()
         except SQLAlchemyError:
-            await self._session.rollback()
             logger.exception("Failed to update Remy config for org %s", org_id)
             raise
 
@@ -152,7 +175,7 @@ class RemyConfigService:
         if user_id in allowed_user_ids:
             return True
 
-        if user_role.lower() in (r.lower() for r in access.get("org_roles", [])):
+        if user_role.lower() in (r.lower() for r in (access.get("org_roles") or [])):
             return True
 
         allowed_team_ids = _normalize_uuids(access.get("team_ids", []))

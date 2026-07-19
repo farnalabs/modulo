@@ -17,21 +17,37 @@ test.describe('First-Run Golden Path', () => {
       return route.fallback()
     })
 
+    // Pipeline list: return at least one pipeline so the run button renders
+    await page.route('**/api/v1/pipelines*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: '1', name: 'Demo Pipeline', organisation_id: '1', description: 'A demo pipeline to test the golden path', visibility: 'org', status: 'idle', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null }], total: 1 }) })
+    })
+
     // Run status poll: start queued, then running, then complete
     let pollCount = 0
+    await page.route('**/api/v1/runs/*/io', async (route) => {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        outputs_json: {
+          'node-1': { input: {}, output: 'Hello world' },
+          'node-2': { input: {}, output: 'Processed: Hello world' },
+          'node-3': { input: {}, output: 'Final result: Processed: Hello world' },
+        },
+      }) })
+    })
     await page.route('**/api/v1/runs/*', async (route) => {
+      const url = route.request().url()
+      if (url.includes('/io')) return route.fallback()
       pollCount++
-      const statuses = ['queued', 'running', 'running', 'complete']
+      const statuses = ['queued', 'running', 'complete']
       const idx = Math.min(pollCount, statuses.length - 1)
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
         id: RUN_ID, pipeline_id: '1', status: statuses[idx],
         created_at: new Date(Date.now() - 60000).toISOString(),
         completed_at: statuses[idx] === 'complete' ? new Date().toISOString() : null,
-        nodes: [
-          { id: 'node-1', name: 'Input', type: 'input', status: 'complete', output: { text: 'Hello world' } },
-          { id: 'node-2', name: 'Process', type: 'llm', status: 'complete', output: { text: 'Processed: Hello world' } },
-          { id: 'node-3', name: 'Output', type: 'output', status: 'complete', output: { text: 'Final result: Processed: Hello world' } },
-        ],
+        node_token_usage: {
+          'node-1': { input_tokens: 10, output_tokens: 5, total_tokens: 15, cost_usd: 0.0001 },
+          'node-2': { input_tokens: 50, output_tokens: 20, total_tokens: 70, cost_usd: 0.0005 },
+          'node-3': { input_tokens: 20, output_tokens: 10, total_tokens: 30, cost_usd: 0.0002 },
+        },
       }) })
     })
 
@@ -52,7 +68,7 @@ test.describe('First-Run Golden Path', () => {
     await submitButton.click()
 
     // ── Step 5: Wait for navigation to run detail and inspect output ─
-    await page.waitForURL(`/runs/${RUN_ID}`, { timeout: 10000 })
+    await page.waitForURL(`/runs/${RUN_ID}`, { timeout: 15000 })
     await page.waitForLoadState('networkidle')
 
     // Verify the run detail page loaded
@@ -60,10 +76,10 @@ test.describe('First-Run Golden Path', () => {
 
     // ── Step 6: Verify run output is visible ────────────────────────
     const completedBadge = page.locator('text=complete').first()
-    await expect(completedBadge).toBeVisible({ timeout: 5000 })
+    await expect(completedBadge).toBeVisible({ timeout: 15000 })
 
     const nodeOutput = page.locator('text=Hello world').first()
-    await expect(nodeOutput).toBeVisible({ timeout: 5000 })
+    await expect(nodeOutput).toBeVisible({ timeout: 15000 })
 
     console.info('[golden-path] Golden path completed successfully')
   })

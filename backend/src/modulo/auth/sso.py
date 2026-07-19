@@ -9,7 +9,6 @@ import urllib.parse
 import uuid
 import zlib
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import defusedxml.ElementTree as ET
 import httpx
@@ -158,20 +157,24 @@ async def apply_group_mappings(
 
 async def _lookup_provider_by_client_id(session: AsyncSession, client_id: str, org_id: uuid.UUID) -> SsoProvider | None:
     result = await session.execute(
-        select(SsoProvider).where(
+        select(SsoProvider)
+        .where(
             SsoProvider.client_id == client_id,
             SsoProvider.organisation_id == org_id,
-        ).limit(1)
+        )
+        .limit(1)
     )
     return result.scalar_one_or_none()
 
 
 async def _lookup_provider_by_entity_id(session: AsyncSession, entity_id: str, org_id: uuid.UUID) -> SsoProvider | None:
     result = await session.execute(
-        select(SsoProvider).where(
+        select(SsoProvider)
+        .where(
             SsoProvider.entity_id == entity_id,
             SsoProvider.organisation_id == org_id,
-        ).limit(1)
+        )
+        .limit(1)
     )
     return result.scalar_one_or_none()
 
@@ -223,7 +226,7 @@ async def oidc_get_authorize_url(
     except httpx.HTTPError as exc:
         raise ValueError(f"Failed to fetch discovery document: {exc}") from None
     auth_endpoint = disc.get("authorization_endpoint")
-    if not auth_endpoint:
+    if not isinstance(auth_endpoint, str) or not auth_endpoint:
         raise ValueError("No authorization_endpoint in discovery document")
 
     raw_state = str(uuid.uuid4())
@@ -251,7 +254,9 @@ async def oidc_process_callback(
     """Exchange auth code for tokens, JIT provision account, return JWT pair."""
     state_data = verify_state(state, settings.secret_key)
     if not state_data:
-        _log.warning("sso.csrf_state_mismatch", extra={"state_prefix": state[:20] + "..." if len(state) > 20 else state})
+        _log.warning(
+            "sso.csrf_state_mismatch", extra={"state_prefix": state[:20] + "..." if len(state) > 20 else state}
+        )
         raise ValueError("Invalid state parameter — possible CSRF")
 
     provider_id = state_data.split(":", 1)[0] if ":" in state_data else state_data
@@ -266,7 +271,7 @@ async def oidc_process_callback(
         raise ValueError(f"Failed to fetch discovery document: {exc}") from None
 
     token_endpoint = disc.get("token_endpoint")
-    if not token_endpoint:
+    if not isinstance(token_endpoint, str) or not token_endpoint:
         raise ValueError("No token_endpoint in discovery document")
 
     try:
@@ -280,11 +285,13 @@ async def oidc_process_callback(
     except httpx.HTTPError as exc:
         raise ValueError(f"Failed to exchange authorization code: {exc}") from None
 
-    id_token = token_data.get("id_token", "")
+    id_token = token_data.get("id_token")
+    if not isinstance(id_token, str) or not id_token:
+        raise ValueError("OIDC token response is missing a valid id_token")
 
-    jwks_uri = disc.get("jwks_uri", "")
-    issuer = disc.get("issuer", "")
-    if not jwks_uri or not issuer:
+    jwks_uri = disc.get("jwks_uri")
+    issuer = disc.get("issuer")
+    if not isinstance(jwks_uri, str) or not jwks_uri or not isinstance(issuer, str) or not issuer:
         raise ValueError(
             "OIDC provider discovery document is missing jwks_uri or issuer — "
             "cannot verify ID token signature. Check provider configuration."
@@ -323,18 +330,23 @@ def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
         return []
     try:
         entries = json.loads(settings.modulo_oidc_providers)
-    except (json.JSONDecodeError, TypeError):
-        _log.warning("sso.oidc_invalid_json")
+    except (json.JSONDecodeError, TypeError) as exc:
+        _log.warning("sso.oidc_invalid_json", extra={"error": str(exc)})
         return []
     if not isinstance(entries, list):
         _log.warning("sso.oidc_not_array", extra={"type": type(entries).__name__})
         return []
     valid = []
+    required_fields = ("provider_id", "client_id", "client_secret", "discovery_url")
     for entry in entries:
-        if all(k in entry for k in ("provider_id", "client_id", "client_secret", "discovery_url")):
+        if isinstance(entry, dict) and not any(key not in entry for key in required_fields):
             valid.append(entry)
         else:
-            safe_entry = {k: v for k, v in entry.items() if k != "client_secret"}
+            safe_entry = (
+                {key: value for key, value in entry.items() if key != "client_secret"}
+                if isinstance(entry, dict)
+                else {"invalid_type": type(entry).__name__}
+            )
             _log.warning("sso.oidc_entry_missing_fields", extra={"entry": str(safe_entry)})
     return valid
 
@@ -343,14 +355,28 @@ def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
 parse_oidc_providers = _parse_oidc_providers
 
 
-async def _fetch_discovery(discovery_url: str) -> dict[str, Any]:
+def _require_json_object(value: object, context: str) -> dict[str, object]:
+    """Validate and precisely type an object decoded from JSON."""
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be a JSON object")
+
+    result: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise ValueError(f"{context} contains a non-string key")
+        result[key] = item
+    return result
+
+
+async def _fetch_discovery(discovery_url: str) -> dict[str, object]:
     async with httpx.AsyncClient() as client:
         resp = await client.get(discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
         resp.raise_for_status()
         try:
-            return resp.json()
+            decoded = resp.json()
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON in discovery document: {exc}") from None
+        return _require_json_object(decoded, "OIDC discovery document")
 
 
 async def _exchange_code(
@@ -359,7 +385,7 @@ async def _exchange_code(
     client_secret: str,
     code: str,
     redirect_uri: str,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             token_endpoint,
@@ -374,10 +400,14 @@ async def _exchange_code(
             timeout=httpx.Timeout(15.0, connect=5.0),
         )
         resp.raise_for_status()
-        return resp.json()
+        try:
+            decoded = resp.json()
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in OIDC token response: {exc}") from None
+        return _require_json_object(decoded, "OIDC token response")
 
 
-def _decode_id_token_claims(id_token: str) -> dict[str, Any]:
+def _decode_id_token_claims(id_token: str) -> dict[str, object]:
     """Decode ID token claims without signature verification.
 
     The code exchange with the token endpoint is over HTTPS (transport-level
@@ -392,8 +422,10 @@ def _decode_id_token_claims(id_token: str) -> dict[str, Any]:
     try:
         pad = (4 - len(parts[1]) % 4) % 4
         padded = parts[1] + "=" * pad
-        return json.loads(base64.urlsafe_b64decode(padded))
-    except (ValueError, json.JSONDecodeError):
+        decoded = json.loads(base64.urlsafe_b64decode(padded))
+        return _require_json_object(decoded, "OIDC ID token claims")
+    except (ValueError, json.JSONDecodeError) as exc:
+        _log.warning("sso.id_token_decode_failed", extra={"error": str(exc)})
         return {}
 
 
@@ -474,6 +506,7 @@ async def saml_process_response(
         decoded = base64.b64decode(saml_response).decode()
         root = ET.fromstring(decoded)
     except (binascii.Error, ET.ParseError, UnicodeDecodeError, ValueError) as exc:
+        _log.warning("sso.saml_decode_failed", extra={"error": str(exc)})
         raise ValueError(str(exc)) from None
 
     try:
@@ -514,8 +547,11 @@ async def saml_process_response(
                             "sso.saml_clock_skew",
                             extra={"issue_instant": issue_instant_str, "now": now_utc.isoformat()},
                         )
-                except ValueError:
-                    _log.warning("sso.saml_unparseable_issue_instant", extra={"issue_instant": issue_instant_str})
+                except ValueError as exc:
+                    _log.warning(
+                        "sso.saml_unparseable_issue_instant",
+                        extra={"issue_instant": issue_instant_str, "error": str(exc)},
+                    )
 
         subject = assertion.find(".//saml:Subject/saml:NameID", ns)
         name_id = subject.text.strip() if subject is not None and subject.text else ""

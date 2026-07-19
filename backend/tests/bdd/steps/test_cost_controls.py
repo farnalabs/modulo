@@ -1,5 +1,6 @@
 """Step definitions for cost controls feature: token budget, spend limits, circuit breaker."""
 
+import contextlib
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -8,10 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/costs/cost_controls.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
@@ -100,6 +99,8 @@ def _use_viewer_auth() -> None:
         account_id=uuid.uuid4(),
         org_role="viewer",
     )
+
+
 # ===========================================================================
 
 
@@ -119,9 +120,7 @@ def org_has_spent_today(org_name: str, amount: str, ctx: dict[str, Any]) -> None
 
 
 @given(
-    parsers.parse(
-        'team "{team_name}" has a daily spend limit of ${limit}'
-    ),
+    parsers.parse('team "{team_name}" has a daily spend limit of ${limit}'),
 )
 def team_has_daily_spend_limit(team_name: str, limit: str, ctx: dict[str, Any]) -> None:
     ctx["team_spend_limit"] = Decimal(str(limit).replace(",", ""))
@@ -129,9 +128,7 @@ def team_has_daily_spend_limit(team_name: str, limit: str, ctx: dict[str, Any]) 
 
 
 @given(
-    parsers.parse(
-        'team "{team_name}" has already spent ${amount} today'
-    ),
+    parsers.parse('team "{team_name}" has already spent ${amount} today'),
 )
 def team_has_spent_today(team_name: str, amount: str, ctx: dict[str, Any]) -> None:
     ctx["team_spent_today"] = Decimal(str(amount).replace(",", ""))
@@ -243,30 +240,22 @@ def spend_approved(ctx: dict[str, Any]) -> None:
 )
 def spend_rejected(reason: str, ctx: dict[str, Any]) -> None:
     assert ctx.get("spend_approved") is False, "Expected spend to be rejected"
-    assert ctx.get("spend_reason") == reason, (
-        f"Expected reason '{reason}', got '{ctx.get('spend_reason')}'"
-    )
+    assert ctx.get("spend_reason") == reason, f"Expected reason '{reason}', got '{ctx.get('spend_reason')}'"
 
 
 @then("the org run count is not incremented")
 def org_run_count_not_incremented(ctx: dict[str, Any]) -> None:
-    assert ctx.get("spend_approved") is False, (
-        "Expected spend to be rejected, so run count should not increment"
-    )
+    assert ctx.get("spend_approved") is False, "Expected spend to be rejected, so run count should not increment"
 
 
 @then("the org run count is incremented")
 def org_run_count_incremented(ctx: dict[str, Any]) -> None:
-    assert ctx.get("spend_approved") is True, (
-        "Expected spend approved so run count should increment"
-    )
+    assert ctx.get("spend_approved") is True, "Expected spend approved so run count should increment"
 
 
 @then("the team run count is incremented")
 def team_run_count_incremented(ctx: dict[str, Any]) -> None:
-    assert ctx.get("spend_approved") is True, (
-        "Expected spend approved so team run count should increment"
-    )
+    assert ctx.get("spend_approved") is True, "Expected spend approved so team run count should increment"
 
 
 # ===========================================================================
@@ -275,18 +264,14 @@ def team_run_count_incremented(ctx: dict[str, Any]) -> None:
 
 
 @given(
-    parsers.parse(
-        'pipeline "{pipeline_name}" has a circuit breaker threshold of ${threshold}'
-    ),
+    parsers.parse('pipeline "{pipeline_name}" has a circuit breaker threshold of ${threshold}'),
 )
 def pipeline_has_circuit_breaker_threshold(pipeline_name: str, threshold: str) -> None:
     pytest.skip("Circuit breaker is not yet implemented")
 
 
 @given(
-    parsers.parse(
-        'pipeline "{pipeline_name}" has accumulated ${amount} this month'
-    ),
+    parsers.parse('pipeline "{pipeline_name}" has accumulated ${amount} this month'),
 )
 def pipeline_accumulated_amount(pipeline_name: str, amount: str) -> None:
     pytest.skip("Circuit breaker is not yet implemented")
@@ -302,9 +287,7 @@ def circuit_breaker_trips() -> None:
     pytest.skip("Circuit breaker is not yet implemented")
 
 
-@then(
-    parsers.parse("the pipeline trigger is permanently paused")
-)
+@then(parsers.parse("the pipeline trigger is permanently paused"))
 def pipeline_trigger_paused() -> None:
     pytest.skip("Circuit breaker is not yet implemented")
 
@@ -344,9 +327,7 @@ def new_runs_allowed() -> None:
 
 
 @when(
-    parsers.parse(
-        "I PUT /api/v1/admin/costs/limits/org with daily spend limit ${limit}"
-    ),
+    parsers.parse("I PUT /api/v1/admin/costs/limits/org with daily spend limit ${limit}"),
 )
 def admin_put_org_limit(limit: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
     org = MagicMock()
@@ -365,9 +346,7 @@ def admin_put_org_limit(limit: str, request: Any, ctx: dict[str, Any], client: A
 
 
 @when(
-    parsers.parse(
-        "I PUT /api/v1/admin/costs/limits/teams/{team_id} with daily spend limit ${limit}"
-    ),
+    parsers.parse("I PUT /api/v1/admin/costs/limits/teams/{team_id} with daily spend limit ${limit}"),
 )
 def admin_put_team_limit(team_id: str, limit: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
     team = MagicMock()
@@ -403,13 +382,9 @@ def admin_get_costs(request: Any, ctx: dict[str, Any], client: Any) -> None:
 
 
 @when(
-    parsers.parse(
-        'I GET /api/v1/admin/costs with group_by "{group_by}" and period "{period}"'
-    ),
+    parsers.parse('I GET /api/v1/admin/costs with group_by "{group_by}" and period "{period}"'),
 )
-def admin_get_costs_with_params(
-    group_by: str, period: str, request: Any, ctx: dict[str, Any], client: Any
-) -> None:
+def admin_get_costs_with_params(group_by: str, period: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
     rows = [
         {"entity_id": str(_ORG_ID), "entity_name": "Acme Corp", "total_spend_usd": 500.0, "total_runs": 25},
     ]

@@ -72,6 +72,8 @@ def _resolve_admin_auth(token: str | None) -> str | None:
             if principal.org_role not in ("admin", "owner"):
                 raise click.ClickException("Token is not an admin-level JWT")
             return str(principal.user_id)
+        except asyncio.CancelledError:
+            raise
         except click.ClickException:
             raise
         except Exception as exc:
@@ -202,7 +204,7 @@ def _write_jsonl(bundle: dict[str, Any], path: Path) -> dict[str, str]:
 
 
 async def _read_jsonl(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    if not path.exists():
+    if not await asyncio.to_thread(path.exists):
         raise click.ClickException(f"Input file not found: {path}")
     meta: dict[str, Any] = {}
     records: list[dict[str, Any]] = []
@@ -317,12 +319,16 @@ async def _import_org_data(
                             id_map[old_id_str] = str(getattr(new_obj, pk_col))
                         counts["created"] += 1
 
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 _log.exception("Error importing %s row %s: %s", table_name, row_id or "?", exc)
                 counts["errors"] += 1
 
         try:
             await session.flush()
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.error("Flush failed after importing table %s: %s", table_name, exc)
             raise
@@ -450,13 +456,15 @@ async def _async_export_org(
             record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
             click.echo(f"Exported {record_count} records to {output}")
             click.echo(f"Export hash: {hashes['__export__']}")
+    except asyncio.CancelledError:
+        raise
     except click.ClickException:
         raise
     except Exception as exc:
         raise click.ClickException(f"Export failed: {exc}") from exc
     finally:
-        if not export_completed and output.exists():
-            output.unlink(missing_ok=True)
+        if not export_completed and await asyncio.to_thread(output.exists):
+            await asyncio.to_thread(output.unlink, missing_ok=True)
 
 
 @cli.command()
@@ -488,9 +496,7 @@ def import_org(
 ) -> None:
     """Import organisation data from a JSONL bundle with conflict resolution."""
     parsed_org_id = _parse_uuid(org_id, "organisation ID")
-    asyncio.run(
-        _async_import_org(ctx, parsed_org_id, input_path, on_conflict, pipelines_only, users_only)
-    )
+    asyncio.run(_async_import_org(ctx, parsed_org_id, input_path, on_conflict, pipelines_only, users_only))
 
 
 async def _async_import_org(
@@ -501,24 +507,15 @@ async def _async_import_org(
     pipelines_only: bool,
     users_only: bool,
 ) -> None:
-    try:
-        async with AsyncSessionLocal() as session:
-            await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-    except click.ClickException:
-        raise
-    except Exception as exc:
-        raise click.ClickException(f"Auth verification failed: {exc}") from exc
-
     _meta, records = await _read_jsonl(input_path)
     click.echo(f"Loaded {len(records)} records from {input_path}")
 
     if _meta.get("export_hash") and not _verify_export(_meta, records):
-        raise click.ClickException(
-            "Import aborted: hash verification failed — file may be corrupted"
-        )
+        raise click.ClickException("Import aborted: hash verification failed — file may be corrupted")
 
     try:
         async with AsyncSessionLocal() as session:
+            await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
             counts = await _import_org_data(
                 session,
                 org_id,
@@ -534,6 +531,8 @@ async def _async_import_org(
                 f"{counts['skipped']} skipped, "
                 f"{counts['errors']} errors"
             )
+    except asyncio.CancelledError:
+        raise
     except click.ClickException:
         raise
     except Exception as exc:
@@ -559,6 +558,8 @@ def verify_export(ctx: click.Context, org_id: str, input_path: Path) -> None:
 async def _async_verify_export(ctx: click.Context, org_id: uuid.UUID, input_path: Path) -> None:
     try:
         meta, records = await _read_jsonl(input_path)
+    except asyncio.CancelledError:
+        raise
     except click.ClickException:
         raise
     except Exception as exc:

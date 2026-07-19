@@ -7,11 +7,11 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import jwt as pyjwt
 import pytest
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from jose import jwt as jose_jwt
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from modulo.auth.oidc_verify import (
     OidcVerifyError,
@@ -41,24 +41,6 @@ def _gen_rsa_keypair() -> tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey]:
     return private_key, private_key.public_key()
 
 
-def _pubkey_to_jwk(public_key: rsa.RSAPublicKey, kid: str = "test-key-1") -> dict:
-    pub_numbers = public_key.public_numbers()
-
-    def _int_to_base64url(num: int) -> str:
-        byte_len = (num.bit_length() + 7) // 8
-        num_bytes = num.to_bytes(byte_len, byteorder="big")
-        return base64.urlsafe_b64encode(num_bytes).rstrip(b"=").decode()
-
-    return {
-        "kty": "RSA",
-        "n": _int_to_base64url(pub_numbers.n),
-        "e": _int_to_base64url(pub_numbers.e),
-        "alg": "RS256",
-        "kid": kid,
-        "use": "sig",
-    }
-
-
 def _create_id_token(
     private_key: rsa.RSAPrivateKey,
     *,
@@ -82,7 +64,58 @@ def _create_id_token(
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     )
-    return str(jose_jwt.encode(claims, pem_key, algorithm="RS256", headers={"kid": kid}))
+    return str(pyjwt.encode(claims, pem_key, algorithm="RS256", headers={"kid": kid}))
+
+
+_RSA_KEYPAIR: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey] = _gen_rsa_keypair()
+_ID_TOKEN: str = _create_id_token(_RSA_KEYPAIR[0])
+
+
+def _pubkey_to_jwk(public_key: rsa.RSAPublicKey, kid: str = "test-key-1") -> dict:
+    pub_numbers = public_key.public_numbers()
+
+    def _int_to_base64url(num: int) -> str:
+        byte_len = (num.bit_length() + 7) // 8
+        num_bytes = num.to_bytes(byte_len, byteorder="big")
+        return base64.urlsafe_b64encode(num_bytes).rstrip(b"=").decode()
+
+    return {
+        "kty": "RSA",
+        "n": _int_to_base64url(pub_numbers.n),
+        "e": _int_to_base64url(pub_numbers.e),
+        "alg": "RS256",
+        "kid": kid,
+        "use": "sig",
+    }
+
+
+def _pubkey_to_ec_jwk(public_key: ec.EllipticCurvePublicKey, kid: str = "test-ec-key-1") -> dict:
+    numbers = public_key.public_numbers()
+
+    def _coordinate_to_base64url(value: int) -> str:
+        return base64.urlsafe_b64encode(value.to_bytes(32, byteorder="big")).rstrip(b"=").decode()
+
+    return {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": _coordinate_to_base64url(numbers.x),
+        "y": _coordinate_to_base64url(numbers.y),
+        "alg": "ES256",
+        "kid": kid,
+        "use": "sig",
+    }
+
+
+def _create_ec_id_token(private_key: ec.EllipticCurvePrivateKey, kid: str = "test-ec-key-1") -> str:
+    now = datetime.now(UTC)
+    claims = {
+        "sub": "ec-user",
+        "iss": _ISSUER,
+        "aud": _CLIENT_ID,
+        "iat": now,
+        "exp": now + timedelta(hours=1),
+    }
+    return str(pyjwt.encode(claims, private_key, algorithm="ES256", headers={"kid": kid}))
 
 
 def _discovery_doc(*, jwks_uri: str = _JWKS_URI, issuer: str = _ISSUER) -> dict:
@@ -142,7 +175,7 @@ def _reset_cache() -> None:
 
 @pytest.fixture()
 def keypair() -> tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey]:
-    return _gen_rsa_keypair()
+    return _RSA_KEYPAIR
 
 
 @pytest.fixture()
@@ -264,6 +297,18 @@ class TestVerifyValidToken:
             cls.return_value.__aenter__.return_value = mock_client
             claims = await verify_id_token(id_token, _JWKS_URI, _CLIENT_ID, _ISSUER)
             assert claims["sub"] == "user123"
+
+    async def test_verify_es256_token(self) -> None:
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        id_token = _create_ec_id_token(private_key)
+        jwks_resp = _make_resp(json_data={"keys": [_pubkey_to_ec_jwk(private_key.public_key())]})
+        mock_client = _make_httpx_mock({_JWKS_URI: jwks_resp})
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            claims = await verify_id_token(id_token, _JWKS_URI, _CLIENT_ID, _ISSUER)
+
+        assert claims["sub"] == "ec-user"
 
 
 # ---------------------------------------------------------------------------

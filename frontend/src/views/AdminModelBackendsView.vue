@@ -1,14 +1,11 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="model_backend_management" show-disabled>
     <div class="page-narrow">
       <header class="flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminModelBackendsView.model_backends') }}</h1>
-          <p class="mt-1 text-muted-foreground">{{ $t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials') }}</p>
-        </div>
+        <PageHeader :title="$t('views.AdminModelBackendsView.model_backends')" :subtitle="$t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials')" />
         <Button
           variant="default"
-          class="btn-glow border-primary/30 hover:border-primary/60"
+           class="border-primary/30 hover:border-primary/60"
           data-testid="admin-model-backends-add"
           @click="openAddForm"
         >
@@ -26,8 +23,8 @@
           <form @submit.prevent="createBackend">
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.name') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-14" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.name') }}</label>
+                <input id="adminmodelbackendsview-field-14"
                   v-model="formData.name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -36,8 +33,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-13" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
+                <input id="adminmodelbackendsview-field-13"
                   v-model="formData.display_name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -46,31 +43,31 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
-                <select
-                  v-model="formData.provider"
-                  aria-label="Provider"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  data-testid="admin-model-backends-provider-select"
-                >
-                  <option value="anthropic">{{ $t('views.AdminModelBackendsView.provider_anthropic') }}</option>
-                  <option value="openai">{{ $t('views.AdminModelBackendsView.provider_openai') }}</option>
-                  <option value="opencode">{{ $t('views.AdminModelBackendsView.provider_opencode') }}</option>
-                  <option value="azure_openai">{{ $t('views.AdminModelBackendsView.azure_openai') }}</option>
-                  <option value="ollama">{{ $t('views.AdminModelBackendsView.provider_ollama') }}</option>
-                  <option value="groq">{{ $t('views.AdminModelBackendsView.provider_groq') }}</option>
-                  <option value="deepseek">{{ $t('views.AdminModelBackendsView.provider_deepseek') }}</option>
-                  <option value="gemini">{{ $t('views.AdminModelBackendsView.provider_gemini') }}</option>
-                  <option value="mistral">{{ $t('views.AdminModelBackendsView.provider_mistral') }}</option>
-                  <option value="cohere">{{ $t('views.AdminModelBackendsView.provider_cohere') }}</option>
-                  <option value="togetherai">{{ $t('views.AdminModelBackendsView.provider_togetherai') }}</option>
-                  <option value="fireworks">{{ $t('views.AdminModelBackendsView.provider_fireworks') }}</option>
-                  <option value="openrouter">{{ $t('views.AdminModelBackendsView.provider_openrouter') }}</option>
-                </select>
+                <label for="adminmodelbackendsview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
+                <Select v-model="formData.provider">
+                  <SelectTrigger data-testid="admin-model-backends-provider-select" aria-label="Provider" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                    <SelectValue placeholder="anthropic" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="anthropic">{{ $t('views.AdminModelBackendsView.provider_anthropic') }}</SelectItem>
+                    <SelectItem value="openai">{{ $t('views.AdminModelBackendsView.provider_openai') }}</SelectItem>
+                    <SelectItem value="opencode">{{ $t('views.AdminModelBackendsView.provider_opencode') }}</SelectItem>
+                    <SelectItem value="azure_openai">{{ $t('views.AdminModelBackendsView.azure_openai') }}</SelectItem>
+                    <SelectItem value="ollama">{{ $t('views.AdminModelBackendsView.provider_ollama') }}</SelectItem>
+                    <SelectItem value="groq">{{ $t('views.AdminModelBackendsView.provider_groq') }}</SelectItem>
+                    <SelectItem value="deepseek">{{ $t('views.AdminModelBackendsView.provider_deepseek') }}</SelectItem>
+                    <SelectItem value="gemini">{{ $t('views.AdminModelBackendsView.provider_gemini') }}</SelectItem>
+                    <SelectItem value="mistral">{{ $t('views.AdminModelBackendsView.provider_mistral') }}</SelectItem>
+                    <SelectItem value="cohere">{{ $t('views.AdminModelBackendsView.provider_cohere') }}</SelectItem>
+                    <SelectItem value="togetherai">{{ $t('views.AdminModelBackendsView.provider_togetherai') }}</SelectItem>
+                    <SelectItem value="fireworks">{{ $t('views.AdminModelBackendsView.provider_fireworks') }}</SelectItem>
+                    <SelectItem value="openrouter">{{ $t('views.AdminModelBackendsView.provider_openrouter') }}</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div v-if="showBaseUrl">
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.base_url') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.base_url') }}</label>
+                <input id="adminmodelbackendsview-field-11"
                   v-model="formData.base_url"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -79,8 +76,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-10" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
+                <input id="adminmodelbackendsview-field-10"
                   v-model="formData.model_id"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -89,8 +86,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-9" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key') }}</label>
+                <input id="adminmodelbackendsview-field-9"
                   v-model="formData.api_key"
                   type="password"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -99,8 +96,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.default_params_json') }}</label>
-                <textarea
+                <label for="adminmodelbackendsview-field-8" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.default_params_json') }}</label>
+                <textarea id="adminmodelbackendsview-field-8"
                   v-model="formData.default_params"
                   rows="4"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -109,16 +106,16 @@
                 ></textarea>
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
-                <select
-                  v-model="formData.visibility"
-                  aria-label="Visibility"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  data-testid="admin-model-backends-visibility-select"
-                >
-                  <option value="org">{{ $t('views.AdminModelBackendsView.visibility_org') }}</option>
-                  <option value="private">{{ $t('views.AdminModelBackendsView.visibility_private') }}</option>
-                </select>
+                <label for="adminmodelbackendsview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
+                <Select v-model="formData.visibility">
+                  <SelectTrigger data-testid="admin-model-backends-visibility-select" aria-label="Visibility" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                    <SelectValue placeholder="org" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="org">{{ $t('views.AdminModelBackendsView.visibility_org') }}</SelectItem>
+                    <SelectItem value="private">{{ $t('views.AdminModelBackendsView.visibility_private') }}</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div class="flex items-center gap-2">
@@ -194,30 +191,7 @@
                   {{ backend.visibility }}
                 </td>
                 <td class="table-cell-numeric">
-                  <div class="flex items-center justify-end gap-1">
-                    <button
-                      class="rounded p-1 text-muted-foreground hover:bg-accent"
-                      data-testid="admin-model-backends-edit"
-                      :aria-label="$t('views.AdminModelBackendsView.edit_model_backend_1')"
-                      :title="$t('views.AdminModelBackendsView.edit_model_backend')"
-                      @click="openEditForm(backend)"
-                    >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                      </svg>
-                    </button>
-                    <button
-                      class="rounded p-1 text-destructive hover:bg-destructive/10"
-                      data-testid="admin-model-backends-delete"
-                      :aria-label="$t('views.AdminModelBackendsView.delete_model_backend')"
-                      :title="$t('views.AdminModelBackendsView.delete_model_backend_1')"
-                      @click="confirmDelete(backend)"
-                    >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                      </svg>
-                    </button>
-                  </div>
+                  <TableActions :actions="backendActions(backend)" />
                 </td>
               </tr>
             </tbody>
@@ -257,26 +231,7 @@
                   <span class="badge badge-context-amber text-xs">{{ $t('views.AdminModelBackendsView.preview_badge') }}</span>
                 </td>
                 <td class="table-cell-numeric">
-                    <div class="flex items-center justify-end gap-1">
-                      <button
-                        class="rounded p-1 text-muted-foreground hover:bg-accent"
-                        data-testid="admin-model-backends-edit"
-                        @click="openEditForm(backend)"
-                      >
-                        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                        </svg>
-                      </button>
-                      <button
-                        class="rounded p-1 text-destructive hover:bg-destructive/10"
-                        data-testid="admin-model-backends-delete"
-                        @click="confirmDelete(backend)"
-                      >
-                        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                        </svg>
-                      </button>
-                    </div>
+                    <TableActions :actions="backendActions(backend)" />
                   </td>
                 </tr>
               </tbody>
@@ -289,8 +244,8 @@
           <form @submit.prevent="updateBackend">
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.name') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.name') }}</label>
+                <input id="adminmodelbackendsview-field-6"
                   v-model="formData.name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -298,8 +253,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
+                <input id="adminmodelbackendsview-field-5"
                   v-model="formData.display_name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -307,8 +262,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
+                <input id="adminmodelbackendsview-field-4"
                   v-model="formData.model_id"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -316,8 +271,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key_leave_blank_to_keep_existing') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key_leave_blank_to_keep_existing') }}</label>
+                <input id="adminmodelbackendsview-field-3"
                   v-model="formData.api_key"
                   type="password"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -326,8 +281,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.default_params_json') }}</label>
-                <textarea
+                <label for="adminmodelbackendsview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.default_params_json') }}</label>
+                <textarea id="adminmodelbackendsview-field-2"
                   v-model="formData.default_params"
                   rows="4"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -335,16 +290,16 @@
                 ></textarea>
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
-                <select
-                  v-model="formData.visibility"
-                  aria-label="Visibility"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  data-testid="admin-model-backends-edit-visibility"
-                >
-                  <option value="org">{{ $t('views.AdminModelBackendsView.visibility_org') }}</option>
-                  <option value="private">{{ $t('views.AdminModelBackendsView.visibility_private') }}</option>
-                </select>
+                <label for="adminmodelbackendsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
+                <Select v-model="formData.visibility">
+                  <SelectTrigger data-testid="admin-model-backends-edit-visibility" aria-label="Visibility" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                    <SelectValue placeholder="org" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="org">{{ $t('views.AdminModelBackendsView.visibility_org') }}</SelectItem>
+                    <SelectItem value="private">{{ $t('views.AdminModelBackendsView.visibility_private') }}</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div class="flex items-center gap-2">
@@ -398,14 +353,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import { ref, reactive, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import TableActions from '../components/shared/TableActions.vue'
 
 type ModelBackendItem = components['schemas']['ModelBackendResponse']
 
@@ -437,14 +396,13 @@ function emptyForm(): BackendFormState {
   }
 }
 
-const backends = ref<ModelBackendItem[]>([])
+const { data: backendsResp, loading, error, load: loadBackends } = useDataFetch(
+  () => api.GET('/api/v1/model-backends'),
+  { initialValue: { items: [] } as { items: ModelBackendItem[] } }
+)
 
-// In-dev backends are hidden entirely; native backends stay in the primary
-// table; preview backends are segregated into a collapsed disclosure section.
-const nativeBackends = computed(() => backends.value.filter(b => (b.tier ?? 'native') !== 'preview' && (b.tier ?? 'native') !== 'in_dev'))
-const previewBackends = computed(() => backends.value.filter(b => b.tier === 'preview'))
-const loading = ref(true)
-const error = ref<string | null>(null)
+const nativeBackends = computed(() => (backendsResp.value?.items ?? []).filter(b => (b.tier ?? 'native') !== 'preview' && (b.tier ?? 'native') !== 'in_dev'))
+const previewBackends = computed(() => (backendsResp.value?.items ?? []).filter(b => b.tier === 'preview'))
 
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<BackendFormState>(emptyForm())
@@ -457,23 +415,6 @@ const deleteConfirmBackendId = ref<string | null>(null)
 const deleteConfirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
-
-async function loadBackends() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/model-backends')
-    if (err) {
-      error.value = `Failed to load model backends: ${formatApiError(err)}`
-    } else if (data) {
-      backends.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load model backends: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
 
 function openAddForm() {
   formMode.value = 'add'
@@ -569,8 +510,8 @@ async function createBackend() {
     if (err) {
       formError.value = formatApiError(err)
     } else if (data) {
-      backends.value.push(data)
       closeForm()
+      loadBackends()
     }
   } catch (e: unknown) {
     formError.value = formatApiError(e)
@@ -591,11 +532,8 @@ async function updateBackend() {
     if (err) {
       formError.value = formatApiError(err)
     } else if (data) {
-      const idx = backends.value.findIndex(b => b.id === editBackendId.value)
-      if (idx >= 0) {
-        backends.value[idx] = data
-      }
       closeEditForm()
+      loadBackends()
     }
   } catch (e: unknown) {
     formError.value = formatApiError(e)
@@ -622,8 +560,8 @@ async function deleteBackend() {
     if (err) {
       deleteError.value = formatApiError(err)
     } else if (response.status === 204 || response.ok) {
-      backends.value = backends.value.filter(b => b.id !== deleteConfirmBackendId.value)
       deleteConfirmBackendId.value = null
+      loadBackends()
     }
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
@@ -632,5 +570,21 @@ async function deleteBackend() {
   }
 }
 
-onMounted(loadBackends)
+function backendActions(backend: ModelBackendItem) {
+  return [
+    {
+      key: 'edit',
+      label: 'Edit',
+      onClick: () => openEditForm(backend),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(backend),
+      danger: true,
+    },
+  ]
+}
+
+/* onMounted handled by useDataFetch */
 </script>

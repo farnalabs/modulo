@@ -7,6 +7,7 @@ per-key isolation, and admin reconfiguration.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,10 +23,8 @@ from modulo.settings import Settings
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/rate_limiting.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +103,7 @@ def given_requests_made(ctx: dict[str, Any], count: int, path: str) -> None:
     ctx["rate_limit"] = _PATH_LIMITS.get(path, 60)
 
 
-@given(parsers.parse('I have exceeded my rate limit for POST {path}'))
+@given(parsers.parse("I have exceeded my rate limit for POST {path}"))
 def given_exceeded_limit(ctx: dict[str, Any], path: str) -> None:
     if "path_counts" not in ctx:
         ctx["path_counts"] = {}
@@ -257,9 +256,7 @@ def then_has_retry_after_header(request: pytest.FixtureRequest) -> None:
 def then_body_indicates_exceeded(request: pytest.FixtureRequest) -> None:
     resp = request.node.response
     body = resp.json()
-    assert body.get("error_code") == "rate_limit_exceeded", (
-        f"Expected error_code 'rate_limit_exceeded', got {body}"
-    )
+    assert body.get("error_code") == "rate_limit_exceeded", f"Expected error_code 'rate_limit_exceeded', got {body}"
 
 
 @then("the Retry-After value is at least 1")

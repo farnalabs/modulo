@@ -1,6 +1,7 @@
 """Step definitions for license management: upload, inspect, and verify license keys."""
 
 import base64
+import contextlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -8,10 +9,8 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/licensing/license_management.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 from modulo.core.license import (
     clear_license,
@@ -30,9 +29,7 @@ def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
     sig_bytes = bytes.fromhex(sig_hex)
     payload_b64 = (
-        base64.urlsafe_b64encode(
-            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-        )
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
         .decode()
         .rstrip("=")
     )
@@ -160,9 +157,7 @@ def tampered_license_key(ctx: dict[str, Any]) -> None:
     key = _sign_license_payload(payload)
     parts = key.split(".")
     tampered_payload_b64 = (
-        base64.urlsafe_b64encode(
-            json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode()
-        )
+        base64.urlsafe_b64encode(json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode())
         .decode()
         .rstrip("=")
     )
@@ -171,9 +166,7 @@ def tampered_license_key(ctx: dict[str, Any]) -> None:
 
 @given("I have an expired license key")
 def expired_license_key(ctx: dict[str, Any]) -> None:
-    payload = _valid_payload(
-        expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat()
-    )
+    payload = _valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
     ctx["license_key"] = _sign_license_payload(payload)
 
 
@@ -217,9 +210,7 @@ def post_license_key(request: Any, ctx: dict[str, Any], client: Any) -> None:
 @when(parsers.parse("I POST a license key to /api/v1/admin/license"))
 def post_license_key_generic(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_client(ctx)
-    resp = client.post(
-        "/api/v1/admin/license", json={"license_key": ctx.get("license_key", "dGVzdA==.dGVzdA==")}
-    )
+    resp = client.post("/api/v1/admin/license", json={"license_key": ctx.get("license_key", "dGVzdA==.dGVzdA==")})
     _store_response(request, ctx, resp)
 
 
@@ -246,9 +237,7 @@ def response_contains_features(features: str, request: Any) -> None:
     data = resp.json()
     expected = [f.strip() for f in features.split(",")]
     for feat in expected:
-        assert feat in data["features"], (
-            f"Expected feature '{feat}' in {data['features']}"
-        )
+        assert feat in data["features"], f"Expected feature '{feat}' in {data['features']}"
 
 
 @then(parsers.parse('the error detail mentions "{text}"'))
@@ -256,9 +245,7 @@ def error_detail_mentions(text: str, request: Any) -> None:
     resp = request.node._resp
     body = resp.json()
     detail = body.get("detail", "")
-    assert text.lower() in detail.lower(), (
-        f"Expected detail to mention '{text}', got '{detail}'"
-    )
+    assert text.lower() in detail.lower(), f"Expected detail to mention '{text}', got '{detail}'"
 
 
 @then("the response shows community tier")
@@ -287,18 +274,14 @@ def response_has_license_true(request: Any) -> None:
 def response_contains_org_id(org_id: str, request: Any) -> None:
     resp = request.node._resp
     data = resp.json()
-    assert data.get("org_id") == org_id, (
-        f"Expected org_id '{org_id}', got '{data.get('org_id')}'"
-    )
+    assert data.get("org_id") == org_id, f"Expected org_id '{org_id}', got '{data.get('org_id')}'"
 
 
 @then(parsers.parse('the response features include "{feature}"'))
 def response_features_include(feature: str, request: Any) -> None:
     resp = request.node._resp
     data = resp.json()
-    assert feature in data["features"], (
-        f"Expected feature '{feature}' in {data['features']}"
-    )
+    assert feature in data["features"], f"Expected feature '{feature}' in {data['features']}"
 
 
 @then("the response contains an expires_at date")

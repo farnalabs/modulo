@@ -178,7 +178,7 @@ and checkpoint resume.
 
 ## Error Handling
 
-- [x] RunNotFoundError returns "failed" with error_code="KeyError"
+- [x] RunNotFoundError returns "failed" with error_code="RunNotFoundError"
 - [x] GraphValidationError blocks run start, transitions run to "failed"
 - [x] Capacity timeout (lock_wait_seconds exceeded) — "failed" with error_code="lock_timeout"
 - [x] Node timeout via asyncio.wait_for — "failed" with error_code="node_timeout"

@@ -5,6 +5,7 @@ Exit code 0 = all covered. Exit code 1 = some feature files lack coverage.
 Usage:
     uv run python check-bdd-coverage.py
 """
+
 import re
 import sys
 from pathlib import Path
@@ -42,12 +43,9 @@ def main() -> int:
             missing.append(rel)
 
     if missing:
-        print(f"ERROR: {len(missing)} feature file(s) have no step definition coverage:")
         for m in missing:
-            print(f"  {m}")
-        print("\nAdd a scenarios('../features/<path>') call in the appropriate step file.")
+            pass
         return 1
-    print(f"OK: all {len(covered)} feature files have step definition coverage.")
     return 0
 
 

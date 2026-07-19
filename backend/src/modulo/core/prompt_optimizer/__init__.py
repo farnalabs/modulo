@@ -6,7 +6,7 @@ import logging
 import random
 import re
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
@@ -79,7 +79,11 @@ def _ensure_dict(value: Any) -> dict[str, Any]:
         return value
     if isinstance(value, str):
         try:
-            return cast("dict[str, Any]", json.loads(value))
+            result = json.loads(value)
+            if isinstance(result, dict):
+                return result
+            _log.warning("JSON parsed value is not a dict: got %s", type(result).__name__)
+            return {}
         except json.JSONDecodeError:
             _log.warning("Failed to parse JSON string as dict", exc_info=True)
             return {}
@@ -102,6 +106,9 @@ def _build_failure_context(
         eval_id = er.get("eval_id")
         eval_id_str = str(eval_id) if eval_id is not None else ""
         edef = eval_definitions.get(eval_id_str, {})
+        if not isinstance(edef, dict):
+            _log.warning("Skipping non-dict eval definition for %s: got %s", eval_id_str, type(edef).__name__)
+            edef = {}
         failures.append(
             {
                 "eval_name": edef.get("name", _UNKNOWN_LABEL),
@@ -148,30 +155,30 @@ def _parse_llm_response(raw: str) -> OptimizationResult:
             try:
                 parsed = json.loads(extracted)
             except json.JSONDecodeError as exc:
-                raise OptimizationFailedError(
-                    f"Failed to parse JSON from code-fenced response: {exc}"
-                ) from exc
+                raise OptimizationFailedError(f"Failed to parse JSON from code-fenced response: {exc}") from exc
         else:
-            raise OptimizationFailedError(
-                "LLM response is not valid JSON and contains no code-fenced block"
-            ) from None
+            raise OptimizationFailedError("LLM response is not valid JSON and contains no code-fenced block") from None
 
     if not isinstance(parsed, dict):
         _log.error("LLM response is valid JSON but not an object: got %s", type(parsed).__name__)
-        raise OptimizationFailedError(
-            f"LLM response is valid JSON but not an object: got {type(parsed).__name__}"
-        )
+        raise OptimizationFailedError(f"LLM response is valid JSON but not an object: got {type(parsed).__name__}")
 
-    try:
-        return OptimizationResult(
-            suggested_prompt=parsed["suggested_prompt"],
-            rationale=parsed["rationale"],
-            analysis=parsed.get("analysis", ""),
-        )
-    except KeyError as exc:
+    suggested_prompt = parsed.get("suggested_prompt")
+    rationale = parsed.get("rationale")
+    if not isinstance(suggested_prompt, str):
         raise OptimizationFailedError(
-            f"LLM response is missing required key: {exc}"
-        ) from exc
+            f"LLM response 'suggested_prompt' must be a string, got {type(suggested_prompt).__name__}"
+        )
+    if not isinstance(rationale, str):
+        raise OptimizationFailedError(f"LLM response 'rationale' must be a string, got {type(rationale).__name__}")
+    analysis = parsed.get("analysis")
+    if not isinstance(analysis, str):
+        analysis = ""
+    return OptimizationResult(
+        suggested_prompt=suggested_prompt,
+        rationale=rationale,
+        analysis=analysis,
+    )
 
 
 class PromptOptimizer:
@@ -229,6 +236,7 @@ class PromptOptimizer:
                     _LLM_TIMEOUT,
                     attempt + 1,
                     _MAX_RETRIES,
+                    exc_info=True,
                 )
                 last_exc = exc
             except OptimizationFailedError:
@@ -253,6 +261,4 @@ class PromptOptimizer:
                 await asyncio.sleep(total_delay)
 
         _log.error("LLM call failed after %d attempts", _MAX_RETRIES)
-        raise OptimizationFailedError(
-            f"LLM call failed after {_MAX_RETRIES} attempts"
-        ) from last_exc
+        raise OptimizationFailedError(f"LLM call failed after {_MAX_RETRIES} attempts") from last_exc

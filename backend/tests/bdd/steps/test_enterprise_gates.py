@@ -1,5 +1,6 @@
 """Step definitions for Team gate enforcement: SSO, RBAC, audit, spend limits."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,10 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/licensing/enterprise_gates.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
@@ -104,6 +103,7 @@ def _setup_client(license_key: str, client: Any, ctx: dict[str, Any]) -> None:
 
     get_settings.cache_clear()
     from modulo.core.license import clear_license
+
     clear_license()
 
 
@@ -121,8 +121,10 @@ def valid_team_license(ctx: dict[str, Any]) -> None:
 def expired_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = ""
     from modulo.core.license import clear_license
+
     clear_license()
     from modulo.settings import get_settings
+
     get_settings.cache_clear()
 
 
@@ -164,7 +166,7 @@ def get_admin_costs_limits(request: Any, ctx: dict[str, Any], client: Any) -> No
     with (
         patch("modulo.api.routes.costs.set_rls_org"),
         patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID, daily_spend_limit=None)),
-        patch("modulo.db.crud.team.list_teams", return_value=mock_page),
+        patch("modulo.api.routes.costs.list_teams", return_value=mock_page),
     ):
         resp = client.get("/api/v1/admin/costs/limits")
         _store_response(request, ctx, resp)
@@ -210,14 +212,10 @@ def error_detail_mentions(feature: str, request: Any) -> None:
     resp = request.node._resp
     body = resp.json()
     detail = body.get("detail", "")
-    assert feature.lower() in detail.lower(), (
-        f"Expected detail to mention '{feature}', got '{detail}'"
-    )
+    assert feature.lower() in detail.lower(), f"Expected detail to mention '{feature}', got '{detail}'"
 
 
-@then('the response does not contain 402 error')
+@then("the response does not contain 402 error")
 def response_no_402(request: Any) -> None:
     resp = request.node._resp
-    assert resp.status_code != 402, (
-        f"Expected non-402 status, got {resp.status_code}"
-    )
+    assert resp.status_code != 402, f"Expected non-402 status, got {resp.status_code}"

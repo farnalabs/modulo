@@ -45,3 +45,30 @@ In-app notification panel, SSE streaming, dashboard panel, dismiss/review-later 
 
 - [x] Admin view for delivery log
 - [x] Status tracking per notification
+
+## Error Handling
+
+- [x] Notification CRUD routes catch `ProgrammingError` → 501
+- [x] Notification CRUD routes catch `SQLAlchemyError` → 503
+- [x] Notification CRUD routes catch `Exception` → 500 with logging
+- [x] Missing notification ID returns 404
+- [x] SSE connection errors handled gracefully — client reconnects
+- [ ] All BDD steps are stubs — no runtime error path verification exists
+
+## Edge Cases
+
+- [x] Empty notification list returns empty response
+- [x] Dismissing already-dismissed notification is idempotent
+- [x] Dismiss all with no notifications is no-op
+- [ ] SSE connection with no new notifications — no heartbeat mechanism
+- [ ] Notification preferences return 501 — not implemented
+- [ ] `expires_at` not exposed in response (fixed per QA history)
+
+## Security
+
+- [x] Auth required for all notification endpoints
+- [x] Notifications are user-scoped — users only see their own notifications
+- [x] Admin delivery log requires operator role
+- [ ] No rate limiting on SSE connections
+
+## Known Gaps

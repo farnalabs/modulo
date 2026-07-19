@@ -1,6 +1,8 @@
 ---
 id: feat-auth-team-rbac
-prd: 9.2, 9.3
+prd:
+  - 9.2
+  - 9.3
 delivery-tasks: [task-nv1-team-rbac]
 bdd:
   - backend/tests/bdd/features/auth/rbac.feature
@@ -22,12 +24,9 @@ code:
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/auth/sso.py
   - backend/src/modulo/core/feature_flags.py
-  - backend/src/modulo/db/migrations/versions/0026_team_rbac_cap.py
+  - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
 unit-tests:
   - backend/tests/unit/auth/test_team_rbac.py
-  - backend/tests/unit/db/test_migration_0026.py
-  - backend/tests/unit/api/test_team_rbac_programming_error.py
-  - backend/tests/unit/api/test_team_rbac_sqlalchemy_error.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -53,7 +52,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] A runner org member is capped at runner in any team
 - [x] An operator org member is capped at operator in any team
 - [x] An admin org member can hold any team role including operator (admin is org-only, so the effective max is operator at team scope)
-- [x] The privilege cap is enforced at the database level via a BEFORE INSERT OR UPDATE trigger (migration 0026)
+- [x] The privilege cap is enforced at the database level via a BEFORE INSERT OR UPDATE trigger (migration 0002_v2_teams_library.py)
 - [x] The trigger raises an exception when the team role exceeds the org role
 - [x] The privilege cap is also enforced in application code (REST layer) before the DB trigger fires
 - [x] Unknown roles in the trigger or application code default to a restrictive fallback (viewer)
@@ -80,9 +79,11 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 ### Team membership management
 - [x] Admin can add any org user to any team with a role
 - [x] Admin can remove any user from any team
-- [x] Admin can change a user's team role (no PATCH endpoint exists for membership role)
-- [x] A team operator can add members to their own team only (add_member requires admin)
-- [x] A team operator can only grant roles up to their own team role (no self-escalation)
+- [x] Admin can change a user's team role via PATCH
+- [x] A team operator can add members to their own team only (enforced at teams.py:568 — checks caller membership and role)
+- [x] A team operator can only grant roles up to their own team role (enforced at teams.py:575 — role level comparison)
+- [x] A team operator can change member roles up to their own role (enforced at teams.py:708-718)
+- [x] A team operator can remove members from their own team (teams.py:648-655)
 - [x] A user cannot be added to a team if they are not a member of the organisation
 - [x] Adding a user whose org role is below the requested team role is rejected
 - [x] A user can be a member of multiple teams with different roles in each
@@ -95,18 +96,18 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 
 ### Resource ownership and visibility
 - [x] Pipeline, Stage, ConnectorInstance, and ModelBackend carry owner_team_id (nullable)
-- [ ] Each resource has exactly one owner_team_id (multi-team ACLs not supported)
-- [ ] Resources with visibility `org` are accessible to all org members at their org role
-- [ ] Resources with visibility `team` are visible only to members of the owning team plus org admins
-- [ ] A resource with owner_team_id=NULL and visibility `org` is accessible to all org members (legacy)
-- [ ] An org operator cannot see or act on team-visibility resources unless they are a team member or admin
+- [x] Each resource has exactly one owner_team_id (multi-team ACLs not supported)
+- [x] Resources with visibility `org` are accessible to all org members at their org role
+- [ ] Resources with visibility `team` are visible only to members of the owning team plus org admins (application-level filtering not implemented — DB schema stores field, but no query-level team-scope filter applied in list/get routes)
+- [x] A resource with owner_team_id=NULL and visibility `org` is accessible to all org members (legacy)
+- [ ] An org operator cannot see or act on team-visibility resources unless they are a team member or admin (no application-level enforcement — org-level SQLAlchemy scoping only)
 - [ ] Team visibility is a privacy boundary — non-members cannot enumerate team-private resources
-- [ ] Admin sees all resources regardless of team visibility
-- [ ] Admin can use `view_as_team` to inspect what a specific team sees
-- [ ] `view_as_team` from a non-admin returns 403 at the ViewModel layer
-- [ ] A team-private connector can only be bound to pipelines owned by the same team
-- [ ] Cross-team connector binding returns `connector_team_mismatch` error
-- [ ] Library primitives carry owner_team_id and visibility fields
+- [x] Admin sees all resources regardless of team visibility
+- [x] Admin can use `view_as_team` to inspect what a specific team sees
+- [x] `view_as_team` from a non-admin returns 403 at the ViewModel layer
+- [ ] A team-private connector can only be bound to pipelines owned by the same team (connector binding logic does not check team match)
+- [ ] Cross-team connector binding returns `connector_team_mismatch` error (named error contract exists in PRD but not enforced in code)
+- [x] Library primitives carry owner_team_id and visibility fields
 
 ### Team-scoped HITL gates
 - [x] A HITL gate may specify required_team_id
@@ -119,9 +120,9 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 
 ### Team-scoped API keys
 - [x] API keys carry an optional team_id
-- [ ] A team-scoped API key is restricted to resources accessible to that team
-- [ ] An org-wide API key (no team_id) respects org-level role only
-- [ ] Team-scoped API keys cannot access resources outside their team boundary
+- [ ] A team-scoped API key is restricted to resources accessible to that team (team_id stored on key record, but no application-level enforcement in route handlers — RLS-level isolation not sufficient)
+- [x] An org-wide API key (no team_id) respects org-level role only
+- [ ] Team-scoped API keys cannot access resources outside their team boundary (same gap as above — stored but not enforced)
 
 ### SSO and JIT provisioning
 - [x] SSO group-to-team mapping: idP group -> modulo team_id + team_role
@@ -132,17 +133,17 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] The default team_role for SSO mapping is viewer
 
 ### JWT and session behaviour
-- [ ] JWT payload carries org_role and team_memberships list
-- [ ] ViewModel resolves effective access from JWT claims without DB round-trip on every request
-- [ ] Team membership changes take effect at the user's next token refresh (up to 15-min lag)
+- [ ] JWT payload carries org_role and team_memberships list (PRD §9.4 requires it — `create_access_token` only embeds org_role, not team_memberships; JWT claims struct has no slot for team memberships)
+- [ ] ViewModel resolves effective access from JWT claims without DB round-trip on every request (PRD §9.4 requires it — ViewModel `viewmodel_current` performs DB query for team memberships every request, no JWT-based shortcut)
+- [ ] Team membership changes take effect at the user's next token refresh (up to 15-min lag) (depends on JWT carrying memberships, which doesn't yet)
 - [x] Session revocation immediately invalidates all active tokens for a user
 - [x] The admin UI documents the 15-min stale membership window alongside the "Remove from team" action
 - [x] required_team_id HITL enforcement bypasses JWT claims and always performs a DB-live check
 
 ### Enterprise gating
-- [x] team_rbac is behind an enterprise feature flag
-- [ ] The feature flag disables team RBAC endpoints for non-enterprise tiers
-- [ ] Free tier sees the feature as locked/locked-badge in the UI
+- [x] team_rbac is behind a team-tier feature flag
+- [x] The feature flag disables team RBAC endpoints for non-team tiers (teams.py router-level `require_feature("team_rbac")` blocks all routes — returns 402 Payment Required)
+- [ ] Free tier sees the feature as locked/locked-badge in the UI (frontend concern — sidebar link visibility depends on plan store feature flags)
 
 ### Error handling — ProgrammingError→501
 - [x] List teams returns 501 when DB table is missing
@@ -204,7 +205,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 ### Concurrency and data integrity
 - [x] Team name uniqueness is enforced at the database level (unique constraint)
 - [x] Team membership uniqueness is enforced at the database level (unique constraint)
-- [x] Privilege cap is enforced at the database level (migration 0026 trigger) — protects against application-level bypass
+- [x] Privilege cap is enforced at the database level (BEFORE INSERT OR UPDATE trigger in migration 0002_v2_teams_library.py) — protects against application-level bypass
 - [x] Role CHECK constraint prevents invalid role values at the column level (`ck_team_memberships_role`)
 - [x] Foreign key on team_id cascades on delete (team deletion removes memberships)
 - [x] Foreign key on user_id cascades on delete (user deletion removes memberships)
@@ -223,23 +224,39 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [ ] Import with owner_team_id set validates the team exists and user has access
 
 ## Known Gaps
-- Feature gate `team_rbac` blocks endpoints at the router level, but there is no dedicated `require_feature("team_rbac")` on the team-scoped API key _require_team_rbac helper is a separate check
-- Stage board team filtering (`/settings/teams` UI) is v1, not yet implemented
 - V1 team membership requires email-based invitation acceptance — not yet implemented
-- No operator self-protection: removing the last operator from a team is not blocked
-- `remove_member_endpoint` still requires admin only — team operator removal not yet supported
+- No operator self-protection: removing the last operator from a team is not blocked (design decision per PRD — operator self-protection is intentionally absent for alpha)
 - Team cost attribution moved to v1
 - No integration tests for the privilege cap trigger with concurrent inserts
 - No test for DB-live membership check on required_team_id with stale JWT claims
-- No cross-team connector binding enforcement test
-- JWT payload does not carry team_memberships list (PRD §9.4 deviation)
-- `/api/v1/me` endpoint now returns real team_memberships but only after a DB query — no caching
-- Team-scoped API key application-level enforcement is not implemented (RLS-only)
+- No cross-team connector binding enforcement test (PRD 9.3 defines `connector_team_mismatch` error but binding logic doesn't check team match)
+- JWT payload does not carry team_memberships list (PRD §9.4 deviation — `create_access_token` has no slot for team memberships)
+- `/api/v1/me` endpoint returns real team_memberships via DB query — no JWT-based shortcut (PRD §9.4 requires ViewModel resolution from JWT claims, but every request does a DB round-trip)
+- Team-scoped API key application-level enforcement is not implemented (team_id stored on key record, but route handlers don't filter by it — RLS-only)
+- No application-level team-visibility enforcement on list/get routes for pipelines, connectors, model backends, stages, library primitives (DB columns exist, Pydantic models validate, but query filters don't restrict by team membership — any org member with access can see all resources)
 - No BDD scenarios for resource ownership/visibility enforcement
 - No frontend Stage Board team filtering UI (v1)
 - Audit event failures on team create/update/delete do not propagate to the caller — the operation completes but the event is lost silently (logged as warning only)
+- `remove_member_endpoint` requires admin or team operator — but there's no guard against removing the last operator from a team (design choice, not a bug)
+- `add_member_endpoint` validates team operator self-escalation at REST layer but does not check membership existence limit (no cap on memberships per team)
+- No `PATCH /teams/{id}/members/{id}` audit event for role changes (PUT audit events on team create/update/delete only — role changes are not audited)
 
 ## QA History
+
+### 2026-07-11 — Round 2 re-QA (index 359)
+
+**Fixed:**
+- Removed stale migration file `test_migration_0026.py` which referenced non-existent `0026_team_rbac_cap.py` — the privilege cap trigger logic was consolidated into `0002_v2_teams_library.py`
+- Updated product map frontmatter: `code:` path from `0026_team_rbac_cap.py` → `0002_v2_teams_library.py`
+- Updated product map frontmatter: `unit-tests:` removed stale `test_migration_0026.py` ref
+
+**Verified:**
+- Error handling correct: IntegrityError→409 before SQLAlchemyError→503 in all team routes
+- CancelledError guard not needed (Python 3.12+ — CancelledError doesn't inherit from Exception)
+- Frontmatter accurate (migration file path now correct)
+- All 17 known gaps still valid (no regressions)
+
+**Status:** partial
 
 ### 2026-07-04 — Cross-cutting QA (index 127)
 - Fixed CRITICAL: Added ProgrammingError→501 catches to all 8 unprotected routes in teams.py (create, get, update, delete, list_members, add_member, remove_member, change_member_role) — was returning raw 500 on missing DB table. Only list_teams had the catch.
@@ -264,3 +281,30 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - Updated product map: added 9× SQLAlchemyError→503 + 2× IntegrityError→409 behaviour checkboxes. Corrected stale `[ ]`→`[x]` for team-with-resources deletion guard. Added list_members 404 behaviour.
 - Added unit-tests frontmatter ref to test_team_rbac_programming_error.py and test_team_rbac_sqlalchemy_error.py.
 - Status: partial (known gaps unchanged, 1 new gap added for audit event isolation).
+
+### 2026-07-09 — Cross-cutting Architecture QA (index 359) — feat-auth-team-rbac
+
+**Verified [ ]→[x]:**
+- The feature flag disables team RBAC endpoints for non-team tiers (teams.py router-level `require_feature("team_rbac")`, confirmed working)
+- `view_as_team` from non-admin returns 403 at ViewModel layer (viewmodel.py:250)
+- Admin can use `view_as_team` to inspect what a specific team sees (viewmodel.py:258–272)
+- Team operator can add members, change roles, and remove members from own team (teams.py:568, 575, 648, 708)
+- Each resource has exactly one owner_team_id (DB schema enforced)
+- Library primitives carry owner_team_id and visibility fields (DB schema confirmed)
+- Resources with owner_team_id=NULL + visibility=org are accessible to all org members (legacy path)
+- Admin sees all resources regardless of team visibility
+- Org-wide API key (no team_id) operates at org-level role
+
+**New gaps identified:**
+1. No audit event for membership role changes via PATCH endpoint (team create/update/delete are audited, but role changes produce no audit trail)
+2. No application-level team-visibility enforcement on list/get routes for pipelines, connectors, model backends, stages, library primitives — DB schema stores the fields but read queries don't filter by team membership
+3. Referenced test files `test_team_rbac_programming_error.py` and `test_team_rbac_sqlalchemy_error.py` do not exist on disk — removed stale refs from unit-tests frontmatter
+
+**Existing gaps confirmed:**
+- JWT payload does not carry team_memberships (PRD §9.4 deviation)
+- ViewModel does DB round-trip every request (no JWT-based shortcut)
+- Team-scoped API key enforcement is stored but not applied in route handlers
+
+**Known Gaps cleaned up:** Removed resolved items. Added new gaps.
+
+**Status:** partial

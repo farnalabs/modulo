@@ -1,8 +1,8 @@
 """SCIM 2.0 provisioning endpoints.
 
-Requires MODULO_SCIM_TOKEN env var for auth and MODULO_LICENSE_KEY for
-Team gating. Maps SCIM Users → internal User, SCIM Groups → internal
-Team + TeamMembership.
+Requires MODULO_SCIM_TOKEN env var for auth. Gated behind the "scim"
+feature flag (require_feature). Maps SCIM Users → internal User, SCIM
+Groups → internal Team + TeamMembership.
 """
 
 import logging
@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
+from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal, require_scim_feature
 from modulo.db.crud.scim import (
     scim_add_group_member,
     scim_create_group,
@@ -44,18 +44,11 @@ _SCIM_LIST_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
 _SCIM_ERROR_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:Error"
 _SCIM_PATCH_OP_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 
-_log = logging.getLogger(__name__)
-
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _license_gate(settings: Settings) -> None:
-    if not settings.modulo_license_key:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="SCIM provisioning requires a Team license",
-        )
+_log = logging.getLogger(__name__)
 
 
 def _scim_error(status_code: int, detail: str) -> HTTPException:
@@ -145,7 +138,7 @@ class ScimUserRequest(BaseModel):
     schemas: list[str]
     userName: str
     name: ScimName | None = None
-    emails: list[ScimEmail] = []
+    emails: list[ScimEmail] = Field(default_factory=list)
     active: bool = True
     externalId: str | None = None
 
@@ -153,7 +146,7 @@ class ScimUserRequest(BaseModel):
 class ScimGroupRequest(BaseModel):
     schemas: list[str]
     displayName: str
-    members: list[ScimMemberRef] = []
+    members: list[ScimMemberRef] = Field(default_factory=list)
     externalId: str | None = None
 
 
@@ -165,7 +158,7 @@ class ScimPatchOperation(BaseModel):
 
 class ScimPatchRequest(BaseModel):
     schemas: list[str]
-    Operations: list[ScimPatchOperation] = []
+    Operations: list[ScimPatchOperation] = Field(default_factory=list)
 
 
 class ScimListResponse(BaseModel):
@@ -176,22 +169,12 @@ class ScimListResponse(BaseModel):
     Resources: list[dict[str, object]]
 
 
-# ── Team license gate ──────────────────────────────────────────
-
-
-def _require_team(
-    settings: Settings = Depends(get_settings),
-) -> Settings:
-    _license_gate(settings)
-    return settings
-
-
 # ── ServiceProviderConfig ────────────────────────────────────────────
 
 
-@router.get("/ServiceProviderConfig")
+@router.get("/ServiceProviderConfig", dependencies=[Depends(require_scim_feature)])
 async def get_service_provider_config(
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
 ) -> dict[str, object]:
     return {
@@ -217,12 +200,12 @@ async def get_service_provider_config(
 # ── Users ────────────────────────────────────────────────────────────
 
 
-@router.get("/Users", response_model=ScimListResponse)
+@router.get("/Users", response_model=ScimListResponse, dependencies=[Depends(require_scim_feature)])
 async def list_users(
     filter: str | None = Query(None),
     startIndex: int = Query(1, ge=1),
     count: int = Query(20, ge=1, le=100),
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScimListResponse:
@@ -243,7 +226,7 @@ async def list_users(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -273,10 +256,10 @@ async def list_users(
     )
 
 
-@router.post("/Users", status_code=status.HTTP_201_CREATED)
+@router.post("/Users", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_scim_feature)])
 async def create_user(
     req: ScimUserRequest,
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -342,10 +325,10 @@ async def create_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
-@router.get("/Users/{user_id}")
+@router.get("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
 async def get_user(
     user_id: uuid.UUID,
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -360,7 +343,7 @@ async def get_user(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -386,11 +369,11 @@ async def get_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
-@router.put("/Users/{user_id}")
+@router.put("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
 async def replace_user(
     user_id: uuid.UUID,
     req: ScimUserRequest,
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -405,15 +388,18 @@ async def replace_user(
             account = await scim_update_user(
                 session,
                 account,
+                org_id=principal.organisation_id,
                 email=req.userName,
                 display_name=display_name,
                 active=req.active,
             )
+    except HTTPException:
+        raise
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -436,11 +422,11 @@ async def replace_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
-@router.patch("/Users/{user_id}")
+@router.patch("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
 async def patch_user(
     user_id: uuid.UUID,
     req: ScimPatchRequest,
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -475,9 +461,8 @@ async def patch_user(
                     if op.path == "active":
                         account.active = False
                 elif op.op == "add":
-                    if isinstance(op.value, dict):
-                        if "userName" in op.value:
-                            account.email = str(op.value["userName"])
+                    if isinstance(op.value, dict) and "userName" in op.value:
+                        account.email = str(op.value["userName"])
                         if "active" in op.value:
                             account.active = bool(op.value["active"])
 
@@ -489,7 +474,7 @@ async def patch_user(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -512,12 +497,12 @@ async def patch_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
-@router.delete("/Users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/Users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_scim_feature)])
 async def delete_user(
     user_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
 ) -> None:
     try:
         async with session.begin():
@@ -530,7 +515,7 @@ async def delete_user(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -557,12 +542,12 @@ async def delete_user(
 # ── Groups ───────────────────────────────────────────────────────────
 
 
-@router.get("/Groups", response_model=ScimListResponse)
+@router.get("/Groups", response_model=ScimListResponse, dependencies=[Depends(require_scim_feature)])
 async def list_groups(
     filter: str | None = Query(None),
     startIndex: int = Query(1, ge=1),
     count: int = Query(20, ge=1, le=100),
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScimListResponse:
@@ -582,8 +567,8 @@ async def list_groups(
                 memberships = await scim_list_group_members(session, g.id)
                 members = [
                     {
-                        "value": str(m.user_id),
-                        "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
+                        "value": str(m.account_id),
+                        "$ref": f"{base_url}/scim/v2/Users/{m.account_id}",
                         "type": "User",
                     }
                     for m in memberships
@@ -596,7 +581,7 @@ async def list_groups(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -625,10 +610,10 @@ async def list_groups(
     )
 
 
-@router.post("/Groups", status_code=status.HTTP_201_CREATED)
+@router.post("/Groups", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_scim_feature)])
 async def create_group(
     req: ScimGroupRequest,
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -718,10 +703,10 @@ async def create_group(
     return _group_to_scim(team, members, base_url)
 
 
-@router.get("/Groups/{group_id}")
+@router.get("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
 async def get_group(
     group_id: uuid.UUID,
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -735,8 +720,8 @@ async def get_group(
             memberships = await scim_list_group_members(session, group_id)
             members = [
                 {
-                    "value": str(m.user_id),
-                    "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
+                    "value": str(m.account_id),
+                    "$ref": f"{base_url}/scim/v2/Users/{m.account_id}",
                     "type": "User",
                 }
                 for m in memberships
@@ -748,7 +733,7 @@ async def get_group(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -771,11 +756,11 @@ async def get_group(
     return _group_to_scim(group, members, base_url)
 
 
-@router.put("/Groups/{group_id}")
+@router.put("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
 async def replace_group(
     group_id: uuid.UUID,
     req: ScimGroupRequest,
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -791,7 +776,7 @@ async def replace_group(
             # Replace all members: remove existing, add new
             existing_members = await scim_list_group_members(session, group.id)
             for em in existing_members:
-                await scim_remove_group_member(session, group.id, em.user_id)
+                await scim_remove_group_member(session, group.id, em.account_id)
 
             for member_ref in req.members:
                 try:
@@ -813,7 +798,7 @@ async def replace_group(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -845,11 +830,11 @@ async def replace_group(
     return _group_to_scim(group, members, base_url)
 
 
-@router.patch("/Groups/{group_id}")
+@router.patch("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
 async def patch_group(
     group_id: uuid.UUID,
     req: ScimPatchRequest,
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
@@ -866,26 +851,25 @@ async def patch_group(
                         status.HTTP_400_BAD_REQUEST,
                         f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
                     )
-                if op.op == "replace":
-                    if isinstance(op.value, dict):
-                        if "displayName" in op.value:
-                            await scim_update_group(session, group, name=str(op.value["displayName"]))
-                        if "members" in op.value and isinstance(op.value["members"], list):
-                            existing = await scim_list_group_members(session, group.id)
-                            for em in existing:
-                                await scim_remove_group_member(session, group.id, em.user_id)
-                            for m in op.value["members"]:
-                                if isinstance(m, dict) and "value" in m:
-                                    try:
-                                        uid = uuid.UUID(str(m["value"]))
-                                    except ValueError:
-                                        continue
-                                    await scim_add_group_member(
-                                        session,
-                                        org_id=principal.organisation_id,
-                                        team_id=group.id,
-                                        user_id=uid,
-                                    )
+                if op.op == "replace" and isinstance(op.value, dict):
+                    if "displayName" in op.value:
+                        await scim_update_group(session, group, name=str(op.value["displayName"]))
+                    if "members" in op.value and isinstance(op.value["members"], list):
+                        existing = await scim_list_group_members(session, group.id)
+                        for em in existing:
+                            await scim_remove_group_member(session, group.id, em.account_id)
+                        for m in op.value["members"]:
+                            if isinstance(m, dict) and "value" in m:
+                                try:
+                                    uid = uuid.UUID(str(m["value"]))
+                                except ValueError:
+                                    continue
+                                await scim_add_group_member(
+                                    session,
+                                    org_id=principal.organisation_id,
+                                    team_id=group.id,
+                                    user_id=uid,
+                                )
                 elif op.op == "add":
                     if op.path == "members" or op.path is None:
                         values = op.value
@@ -936,8 +920,8 @@ async def patch_group(
             memberships = await scim_list_group_members(session, group.id)
             members = [
                 {
-                    "value": str(m.user_id),
-                    "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
+                    "value": str(m.account_id),
+                    "$ref": f"{base_url}/scim/v2/Users/{m.account_id}",
                     "type": "User",
                 }
                 for m in memberships
@@ -949,7 +933,7 @@ async def patch_group(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -972,12 +956,16 @@ async def patch_group(
     return _group_to_scim(group, members, base_url)
 
 
-@router.delete("/Groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/Groups/{group_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_scim_feature)],
+)
 async def delete_group(
     group_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),
     session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(_require_team),
+    settings: Settings = Depends(get_settings),
 ) -> None:
     try:
         async with session.begin():
@@ -990,7 +978,7 @@ async def delete_group(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(

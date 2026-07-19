@@ -36,6 +36,9 @@ unit-tests:
   - backend/tests/unit/model_backends/test_vllm.py
   - backend/tests/unit/model_backends/test_watsonx.py
 code:
+  - backend/src/modulo/api/routes/mcp_setup.py
+  - backend/src/modulo/core/mcp_setup_handoff/
+  - backend/src/modulo/db/models/mcp_setup_token.py
   - backend/src/modulo/model_backends/base.py
   - backend/src/modulo/model_backends/anthropic/__init__.py
   - backend/src/modulo/model_backends/openai/__init__.py
@@ -124,7 +127,7 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [ ] `ReplicateBackend`: wraps `ChatReplicate` — no backend implementation file exists; enum value registered in `ModelBackendProvider` but factory has no `replicate` case
 - [ ] `Custom` backend (user-provided endpoint) — not implemented
 - [ ] Provider-specific `invoke()` param forwarding (e.g. `max_tokens` to Anthropic) — not validated
-- [ ] All 26 provider backends (missing `replicate`, `custom`) registered in `ModelBackendHub._build_backend()` factory — `replicate` and `custom` missing from factory; would fall through to plugin registry or raise `ValueError`
+- [x] All 26 provider backend implementations registered in `ModelBackendHub._build_backend()` factory; `replicate` and `custom` have enum entries but no factory case — would fall through to plugin registry or raise `ValueError`
 
 ### Credential Management — encryption and rotation
 
@@ -158,9 +161,9 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 
 - [x] `status` column on `ModelBackend` entity (server default `"active"`)
 - [x] Graph validator blocks inactive backends — `MODEL_BACKEND_INACTIVE` error when status != `"active"`
-- [x] Agent definitions reference `model_backend_id` (UUID FK to `model_backends.id`) — DB-level referential integrity
+- [x] Agent definitions reference `model_backend_id` (UUID FK to `model_backends.id` with `ON DELETE RESTRICT`) — DB-level referential integrity prevents deletion of backends referenced by agents
 - [x] PipelineSnapshot stores `model_backend_pins_json` — pinning at snapshot time prevents stale-backend runs
-- [ ] Hard delete blocked if referenced by any active agent definition — no explicit FK `ON DELETE RESTRICT` on agent's `model_backend_id`
+- [x] Hard delete blocked if referenced by any active agent definition — `ON DELETE RESTRICT` on agent FK enforces this at DB level
 - [ ] Hard delete blocked if referenced by any PipelineSnapshot associated with a non-terminal run
 - [ ] Soft-delete (`status: deprecated`) — `status` column exists but no soft-delete API or deprecation workflow
 - [ ] Deprecated backends serve in-progress runs but hidden from new pipeline pickers
@@ -192,7 +195,7 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [x] Unauthenticated access → 401/403 (confirmed by `test_list_model_backends_unauthenticated_returns_4xx`)
 - [x] Not-found on GET/PATCH/DELETE → 404
 - [x] Duplicate name on create → 409 (BDD scenario defined, with_for_update() on duplicate check, IntegrityError→409 catch for defense-in-depth)
-- [x] IntegrityError on CRUD operation → 409 Conflict (added to create route with dedicated handler)
+- [x] IntegrityError on CRUD operation → 409 Conflict (handled on all 5 routes)
 - [ ] Concurrent credential rotation and run start — rotation waits for active snapshot release
 - [ ] Null `model_id` in snapshot — validation error at run start, not at pipeline save time
 - [ ] Backend provider returns unexpected status code — mapped to typed error
@@ -212,13 +215,12 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 ### Unresolved
 
 - [ ] **No health check on save**: no test inference call when creating or updating a model backend
-- [ ] **No deletion protection**: no FK `ON DELETE RESTRICT` on agent `model_backend_id` — deleting a backend referenced by active agents would orphan agent references at DB level
 - [ ] **No soft-delete / deprecation workflow**: `status` column exists but no API to deprecate, no deprecation warning in graph validator (inactive = blocked entirely; no "deprecated but allowed" state)
 - [ ] **No cost tracking**: no pricing config integration, no cost calculation against pinned `model_id`
 - [ ] **No health check API route**: no standalone `/api/v1/model-backends/{id}/health` endpoint for manual revalidation
 - [ ] **No credential rotation endpoint**: PATCH handles key changes but no dedicated "rotate" action with post-rotation health check
 - [ ] **No health check result caching**: no staleness bound on health check results
-- [ ] **No duplicate name constraint**: DB-level unique constraint on `name` per org — relies on application-level check in CRUD (not yet implemented in `create_model_backend`)
+- [ ] **No DB-level unique constraint on name**: `name` uniqueness per org enforced at application level via `with_for_update()` check in create route — no DB UNIQUE constraint for defense-in-depth
 - [ ] **No rate limiting on model backend API endpoints**: only general per-endpoint rate limits apply
 - [ ] **No multi-backend test coverage**: `fallback_backend_ids` stored on entity but no runtime fallback logic verified in tests
 - [ ] **BDD rate_limiting.feature out of place**: rate_limiting.feature lives in model_backends directory but tests general API rate limiting (runs, webhooks, MCP), not backend-specific rate limiting
@@ -226,13 +228,10 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 
 ## QA History
 
+- 2026-07-08 (improve-architecture index 273): Cross-cutting QA. Fixed CRITICAL — `ModelBackendResponse.model_config` used `from_attributes: False` preventing `model_validate()` from ORM; changed to `from_attributes: True, populate_by_name: True` matching all other response models. `created_by` uses `validation_alias="account_id"` which requires `from_attributes=True`. Fixed CRITICAL — frontend provider dropdown sent `"google"` (backed expects `gemini`) and `"together"` (backed expects `togetherai`) — dead controls that always returned 422. Fixed CRITICAL — frontend created/had hardcoded English strings across entire view (add button, form labels, table headers, credentials badge, delete confirmation, action buttons) — wrapped ~30 strings in `$t()` wrappers with new i18n keys. Fixed CRITICAL — frontend error handlers used `String(err)` and `e instanceof Error ? e.message : String(e)` instead of `formatApiError(err)` — would display `[object Object]` on API errors. Fixed MAJOR — added `with_for_update()` to duplicate name check in create route (TOCTOU race prevention). Fixed MAJOR — added `except IntegrityError → 409` catch to create route (FK/constraint violations now return 409 instead of propagating to SQLAlchemyError→503). Fixed MAJOR — added `replicate` and `custom` to `_VALID_PROVIDERS` (were missing from API validation, so frontend provider dropdown options for these returned 422). Removed `replicate` and `custom` from frontend provider dropdown (no backend implementation — ReplicateBackend missing from factory, Custom not implemented). Added 1 new unit test `test_create_model_backend_integrity_error_returns_409` to `test_model_backends_endpoint.py`. Updated product map: added IntegrityError→409 behaviour checkbox, added QA History section. All existing tests pass (unchanged). Merged to main. Status: partial.
+- 2026-07-07 (improve-architecture index 313): Cross-cutting QA pass 4. **Fixed CRITICAL** — ModelBackendBase.health_check() did not catch asyncio.CancelledError (a BaseException subclass, not Exception in Python 3.12); added except asyncio.CancelledError: raise before generic except Exception so cancellation propagates correctly. **Fixed MAJOR** — PATCH endpoint crashed with AttributeError when api_key: null was passed (_encrypt(None, ...).encode()); added null guard that treats null api_key as no-op. **Fixed MINOR** — Hub initialise() silently succeeded when all backends failed decryption; added warning log when zero backends registered. Updated product map: added 3 new edge-case [x] checkboxes. All 11 known gaps from previous pass remain unresolved.
+- 2026-07-06 (qa-iterate prodmap model-backends): Fixes from code verification. Corrected exception base classes (`BackendNotFoundError(KeyError)`→`BackendNotFoundError(Exception)`, `BackendUnavailableError(RuntimeError)`→`BackendUnavailableError(Exception)`). Corrected `_build_backend` error message to `ValueError("Unknown model backend provider: {provider!r}")`. Corrected UUID fallback handling claim (caught, not uncaught). Fixed logging claim — Hub has 11+ logger calls; real gap is failover events not surfaced via `audit_logger` callback. Updated provider count from 25 to 28 (enum) / 26 (implemented). Added `opencode` to `code:` frontmatter and provider list. Added `custom` to provider list. Updated ReplicateBackend gap to also cover CustomBackend.
+- 2026-07-05 (qa-iterate prodmap model-backends): Corrected false claims: ReplicateBackend changed from `[x]` to `[ ]` (no backend implementation file exists; enum-only). "All 26 provider backends registered" changed from `[x]` to `[ ]` (only 25 built-in; `replicate` missing from `_build_backend()` factory). Updated provider count text from "26 providers" to "25 providers; replicate registered in enum but no backend implementation". Added ReplicateBackend missing to Known Gaps.
 - 2026-07-03 (improve-architecture index 84): Cross-cutting QA pass 2. Fixed massively stale product map — marked 40+ behaviours [ ]→[x] across DB entity, Fernet encryption, CRUD API routes, PipelineSnapshot pinning, graph validator health checks, and BDD step definitions. Resolved 5 stale known gaps (DB entity, credential encryption, model_backend_pins_json, BDD steps, REST API). Added ReplicateBackend to provider list. Added 11 new known gaps (no health check on save, no deletion protection FK, no soft-delete, no cost tracking, no health API route, no credential rotation endpoint, no caching, no duplicate name constraint, no rate limiting, no multi-backend fallback test coverage, rate_limiting.feature out of place). Added 9 edge case [x] from error path audit (MODEL_BACKEND_NOT_FOUND/INACTIVE/UNHEALTHY, 404, 501, 401/403, credential encryption). Created website docs stub.
 - 2026-07-02 (improve-architecture index 53): Cross-cutting QA pass 1. Fixed frontmatter YAML (bdd/unit-tests/code paths). Added 22 missing provider backends. Added 5 BDD feature file refs. Marked health_check method and HealthResult dataclass as [x].
-
-## QA History (index 273)
-
-- 2026-07-08 (improve-architecture index 273): Cross-cutting QA. Fixed CRITICAL — `ModelBackendResponse.model_config` used `from_attributes: False` preventing `model_validate()` from ORM; changed to `from_attributes: True, populate_by_name: True` matching all other response models. `created_by` uses `validation_alias="account_id"` which requires `from_attributes=True`. Fixed CRITICAL — frontend provider dropdown sent `"google"` (backed expects `gemini`) and `"together"` (backed expects `togetherai`) — dead controls that always returned 422. Fixed CRITICAL — frontend created/had hardcoded English strings across entire view (add button, form labels, table headers, credentials badge, delete confirmation, action buttons) — wrapped ~30 strings in `$t()` wrappers with new i18n keys. Fixed CRITICAL — frontend error handlers used `String(err)` and `e instanceof Error ? e.message : String(e)` instead of `formatApiError(err)` — would display `[object Object]` on API errors. Fixed MAJOR — added `with_for_update()` to duplicate name check in create route (TOCTOU race prevention). Fixed MAJOR — added `except IntegrityError → 409` catch to create route (FK/constraint violations now return 409 instead of propagating to SQLAlchemyError→503). Fixed MAJOR — added `replicate` and `custom` to `_VALID_PROVIDERS` (were missing from API validation, so frontend provider dropdown options for these returned 422). Removed `replicate` and `custom` from frontend provider dropdown (no backend implementation — ReplicateBackend missing from factory, Custom not implemented). Added 1 new unit test `test_create_model_backend_integrity_error_returns_409` to `test_model_backends_endpoint.py`. Updated product map: added IntegrityError→409 behaviour checkbox, added QA History section. All existing tests pass (unchanged). Merged to main. Status: partial.
-- 2026-07-05 (qa-iterate prodmap model-backends): Corrected false claims: ReplicateBackend changed from `[x]` to `[ ]` (no backend implementation file exists; enum-only). "All 26 provider backends registered" changed from `[x]` to `[ ]` (only 25 built-in; `replicate` missing from `_build_backend()` factory). Updated provider count text from "26 providers" to "25 providers; replicate registered in enum but no backend implementation". Added ReplicateBackend missing to Known Gaps.
-- 2026-07-06 (qa-iterate prodmap model-backends): Fixes from code verification. Corrected exception base classes (`BackendNotFoundError(KeyError)`→`BackendNotFoundError(Exception)`, `BackendUnavailableError(RuntimeError)`→`BackendUnavailableError(Exception)`). Corrected `_build_backend` error message to `ValueError("Unknown model backend provider: {provider!r}")`. Corrected UUID fallback handling claim (caught, not uncaught). Fixed logging claim — Hub has 11+ logger calls; real gap is failover events not surfaced via `audit_logger` callback. Updated provider count from 25 to 28 (enum) / 26 (implemented). Added `opencode` to `code:` frontmatter and provider list. Added `custom` to provider list. Updated ReplicateBackend gap to also cover CustomBackend.
-
-- 2026-07-07 (improve-architecture index 313): Cross-cutting QA pass 4. **Fixed CRITICAL** � ModelBackendBase.health_check() did not catch asyncio.CancelledError (a BaseException subclass, not Exception in Python 3.12); added except asyncio.CancelledError: raise before generic except Exception so cancellation propagates correctly. **Fixed MAJOR** � PATCH endpoint crashed with AttributeError when api_key: null was passed (_encrypt(None, ...).encode()); added null guard that treats null api_key as no-op. **Fixed MINOR** � Hub initialise() silently succeeded when all backends failed decryption; added warning log when zero backends registered. Updated product map: added 3 new edge-case [x] checkboxes. All 11 known gaps from previous pass remain unresolved.
+- 2026-07-12 (qa-iterate r2-docs-mb-66): Code verification pass. Corrected stale factory registration count — all 26 implementations registered in `_build_backend()` factory (was claimed "only 24 of 26"). Updated IntegrityError claim — handled on all 5 routes (was claimed "create route only").

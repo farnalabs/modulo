@@ -1,5 +1,6 @@
 """Admin-only routes for organisation, user, team, and billing management."""
 
+import asyncio
 import logging
 import secrets
 import uuid
@@ -11,16 +12,17 @@ from sqlalchemy import Date, case, cast, delete, func, select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.api_key import revoke_api_key
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import detect_regressions
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
-from modulo.db.crud.org_membership import create_membership
+from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.organisation import get_organisation, update_organisation
 from modulo.db.crud.publisher import (
     create_publisher,
@@ -57,6 +59,7 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
 
+
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
@@ -76,13 +79,14 @@ class SearchResponse(BaseModel):
     total_by_type: dict[str, int]
 
 
+@handle_db_errors("admin.global_search")
 @router.get("/search", response_model=SearchResponse)
 async def global_search(
     q: str = Query(min_length=1),
     type_filter: str = Query(default="all", alias="type", pattern=r"^(all|pipeline|run|audit|library)$"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SearchResponse:
     if current_user.org_role not in ("admin", "operator"):
@@ -92,7 +96,6 @@ async def global_search(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
 
@@ -111,10 +114,10 @@ async def global_search(
                         await session.execute(
                             text("""
                                 SELECT id, name, description,
-                                    CASE WHEN name ILIKE :prefix THEN 2 ELSE 1 END AS relevance
+                                    CASE WHEN LOWER(name) LIKE LOWER(:prefix) THEN 2 ELSE 1 END AS relevance
                                 FROM pipelines
                                 WHERE organisation_id = :org_id
-                                    AND (name ILIKE :like OR description ILIKE :like)
+                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
                                 ORDER BY relevance DESC, name ASC
                                 LIMIT :lim OFFSET :off
                             """),
@@ -132,7 +135,7 @@ async def global_search(
                             text("""
                                 SELECT COUNT(*) FROM pipelines
                                 WHERE organisation_id = :org_id
-                                    AND (name ILIKE :like OR description ILIKE :like)
+                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
                             """),
                             {"org_id": org_id, "like": like},
                         )
@@ -157,13 +160,16 @@ async def global_search(
                     rows = (
                         await session.execute(
                             text("""
-                                SELECT r.id, r.run_number, r.id::text AS display_id, p.name AS pipeline_name,
-                                    CASE WHEN r.id::text ILIKE :prefix THEN 2
-                                         WHEN p.name ILIKE :like THEN 1 ELSE 0 END AS relevance
+                                SELECT r.id, r.run_number, CAST(r.id AS TEXT) AS display_id, p.name AS pipeline_name,
+                                    CASE WHEN LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix) THEN 2
+                                         WHEN LOWER(p.name) LIKE LOWER(:like) THEN 1 ELSE 0 END AS relevance
                                 FROM runs r
                                 JOIN pipelines p ON p.id = r.pipeline_id
                                 WHERE r.organisation_id = :org_id
-                                    AND (r.id::text ILIKE :prefix OR p.name ILIKE :like)
+                                    AND (
+                                        LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix)
+                                        OR LOWER(p.name) LIKE LOWER(:like)
+                                    )
                                 ORDER BY relevance DESC, r.created_at DESC
                                 LIMIT :lim OFFSET :off
                             """),
@@ -182,7 +188,10 @@ async def global_search(
                                 SELECT COUNT(*) FROM runs r
                                 JOIN pipelines p ON p.id = r.pipeline_id
                                 WHERE r.organisation_id = :org_id
-                                    AND (r.id::text ILIKE :prefix OR p.name ILIKE :like)
+                                    AND (
+                                        LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix)
+                                        OR LOWER(p.name) LIKE LOWER(:like)
+                                    )
                             """),
                             {"org_id": org_id, "like": like, "prefix": prefix},
                         )
@@ -209,14 +218,20 @@ async def global_search(
                         await session.execute(
                             text("""
                                 SELECT id, event_type, resource_type,
-                                    CASE WHEN event_type ILIKE :prefix THEN 2
-                                         WHEN event_type ILIKE :like OR resource_type ILIKE :like
-                                              OR payload_json::text ILIKE :like THEN 1
-                                         ELSE 0 END AS relevance
+                                    CASE
+                                        WHEN LOWER(event_type) LIKE LOWER(:prefix) THEN 2
+                                        WHEN LOWER(event_type) LIKE LOWER(:like)
+                                             OR LOWER(resource_type) LIKE LOWER(:like)
+                                             OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like) THEN 1
+                                        ELSE 0
+                                    END AS relevance
                                 FROM audit_events
                                 WHERE organisation_id = :org_id
-                                    AND (event_type ILIKE :like OR resource_type ILIKE :like
-                                         OR payload_json::text ILIKE :like)
+                                    AND (
+                                        LOWER(event_type) LIKE LOWER(:like)
+                                        OR LOWER(resource_type) LIKE LOWER(:like)
+                                        OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
+                                    )
                                 ORDER BY relevance DESC, created_at DESC
                                 LIMIT :lim OFFSET :off
                             """),
@@ -234,8 +249,11 @@ async def global_search(
                             text("""
                                 SELECT COUNT(*) FROM audit_events
                                 WHERE organisation_id = :org_id
-                                    AND (event_type ILIKE :like OR resource_type ILIKE :like
-                                         OR payload_json::text ILIKE :like)
+                                    AND (
+                                        LOWER(event_type) LIKE LOWER(:like)
+                                        OR LOWER(resource_type) LIKE LOWER(:like)
+                                        OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
+                                    )
                             """),
                             {"org_id": org_id, "like": like},
                         )
@@ -264,10 +282,10 @@ async def global_search(
                         await session.execute(
                             text("""
                                 SELECT id, name, description,
-                                    CASE WHEN name ILIKE :prefix THEN 2 ELSE 1 END AS relevance
+                                    CASE WHEN LOWER(name) LIKE LOWER(:prefix) THEN 2 ELSE 1 END AS relevance
                                 FROM library_primitives
                                 WHERE organisation_id = :org_id
-                                    AND (name ILIKE :like OR description ILIKE :like)
+                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
                                 ORDER BY relevance DESC, name ASC
                                 LIMIT :lim OFFSET :off
                             """),
@@ -285,7 +303,7 @@ async def global_search(
                             text("""
                                 SELECT COUNT(*) FROM library_primitives
                                 WHERE organisation_id = :org_id
-                                    AND (name ILIKE :like OR description ILIKE :like)
+                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
                             """),
                             {"org_id": org_id, "like": like},
                         )
@@ -310,16 +328,12 @@ async def global_search(
             paginated = [item for _, item in all_items[offset : offset + limit]]
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return SearchResponse(results=paginated, total_by_type=total_by_type)
 
@@ -338,10 +352,11 @@ class CreateUserResponse(BaseModel):
     org_role: str
 
 
+@handle_db_errors("admin.admin_create_user")
 @router.post("/users", response_model=CreateUserResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_user(
     req: CreateUserRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateUserResponse:
     if current_user.org_role != "admin":
@@ -352,57 +367,70 @@ async def admin_create_user(
 
     if req.org_role not in ("admin", "operator", "runner", "viewer"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(f"Invalid role: {req.org_role}. Must be one of: admin, operator, runner, viewer"),
         )
 
-    existing = await get_account_by_email(session, req.email)
-    if existing is not None:
-        from modulo.db.crud.org_membership import get_membership_by_account_and_org
+    try:
+        async with session.begin():
+            existing = await get_account_by_email(session, req.email)
+            if existing is not None:
+                membership = await get_membership_by_account_and_org(session, existing.id, current_user.organisation_id)
+                if membership is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A user with this email already exists in this organisation",
+                    )
 
-        membership = await get_membership_by_account_and_org(session, existing.id, current_user.organisation_id)
-        if membership is not None:
+        try:
+            validate_password_strength(req.password)
+        except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A user with this email already exists in this organisation",
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+
+        pw_hash = hash_password(req.password)
+
+        async with session.begin():
+            from modulo.db.crud.account import create_account
+
+            if existing is not None:
+                account = existing
+                account.password_hash = pw_hash
+            else:
+                account = await create_account(
+                    session,
+                    email=req.email,
+                    display_name=req.display_name,
+                    password_hash=pw_hash,
+                )
+
+            membership = await create_membership(
+                session,
+                account_id=account.id,
+                org_id=current_user.organisation_id,
+                role=req.org_role,
             )
 
-    try:
-        validate_password_strength(req.password)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-
-    pw_hash = hash_password(req.password)
-
-    if existing is not None:
-        account = existing
-        account.password_hash = pw_hash
-    else:
-        from modulo.db.crud.account import create_account
-
-        account = await create_account(
-            session,
-            email=req.email,
-            display_name=req.display_name,
-            password_hash=pw_hash,
+        return CreateUserResponse(
+            id=str(account.id),
+            email=account.email,
+            display_name=account.display_name,
+            org_role=membership.role,
         )
-
-    membership = await create_membership(
-        session,
-        account_id=account.id,
-        org_id=current_user.organisation_id,
-        role=req.org_role,
-    )
-
-    return CreateUserResponse(
-        id=str(account.id),
-        email=account.email,
-        display_name=account.display_name,
-        org_role=membership.role,
-    )
+    except ProgrammingError:
+        logger.warning("admin_create_user: DB migration may be missing", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Database migration incomplete. Please run database migrations.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("admin_create_user: DB error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
+        ) from None
 
 
 class AdminCreateTeamRequest(BaseModel):
@@ -431,7 +459,7 @@ class AdminCreateTeamResponse(BaseModel):
 )
 async def admin_create_team(
     req: AdminCreateTeamRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminCreateTeamResponse:
     if current_user.org_role != "admin":
@@ -502,11 +530,17 @@ async def admin_create_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
-        logger.warning("admin_create_team audit event ProgrammingError — team was created", extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)})
+        logger.warning(
+            "admin_create_team audit event ProgrammingError — team was created",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
+        )
     except SQLAlchemyError:
-        logger.warning("admin_create_team audit event SQLAlchemyError — team was created", extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)})
+        logger.warning(
+            "admin_create_team audit event SQLAlchemyError — team was created",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
+        )
 
     return AdminCreateTeamResponse(
         id=str(team.id),
@@ -535,9 +569,10 @@ class OrgProfileResponse(BaseModel):
     created_at: str
 
 
+@handle_db_errors("admin.admin_get_org")
 @router.get("/org", response_model=OrgProfileResponse)
 async def admin_get_org(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgProfileResponse:
     if current_user.org_role != "admin":
@@ -559,17 +594,17 @@ async def admin_get_org(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org profile.",
-        )
+        ) from None
 
     current_settings = org.settings_json or {}
     return OrgProfileResponse(
@@ -582,10 +617,11 @@ async def admin_get_org(
     )
 
 
+@handle_db_errors("admin.admin_update_org")
 @router.put("/org", response_model=OrgProfileResponse)
 async def admin_update_org(
     req: UpdateOrgRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgProfileResponse:
     if current_user.org_role != "admin":
@@ -622,17 +658,17 @@ async def admin_update_org(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating org profile.",
-        )
+        ) from None
 
     current_settings = org.settings_json or {}
     return OrgProfileResponse(
@@ -645,9 +681,10 @@ async def admin_update_org(
     )
 
 
+@handle_db_errors("admin.admin_regenerate_api_key")
 @router.post("/org/regenerate-api-key", status_code=status.HTTP_200_OK)
 async def admin_regenerate_api_key(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, str]:
     if current_user.org_role != "admin":
@@ -673,17 +710,17 @@ async def admin_regenerate_api_key(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while regenerating API key.",
-        )
+        ) from None
 
     return {"api_key": raw_key, "lookup_prefix": raw_key[3:11]}
 
@@ -709,13 +746,14 @@ class UserListResponse(BaseModel):
     page_size: int
 
 
+@handle_db_errors("admin.admin_list_users")
 @router.get("/users", response_model=UserListResponse)
 async def admin_list_users(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=1000),
     search: str | None = Query(None, min_length=1),
     role: str | None = Query(None, pattern=r"^(admin|operator|runner|viewer)$"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListResponse:
     if current_user.org_role != "admin":
@@ -725,7 +763,6 @@ async def admin_list_users(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             accounts_memberships, total = await _list_org_accounts(
@@ -738,16 +775,12 @@ async def admin_list_users(
             )
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return UserListResponse(
         items=[
@@ -777,7 +810,7 @@ async def _list_org_accounts(
     page_size: int = 20,
     search: str | None = None,
     role_filter: str | None = None,
-) -> tuple[list[tuple[Account, object]], int]:
+) -> tuple[list[tuple[Account, OrgMembership]], int]:
     conditions = [OrgMembership.organisation_id == org_id]
     if search:
         conditions.append(Account.email.ilike(f"%{search}%"))
@@ -801,7 +834,7 @@ async def _list_org_accounts(
         .limit(page_size)
     )
     result = await session.execute(query)
-    return list(result.all()), total
+    return [(row[0], row[1]) for row in result.all()], total
 
 
 class UpdateUserRequest(BaseModel):
@@ -831,16 +864,17 @@ async def _prevent_last_admin_lockout(
 
     if admin_count <= 1:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Cannot remove the last admin. Promote another user to admin first.",
         )
 
 
+@handle_db_errors("admin.admin_update_user")
 @router.put("/users/{user_id}", response_model=UserListItem)
 async def admin_update_user(
     user_id: uuid.UUID,
     req: UpdateUserRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
     if current_user.org_role != "admin":
@@ -850,7 +884,6 @@ async def admin_update_user(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             await _prevent_last_admin_lockout(
@@ -880,16 +913,12 @@ async def admin_update_user(
                 )
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     org_role = req.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
     return UserListItem(
@@ -905,16 +934,15 @@ async def admin_update_user(
 
 
 async def _get_org_role(session: AsyncSession, account_id: uuid.UUID, org_id: uuid.UUID) -> str:
-    from modulo.db.crud.org_membership import get_membership_by_account_and_org
-
     membership = await get_membership_by_account_and_org(session, account_id, org_id)
     return membership.role if membership is not None else ""
 
 
+@handle_db_errors("admin.admin_deactivate_user")
 @router.post("/users/{user_id}/deactivate", response_model=UserListItem)
 async def admin_deactivate_user(
     user_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
     if current_user.org_role != "admin":
@@ -925,7 +953,7 @@ async def admin_deactivate_user(
 
     if current_user.account_id == user_id:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Cannot deactivate yourself",
         )
 
@@ -943,16 +971,20 @@ async def admin_deactivate_user(
 
             families = await list_families_for_account(session, user_id)
             for family in families:
-                await blacklist_family(session, family.family_id)
+                await blacklist_family(session, family.family_id, user_id)
 
             active_keys = (
-                await session.execute(
-                    select(OrgApiKey).where(
-                        OrgApiKey.account_id == user_id,
-                        OrgApiKey.revoked_at.is_(None),
+                (
+                    await session.execute(
+                        select(OrgApiKey).where(
+                            OrgApiKey.account_id == user_id,
+                            OrgApiKey.revoked_at.is_(None),
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             for key in active_keys:
                 await revoke_api_key(session, key.id, current_user.organisation_id)
 
@@ -990,7 +1022,7 @@ async def admin_deactivate_user(
                 admin_count = admin_result.scalar() or 0
                 if admin_count <= 1:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="Cannot deactivate the last admin. Promote another user to admin first.",
                     )
 
@@ -1001,7 +1033,7 @@ async def admin_deactivate_user(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1040,10 +1072,11 @@ async def admin_deactivate_user(
     )
 
 
+@handle_db_errors("admin.admin_reactivate_user")
 @router.post("/users/{user_id}/reactivate", response_model=UserListItem)
 async def admin_reactivate_user(
     user_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
     if current_user.org_role != "admin":
@@ -1079,7 +1112,7 @@ async def admin_reactivate_user(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1122,10 +1155,11 @@ class AdminResetPasswordResponse(BaseModel):
     temporary_password: str
 
 
+@handle_db_errors("admin.admin_reset_password")
 @router.post("/users/{user_id}/reset-password", response_model=AdminResetPasswordResponse)
 async def admin_reset_password(
     user_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminResetPasswordResponse:
     if current_user.org_role != "admin":
@@ -1135,7 +1169,6 @@ async def admin_reset_password(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             account = await get_account_by_id(session, user_id)
@@ -1147,21 +1180,17 @@ async def admin_reset_password(
 
             families = await list_families_for_account(session, user_id)
             for family in families:
-                await blacklist_family(session, family.family_id)
+                await blacklist_family(session, family.family_id, user_id)
 
             await session.flush()
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return AdminResetPasswordResponse(temporary_password=temporary_password)
 
@@ -1189,7 +1218,7 @@ class AdminTeamListResponse(BaseModel):
 async def admin_list_teams(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=1000),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminTeamListResponse:
     if current_user.org_role != "admin":
@@ -1222,7 +1251,7 @@ async def admin_list_teams(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1249,7 +1278,7 @@ async def admin_list_teams(
                 description=t.description,
                 account_id=str(t.account_id),
                 member_count=member_counts.get(t.id, 0),
-                created_at=t.created_at.isoformat(),
+                created_at=t.created_at.isoformat() if t.created_at else "",
             )
             for t in result.items
         ],
@@ -1263,7 +1292,7 @@ async def admin_list_teams(
 async def admin_update_team(
     team_id: uuid.UUID,
     req: AdminUpdateTeamRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminTeamItem:
     if current_user.org_role != "admin":
@@ -1292,14 +1321,17 @@ async def admin_update_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.warning("admin_update_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.warning(
+            "admin_update_team SQLAlchemyError",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
@@ -1307,7 +1339,10 @@ async def admin_update_team(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("admin_update_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.exception(
+            "admin_update_team unexpected error",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating the team.",
@@ -1335,11 +1370,17 @@ async def admin_update_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
-        logger.warning("admin_update_team audit event ProgrammingError — team was updated", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.warning(
+            "admin_update_team audit event ProgrammingError — team was updated",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
     except SQLAlchemyError:
-        logger.warning("admin_update_team audit event SQLAlchemyError — team was updated", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.warning(
+            "admin_update_team audit event SQLAlchemyError — team was updated",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
 
     return AdminTeamItem(
         id=str(team.id),
@@ -1353,7 +1394,7 @@ async def admin_update_team(
 @router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("team_rbac")])
 async def admin_delete_team(
     team_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     if current_user.org_role != "admin":
@@ -1377,7 +1418,9 @@ async def admin_delete_team(
             ]:
                 count = (
                     await session.execute(
-                        select(func.count()).select_from(model_cls).where(model_cls.owner_team_id == team_id)
+                        select(func.count())
+                        .select_from(model_cls)
+                        .where(model_cls.__table__.c.owner_team_id == team_id)
                     )
                 ).scalar() or 0
                 if count > 0:
@@ -1395,14 +1438,17 @@ async def admin_delete_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.warning("admin_delete_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.warning(
+            "admin_delete_team SQLAlchemyError",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
@@ -1410,7 +1456,10 @@ async def admin_delete_team(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("admin_delete_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.exception(
+            "admin_delete_team unexpected error",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting the team.",
@@ -1438,7 +1487,7 @@ async def admin_delete_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.warning("Failed to record team_deleted audit event for team %s", team_id)
 
@@ -1457,9 +1506,10 @@ class BillingOverviewResponse(BaseModel):
     license_key: str | None = None
 
 
+@handle_db_errors("admin.admin_billing_overview")
 @router.get("/billing/overview", response_model=BillingOverviewResponse)
 async def admin_billing_overview(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> BillingOverviewResponse:
     if current_user.org_role != "admin":
@@ -1486,9 +1536,7 @@ async def admin_billing_overview(
             ).scalar() or 0
 
             team_count = (
-                await session.execute(
-                    select(func.count()).select_from(Team).where(Team.organisation_id == org_id)
-                )
+                await session.execute(select(func.count()).select_from(Team).where(Team.organisation_id == org_id))
             ).scalar() or 0
 
             pipeline_count = (
@@ -1537,7 +1585,7 @@ async def admin_billing_overview(
 # ── Org Deletion ─────────────────────────────────────────────────────
 
 
-def _require_org_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_org_admin(principal: TenantPrincipal) -> None:
     if principal.is_system_admin:
         return
     if principal.org_role not in ("admin", "owner"):
@@ -1554,13 +1602,14 @@ class DeletionRequestResponse(BaseModel):
     export_summary: dict[str, object]
 
 
+@handle_db_errors("admin.request_org_deletion")
 @router.post(
     "/org/deletion-request",
     response_model=DeletionRequestResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def request_org_deletion(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> DeletionRequestResponse:
     _require_org_admin(current_user)
@@ -1598,17 +1647,17 @@ async def request_org_deletion(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while requesting org deletion.",
-        )
+        ) from None
 
     export = result["export"]
     return DeletionRequestResponse(
@@ -1638,10 +1687,11 @@ class ConfirmDeletionResponse(BaseModel):
     hard_deleted_runs: int
 
 
+@handle_db_errors("admin.confirm_org_deletion")
 @router.post("/org/deletion-confirm", response_model=ConfirmDeletionResponse)
 async def confirm_org_deletion(
     req: ConfirmDeletionRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
     _require_org_admin(current_user)
@@ -1665,17 +1715,17 @@ async def confirm_org_deletion(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while confirming org deletion.",
-        )
+        ) from None
 
     return ConfirmDeletionResponse(
         message="Organisation has been permanently deleted.",
@@ -1693,9 +1743,10 @@ class OrgExportResponse(BaseModel):
     exported_at: str
 
 
+@handle_db_errors("admin.cancel_org_deletion")
 @router.patch("/org/deletion-cancel", response_model=CancelDeletionResponse)
 async def cancel_org_deletion(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CancelDeletionResponse:
     _require_org_admin(current_user)
@@ -1713,24 +1764,25 @@ async def cancel_org_deletion(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while cancelling org deletion.",
-        )
+        ) from None
 
     return CancelDeletionResponse(**result)
 
 
+@handle_db_errors("admin.export_org_data")
 @router.get("/org/export", response_model=OrgExportResponse)
 async def export_org_data(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgExportResponse:
     _require_org_admin(current_user)
@@ -1749,17 +1801,17 @@ async def export_org_data(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while exporting org data.",
-        )
+        ) from None
 
     org_info = (bundle.get("organisation") or [{}])[0]
     return OrgExportResponse(
@@ -1774,9 +1826,10 @@ async def export_org_data(
     )
 
 
+@handle_db_errors("admin.delete_org_immediate")
 @router.delete("/org", response_model=ConfirmDeletionResponse)
 async def delete_org_immediate(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
     _require_org_admin(current_user)
@@ -1818,17 +1871,17 @@ async def delete_org_immediate(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting org.",
-        )
+        ) from None
 
     return ConfirmDeletionResponse(
         message="Organisation has been permanently deleted.",
@@ -1887,9 +1940,10 @@ class EvalDashboardResponse(BaseModel):
     recent_results: list[RecentEvalResult]
 
 
+@handle_db_errors("admin.eval_dashboard")
 @router.get("/evals/dashboard", response_model=EvalDashboardResponse)
 async def eval_dashboard(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> EvalDashboardResponse:
     if current_user.org_role != "admin":
@@ -1927,17 +1981,22 @@ async def eval_dashboard(
             )
 
             # ── Trend (daily buckets) ───────────────────────────────────
-            trend_q = select(
-                cast(EvalResult.evaluated_at, Date).label("bucket"),
-                func.count().label("total"),
-                func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
-                func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
-            ).where(
-                EvalResult.organisation_id == current_user.organisation_id,
-            ).group_by(
-                cast(EvalResult.evaluated_at, Date),
-            ).order_by(
-                cast(EvalResult.evaluated_at, Date),
+            trend_q = (
+                select(
+                    cast(EvalResult.evaluated_at, Date).label("bucket"),
+                    func.count().label("total"),
+                    func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+                    func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
+                )
+                .where(
+                    EvalResult.organisation_id == current_user.organisation_id,
+                )
+                .group_by(
+                    cast(EvalResult.evaluated_at, Date),
+                )
+                .order_by(
+                    cast(EvalResult.evaluated_at, Date),
+                )
             )
             trend_rows = (await session.execute(trend_q)).all()
 
@@ -1952,19 +2011,23 @@ async def eval_dashboard(
             ]
 
             # ── By eval type ────────────────────────────────────────────
-            by_type_q = select(
-                EvalDefinition.eval_type,
-                func.count(EvalResult.id).label("total"),
-                func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
-                func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
-            ).outerjoin(
-                EvalResult, EvalResult.eval_id == EvalDefinition.id
-            ).where(
-                EvalDefinition.organisation_id == current_user.organisation_id,
-            ).group_by(
-                EvalDefinition.eval_type,
-            ).order_by(
-                EvalDefinition.eval_type,
+            by_type_q = (
+                select(
+                    EvalDefinition.eval_type,
+                    func.count(EvalResult.id).label("total"),
+                    func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+                    func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
+                )
+                .outerjoin(EvalResult, EvalResult.eval_id == EvalDefinition.id)
+                .where(
+                    EvalDefinition.organisation_id == current_user.organisation_id,
+                )
+                .group_by(
+                    EvalDefinition.eval_type,
+                )
+                .order_by(
+                    EvalDefinition.eval_type,
+                )
             )
             by_type_rows = (await session.execute(by_type_q)).all()
 
@@ -2048,18 +2111,18 @@ async def eval_dashboard(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         logger.warning("Eval dashboard DB error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
-        )
+        ) from None
 
     return EvalDashboardResponse(
         summary=summary,
@@ -2090,11 +2153,12 @@ class RegressionAlertsResponse(BaseModel):
     lookback_days: int
 
 
+@handle_db_errors("admin.eval_regressions")
 @router.get("/evals/regressions", response_model=RegressionAlertsResponse)
 async def eval_regressions(
     days: int = Query(default=7, ge=1, le=90, description="Lookback period in days"),
     threshold: float = Query(default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RegressionAlertsResponse:
     if current_user.org_role != "admin":
@@ -2116,31 +2180,31 @@ async def eval_regressions(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.warning("Eval regressions unavailable — DB may need migration")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except TimeoutError:
-        logger.error("Eval regressions query timed out", exc_info=True)
+        logger.exception("Eval regressions query timed out")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Query timed out. Please try again or reduce the lookback period.",
-        )
+        ) from None
     except SQLAlchemyError:
-        logger.error("Eval regressions DB error", exc_info=True)
+        logger.exception("Eval regressions DB error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
-        )
+        ) from None
     except Exception:
         logger.exception("Eval regressions unexpected error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while checking eval regressions.",
-        )
+        ) from None
 
     return RegressionAlertsResponse(
         alerts=[
@@ -2182,6 +2246,7 @@ class OkrProgressResponse(BaseModel):
     breach: bool
 
 
+@handle_db_errors("admin.okr_progress")
 @router.get("/evals/okr-progress/{suite_id}", response_model=OkrProgressResponse)
 async def okr_progress(
     suite_id: str,
@@ -2189,7 +2254,7 @@ async def okr_progress(
         default=None,
         description="Optional ISO 8601 target date (e.g. 2026-09-30) for days-to-target",
     ),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OkrProgressResponse:
     if current_user.org_role != "admin":
@@ -2219,24 +2284,24 @@ async def okr_progress(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
-        logger.warning("OKR progress DB error", exc_info=True)
+        logger.exception("OKR progress DB error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
-        )
+        ) from None
     except Exception:
         logger.exception("Unexpected error in OKR progress endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     return OkrProgressResponse(
         suite_id=progress.suite_id,
@@ -2298,13 +2363,14 @@ class PublisherListResponse(BaseModel):
     page_size: int
 
 
+@handle_db_errors("admin.admin_list_publishers")
 @router.get("/publishers", response_model=PublisherListResponse)
 async def admin_list_publishers(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     trust_tier: str | None = Query(None, pattern=r"^(green|amber)$"),
     search: str | None = Query(None, min_length=1),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherListResponse:
     if current_user.org_role != "admin":
@@ -2328,12 +2394,12 @@ async def admin_list_publishers(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return PublisherListResponse(
         items=[
@@ -2356,10 +2422,11 @@ async def admin_list_publishers(
     )
 
 
+@handle_db_errors("admin.admin_create_publisher")
 @router.post("/publishers", response_model=PublisherResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_publisher(
     req: PublisherCreateRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherResponse:
     if current_user.org_role != "admin":
@@ -2398,19 +2465,19 @@ async def admin_create_publisher(
                 )
             except ValueError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=str(exc),
                 ) from exc
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return PublisherResponse(
         id=str(publisher.id),
@@ -2425,11 +2492,12 @@ async def admin_create_publisher(
     )
 
 
+@handle_db_errors("admin.admin_update_publisher")
 @router.put("/publishers/{publisher_id}", response_model=PublisherResponse)
 async def admin_update_publisher(
     publisher_id: uuid.UUID,
     req: PublisherUpdateRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherResponse:
     if current_user.org_role != "admin":
@@ -2448,7 +2516,7 @@ async def admin_update_publisher(
                 name_val = updates["name"]
                 if not isinstance(name_val, str):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="publisher_name_invalid: Name must be a string",
                     )
                 existing = await get_publisher_by_name(session, current_user.organisation_id, name_val)
@@ -2462,7 +2530,7 @@ async def admin_update_publisher(
                 key_val = updates["public_key_hex"]
                 if not isinstance(key_val, str):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="publisher_key_invalid: Public key must be a string",
                     )
                 existing_key = await get_publisher_by_key(session, current_user.organisation_id, key_val)
@@ -2473,22 +2541,24 @@ async def admin_update_publisher(
                     )
 
             try:
-                publisher = await crud_update_publisher(session, publisher_id, updates)
+                publisher = await crud_update_publisher(
+                    session, publisher_id, updates, org_id=current_user.organisation_id
+                )
             except ValueError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=str(exc),
                 ) from exc
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if publisher is None:
         raise HTTPException(
@@ -2509,10 +2579,11 @@ async def admin_update_publisher(
     )
 
 
+@handle_db_errors("admin.admin_delete_publisher")
 @router.delete("/publishers/{publisher_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_delete_publisher(
     publisher_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     if current_user.org_role != "admin":
@@ -2524,17 +2595,17 @@ async def admin_delete_publisher(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            deleted = await crud_delete_publisher(session, publisher_id)
+            deleted = await crud_delete_publisher(session, publisher_id, org_id=current_user.organisation_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if not deleted:
         raise HTTPException(
@@ -2550,10 +2621,10 @@ class RetentionPurgeRequest(BaseModel):
     max_age_days: int = 90
 
 
-@router.post("/purge/runs", status_code=status.HTTP_200_OK)
+@router.post("/purge/runs", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_retention_purge_runs(
     req: RetentionPurgeRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, int]:
     if current_user.org_role != "admin":
@@ -2563,22 +2634,38 @@ async def admin_retention_purge_runs(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             deleted = await batch_delete_old_terminal_runs(session, max_age_days=req.max_age_days)
 
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
 
-        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     return {"deleted_run_count": deleted}
 
@@ -2587,10 +2674,10 @@ class ManualPurgeRequest(BaseModel):
     older_than: str
 
 
-@router.post("/purge", status_code=status.HTTP_200_OK)
+@router.post("/purge", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_manual_purge(
     req: ManualPurgeRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, int]:
     if current_user.org_role != "admin":
@@ -2613,16 +2700,32 @@ async def admin_manual_purge(
                 resource_type="run",
                 payload_json={"older_than": req.older_than},
             )
+    except asyncio.CancelledError:
+        raise
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     return result
 
@@ -2635,10 +2738,10 @@ class PurgeRunsResponse(BaseModel):
     purged_count: int
 
 
-@router.post("/runs/purge", status_code=status.HTTP_200_OK)
+@router.post("/runs/purge", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_purge_stale_runs(
     request: PurgeRunsRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PurgeRunsResponse:
     if current_user.org_role != "admin":
@@ -2651,29 +2754,44 @@ async def admin_purge_stale_runs(
     terminal_states = ("complete", "failed", "eval_failed", "cancelled")
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             result = await session.execute(
-                delete(Run)
-                .where(
+                delete(Run).where(
                     Run.organisation_id == current_user.organisation_id,
                     Run.status.in_(terminal_states),
                     Run.created_at < cutoff,
                 )
             )
 
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
 
-        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     return PurgeRunsResponse(purged_count=result.rowcount)  # type: ignore[attr-defined]
 
@@ -2700,32 +2818,52 @@ class StatusCount(BaseModel):
     count: int
 
 
-@router.get("/runs/retention", response_model=RetentionConfigResponse)
+@router.get(
+    "/runs/retention",
+    response_model=RetentionConfigResponse,
+    dependencies=[require_feature("admin_run_retention")],
+)
 async def admin_get_retention(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RetentionConfigResponse:
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can view retention")
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             result = await session.execute(
                 select(Organisation.settings_json).where(Organisation.id == current_user.organisation_id).limit(1)
             )
             row = result.scalar_one_or_none()
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
 
-        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     retention_days = 90
     if row and isinstance(row, dict):
@@ -2733,16 +2871,15 @@ async def admin_get_retention(
     return RetentionConfigResponse(retention_days=retention_days)
 
 
-@router.put("/runs/retention", status_code=status.HTTP_200_OK)
+@router.put("/runs/retention", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_update_retention(
     req: UpdateRetentionRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RetentionConfigResponse:
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can update retention")
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             result = await session.execute(
@@ -2755,17 +2892,34 @@ async def admin_update_retention(
             settings["retention_days"] = req.retention_days
             org.settings_json = settings
             await session.flush()
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
 
-        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     logger.info(
         "run_retention.updated",
@@ -2777,15 +2931,15 @@ async def admin_update_retention(
     return RetentionConfigResponse(retention_days=req.retention_days)
 
 
+@handle_db_errors("admin.admin_get_storage")
 @router.get("/runs/storage", response_model=StorageInfoResponse)
 async def admin_get_storage(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> StorageInfoResponse:
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can view storage")
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             total = (
@@ -2803,16 +2957,12 @@ async def admin_get_storage(
             ).all()
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     breakdown: dict[str, int] = {}
     for row in status_rows:
@@ -2845,9 +2995,10 @@ class OverdueClaimsResponse(BaseModel):
     claims: list[OverdueClaimItem]
 
 
+@handle_db_errors("admin.admin_overdue_hitl_claims")
 @router.get("/hitl/overdue", response_model=OverdueClaimsResponse)
 async def admin_overdue_hitl_claims(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OverdueClaimsResponse:
     """List overdue HITL claims across the organisation."""
@@ -2858,21 +3009,16 @@ async def admin_overdue_hitl_claims(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             claims = await get_overdue_claims(session, current_user.organisation_id)
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
-        )
+        ) from None
 
     return OverdueClaimsResponse(claims=[OverdueClaimItem(**c) for c in claims])

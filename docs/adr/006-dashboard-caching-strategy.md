@@ -1,6 +1,6 @@
 # ADR 006 — Dashboard Performance: Application Cache Over Materialized View
 
-**Date**: 2026-07-01  
+**Date**: 2026-07-01
 **Status**: Active
 
 ---

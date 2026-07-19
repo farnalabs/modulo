@@ -19,21 +19,29 @@ import time
 from typing import Any
 
 import httpx
-from jose import jwk
-from jose import jwt as jose_jwt
-from jose.exceptions import JWKError, JWTError
+import jwt
+from jwt import InvalidTokenError as JWTError
+from jwt import PyJWK, PyJWKError
 
 _log = logging.getLogger(__name__)
 
 _JWKS_CACHE_TTL = 3600  # 1 hour
 _jwks_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
-_ACCEPTABLE_JWT_ALGORITHMS = frozenset({
-    "RS256", "RS384", "RS512",
-    "ES256", "ES384", "ES512",
-    "PS256", "PS384", "PS512",
-    "EdDSA",
-})
+_ACCEPTABLE_JWT_ALGORITHMS = frozenset(
+    {
+        "RS256",
+        "RS384",
+        "RS512",
+        "ES256",
+        "ES384",
+        "ES512",
+        "PS256",
+        "PS384",
+        "PS512",
+        "EdDSA",
+    }
+)
 
 
 class OidcVerifyError(Exception):
@@ -245,12 +253,12 @@ async def _decode_and_verify(
 ) -> dict[str, Any]:
     """Construct the key from JWK and verify the JWT."""
     try:
-        key = jwk.construct(jwk_dict)
-    except JWKError as exc:
+        key = PyJWK.from_dict(jwk_dict).key
+    except PyJWKError as exc:
         raise OidcVerifyError(f"Failed to construct key from JWK: {exc}") from exc
 
     try:
-        claims = jose_jwt.decode(
+        claims = jwt.decode(
             id_token,
             key,
             algorithms=[alg],
@@ -263,15 +271,15 @@ async def _decode_and_verify(
         try:
             jwks = await _fetch_jwks_force(jwks_uri)
             jwk_dict = _find_jwk(jwks, header_kid)
-            key = jwk.construct(jwk_dict)
-            claims = jose_jwt.decode(
+            key = PyJWK.from_dict(jwk_dict).key
+            claims = jwt.decode(
                 id_token,
                 key,
                 algorithms=[alg],
                 audience=client_id,
                 issuer=issuer,
             )
-        except (JWTError, JWKError, OidcVerifyError) as exc2:
+        except (JWTError, PyJWKError, OidcVerifyError) as exc2:
             raise OidcVerifyError(f"ID token verification failed after retry: {exc2}") from exc
 
     return dict(claims)

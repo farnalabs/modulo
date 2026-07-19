@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Registry service — Ed25519 signing, SHA-256 integrity, publish/pull protocol.
 
 Primitives are identified by ``author/name`` namespaced slugs.
@@ -13,9 +11,11 @@ State of the art:
   - Abstract schema namespacing (author/name)
 """
 
+from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -226,6 +226,8 @@ _registry_private = Ed25519PrivateKey.generate()
 _registry_public = _registry_private.public_key()
 _registry_fingerprint = fingerprint(_registry_public)
 
+_registry_lock = threading.Lock()
+
 _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
     e.slug: e
     for e in [
@@ -427,7 +429,8 @@ def list_registry_primitives(
     search: str | None = None,
 ) -> list[RegistryEntry]:
     """List all published primitives in the registry, with optional filters."""
-    results = list(_BUILTIN_REGISTRY.values())
+    with _registry_lock:
+        results = list(_BUILTIN_REGISTRY.values())
     if author:
         results = [e for e in results if e.author == author]
     if primitive_type:
@@ -440,21 +443,29 @@ def list_registry_primitives(
 
 def get_registry_primitive(slug: str) -> RegistryEntry | None:
     """Return a single primitive by its ``author/name`` slug."""
-    return _BUILTIN_REGISTRY.get(slug)
+    with _registry_lock:
+        return _BUILTIN_REGISTRY.get(slug)
 
 
 def _validate_registry_inputs(
-    author: str, name: str, primitive_type: str, tags: list[str], content_json: dict[str, Any],
+    author: str,
+    name: str,
+    primitive_type: str,
+    description: str,
+    tags: list[str],
+    content_json: dict[str, Any],
 ) -> None:
     """Validate registry metadata inputs and content serializability."""
-    if not author or not author.strip():
+    if not isinstance(author, str) or not author.strip():
         raise ValueError("author must be a non-empty string")
-    if not name or not name.strip():
+    if not isinstance(name, str) or not name.strip():
         raise ValueError("name must be a non-empty string")
-    if not primitive_type or not primitive_type.strip():
+    if not isinstance(primitive_type, str) or not primitive_type.strip():
         raise ValueError("primitive_type must be a non-empty string")
     if not isinstance(tags, list) or any(not isinstance(t, str) for t in tags):
         raise ValueError("tags must be a list of strings")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError("description must be a non-empty string")
     if not isinstance(content_json, dict):
         raise ValueError("content_json must be a dict")
     try:
@@ -479,7 +490,7 @@ def publish_primitive(
     In production this would POST to the hosted Modulo registry API.
     The signing key must correspond to the author's registered key.
     """
-    _validate_registry_inputs(author, name, primitive_type, tags, content_json)
+    _validate_registry_inputs(author, name, primitive_type, description, tags, content_json)
 
     try:
         private_bytes = bytes.fromhex(signing_key_hex)
@@ -488,20 +499,20 @@ def publish_primitive(
         raise ValueError("invalid signing key hex") from None
 
     slug = f"{author}/{name}"
-    if slug in _BUILTIN_REGISTRY:
-        logger.info("publish_primitive: overwriting existing entry %r", slug)
-
-    entry = _build_entry(
-        author=author,
-        name=name,
-        primitive_type=primitive_type,
-        description=description,
-        tags=tags,
-        content_json=content_json,
-        private_key=private_key,
-        version=version,
-    )
-    _BUILTIN_REGISTRY[entry.slug] = entry
+    with _registry_lock:
+        if slug in _BUILTIN_REGISTRY:
+            logger.info("publish_primitive: overwriting existing entry %r", slug)
+        entry = _build_entry(
+            author=author,
+            name=name,
+            primitive_type=primitive_type,
+            description=description,
+            tags=tags,
+            content_json=content_json,
+            private_key=private_key,
+            version=version,
+        )
+        _BUILTIN_REGISTRY[entry.slug] = entry
     return entry
 
 
@@ -547,8 +558,13 @@ def verify_primitive_signature(
         return False
 
     payload = _entry_payload(
-        entry.author, entry.name, entry.version,
-        entry.primitive_type, entry.description, entry.tags, entry.content_json,
+        entry.author,
+        entry.name,
+        entry.version,
+        entry.primitive_type,
+        entry.description,
+        entry.tags,
+        entry.content_json,
     )
     return verify_manifest(payload, entry.ed25519_signature_hex, pubkey)
 
@@ -573,6 +589,8 @@ class Publisher:
     website: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
+
+_publishers_lock = threading.Lock()
 
 _publishers: dict[str, Publisher] = {
     _registry_fingerprint: Publisher(
@@ -599,19 +617,21 @@ def register_publisher(
         status=PUBLISHER_TRUST_VERIFIED,
         website=website,
     )
-    _publishers[fingerprint_hex] = pub
+    with _publishers_lock:
+        _publishers[fingerprint_hex] = pub
     return pub
 
 
 def revoke_publisher(fingerprint_hex: str) -> bool:
     """Revoke a publisher's trust status."""
-    pub = _publishers.get(fingerprint_hex)
-    if pub is None:
-        logger.warning("revoke_publisher: fingerprint %s not found", fingerprint_hex)
-        return False
-    if pub.status == PUBLISHER_TRUST_REVOKED:
-        logger.warning("revoke_publisher: fingerprint %s already revoked", fingerprint_hex)
-    pub.status = PUBLISHER_TRUST_REVOKED
+    with _publishers_lock:
+        pub = _publishers.get(fingerprint_hex)
+        if pub is None:
+            logger.warning("revoke_publisher: fingerprint %s not found", fingerprint_hex)
+            return False
+        if pub.status == PUBLISHER_TRUST_REVOKED:
+            logger.warning("revoke_publisher: fingerprint %s already revoked", fingerprint_hex)
+        pub.status = PUBLISHER_TRUST_REVOKED
     return True
 
 
@@ -620,18 +640,21 @@ def get_publisher_status(fingerprint_hex: str) -> str:
 
     Returns ``verified``, ``community``, or ``revoked``.
     """
-    pub = _publishers.get(fingerprint_hex)
+    with _publishers_lock:
+        pub = _publishers.get(fingerprint_hex)
     if pub is None:
         return PUBLISHER_TRUST_COMMUNITY
     return pub.status
 
 
 def get_publisher(fingerprint_hex: str) -> Publisher | None:
-    return _publishers.get(fingerprint_hex)
+    with _publishers_lock:
+        return _publishers.get(fingerprint_hex)
 
 
 def list_verified_publishers() -> list[Publisher]:
-    return [p for p in _publishers.values() if p.status == PUBLISHER_TRUST_VERIFIED]
+    with _publishers_lock:
+        return [p for p in _publishers.values() if p.status == PUBLISHER_TRUST_VERIFIED]
 
 
 # ---------------------------------------------------------------------------

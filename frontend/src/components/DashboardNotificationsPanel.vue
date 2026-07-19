@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="dashboard-notifications rounded-lg border bg-background">
     <button
       type="button"
@@ -57,6 +57,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
+import { useStorage } from '@vueuse/core';
 import type { NotificationResponse } from "../lib/api/notifications";
 import { fetchDashboardNotifications, reviewLater } from "../lib/api/notifications";
 import { registerHandler } from "../stores/syncRegistry";
@@ -65,15 +66,7 @@ import { formatApiError } from "../lib/api/formatError";
 import LoadingSpinner from "./shared/LoadingSpinner.vue";
 
 const DASHBOARD_LIMIT = 5;
-const collapsed = ref(getCollapsedPref());
-
-function getCollapsedPref(): boolean {
-  try {
-    return localStorage.getItem("notif-panel-collapsed") !== "false";
-  } catch {
-    return false;
-  }
-}
+const collapsed = useStorage('notif-panel-collapsed', true);
 const notifications = ref<NotificationResponse[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -83,10 +76,6 @@ const hasMore = ref(false);
 
 function toggleCollapsed() {
   collapsed.value = !collapsed.value;
-  try {
-    localStorage.setItem("notif-panel-collapsed", String(collapsed.value));
-  } catch (e) {
-  }
 }
 
 function onDismissed(id: string) {
@@ -133,4 +122,3 @@ async function loadDashboard() {
   }
 }
 </script>
-

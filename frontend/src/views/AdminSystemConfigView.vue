@@ -1,10 +1,7 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminSystemConfigView.system_admin_config') }}</h1>
-        <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only') }}</p>
-      </div>
+      <PageHeader :title="$t('views.AdminSystemConfigView.system_admin_config')" :subtitle="$t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only')" />
       <button
         type="button"
         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
@@ -57,9 +54,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import { Ref, ref, watch } from 'vue'
 import { api } from '../lib/api/client'
-import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
@@ -68,10 +66,6 @@ interface ConfigEntry {
   value: unknown
   updated_at: string | null
 }
-
-const loading = ref(true)
-const error = ref<string | null>(null)
-const items = ref<ConfigEntry[]>([])
 
 function formatValue(value: unknown): string {
   if (value === null) return '(null)'
@@ -85,25 +79,12 @@ function formatValue(value: unknown): string {
   }
 }
 
-async function loadConfig() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/system-admin/config')
-    if (err) {
-      error.value = err && typeof err === 'object' && 'detail' in err
-        ? `Failed to load system config: ${(err as ProblemDetail).detail}`
-        : `Failed to load system config: ${formatApiError(err)}`
-    } else if (data) {
-      items.value = data as unknown as ConfigEntry[]
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load system config: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
+const { loading, error, data, load: loadConfig } = useDataFetch(
+  () => api.GET('/api/v1/system-admin/config'),
+)
 
-onMounted(loadConfig)
+const items: Ref<ConfigEntry[]> = ref([])
+watch(data, (d) => {
+  if (d) items.value = d as unknown as ConfigEntry[]
+}, { immediate: true })
 </script>
-

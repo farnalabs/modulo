@@ -95,7 +95,7 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 
 - [x] All three endpoints wrap DB queries in `try/except` — degrade gracefully on failure rather than crash
 - [x] `dashboard_summary` includes config_warnings section with graceful fallback (broad `except Exception` for model-backend and Remy checks)
-- [x] `_log.warning()` with `exc_info=True` on all exception paths — sufficient context for debugging
+- [x] `_log.warning()` with `exc_info=True` on all exception paths — cache read/write handlers now use `exc_info=True` (was passing `%s, exc` instead)
 - [ ] No retry/backoff for transient DB failures (deadlock, serialisation) — SQLAlchemyError immediately returns 503
 - [ ] No circuit breaker or health check for dashboard-specific DB queries
 - [ ] Cache (`_get_cached_dashboard`) has no fallback on Redis/cache failure — cache miss re-queries DB
@@ -106,13 +106,18 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 ### 2026-07-06 — Cross-cutting QA (improve-architecture index 232)
 - **MAJOR:** Corrected 3 stale product map claims: `daily_run_counts` does catch ProgrammingError → 501 (lines 700-704), `dashboard_trends` also catches SQLAlchemyError → 500 and Exception → 500 (lines 652-662), `dashboard_summary` also catches SQLAlchemyError → 500 and Exception → 500 (lines 438-448)
 - **MAJOR:** Created `test_dashboard_programming_error.py` with 9 tests covering ProgrammingError → 501, SQLAlchemyError → 503, and Exception → 500 for all 3 dashboard endpoints
-- **MAJOR:** Updated Known Gaps: corrected stale BDD step gap (steps ARE wired but are empty stubs with no assertions); removed stale `daily_run_counts` gap
+- **MAJOR:** Updated Known Gaps: corrected stale BDD step gap (steps file does not exist — was claimed as empty stubs); removed stale `daily_run_counts` gap
 - **MINOR:** Added Resilience section (7 checkboxes: 4 [x] + 3 [ ])
 - **MINOR:** Added Error Handling checklist for cache error-path coverage gap
 - **MINOR:** Added website docs stub at Website/src/docs/hitl-trends.md
 
+### 2026-07-12 — Round 3 improve-architecture
+- **MAJOR:** Fixed B904 (exception chaining) on all 3 dashboard endpoint error handlers — `ProgrammingError`, `SQLAlchemyError`, and `Exception` now use `raise ... from exc` pattern
+- **MAJOR:** Fixed `exc_info=True` missing from Redis cache read/write exception handlers (were using `%s, exc` instead of `exc_info=True`)
+- **MAJOR:** Corrected stale product map claim — BDD steps file `test_hitl_trends_steps.py` does not exist on disk (was claimed as having empty stubs)
+
 ## Known Gaps
-- BDD step definitions (test_hitl_trends_steps.py) are wired via `scenarios()` but all `@then` steps are empty `pass` — no assertions execute. Feature file is spec-only.
+- BDD step definitions file (`test_hitl_trends_steps.py`) does not exist — no step definitions are wired for the 7 scenarios in `hitl_trends.feature`. Feature file is spec-only.
 - No frontend HITL trend visualisation — API endpoint is fully implemented but has no consuming UI
 - Grafana dashboard requires manual import (not provisioned as code)
 - No per-team HITL effort breakdown (only org-level in trends endpoint)

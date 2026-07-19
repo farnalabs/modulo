@@ -1,5 +1,6 @@
 """Step definitions for organisation management features — onboarding, membership."""
 
+import contextlib
 import json
 import os
 import uuid
@@ -12,14 +13,10 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/orgs/member_management.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/orgs/org_onboarding.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +45,7 @@ def _onboarding_state_path():
     """Return the real path used by the onboarding module."""
     base = os.path.join(os.path.dirname(__file__), "..", "..", "..", "src", "modulo", "api", "routes")
     return os.path.join(base, "..", "..", "..", "..", ".onboarding-state.json")
+
 
 # ===========================================================================
 # Override auth steps to propagate role into ctx
@@ -139,13 +137,16 @@ def remove_user_from_team(request, username: str, team_name: str, client, ctx):
     team_id = ctx.get("team_id", str(uuid.uuid4()))
     membership_id = ctx.get("membership_id", str(uuid.uuid4()))
 
-    with patch(
-        "modulo.api.routes.teams.remove_team_member",
-        new_callable=AsyncMock,
-    ), patch(
-        "modulo.api.routes.teams.get_membership",
-        new_callable=AsyncMock,
-        return_value=MagicMock(team_id=uuid.UUID(team_id)),
+    with (
+        patch(
+            "modulo.api.routes.teams.remove_team_member",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "modulo.api.routes.teams.get_membership",
+            new_callable=AsyncMock,
+            return_value=MagicMock(team_id=uuid.UUID(team_id)),
+        ),
     ):
         resp = client.delete(f"/api/v1/teams/{team_id}/members/{membership_id}")
     request.node._resp = resp
@@ -154,7 +155,6 @@ def remove_user_from_team(request, username: str, team_name: str, client, ctx):
 @when(parsers.parse('I deactivate user "{username}"'))
 def deactivate_user(request, username: str, client, ctx):
     target_user_id = ctx.get("target_user_id", str(uuid.uuid4()))
-    now_iso = datetime.now(UTC).isoformat()
 
     mock_account = MagicMock()
     mock_account.id = target_user_id
@@ -168,34 +168,43 @@ def deactivate_user(request, username: str, client, ctx):
     mock_org_membership = MagicMock()
     mock_org_membership.role = "operator"
 
-    with patch(
-        "modulo.api.routes.admin.get_account_by_id",
-        new_callable=AsyncMock,
-        return_value=mock_account,
-    ), patch(
-        "modulo.api.routes.admin.list_families_for_account",
-        new_callable=AsyncMock,
-        return_value=[],
-    ), patch(
-        "modulo.api.routes.admin.blacklist_family",
-        new_callable=AsyncMock,
-    ), patch(
-        "modulo.api.routes.admin.list_team_memberships_for_account",
-        new_callable=AsyncMock,
-        return_value=[],
-    ), patch(
-        "modulo.api.routes.admin.remove_team_member",
-        new_callable=AsyncMock,
-    ), patch(
-        "modulo.api.routes.admin.revoke_api_key",
-        new_callable=AsyncMock,
-    ), patch(
-        "modulo.core.audit_logger.append_audit_event",
-        new_callable=AsyncMock,
-    ), patch(
-        "modulo.api.routes.admin._get_org_role",
-        new_callable=AsyncMock,
-        return_value="operator",
+    with (
+        patch(
+            "modulo.api.routes.admin.get_account_by_id",
+            new_callable=AsyncMock,
+            return_value=mock_account,
+        ),
+        patch(
+            "modulo.api.routes.admin.list_families_for_account",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "modulo.api.routes.admin.blacklist_family",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "modulo.api.routes.admin.list_team_memberships_for_account",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "modulo.api.routes.admin.remove_team_member",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "modulo.api.routes.admin.revoke_api_key",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "modulo.core.audit_logger.append_audit_event",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "modulo.api.routes.admin._get_org_role",
+            new_callable=AsyncMock,
+            return_value="operator",
+        ),
     ):
         resp = client.post(f"/api/v1/admin/users/{target_user_id}/deactivate")
     request.node._resp = resp
@@ -288,7 +297,7 @@ def mark_all_steps_complete(client, request, ctx):
     }
 
 
-@when(parsers.parse('I GET /api/v1/onboarding/step/{step_id}'))
+@when(parsers.parse("I GET /api/v1/onboarding/step/{step_id}"))
 def get_onboarding_step(request, step_id: str, client, ctx):
     from unittest.mock import MagicMock
 
@@ -329,9 +338,7 @@ def step_marked_completed(request):
 @then('completed_steps contains "connect_tools"')
 def completed_steps_contains(request):
     body = request.node._resp.json()
-    assert "connect_tools" in body.get("completed_steps", []), (
-        f"connect_tools not in completed_steps: {body}"
-    )
+    assert "connect_tools" in body.get("completed_steps", []), f"connect_tools not in completed_steps: {body}"
 
 
 @then("is_first_run becomes false")
@@ -344,6 +351,4 @@ def is_first_run_false(request):
 def response_contains_connector_options(request):
     body = request.node._resp.json()
     data = body.get("data", {})
-    assert "connectors" in data or "title" in data, (
-        f"Expected connector info in response: {body}"
-    )
+    assert "connectors" in data or "title" in data, f"Expected connector info in response: {body}"

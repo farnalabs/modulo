@@ -1,5 +1,6 @@
 """BDD step definitions: Team membership management."""
 
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,10 +10,9 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.conftest import make_settings
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/team_membership.feature")
-except (FileNotFoundError, OSError):
-    pass
+
 
 @pytest.fixture
 def ctx():
@@ -28,10 +28,8 @@ def patches():
     collectors = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 @given(parsers.parse('I am authenticated as a team operator of team "{team_name}"'))
@@ -55,9 +53,7 @@ def user_exists(username: str, ctx) -> None:
     ctx["users"][username] = {"id": str(uuid.uuid4()), "username": username}
 
 
-@given(
-    parsers.parse('user "{username}" is already a member of team "{team_name}"')
-)
+@given(parsers.parse('user "{username}" is already a member of team "{team_name}"'))
 def user_already_member(username: str, team_name: str, ctx) -> None:
     user_id = ctx["users"].get(username, {}).get("id", str(uuid.uuid4()))
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
@@ -68,9 +64,7 @@ def user_already_member(username: str, team_name: str, ctx) -> None:
     }
 
 
-@given(
-    parsers.parse('user "{username}" is a member of team "{team_name}"')
-)
+@given(parsers.parse('user "{username}" is a member of team "{team_name}"'))
 def user_is_member(username: str, team_name: str, ctx) -> None:
     user_id = ctx["users"].get(username, {}).get("id", str(uuid.uuid4()))
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
@@ -81,17 +75,13 @@ def user_is_member(username: str, team_name: str, ctx) -> None:
     }
 
 
-@given(
-    parsers.parse('I am a member of team "{team_name}"')
-)
+@given(parsers.parse('I am a member of team "{team_name}"'))
 def i_am_member(team_name: str, ctx) -> None:
     ctx["my_teams"] = ctx.get("my_teams", [])
     ctx["my_teams"].append(team_name)
 
 
-@when(
-    parsers.parse('I add user "{username}" to team "{team_name}" with role "{role}"')
-)
+@when(parsers.parse('I add user "{username}" to team "{team_name}" with role "{role}"'))
 def add_user_to_team(username: str, team_name: str, role: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
@@ -122,13 +112,12 @@ def add_user_to_team(username: str, team_name: str, role: str, request, ctx) -> 
         request.node._resp = resp
         return
 
-    if auth_role == "team_operator":
-        if role == "operator":
-            resp = MagicMock()
-            resp.status_code = 403
-            resp.json = lambda: {"detail": "Cannot grant role higher than your own"}
-            request.node._resp = resp
-            return
+    if auth_role == "team_operator" and role == "operator":
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.json = lambda: {"detail": "Cannot grant role higher than your own"}
+        request.node._resp = resp
+        return
 
     mock_membership = {
         "user_id": user_id,
@@ -143,9 +132,7 @@ def add_user_to_team(username: str, team_name: str, role: str, request, ctx) -> 
         request.node._resp = resp
 
 
-@when(
-    parsers.parse('I add user "{username}" to team "{team_name}" with role "{role}"')
-)
+@when(parsers.parse('I add user "{username}" to team "{team_name}" with role "{role}"'))
 def add_user_to_team_existing(membership_key, request, ctx):
     pass
 
@@ -154,6 +141,7 @@ def add_user_to_team_existing(membership_key, request, ctx):
 def remove_user_from_team(username: str, team_name: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -175,6 +163,7 @@ def remove_user_from_team(username: str, team_name: str, request, ctx) -> None:
 def request_my_profile(request) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -190,14 +179,10 @@ def request_my_profile(request) -> None:
 
 @then(parsers.parse('user "{username}" is a member of team "{team_name}"'))
 def user_is_member_of_team(username: str, team_name: str, ctx) -> None:
-    assert f"{username}:{team_name}" in ctx["memberships"], (
-        f"Expected {username} to be member of {team_name}"
-    )
+    assert f"{username}:{team_name}" in ctx["memberships"], f"Expected {username} to be member of {team_name}"
 
 
-@then(
-    parsers.parse('user "{username}" cannot access team "{team_name}" resources')
-)
+@then(parsers.parse('user "{username}" cannot access team "{team_name}" resources'))
 def user_cannot_access_team(username: str, team_name: str, ctx) -> None:
     pass
 
@@ -222,4 +207,3 @@ def membership_has_fields(request) -> None:
         assert "id" in team
         assert "name" in team
         assert "role" in team
-

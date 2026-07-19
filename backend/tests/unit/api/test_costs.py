@@ -178,7 +178,7 @@ class TestGetSpendLimits:
                 return_value=org,
             ),
             patch(
-                "modulo.db.crud.team.list_teams",
+                "modulo.api.routes.costs.list_teams",
                 return_value=page_result,
             ),
             patch("modulo.api.routes.costs.set_rls_org"),
@@ -206,7 +206,7 @@ class TestGetSpendLimits:
                 return_value=org,
             ),
             patch(
-                "modulo.db.crud.team.list_teams",
+                "modulo.api.routes.costs.list_teams",
                 return_value=page_result,
             ),
             patch("modulo.api.routes.costs.set_rls_org"),
@@ -428,6 +428,10 @@ class TestCreateReport:
 
     def test_create_report_missing_recipients_returns_422(self, client: TestClient) -> None:
         resp = client.post(self.ENDPOINT, json={**self.PAYLOAD, "recipients": []})
+        assert resp.status_code == 422
+
+    def test_create_report_rejects_unsupported_grouping(self, client: TestClient) -> None:
+        resp = client.post(self.ENDPOINT, json={**self.PAYLOAD, "group_by": "pipeline"})
         assert resp.status_code == 422
 
     def test_create_report_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:

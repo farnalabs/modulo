@@ -10,6 +10,7 @@ Each eval has a configurable failure_behaviour (warn | block).
 Blocked evals raise EvalBlockedError.
 """
 
+import asyncio
 import logging
 import re
 from collections.abc import Sequence
@@ -148,27 +149,6 @@ def _fail_result(
         eval_id=eval_id,
         passed=False,
         score=_SCORE_FAIL,
-        detail=detail,
-    )
-
-
-def _log_and_fail(
-    eval_def: EvalDefinition,
-    run_id: UUID,
-    detail: str,
-    *,
-    level: int = logging.WARNING,
-    exc_info: bool = False,
-) -> EvalResult:
-    """Log a warning/error and return a failed EvalResult.
-
-    Saves ~3 lines per call site vs. manual _log.warning + _fail_result.
-    """
-    _log.log(level, "Eval %s (%s): %s", eval_def.id, eval_def.name, detail, exc_info=exc_info)
-    return _fail_result(
-        run_id=run_id,
-        node_id=eval_def.node_id or "",
-        eval_id=eval_def.id,
         detail=detail,
     )
 
@@ -394,7 +374,7 @@ class EvalEngine:
         """
         try:
             raw = callable_fn(*callable_args)
-        except (KeyboardInterrupt, SystemExit):
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
         except Exception as exc:
             _log.warning("%s eval %s %s raised: %s", log_prefix, eval_def.id, callable_name, exc, exc_info=True)
@@ -408,7 +388,11 @@ class EvalEngine:
             return _result_from_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
         except TypeError:
             _log.warning(
-                "%s eval %s %s returned non-dict: %s", log_prefix, eval_def.id, callable_name, type(raw).__name__,
+                "%s eval %s %s returned non-dict: %s",
+                log_prefix,
+                eval_def.id,
+                callable_name,
+                type(raw).__name__,
                 exc_info=True,
             )
             return _fail_result(

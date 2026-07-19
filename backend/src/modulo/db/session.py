@@ -35,7 +35,7 @@ def _build_engine() -> AsyncEngine:
     if db_type == "postgres":
         kw["connect_args"] = {
             "timeout": 10,
-            "command_timeout": 60,
+            "ssl": False,
         }
 
     engine = create_async_engine(**kw)
@@ -60,4 +60,3 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
     autobegin=False,
 )
-

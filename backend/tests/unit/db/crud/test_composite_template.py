@@ -11,6 +11,7 @@ from modulo.db.crud.base import PageResult
 @pytest.fixture()
 def mock_session() -> AsyncMock:
     session = AsyncMock()
+    session.add = MagicMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -63,6 +64,7 @@ class TestCreateCompositeTemplate:
                 parameter_ports_json=[],
                 input_schema_id=None,
                 output_schema_id=None,
+                parameter_schema_id=None,
                 version="1.0.0",
             )
             mock_session.add.assert_called_once()

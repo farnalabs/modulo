@@ -1,5 +1,6 @@
 """BDD step definitions: View-as-Team — admin temporarily views org as a specific team."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,10 +15,8 @@ from modulo.db.crud.base import PageResult
 from modulo.settings import get_settings
 from tests.bdd.conftest import make_mock_pipeline, make_mock_session, make_settings
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/view_as_team.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -56,10 +55,8 @@ def patches():
     collectors: list[Any] = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 @pytest.fixture
@@ -111,7 +108,6 @@ def get_viewmodel_with_view_as_team(
 
     from modulo.api.dependencies import _get_engine, get_db_session
     from modulo.api.main import app
-
 
     mock_session = make_mock_session()
 
@@ -206,9 +202,7 @@ def check_response_team_scoped(team_name: str, request) -> None:
     body = request.node._resp.json()
     pipelines = body.get("pipelines", [])
     for p in pipelines:
-        assert p.get("owner_team_id") is not None, (
-            f"Pipeline {p['name']} is not team-scoped (owner_team_id is null)"
-        )
+        assert p.get("owner_team_id") is not None, f"Pipeline {p['name']} is not team-scoped (owner_team_id is null)"
 
 
 @then(parsers.parse('the response contains pipeline "{name}"'))

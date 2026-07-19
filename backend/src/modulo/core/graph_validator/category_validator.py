@@ -1,10 +1,9 @@
-from __future__ import annotations
-
 """Category validator — validates node_category_id references on graph nodes.
 
 Standalone function usable outside GraphValidator.
 """
 
+from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
@@ -45,11 +44,7 @@ async def validate_node_category(
         )
         return result
 
-    row = (
-        await session.execute(
-            select(NodeCategory).where(NodeCategory.id == parsed)
-        )
-    ).scalar_one_or_none()
+    row = (await session.execute(select(NodeCategory).where(NodeCategory.id == parsed))).scalar_one_or_none()
 
     if row is None:
         result.error(
@@ -104,9 +99,7 @@ async def validate_node_categories(
     if parsed:
         uuids = {uuid.UUID(raw) for raw in parsed}
         rows: Sequence[NodeCategory] = (
-            (await session.execute(select(NodeCategory).where(NodeCategory.id.in_(uuids))))
-            .scalars()
-            .all()
+            (await session.execute(select(NodeCategory).where(NodeCategory.id.in_(uuids)))).scalars().all()
         )
         found: dict[str, NodeCategory] = {str(r.id): r for r in rows}
 

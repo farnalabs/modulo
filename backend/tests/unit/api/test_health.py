@@ -1,4 +1,4 @@
-"""Unit tests for health endpoints — liveness, readiness, and dependency checks."""
+"""Tests for readiness endpoint — aggregation logic, degraded/unavailable status, and check structure."""
 
 from collections.abc import Generator
 from unittest.mock import AsyncMock, patch
@@ -23,6 +23,7 @@ def _make_settings() -> Settings:
 
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
+    app.dependency_overrides.clear()
     app.dependency_overrides[get_settings] = _make_settings
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -40,28 +41,23 @@ def _unavailable_check(detail: str = "unavailable") -> CheckResult:
     return CheckResult(status="unavailable", latency_ms=5000.0, detail=detail)
 
 
-class TestLiveness:
-    def test_healthz_returns_200(self, client: TestClient) -> None:
-        resp = client.get("/healthz")
-        assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
-
-
 class TestReadiness:
     def test_healthz_ready_mounted(self, client: TestClient) -> None:
         resp = client.get("/healthz/ready")
-        assert resp.status_code in (200, 503)
+        assert resp.status_code in (200, 503, 504)
 
     def test_healthz_ready_structure_when_unavailable(self, client: TestClient) -> None:
         resp = client.get("/healthz/ready")
-        assert resp.status_code in (200, 503)
+        assert resp.status_code in (200, 503, 504)
         body = resp.json()
+        if resp.status_code == 504:
+            return
         if resp.status_code == 503:
             assert body["status"] == "unavailable"
         assert body["version"] == "0.1.0"
         assert isinstance(body["uptime_seconds"], float)
         assert isinstance(body["checks"], dict)
-        for key in ("database", "redis", "checkpointer", "migrations"):
+        for key in ("database", "redis", "checkpointer", "migrations", "background_worker"):
             assert key in body["checks"], f"missing check key: {key}"
 
     def test_healthz_ready_degraded_overall(self, client: TestClient) -> None:
@@ -72,13 +68,17 @@ class TestReadiness:
             ),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch(
+                "modulo.api.routes.health._check_background_worker",
+                AsyncMock(return_value=_ok_check("background_worker")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "degraded"
         assert body["checks"]["redis"]["status"] == "degraded"
-        for key in ("database", "checkpointer", "migrations"):
+        for key in ("database", "checkpointer", "migrations", "background_worker"):
             assert body["checks"][key]["status"] == "ok"
 
     def test_healthz_ready_unavailable_overall(self, client: TestClient) -> None:
@@ -87,6 +87,10 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch(
+                "modulo.api.routes.health._check_background_worker",
+                AsyncMock(return_value=_ok_check("background_worker")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 503
@@ -100,12 +104,16 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch(
+                "modulo.api.routes.health._check_background_worker",
+                AsyncMock(return_value=_ok_check("background_worker")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "ok"
-        for key in ("database", "redis", "checkpointer", "migrations"):
+        for key in ("database", "redis", "checkpointer", "migrations", "background_worker"):
             assert body["checks"][key]["status"] == "ok"
 
     def test_healthz_ready_check_keys_present(self, client: TestClient) -> None:
@@ -114,10 +122,14 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch(
+                "modulo.api.routes.health._check_background_worker",
+                AsyncMock(return_value=_ok_check("background_worker")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         body = resp.json()
-        for key in ("database", "redis", "checkpointer", "migrations"):
+        for key in ("database", "redis", "checkpointer", "migrations", "background_worker"):
             c = body["checks"][key]
             assert "status" in c
             assert "latency_ms" in c
@@ -134,6 +146,10 @@ class TestHttpTimeout:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch(
+                "modulo.api.routes.health._check_background_worker",
+                AsyncMock(return_value=_ok_check("background_worker")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 503

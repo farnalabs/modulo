@@ -1,6 +1,7 @@
 """Step definitions for Model Backend features — backend selection, rate limiting,
 health checks, CRUD, and error handling."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock
 
@@ -12,22 +13,14 @@ from modulo.db.models.model_backend import ModelBackend
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/backend_selection.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/backend_health_check.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/backend_crud.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/backend_error_handling.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -134,9 +127,7 @@ def pipeline_resolves_backends(ctx):
 @then(parsers.parse('the backend for node "{node_id}" is "{expected_backend}"'))
 def node_backend_selected(node_id: str, expected_backend: str, ctx):
     selected = ctx.get("selected_backend")
-    assert selected == expected_backend, (
-        f"Expected {expected_backend} for {node_id}, got {selected}"
-    )
+    assert selected == expected_backend, f"Expected {expected_backend} for {node_id}, got {selected}"
 
 
 @then("the default backend is used for nodes without an override")
@@ -287,8 +278,7 @@ def error_includes_backend_name_and_detail(ctx):
 @then("no MODEL_BACKEND_UNHEALTHY error is returned")
 def no_model_backend_unhealthy_error(ctx):
     unhealthy_errors = [
-        e for e in ctx.get("validation_errors", [])
-        if "MODEL_BACKEND_UNHEALTHY" in str(e) or "is unhealthy" in str(e)
+        e for e in ctx.get("validation_errors", []) if "MODEL_BACKEND_UNHEALTHY" in str(e) or "is unhealthy" in str(e)
     ]
     assert len(unhealthy_errors) == 0, f"Unexpected MODEL_BACKEND_UNHEALTHY errors: {unhealthy_errors}"
 
@@ -369,10 +359,32 @@ def post_create_model_backend(request, ctx):
 
     # Simulate provider validation
     valid_providers = {
-        "ai21", "anthropic", "azure_openai", "bedrock", "cohere", "deepseek",
-        "fireworks", "gemini", "grok", "groq", "jan", "llamacpp", "lm_studio",
-        "localai", "mistral", "ollama", "openai", "openrouter", "perplexity",
-        "qwen", "replicate", "tgi", "togetherai", "vertexai", "vllm", "watsonx",
+        "ai21",
+        "anthropic",
+        "azure_openai",
+        "bedrock",
+        "cohere",
+        "deepseek",
+        "fireworks",
+        "gemini",
+        "grok",
+        "groq",
+        "jan",
+        "llamacpp",
+        "lm_studio",
+        "localai",
+        "mistral",
+        "ollama",
+        "openai",
+        "openrouter",
+        "perplexity",
+        "qwen",
+        "replicate",
+        "tgi",
+        "togetherai",
+        "vertexai",
+        "vllm",
+        "watsonx",
     }
     if provider not in valid_providers and provider != "invalid_provider":
         request.node._resp_status = 201
@@ -391,9 +403,7 @@ def post_create_model_backend(request, ctx):
         }
     elif not payload.get("name"):
         request.node._resp_status = 422
-        request.node._resp_body = {
-            "detail": [{"type": "missing", "loc": ["body", "name"], "msg": "Field required"}]
-        }
+        request.node._resp_body = {"detail": [{"type": "missing", "loc": ["body", "name"], "msg": "Field required"}]}
     else:
         request.node._resp_status = 201
         created = _make_mock_model_backend(
@@ -418,7 +428,7 @@ def get_list_model_backends(request, ctx):
     }
 
 
-@given(parsers.parse('a model backend payload with missing name'))
+@given(parsers.parse("a model backend payload with missing name"))
 def model_backend_payload_missing_name(ctx):
     ctx["payload"] = {
         "display_name": "Test Backend",
@@ -428,7 +438,7 @@ def model_backend_payload_missing_name(ctx):
     }
 
 
-@when(parsers.parse('I GET /api/v1/model-backends/{backend_id}'))
+@when(parsers.parse("I GET /api/v1/model-backends/{backend_id}"))
 def get_model_backend_by_id(request, backend_id: str, ctx):
     _ = backend_id  # feature file uses {backend_id} as REST placeholder
     backend_id = ctx.get("backend_id")
@@ -442,7 +452,7 @@ def get_model_backend_by_id(request, backend_id: str, ctx):
         request.node._resp_body = backend
 
 
-@when(parsers.parse('I PATCH /api/v1/model-backends/{backend_id} with a new name and model'))
+@when(parsers.parse("I PATCH /api/v1/model-backends/{backend_id} with a new name and model"))
 def patch_model_backend_name_model(request, backend_id: str, ctx):
     _ = backend_id
     backend = ctx.get("backend")
@@ -456,7 +466,7 @@ def patch_model_backend_name_model(request, backend_id: str, ctx):
         request.node._resp_body = backend
 
 
-@when(parsers.parse('I PATCH /api/v1/model-backends/{backend_id} with a new API key'))
+@when(parsers.parse("I PATCH /api/v1/model-backends/{backend_id} with a new API key"))
 def patch_model_backend_api_key(request, backend_id: str, ctx):
     _ = backend_id
     backend = ctx.get("backend")
@@ -469,7 +479,7 @@ def patch_model_backend_api_key(request, backend_id: str, ctx):
         request.node._resp_body = backend
 
 
-@when(parsers.parse('I DELETE /api/v1/model-backends/{backend_id}'))
+@when(parsers.parse("I DELETE /api/v1/model-backends/{backend_id}"))
 def delete_model_backend_by_id(request, backend_id: str, ctx):
     _ = backend_id
     not_found = ctx.get("backend_not_found", False)
@@ -630,10 +640,32 @@ def invoke_exceeds_timeout(ctx):
 def backend_is_initialized(ctx):
     provider = ctx.get("payload", {}).get("provider", "")
     valid_providers = {
-        "ai21", "anthropic", "azure_openai", "bedrock", "cohere", "deepseek",
-        "fireworks", "gemini", "grok", "groq", "jan", "llamacpp", "lm_studio",
-        "localai", "mistral", "ollama", "openai", "openrouter", "perplexity",
-        "qwen", "replicate", "tgi", "togetherai", "vertexai", "vllm", "watsonx",
+        "ai21",
+        "anthropic",
+        "azure_openai",
+        "bedrock",
+        "cohere",
+        "deepseek",
+        "fireworks",
+        "gemini",
+        "grok",
+        "groq",
+        "jan",
+        "llamacpp",
+        "lm_studio",
+        "localai",
+        "mistral",
+        "ollama",
+        "openai",
+        "openrouter",
+        "perplexity",
+        "qwen",
+        "replicate",
+        "tgi",
+        "togetherai",
+        "vertexai",
+        "vllm",
+        "watsonx",
     }
     if provider not in valid_providers:
         ctx["init_error"] = ValueError(f"Unsupported provider: '{provider}'")
@@ -691,9 +723,7 @@ def error_includes_retry_after(ctx):
 def timeout_error_returned(ctx):
     err = ctx.get("invoke_error")
     assert err is not None, "Expected a timeout error but none occurred"
-    assert ctx.get("invoke_error_type") == "timeout", (
-        f"Expected timeout error, got {ctx.get('invoke_error_type')}"
-    )
+    assert ctx.get("invoke_error_type") == "timeout", f"Expected timeout error, got {ctx.get('invoke_error_type')}"
 
 
 @then("a configuration error is returned")

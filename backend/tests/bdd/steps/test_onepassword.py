@@ -1,6 +1,7 @@
 """BDD step definitions for 1Password Connect connector scenarios."""
 
 import asyncio
+import contextlib
 
 import httpx
 import pytest
@@ -10,10 +11,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.onepassword import OnePasswordConnector
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/onepassword.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 TOKEN = "op_test_token"
 BASE_URL = "http://localhost:8080"
@@ -57,9 +56,7 @@ def given_valid_connector(op_connector):
 @when("I perform a health check")
 def when_health_check(op_connector):
     with respx.mock:
-        respx.get(f"{BASE_URL}/v1/vaults", params={"limit": 1}).mock(
-            return_value=httpx.Response(200, json=[])
-        )
+        respx.get(f"{BASE_URL}/v1/vaults", params={"limit": 1}).mock(return_value=httpx.Response(200, json=[]))
         global _last_health_result
         _last_health_result = _run(op_connector.health_check())
 
@@ -126,11 +123,7 @@ def when_query_vault_item(op_connector, resource, vault_id, item_id):
         _last_query_result = None
 
 
-@when(
-    parsers.parse(
-        'I query 1Password resource "{resource}" with vault_id "{vault_id}" and title "{title}"'
-    )
-)
+@when(parsers.parse('I query 1Password resource "{resource}" with vault_id "{vault_id}" and title "{title}"'))
 def when_query_by_title(op_connector, resource, vault_id, title):
     global _last_query_result, _last_error
     try:
@@ -139,9 +132,7 @@ def when_query_by_title(op_connector, resource, vault_id, title):
                 return_value=httpx.Response(200, json=[{"id": "i1", "title": title}])
             )
             _last_query_result = _run(
-                op_connector.query(
-                    ConnectorQuery(resource=resource, filters={"vault_id": vault_id, "title": title})
-                )
+                op_connector.query(ConnectorQuery(resource=resource, filters={"vault_id": vault_id, "title": title}))
             )
             _last_error = None
     except ValueError as e:
@@ -190,20 +181,14 @@ def when_query_without_vault(op_connector, resource):
 def when_query_without_item(op_connector, resource, vault_id):
     global _last_query_result, _last_error
     try:
-        _last_query_result = _run(
-            op_connector.query(ConnectorQuery(resource=resource, filters={"vault_id": vault_id}))
-        )
+        _last_query_result = _run(op_connector.query(ConnectorQuery(resource=resource, filters={"vault_id": vault_id})))
         _last_error = None
     except ValueError as e:
         _last_error = e
         _last_query_result = None
 
 
-@when(
-    parsers.parse(
-        'I write 1Password resource "{resource}" with vault_id "{vault_id}" title "{title}" type "{typ}"'
-    )
-)
+@when(parsers.parse('I write 1Password resource "{resource}" with vault_id "{vault_id}" title "{title}" type "{typ}"'))
 def when_write_item(op_connector, resource, vault_id, title, typ):
     global _last_write_result, _last_error
     try:
@@ -251,22 +236,14 @@ def when_write_update(op_connector, resource, vault_id, item_id, title):
         _last_write_result = None
 
 
-@when(
-    parsers.parse(
-        'I write 1Password resource "{resource}" with vault_id "{vault_id}" and item_id "{item_id}"'
-    )
-)
+@when(parsers.parse('I write 1Password resource "{resource}" with vault_id "{vault_id}" and item_id "{item_id}"'))
 def when_write_delete(op_connector, resource, vault_id, item_id):
     global _last_write_result, _last_error
     try:
         with respx.mock:
-            respx.delete(f"{BASE_URL}/v1/vaults/{vault_id}/items/{item_id}").mock(
-                return_value=httpx.Response(204)
-            )
+            respx.delete(f"{BASE_URL}/v1/vaults/{vault_id}/items/{item_id}").mock(return_value=httpx.Response(204))
             _last_write_result = _run(
-                op_connector.write(
-                    ConnectorPayload(resource=resource, data={"vault_id": vault_id, "item_id": item_id})
-                )
+                op_connector.write(ConnectorPayload(resource=resource, data={"vault_id": vault_id, "item_id": item_id}))
             )
             _last_error = None
     except ValueError as e:

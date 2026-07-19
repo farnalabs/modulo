@@ -4,6 +4,7 @@ Covers: crud, run_lifecycle, pipeline_config_validation, checkpoint_resume,
 run_variants, scheduling, webhook_trigger.
 """
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,26 +15,16 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature files — each call loads its scenarios into this module.
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/crud.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/error_recovery.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/run_variants.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/scheduling.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/webhook_trigger.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -85,16 +76,13 @@ def patches():
     collectors: list[Any] = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 # ===================================================================
 #  GIVEN — shared preconditions
 # ===================================================================
-
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}"'))
@@ -697,10 +685,7 @@ def check_error_mentions(request: pytest.FixtureRequest, field: str) -> None:
     This works for both the FastAPI automatic 422 and custom error responses.
     """
     body = request.node._resp_body
-    if isinstance(body, dict):
-        detail = str(body.get("detail", body))
-    else:
-        detail = str(body)
+    detail = str(body.get("detail", body)) if isinstance(body, dict) else str(body)
     assert field.lower() in detail.lower(), f"Expected error to mention {field!r}, got: {detail[:500]}"
 
 
@@ -906,9 +891,7 @@ def human_approves_gate(request: pytest.FixtureRequest) -> None:
 def check_error_code(request: pytest.FixtureRequest, error_code: str) -> None:
     mock_run = getattr(request.node, "_mock_run", None)
     if mock_run is not None and hasattr(mock_run, "error_detail"):
-        assert mock_run.error_detail == error_code, (
-            f"Expected error_code {error_code!r}, got {mock_run.error_detail!r}"
-        )
+        assert mock_run.error_detail == error_code, f"Expected error_code {error_code!r}, got {mock_run.error_detail!r}"
     else:
         stored = getattr(request.node, "_error_code", None)
         assert stored == error_code, f"Expected error_code {error_code!r}, got {stored!r}"
@@ -916,9 +899,7 @@ def check_error_code(request: pytest.FixtureRequest, error_code: str) -> None:
 
 @then("execution resumes from the interrupted node")
 def resumes_from_interrupted(request: pytest.FixtureRequest) -> None:
-    assert request.node._run_status == "running", (
-        f"Expected running, got {request.node._run_status}"
-    )
+    assert request.node._run_status == "running", f"Expected running, got {request.node._run_status}"
 
 
 # ===================================================================
@@ -1013,9 +994,7 @@ def human_output_provided(request: pytest.FixtureRequest) -> None:
 
 @then("the node executes successfully")
 def node_executes_successfully(request: pytest.FixtureRequest) -> None:
-    assert request.node._run_status == "running", (
-        f"Expected running, got {request.node._run_status}"
-    )
+    assert request.node._run_status == "running", f"Expected running, got {request.node._run_status}"
 
 
 @then("an artifact is recorded")
@@ -1025,9 +1004,7 @@ def artifact_recorded(request: pytest.FixtureRequest) -> None:
 
 @then("the run pauses for human input")
 def run_pauses_for_human(request: pytest.FixtureRequest) -> None:
-    assert request.node._run_status == "awaiting_human", (
-        f"Expected awaiting_human, got {request.node._run_status}"
-    )
+    assert request.node._run_status == "awaiting_human", f"Expected awaiting_human, got {request.node._run_status}"
 
 
 @then("the manual output is available in artifacts")
@@ -1038,9 +1015,7 @@ def manual_output_in_artifacts(request: pytest.FixtureRequest) -> None:
 
 @then("the run continues")
 def run_continues(request: pytest.FixtureRequest) -> None:
-    assert request.node._run_status == "running", (
-        f"Expected running, got {request.node._run_status}"
-    )
+    assert request.node._run_status == "running", f"Expected running, got {request.node._run_status}"
 
 
 @then('the run status becomes "waiting_for_approval"')
@@ -1130,11 +1105,7 @@ def variant_group_exists(name: str, pipeline_name: str, request: pytest.FixtureR
     request.node._variant_group_name = name
 
 
-@given(
-    parsers.parse(
-        'a variant group "{name}" exists for pipeline "{pipeline_name}" at max concurrency'
-    )
-)
+@given(parsers.parse('a variant group "{name}" exists for pipeline "{pipeline_name}" at max concurrency'))
 def variant_group_at_max_concurrency(name: str, pipeline_name: str, request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
@@ -1214,10 +1185,7 @@ def run_variant_group(name: str, client, request: pytest.FixtureRequest, patches
     patcher2.start()
     patches.append(patcher2)
 
-    if getattr(request.node, "_variant_at_max_concurrency", False):
-        mock_run_result = None
-    else:
-        mock_run_result = mock_result
+    mock_run_result = None if getattr(request.node, "_variant_at_max_concurrency", False) else mock_result
 
     patcher3 = patch(
         "modulo.api.routes.variants.run_variant_weighted",
@@ -1312,11 +1280,7 @@ def active_cron_trigger_exists(pipeline_name: str, request: pytest.FixtureReques
     request.node._cron_expression = "0 6 * * *"
 
 
-@given(
-    parsers.parse(
-        'an active cron trigger exists for pipeline "{pipeline_name}" with expression "{expression}"'
-    )
-)
+@given(parsers.parse('an active cron trigger exists for pipeline "{pipeline_name}" with expression "{expression}"'))
 def active_cron_trigger_with_expression(pipeline_name: str, expression: str, request: pytest.FixtureRequest) -> None:
     request.node._trigger_id = uuid.uuid5(uuid.NAMESPACE_DNS, f"cron-{pipeline_name}-{expression}")
     request.node._trigger_type = "cron"
@@ -1452,11 +1416,7 @@ def check_future_fire_times(request: pytest.FixtureRequest, count: int) -> None:
 # ===================================================================
 
 
-@given(
-    parsers.parse(
-        'org "{org}" has pipeline "{pipeline_name}" with webhook secret "{secret}"'
-    )
-)
+@given(parsers.parse('org "{org}" has pipeline "{pipeline_name}" with webhook secret "{secret}"'))
 def pipeline_with_webhook_secret(org: str, pipeline_name: str, secret: str, request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
@@ -1737,7 +1697,7 @@ def rollback_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, reques
 def delete_snapshot_endpoint(snap_ref: str, client, request, patches):
     pipeline = request.node._mock_pipeline
     snapshots = request.node._mock_snapshots
-    is_latest = snap_ref in ("snap-2",) if snapshots else False
+    is_latest = snap_ref == "snap-2" if snapshots else False
 
     _patch_set_rls(patches)
     if not is_latest:

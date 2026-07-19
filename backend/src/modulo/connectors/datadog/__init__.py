@@ -1,5 +1,6 @@
 """DatadogConnector — async Datadog REST API connector (v1 + v2)."""
 
+import asyncio
 from typing import Any, cast
 
 import httpx
@@ -26,9 +27,10 @@ class DatadogConnector(ConnectorBase):
     def __init__(self, api_key: str, app_key: str, site: str = "us") -> None:
         self._api_key = api_key
         self._app_key = app_key
-        self._base = _SITES.get(site)
-        if not self._base:
+        base = _SITES.get(site)
+        if base is None:
             raise ValueError(f"Unknown Datadog site: {site!r}. Choose from: {', '.join(_SITES)}")
+        self._base = base
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -58,6 +60,8 @@ class DatadogConnector(ConnectorBase):
             if exc.response.status_code == 403:
                 return HealthResult(ok=False, detail="Invalid Datadog API key")
             return HealthResult(ok=False, detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -136,8 +140,8 @@ class DatadogConnector(ConnectorBase):
                     "from": q.filters.get("from", 0),
                     "to": q.filters.get("to", 0),
                     "queries": q.filters.get("queries", []),
-                }
-            }
+                },
+            },
         }
         resp = await c.post("/api/v2/query/timeseries", json=data)
         resp.raise_for_status()
@@ -189,7 +193,7 @@ class DatadogConnector(ConnectorBase):
         resp = await c.post("/api/v1/events", json=body)
         resp.raise_for_status()
         result: dict[str, Any] = resp.json()
-        return cast(dict[str, Any], result.get("event", result))
+        return cast("dict[str, Any]", result.get("event", result))
 
     async def _create_monitor(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         query = data.get("query")

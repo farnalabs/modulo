@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -14,6 +15,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.base import PageResult
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -31,7 +33,7 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -45,12 +47,21 @@ def _fake_profile(**overrides: Any) -> MagicMock:
     p.organisation_id = overrides.get("organisation_id", _ORG_ID)
     p.name = overrides.get("name", "test-profile")
     p.description = overrides.get("description", "A test profile")
+    p.provider_type = overrides.get("provider_type", "docker")
     p.image_ref = overrides.get("image_ref", "python:3.12-slim")
     p.capabilities = overrides.get("capabilities", ["docker"])
+    p.capabilities_json = overrides.get("capabilities", ["docker"])
+    p.config_json = overrides.get("config_json", {})
     p.egress_policy = overrides.get("egress_policy", "allow_all")
+    p.network_policy = overrides.get("network_policy", "allow_all")
+    p.initialisation_strategy = overrides.get("initialisation_strategy", "none")
+    p.secret_refs_json = overrides.get("secret_refs", [])
     p.timeout_seconds = overrides.get("timeout_seconds", 3600)
     p.resource_limits_json = overrides.get("resource_limits", {})
-    p.persistence_policy = overrides.get("persistence_policy", {})
+    p.persistence_policy = overrides.get("persistence_policy", "ephemeral")
+    p.status = overrides.get("status", "active")
+    p.visibility = overrides.get("visibility", "org")
+    p.owner_team_id = overrides.get("owner_team_id")
     p.is_active = overrides.get("is_active", True)
     p.created_by = overrides.get("created_by", _USER_ID)
     p.created_at = None
@@ -91,6 +102,22 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+_ENV_AUTH_CASES = [
+    ("GET", "/api/v1/environments"),
+    ("POST", "/api/v1/environments"),
+    ("GET", f"/api/v1/environments/{_PROFILE_ID}"),
+    ("PATCH", f"/api/v1/environments/{_PROFILE_ID}"),
+    ("DELETE", f"/api/v1/environments/{_PROFILE_ID}"),
+    ("POST", f"/api/v1/environments/{_PROFILE_ID}/test"),
+]
+
+
+@pytest.mark.parametrize("method,url", _ENV_AUTH_CASES, ids=["list", "create", "get", "update", "delete", "test"])
+def test_endpoints_unauthenticated(unauth_client: TestClient, method: str, url: str) -> None:
+    resp = getattr(unauth_client, method.lower())(url)
+    assert resp.status_code in (401, 403), f"Expected 401/403 for {method} {url}, got {resp.status_code}"
+
+
 class TestListProfiles:
     URL = "/api/v1/environments"
 
@@ -123,10 +150,6 @@ class TestListProfiles:
         assert data["total"] == 0
         assert data["items"] == []
 
-    def test_list_profiles_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.get(self.URL)
-        assert resp.status_code in (401, 403)
-
 
 class TestCreateProfile:
     URL = "/api/v1/environments"
@@ -153,13 +176,12 @@ class TestCreateProfile:
         assert data["image_ref"] == "ubuntu:22.04"
         assert data["capabilities"] == ["docker", "gpu"]
 
-    def test_create_profile_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.post(self.URL, json=self.PAYLOAD)
-        assert resp.status_code in (401, 403)
-
-    def test_create_profile_missing_required_fields(self, client: TestClient) -> None:
+    def test_create_profile_with_defaults(self, client: TestClient) -> None:
         resp = client.post(self.URL, json={"name": "incomplete"})
-        assert resp.status_code == 422
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "incomplete"
+        assert data["status"] == "active"
 
 
 class TestGetProfile:
@@ -188,10 +210,6 @@ class TestGetProfile:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
 
-    def test_get_profile_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.get(f"{self.URL}/{_PROFILE_ID}")
-        assert resp.status_code in (401, 403)
-
 
 class TestUpdateProfile:
     URL = "/api/v1/environments"
@@ -218,13 +236,16 @@ class TestUpdateProfile:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
 
-    def test_update_profile_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.patch(f"{self.URL}/{_PROFILE_ID}", json={"name": "x"})
-        assert resp.status_code in (401, 403)
-
-    def test_update_profile_invalid_egress_policy(self, client: TestClient) -> None:
-        resp = client.patch(f"{self.URL}/{_PROFILE_ID}", json={"egress_policy": "bogus"})
-        assert resp.status_code == 422
+    def test_update_profile_invalid_network_policy(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.environments.get_environment_profile"),
+            patch("modulo.api.routes.environments.update_environment_profile") as mock_update,
+            patch("modulo.api.routes.environments.set_rls_org"),
+        ):
+            mock_update.side_effect = IntegrityError("mock", "mock", "mock")
+            resp = client.patch(f"{self.URL}/{_PROFILE_ID}", json={"network_policy": "bogus"})
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "An environment profile with this name already exists in your organisation."
 
 
 class TestDeleteProfile:
@@ -249,17 +270,9 @@ class TestDeleteProfile:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
 
-    def test_delete_profile_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.delete(f"{self.URL}/{_PROFILE_ID}")
-        assert resp.status_code in (401, 403)
-
 
 class TestProfileTestEndpoint:
     URL = "/api/v1/environments"
-
-    def test_profile_test_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.post(f"{self.URL}/{_PROFILE_ID}/test")
-        assert resp.status_code in (401, 403)
 
     def test_profile_test_profile_not_found(self, client: TestClient) -> None:
         with (

@@ -1,15 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
-import { nextTick } from 'vue'
+import { nextTick as vueNextTick } from 'vue'
+
+async function nextTick() {
+  await vueNextTick()
+  await flushPromises()
+}
 
 const getMock = vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 12 })
 
-vi.mock('../composables/useApi', () => ({
-  useApi: vi.fn(() => ({
-    get: getMock,
-    patch: vi.fn(),
-  })),
+vi.mock('../lib/api/client', () => ({
+  api: {
+    GET: vi.fn(async (...args: unknown[]) => ({ data: await getMock(...args), error: undefined })),
+    PATCH: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+  },
 }))
 
 import LibraryView from '../views/LibraryView.vue'

@@ -1,15 +1,14 @@
 """BDD step definitions: Schema Migration (dry-run, plan, apply)."""
 
+import contextlib
 import json
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/schemas/schema_migration.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _SCHEMA_DEFS: dict[str, dict] = {}
@@ -40,7 +39,7 @@ def _make_schema_version(schema_id: uuid.UUID, fields: dict[str, str]) -> MagicM
 
 @given(
     parsers.parse(
-        'a source schema version with fields {fields_json}',
+        "a source schema version with fields {fields_json}",
     ),
     target_fixture="source_schema_ctx",
 )
@@ -55,7 +54,7 @@ def step_source_schema_with_fields(fields_json: str, request) -> dict:
 
 @given(
     parsers.parse(
-        'a target schema version with fields {fields_json}',
+        "a target schema version with fields {fields_json}",
     ),
     target_fixture="target_schema_ctx",
 )
@@ -99,10 +98,13 @@ def step_migrate_plan(request, client):
     source_def = getattr(request.node, "_source_def", {})
     target_def = getattr(request.node, "_target_def", {})
 
-    resp = client.post("/api/v1/schemas/migrate/plan", json={
-        "from_definition": source_def,
-        "to_definition": target_def,
-    })
+    resp = client.post(
+        "/api/v1/schemas/migrate/plan",
+        json={
+            "from_definition": source_def,
+            "to_definition": target_def,
+        },
+    )
     request.node._resp = resp
 
 
@@ -134,9 +136,7 @@ def step_migrated_data_equals_original(request):
 @then('the migrated_data still contains "full_name"')
 def step_migrated_data_contains_full_name(request):
     data = request.node._resp.json()
-    assert "full_name" in data["migrated_data"], (
-        f"Dry-run should not remove full_name: {data['migrated_data']}"
-    )
+    assert "full_name" in data["migrated_data"], f"Dry-run should not remove full_name: {data['migrated_data']}"
 
 
 @then(
@@ -146,9 +146,7 @@ def step_plan_contains_rename(old_name: str, new_name: str, request):
     data = request.node._resp.json()
     plan = data if "field_additions" in data else data.get("plan", {})
     renames = plan.get("renames", {})
-    assert renames.get(old_name) == new_name, (
-        f"Expected rename {old_name} -> {new_name}, got {renames}"
-    )
+    assert renames.get(old_name) == new_name, f"Expected rename {old_name} -> {new_name}, got {renames}"
 
 
 @then(
@@ -158,9 +156,7 @@ def step_plan_lists_field_addition(field: str, request):
     data = request.node._resp.json()
     plan = data if "field_additions" in data else data.get("plan", {})
     additions = plan.get("field_additions", {})
-    assert field in additions, (
-        f"Expected '{field}' in field_additions, got {additions}"
-    )
+    assert field in additions, f"Expected '{field}' in field_additions, got {additions}"
 
 
 def _call_migrate(request, client, dry_run: bool = False, data_override: dict | None = None) -> None:
@@ -183,6 +179,7 @@ def _call_migrate(request, client, dry_run: bool = False, data_override: dict | 
         patch("modulo.api.routes.schemas.get_schema") as mock_get_schema,
         patch("modulo.api.routes.schemas._get_latest_version") as mock_latest,
     ):
+
         def _get_schema_side(session, schema_id):
             for ctx in (source_ctx, target_ctx):
                 if ctx["schema"].id == schema_id:

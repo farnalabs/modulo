@@ -43,16 +43,19 @@ async def cleanup_retained_payloads(
                 Run.status.in_(_TERMINAL_STATES),
                 (Run.input_payload.isnot(None) | Run.outputs_json.isnot(None)),
             )
+            .order_by(Run.id)
             .limit(BATCH_SIZE)
         )
         ids = result.scalars().all()
         if not ids:
             break
 
-        await db_session.execute(
-            update(Run).where(Run.id.in_(ids)).values(input_payload=None, outputs_json=None)
-        )
-        await db_session.commit()
+        await db_session.execute(update(Run).where(Run.id.in_(ids)).values(input_payload=None, outputs_json=None))
+        try:
+            await db_session.commit()
+        except Exception:
+            _log.exception("Failed to commit payload cleanup for %d runs", len(ids))
+            raise
         total += len(ids)
 
         if len(ids) < BATCH_SIZE:

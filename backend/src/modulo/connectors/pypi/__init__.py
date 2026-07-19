@@ -1,5 +1,10 @@
-"""PyPIConnector — async PyPI JSON/XML-RPC API connector for package metadata."""
+"""PyPI connector for package metadata.
 
+The defusedxml monkey patch is installed at import time before the XML-RPC client makes any request.
+"""
+
+import asyncio
+import xmlrpc.client  # nosec B411
 from typing import Any, cast
 
 import defusedxml.xmlrpc
@@ -49,6 +54,8 @@ class PyPIConnector(ConnectorBase):
                 return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Cannot connect to PyPI registry")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -98,7 +105,7 @@ class PyPIConnector(ConnectorBase):
             raise ValueError("PyPI search query requires 'text' in filters")
         spec = {"name": text, "summary": text}
         operator = q.filters.get("operator", "and")
-        xml_body = defusedxml.xmlrpc.dumps((spec, operator), "search")
+        xml_body = xmlrpc.client.dumps((spec, operator), "search")
 
         async with httpx.AsyncClient(
             base_url=_API_BASE,
@@ -106,23 +113,25 @@ class PyPIConnector(ConnectorBase):
         ) as c:
             resp = await c.post("/", content=xml_body, headers={"Content-Type": "text/xml"})
             resp.raise_for_status()
-            results: list[dict[str, Any]] = cast("list[dict[str, Any]]", defusedxml.xmlrpc.loads(resp.text)[0][0])
+            results: list[dict[str, Any]] = cast("list[dict[str, Any]]", xmlrpc.client.loads(resp.text)[0][0])
         records = []
         for r in results:
-            records.append({
-                "name": r.get("name", ""),
-                "version": r.get("version", ""),
-                "summary": r.get("summary", ""),
-                "author": r.get("author", ""),
-                "author_email": r.get("author_email", ""),
-                "maintainer": r.get("maintainer", ""),
-                "maintainer_email": r.get("maintainer_email", ""),
-                "home_page": r.get("home_page", ""),
-                "license": r.get("license", ""),
-                "description": r.get("description", ""),
-                "platform": r.get("platform", ""),
-                "downloads": r.get("downloads", 0),
-            })
+            records.append(
+                {
+                    "name": r.get("name", ""),
+                    "version": r.get("version", ""),
+                    "summary": r.get("summary", ""),
+                    "author": r.get("author", ""),
+                    "author_email": r.get("author_email", ""),
+                    "maintainer": r.get("maintainer", ""),
+                    "maintainer_email": r.get("maintainer_email", ""),
+                    "home_page": r.get("home_page", ""),
+                    "license": r.get("license", ""),
+                    "description": r.get("description", ""),
+                    "platform": r.get("platform", ""),
+                    "downloads": r.get("downloads", 0),
+                },
+            )
         return ConnectorResult(
             records=records,
             total=len(records),

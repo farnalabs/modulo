@@ -402,7 +402,7 @@ The auth store must be wired to `ErrorTracker.setUser()` and `setTags()`:
 ```
 Login success → tracker.setUser({ id, email, name, role })
                tracker.setTags({ orgId, tier, env })
-               
+
 Logout / 401  → tracker.setUser(null)
                tracker.setTags({})
 ```

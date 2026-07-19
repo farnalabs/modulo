@@ -1,5 +1,6 @@
 """MondayConnector — async Monday.com GraphQL API v2 connector."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -196,6 +197,8 @@ class MondayConnector(ConnectorBase):
                 ok=False,
                 detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}",
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -281,9 +284,7 @@ class MondayConnector(ConnectorBase):
                 column_id = payload.data.get("column_id")
                 value = payload.data.get("value")
                 if item_id is None or column_id is None or value is None:
-                    raise ValueError(
-                        "Monday column_value write requires 'item_id', 'column_id', and 'value' in data"
-                    )
+                    raise ValueError("Monday column_value write requires 'item_id', 'column_id', and 'value' in data")
                 data = await self._graphql(
                     _CHANGE_SIMPLE_COLUMN_VALUE_MUTATION,
                     {"item_id": item_id, "column_id": column_id, "value": value},

@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Event system for real-time resource-change notifications via SSE."""
 
+from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
@@ -15,6 +14,7 @@ if TYPE_CHECKING:
 def __getattr__(name: str) -> object:
     if name == "RedisEventBroker":
         from modulo.core.events.redis_broker import RedisEventBroker
+
         return RedisEventBroker
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)

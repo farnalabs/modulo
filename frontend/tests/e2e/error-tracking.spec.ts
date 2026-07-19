@@ -11,7 +11,7 @@ test.describe('Error Tracking', () => {
 
   test('error dashboard shows UI elements', async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await page.route('**/api/v1/admin/errors*', (route) => {
+    await page.route('**/api/v1/errors*', (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -19,10 +19,12 @@ test.describe('Error Tracking', () => {
           items: [
             {
               id: 'e1',
-              message: 'Connection timeout',
+              sample_message: 'Connection timeout',
+              level_peak: 'error',
               count: 15,
+              first_seen: '2025-06-01T12:00:00Z',
               last_seen: '2025-06-01T12:00:00Z',
-              status: 'unresolved',
+              status: 'new',
             },
           ],
           total: 1,

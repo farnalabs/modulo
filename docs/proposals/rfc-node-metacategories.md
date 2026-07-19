@@ -1,8 +1,8 @@
 # RFC — Node Metacategories for the Visual Pipeline Builder
 
-**Date**: 2026-06-27  
-**Status**: Draft — seeking review  
-**Author**: Duncan / AI agent  
+**Date**: 2026-06-27
+**Status**: Draft — seeking review
+**Author**: Duncan / AI agent
 **PRD ref**: §8.2 Pipeline Editor — Vue Flow canvas, node/edge data model
 
 ---
@@ -54,7 +54,7 @@ Each category defines:
 
 **Why `human_input` lives here**: The run pauses inside Modulo's runtime, the human returns to Modulo's UI with their output, and the run continues. The work is human, but the execution boundary is Modulo — we own the pause, the interaction flow, and the continuation.
 
-**Visual**: Solid border. Primary brand colour (sky blue).  
+**Visual**: Solid border. Primary brand colour (sky blue).
 **Icon**: Play / robot for `agent`; edit / pencil for `human_input`.
 
 ---
@@ -71,7 +71,7 @@ Each category defines:
 
 Observed nodes require a `connector_binding` to the system being observed, plus a `completion_condition` — a JMESPath expression against the observed state that signals completion.
 
-**Visual**: Solid border, distinct colour (teal/green — the "watching" colour).  
+**Visual**: Solid border, distinct colour (teal/green — the "watching" colour).
 **Icon**: Eye / satellite dish.
 
 ---
@@ -88,7 +88,7 @@ Observed nodes require a `connector_binding` to the system being observed, plus 
 
 Like Observed nodes, Human nodes require a `connector_binding` and a `completion_condition` (e.g., `pr.labels contains 'approved'`, `ticket.status == 'done'`).
 
-**Visual**: **Dashed border** (your instinct — correct). Softer colour than executable. The dash says "this happens outside Modulo."  
+**Visual**: **Dashed border** (your instinct — correct). Softer colour than executable. The dash says "this happens outside Modulo."
 **Icon**: Person / user.
 
 **Key rule**: A Human node must always have a detectable state change. A pure "human reads something" with no expected external outcome should be a doc annotation, not a pipeline node.
@@ -115,7 +115,7 @@ class DurationConfig(BaseModel):
 
 **Restriction**: Temporal nodes must not be graph entry points. A `wait_until` at the start of a pipeline means the run blocks immediately with no computation — confusing UX with no benefit over a cron trigger.
 
-**Visual**: Dotted border (distinct from dashed Human nodes). Circular or pill-shaped node.  
+**Visual**: Dotted border (distinct from dashed Human nodes). Circular or pill-shaped node.
 **Icon**: Clock / hourglass.
 
 ---
@@ -133,7 +133,7 @@ Composite nodes require a `pipeline_ref` (UUID of the referenced pipeline) and a
 
 Entry-point resolution is recursive: if pipeline A's first node is a `composite.sub_pipeline` referencing pipeline B, the runtime entry point is pipeline B's first node. The graph validator must handle this chain.
 
-**Visual**: Double border or thicker border. Expand/collapse affordance — clicking drills into the sub-pipeline (preserving viewport state via Vue Router, per ADR 001).  
+**Visual**: Double border or thicker border. Expand/collapse affordance — clicking drills into the sub-pipeline (preserving viewport state via Vue Router, per ADR 001).
 **Icon**: Stack / folder.
 
 ---

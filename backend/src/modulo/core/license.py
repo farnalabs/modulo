@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """License key parsing, verification, and storage.
 
 License keys are base64-encoded, Ed25519-signed JSON payloads in the
@@ -9,15 +7,17 @@ format::
 
 The payload is a JSON object with keys:
 
-    tier        — "community" | "team" | "v1" | "v2"
+    tier        — "community" | "team"
     features    — list of feature flag names
     expires_at  — ISO 8601 expiration timestamp
     org_id      — organisation identifier
 """
 
+from __future__ import annotations
 
 import base64
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -28,6 +28,9 @@ from modulo.core.registry.crypto import verify_signature
 # In production this would be set via environment or mounted secret.
 # This is the dev/test key — replace for production deployments.
 _LICENSE_PUBLIC_KEY_HEX: str = "a101dd3f34a806455d25ca247fb84a0a61decff4cf1a467b9456175634b0fc51"
+
+# Optional override for the public key (set via env var or set_public_key).
+_configured_public_key_hex: str | None = None
 
 # In-memory store for the current validated license.
 _current_license: LicenseData | None = None
@@ -47,10 +50,15 @@ def _validate_public_key_hex(hex_key: str) -> None:
 _validate_public_key_hex(_LICENSE_PUBLIC_KEY_HEX)
 
 
+def _get_effective_public_key() -> str:
+    """Return the configured key if set, otherwise fall back to the built-in key."""
+    return _configured_public_key_hex if _configured_public_key_hex is not None else _LICENSE_PUBLIC_KEY_HEX
+
+
 def set_public_key(hex_key: str) -> None:
-    global _LICENSE_PUBLIC_KEY_HEX
+    global _configured_public_key_hex
     _validate_public_key_hex(hex_key)
-    _LICENSE_PUBLIC_KEY_HEX = hex_key
+    _configured_public_key_hex = hex_key
 
 
 @dataclass
@@ -70,8 +78,7 @@ class LicenseValidation:
     error: str | None = None
 
 
-class LicenseError(ValueError):
-    ...
+class LicenseError(ValueError): ...
 
 
 def _decode_license_key(key: str) -> tuple[bytes, bytes]:
@@ -118,7 +125,7 @@ def parse_and_verify(key: str) -> LicenseValidation:
 
     sig_hex = sig_bytes.hex()
 
-    if not verify_signature(payload, sig_hex, _LICENSE_PUBLIC_KEY_HEX):
+    if not verify_signature(payload, sig_hex, _get_effective_public_key()):
         return LicenseValidation(valid=False, error="Signature verification failed")
 
     tier = payload.get("tier", "community")
@@ -163,3 +170,16 @@ def get_license() -> LicenseData | None:
 def clear_license() -> None:
     global _current_license
     _current_license = None
+
+
+_log = logging.getLogger(__name__)
+
+
+def check_production_public_key(settings: Any) -> None:
+    """Log a CRITICAL warning if the app is using the dev key outside debug mode."""
+    effective_key = _get_effective_public_key()
+    if effective_key == _LICENSE_PUBLIC_KEY_HEX and not getattr(settings, "debug", False):
+        _log.critical(
+            "LICENSE_CRITICAL: Using dev/test license public key in production. "
+            "Set MODULO_LICENSE_PUBLIC_KEY env var to a production key.",
+        )

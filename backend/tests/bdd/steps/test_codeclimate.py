@@ -1,15 +1,15 @@
 """BDD step definitions for Code Climate connector scenarios."""
 
+import contextlib
+
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.codeclimate import CodeClimateConnector
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/codeclimate.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -76,9 +76,7 @@ async def when_health_check(codeclimate_connector):
 @when(parsers.parse('I query resource "{resource}" with limit {limit:d}'))
 async def when_query_with_limit(codeclimate_connector, resource, limit):
     global _last_query_result
-    _last_query_result = await codeclimate_connector.query(
-        ConnectorQuery(resource=resource, limit=limit)
-    )
+    _last_query_result = await codeclimate_connector.query(ConnectorQuery(resource=resource, limit=limit))
     return _last_query_result
 
 
@@ -94,9 +92,7 @@ async def when_query_with_github_slug(codeclimate_connector, resource, github_sl
 @when(parsers.parse('I query resource "{resource}" with id "{item_id}"'))
 async def when_query_with_id(codeclimate_connector, resource, item_id):
     global _last_query_result
-    _last_query_result = await codeclimate_connector.query(
-        ConnectorQuery(resource=resource, filters={"id": item_id})
-    )
+    _last_query_result = await codeclimate_connector.query(ConnectorQuery(resource=resource, filters={"id": item_id}))
     return _last_query_result
 
 
@@ -127,10 +123,12 @@ async def when_query_test_report(codeclimate_connector, resource, repo_id, repor
     return _last_query_result
 
 
-@when(parsers.parse(
-    'I write a test report for repo "{repo_id}" duration {duration:d} '
-    'exit_code {exit_code:d} branch "{branch}" sha "{commit_sha}"'
-))
+@when(
+    parsers.parse(
+        'I write a test report for repo "{repo_id}" duration {duration:d} '
+        'exit_code {exit_code:d} branch "{branch}" sha "{commit_sha}"'
+    )
+)
 async def when_write_test_report(codeclimate_connector, repo_id, duration, exit_code, branch, commit_sha):
     global _last_write_result
     _last_write_result = await codeclimate_connector.write(

@@ -58,8 +58,15 @@ async def update_membership_role(
     session: AsyncSession,
     membership_id: uuid.UUID,
     role: str,
+    *,
+    org_id: uuid.UUID,
 ) -> OrgMembership | None:
-    result = await session.execute(select(OrgMembership).where(OrgMembership.id == membership_id))
+    result = await session.execute(
+        select(OrgMembership).where(
+            OrgMembership.id == membership_id,
+            OrgMembership.organisation_id == org_id,
+        )
+    )
     membership = result.scalar_one_or_none()
     if membership is None:
         return None

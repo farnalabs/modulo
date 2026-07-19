@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Registry API — browse, publish, pull, and trust-verify registry primitives."""
 
+from __future__ import annotations
 
 import base64
 import hashlib
@@ -17,9 +16,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.registry import (
     get_publisher_status,
     get_registry_primitive,
@@ -121,6 +121,7 @@ class RegisterPublisherRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("registry.list_registry_primitives_endpoint")
 @router.get("/primitives", response_model=RegistryRankedListResponse)
 async def list_registry_primitives_endpoint(
     author: str | None = Query(None),
@@ -167,6 +168,7 @@ async def list_registry_primitives_endpoint(
     return RegistryRankedListResponse(items=items, total=total)
 
 
+@handle_db_errors("registry.get_registry_primitive_endpoint")
 @router.get("/primitives/{slug:path}", response_model=PullResponse)
 async def get_registry_primitive_endpoint(
     slug: str,
@@ -215,6 +217,7 @@ async def get_registry_primitive_endpoint(
     )
 
 
+@handle_db_errors("registry.publish_primitive_endpoint")
 @router.post(
     "/primitives",
     response_model=RegistryEntryResponse,
@@ -222,7 +225,7 @@ async def get_registry_primitive_endpoint(
 )
 async def publish_primitive_endpoint(
     req: PublishRequest,
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RegistryEntryResponse:
     """Publish a new primitive to the registry (in-memory for alpha)."""
     try:
@@ -251,6 +254,7 @@ async def publish_primitive_endpoint(
     return RegistryEntryResponse.model_validate(entry)
 
 
+@handle_db_errors("registry.download_registry_primitive_endpoint")
 @router.post(
     "/primitives/{slug:path}/download",
     response_model=PullResponse,
@@ -258,7 +262,7 @@ async def publish_primitive_endpoint(
 async def download_registry_primitive_endpoint(
     slug: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PullResponse:
     """Download a primitive from the registry into the org's local library.
 
@@ -317,13 +321,13 @@ async def download_registry_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
-        _log.warning("DB error in download_registry_primitive_endpoint for slug=%s", slug)
+        _log.warning("DB error in download_registry_primitive_endpoint for slug=%s", slug, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception as e:
@@ -393,10 +397,11 @@ class VerifyResponseV2(BaseModel):
     trust_anchor_verified: bool = False
 
 
+@handle_db_errors("registry.publish_primitive_v2")
 @router.post("/publish", response_model=PublishResponseV2, status_code=status.HTTP_201_CREATED)
 async def publish_primitive_v2(
     req: PublishRequestV2,
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PublishResponseV2:
     """Publish a primitive to the registry (v2 protocol).
 
@@ -481,6 +486,7 @@ async def publish_primitive_v2(
     )
 
 
+@handle_db_errors("registry.pull_registry_primitive_v2")
 @router.get("/pull/{slug:path}", response_model=PullResponseV2)
 async def pull_registry_primitive_v2(
     slug: str,
@@ -517,13 +523,14 @@ async def pull_registry_primitive_v2(
     )
 
 
+@handle_db_errors("registry.verify_registry_primitive_v2")
 @router.get("/verify/{slug:path}", response_model=VerifyResponseV2)
 async def verify_registry_primitive_v2(
     slug: str,
     public_key_hex: str | None = None,
     public_key_pem: str | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> VerifyResponseV2:
     """Verify a published primitive's signature (v2 protocol).
 
@@ -563,9 +570,7 @@ async def verify_registry_primitive_v2(
             sort_keys=True,
         ).encode()
 
-        sig_b64 = base64.b64encode(
-            bytes.fromhex(entry.ed25519_signature_hex)
-        ).decode()
+        sig_b64 = base64.b64encode(bytes.fromhex(entry.ed25519_signature_hex)).decode()
 
         verified = crypto_pem_verify(public_key_pem, payload_bytes, sig_b64)
         trust_anchor_verified = verify_trust_anchor(public_key_pem, sig_b64)
@@ -592,21 +597,24 @@ async def verify_registry_primitive_v2(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
         except SQLAlchemyError:
             _log.warning(
                 "DB error in verify_registry_primitive_v2: public_key_hex path, slug=%s, fp=%s",
-                slug, entry.signing_key_fingerprint,
+                slug,
+                entry.signing_key_fingerprint,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database operation failed. Please try again.",
-            )
+            ) from None
         except HTTPException:
             raise
         except Exception as e:
             _log.exception(
-                "registry.verify_primitive.unexpected_error", extra={"slug": slug, "fp": entry.signing_key_fingerprint},
+                "registry.verify_primitive.unexpected_error",
+                extra={"slug": slug, "fp": entry.signing_key_fingerprint},
             )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -631,10 +639,11 @@ async def verify_registry_primitive_v2(
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("registry.register_publisher_endpoint")
 @router.post("/publishers", status_code=status.HTTP_201_CREATED)
 async def register_publisher_endpoint(
     req: RegisterPublisherRequest,
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Register a verified publisher (admin operation)."""
     pub = register_publisher(
@@ -646,10 +655,11 @@ async def register_publisher_endpoint(
     return {"status": "registered", "fingerprint": pub.fingerprint, "author": pub.author}
 
 
+@handle_db_errors("registry.revoke_publisher_endpoint")
 @router.post("/publishers/{fingerprint_hex}/revoke")
 async def revoke_publisher_endpoint(
     fingerprint_hex: str,
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Revoke a publisher's trust status."""
     ok = revoke_publisher(fingerprint_hex)
@@ -658,6 +668,7 @@ async def revoke_publisher_endpoint(
     return {"status": "revoked", "fingerprint": fingerprint_hex}
 
 
+@handle_db_errors("registry.list_publishers_endpoint")
 @router.get("/publishers")
 async def list_publishers_endpoint() -> list[dict[str, str]]:
     """List all verified publishers."""

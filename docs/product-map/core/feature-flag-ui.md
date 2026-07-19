@@ -16,7 +16,6 @@ code:
   - frontend/src/components/SidebarFooter.vue
   - frontend/src/stores/planStore.ts
   - frontend/src/router/index.ts
-
 bdd:
   - backend/tests/bdd/features/licensing/feature_flag_inspection.feature
 depends-on: [feat-core-db-abstraction-core]
@@ -215,7 +214,7 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] Frontend tests for error/loading/empty states in AdminFeatureFlagsView added
 - [x] planStore unit tests exist at frontend/src/__tests__/planStore.spec.ts
 
-## QA History (index 351 — cross-cutting) 
+## QA History (index 351 — cross-cutting)
 
 ### Findings fixed
 

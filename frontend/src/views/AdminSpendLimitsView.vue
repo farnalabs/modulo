@@ -1,14 +1,11 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Overview', to: '/admin/costs' },
     { label: 'Spend Limits', to: '/admin/costs/limits' },
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
   <div data-theme="agent" class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.spend_limits') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminCostBreakdownView.spend_limits')" :subtitle="$t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level')" />
 
     <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled>
 
@@ -25,8 +22,8 @@
           <CardContent>
             <div class="flex items-end gap-3">
               <div class="flex-1">
-                <label class="mb-1.5 block text-xs font-medium text-muted-foreground">Daily limit (USD)</label>
-                <Input :model-value="orgLimit ?? undefined" @update:model-value="(v: any) => orgLimit = v === '' ? null : Number(v)" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
+                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">Daily limit (USD)</span>
+                <Input aria-label="Form control" :model-value="orgLimit ?? undefined" @update:model-value="(v: any) => orgLimit = v === '' ? null : Number(v)" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
               </div>
               <Button :disabled="savingOrg" data-testid="admin-spend-limits-org-save" @click="saveOrgLimit">
                 {{ savingOrg ? 'Saving...' : 'Save' }}
@@ -58,7 +55,7 @@
                 <tr v-for="team in teams" :key="team.id" class="border-b last:border-b-0">
                   <td class="table-cell font-medium">{{ team.name }}</td>
                   <td class="table-cell">
-                    <Input
+                    <Input aria-label="Form control"
                       :model-value="team.editingLimit ?? undefined" @update:model-value="(v: any) => team.editingLimit = v === '' ? null : Number(v)"
                       type="number"
                       min="0"
@@ -117,8 +114,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import { ref, computed, watch } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -140,16 +139,9 @@ interface SpendLimitData {
   }>
 }
 
-interface TeamCostItem {
-  team_id: string
-  team_name: string
-  cost_usd: number
-  limit_usd: number | null
-}
-
 interface CostReportData {
   org_total_usd: number
-  teams: TeamCostItem[]
+  teams: Array<{ team_id: string; team_name: string; cost_usd: number; limit_usd: number | null }>
 }
 
 interface TeamRow {
@@ -161,67 +153,41 @@ interface TeamRow {
   saveError: string | null
 }
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { data: limitsData, loading, error: loadError, load: loadData } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/costs/limits'),
+)
 
 const orgLimit = ref<number | null>(null)
+const teams = ref<TeamRow[]>([])
+
+watch(() => limitsData.value, (data) => {
+  if (data) {
+    const resp = data as SpendLimitData
+    orgLimit.value = resp.org_daily_limit_usd
+    teams.value = (resp.teams ?? []).map(t => ({
+      ...t,
+      editingLimit: t.daily_limit_usd,
+      saving: false,
+      saveError: null,
+    }))
+  }
+})
+
+const { data: costsResp, loading: costsLoading, error: costsError } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/costs'),
+  { initialValue: { org_total_usd: 0, teams: [] } }
+)
+
+const orgTotalCost = computed(() => (costsResp.value as CostReportData)?.org_total_usd ?? 0)
+const teamCosts = computed(() => (costsResp.value as CostReportData)?.teams ?? [])
+
 const savingOrg = ref(false)
 const orgSaveError = ref<string | null>(null)
 const orgSaveSuccess = ref(false)
 
-const teams = ref<TeamRow[]>([])
-
-const costsLoading = ref(true)
-const costsError = ref<string | null>(null)
-const orgTotalCost = ref(0)
-const teamCosts = ref<TeamCostItem[]>([])
-
 function overageClass(cost: number, limit: number | null): string {
   if (limit === null || limit <= 0) return ''
   return cost > limit ? 'text-destructive' : 'text-success'
-}
-
-async function loadData() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/limits')
-    if (err) {
-      loadError.value = `Failed to load spend limits: ${formatApiError(err)}`
-    } else if (data) {
-      const resp = data as SpendLimitData
-      orgLimit.value = resp.org_daily_limit_usd
-      teams.value = (resp.teams ?? []).map((t) => ({
-        ...t,
-        editingLimit: t.daily_limit_usd,
-        saving: false,
-        saveError: null,
-      }))
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load spend limits: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
-async function loadCosts() {
-  costsLoading.value = true
-  costsError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs')
-    if (err) {
-      costsError.value = `Failed to load costs: ${formatApiError(err)}`
-    } else if (data) {
-      const resp = data as CostReportData
-      orgTotalCost.value = resp.org_total_usd ?? 0
-      teamCosts.value = resp.teams ?? []
-    }
-  } catch (e: unknown) {
-    costsError.value = `Failed to load costs: ${formatApiError(e)}`
-  } finally {
-    costsLoading.value = false
-  }
 }
 
 async function saveOrgLimit() {
@@ -263,10 +229,5 @@ async function saveTeamLimit(team: TeamRow) {
   }
 }
 
-onMounted(() => {
-  planStore.fetchPlan()
-  loadData()
-  loadCosts()
-})
+planStore.fetchPlan()
 </script>
-

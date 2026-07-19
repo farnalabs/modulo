@@ -1,9 +1,6 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminSystemOrgsView.system_admin_organisations') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSystemOrgsView.crosstenant_organisation_management_system_admin_only') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminSystemOrgsView.system_admin_organisations')" :subtitle="$t('views.AdminSystemOrgsView.crosstenant_organisation_management_system_admin_only')" />
 
     <div class="grid gap-6 md:grid-cols-2">
       <div class="rounded-lg border p-6">
@@ -36,4 +33,5 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 </script>

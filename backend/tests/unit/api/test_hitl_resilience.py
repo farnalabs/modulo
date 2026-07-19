@@ -8,12 +8,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.hitl_manager import NotTeamMemberError
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -33,6 +34,7 @@ def _make_settings() -> Settings:
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
     mock_session = AsyncMock()
+    configure_mock_session(mock_session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -41,7 +43,10 @@ def client() -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
@@ -65,7 +70,10 @@ class TestClaimGateSQLAlchemyError:
 
 
 class TestClaimGateNotTeamMemberError:
-    @patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)))
+    @patch(
+        "modulo.api.routes.hitl.HITLManager.claim",
+        new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)),
+    )
     def test_claim_gate_returns_403_for_non_team_member(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
@@ -131,7 +139,10 @@ class TestSubmitManualSQLAlchemyError:
 
 
 class TestSubmitManualNotTeamMemberError:
-    @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)))
+    @patch(
+        "modulo.api.routes.hitl.HITLManager.approve",
+        new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)),
+    )
     def test_submit_manual_returns_403_for_non_team_member(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/manual/gate-1/submit",

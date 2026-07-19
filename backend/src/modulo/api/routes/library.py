@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
@@ -13,9 +13,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user, require_system_admin
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
     ContributionInvalidTransitionError,
@@ -30,6 +31,7 @@ from modulo.core.library_service import (
 )
 from modulo.core.workflow_import_export import (
     export_pipeline_bundle,
+    export_pipeline_bundle_v2,
     extract_bundle_json_from_zip,
     get_existing_agent_names,
     get_existing_pipeline_names,
@@ -102,20 +104,19 @@ class LibraryPrimitiveResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
     @model_validator(mode="after")
-    @classmethod
-    def _compute_trust_tier(cls, data: Any) -> Any:
-        if data.source == "modulo":
-            data.trust_tier = "modulo"
-        elif data.source == "registry" and data.verified is True:
-            data.trust_tier = "green"
-        elif data.source == "registry":
-            data.trust_tier = "amber"
+    def _compute_trust_tier(self) -> Self:
+        if self.source == "modulo":
+            self.trust_tier = "modulo"
+        elif self.source == "registry" and self.verified is True:
+            self.trust_tier = "green"
+        elif self.source == "registry":
+            self.trust_tier = "amber"
         else:
-            data.trust_tier = None
-        return data
+            self.trust_tier = None
+        return self
 
 
 class LibraryPrimitiveListResponse(BaseModel):
@@ -139,11 +140,10 @@ class LibraryPrimitiveCreate(BaseModel):
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
 
     @model_validator(mode="after")
-    @classmethod
-    def _require_team_id_for_team_visibility(cls, values: Any) -> Any:
-        if values.visibility == "team" and values.owner_team_id is None:
+    def _require_team_id_for_team_visibility(self) -> Self:
+        if self.visibility == "team" and self.owner_team_id is None:
             raise ValueError("owner_team_id is required when visibility is 'team'")
-        return values
+        return self
 
 
 class LibraryPrimitiveUpdate(BaseModel):
@@ -157,11 +157,10 @@ class LibraryPrimitiveUpdate(BaseModel):
     tier: Literal["native", "preview", "in_dev"] | None = None
 
     @model_validator(mode="after")
-    @classmethod
-    def _require_team_id_for_team_visibility(cls, values: Any) -> Any:
-        if values.visibility == "team" and values.owner_team_id is None:
+    def _require_team_id_for_team_visibility(self) -> Self:
+        if self.visibility == "team" and self.owner_team_id is None:
             raise ValueError("owner_team_id is required when visibility is 'team'")
-        return values
+        return self
 
 
 class RatingSubmit(BaseModel):
@@ -272,6 +271,7 @@ class PipelineFromTemplateResponse(BaseModel):
 _log = logging.getLogger(__name__)
 
 
+@handle_db_errors("library.list_library_primitives_endpoint")
 @router.get("", response_model=LibraryPrimitiveListResponse)
 async def list_library_primitives_endpoint(
     page: int = Query(1, ge=1),
@@ -281,7 +281,7 @@ async def list_library_primitives_endpoint(
     search: str | None = None,
     source: str | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveListResponse:
     try:
         try:
@@ -301,7 +301,10 @@ async def list_library_primitives_endpoint(
                     cursor=cursor,
                 )
         except ProgrammingError:
-            _log.warning("list_library_primitives_endpoint: ProgrammingError — missing DB table or migration")
+            _log.warning(
+                "list_library_primitives_endpoint: ProgrammingError — missing DB table or migration",
+                exc_info=True,
+            )
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
@@ -351,16 +354,18 @@ async def list_library_primitives_endpoint(
         ) from None
 
 
+@handle_db_errors("library.ping")
 @router.get("/ping")
-async def ping():
+async def ping() -> dict[str, bool]:
     return {"pong": True}
 
 
+@handle_db_errors("library.get_library_primitive_endpoint")
 @router.get("/{primitive_id}", response_model=LibraryPrimitiveResponse)
 async def get_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -371,7 +376,7 @@ async def get_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -396,19 +401,18 @@ async def get_library_primitive_endpoint(
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("library.create_library_primitive_endpoint")
 @router.post("", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
 async def create_library_primitive_endpoint(
     req: LibraryPrimitiveCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            existing = await get_primitive_by_slug(
-                session, principal.organisation_id, req.primitive_type, req.slug
-            )
+            existing = await get_primitive_by_slug(session, principal.organisation_id, req.primitive_type, req.slug)
             if existing is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -440,24 +444,20 @@ async def create_library_primitive_endpoint(
                 tier=req.tier,
             )
     except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        ) from None
-    except IntegrityError:
         _log.warning(
             "create_library_primitive_endpoint: IntegrityError — slug collision on %s/%s",
             req.primitive_type,
             req.slug,
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Primitive with type '{req.primitive_type}' and slug '{req.slug}' already exists",
+        ) from None
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
         _log.exception("create_library_primitive_endpoint: SQLAlchemyError")
@@ -468,12 +468,13 @@ async def create_library_primitive_endpoint(
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
+@handle_db_errors("library.update_library_primitive_endpoint")
 @router.patch("/{primitive_id}", response_model=LibraryPrimitiveResponse)
 async def update_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     req: LibraryPrimitiveUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -485,7 +486,7 @@ async def update_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -505,11 +506,12 @@ async def update_library_primitive_endpoint(
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
+@handle_db_errors("library.delete_library_primitive_endpoint")
 @router.delete("/{primitive_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -520,7 +522,7 @@ async def delete_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -544,12 +546,13 @@ async def delete_library_primitive_endpoint(
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("library.copy_to_adapt_endpoint")
 @router.post("/{primitive_id}/adapt", response_model=LibraryPrimitiveResponse)
 async def copy_to_adapt_endpoint(
     primitive_id: uuid.UUID,
     req: CopyToAdaptRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveResponse:
     try:
         result = await copy_to_adapt(
@@ -575,7 +578,7 @@ async def copy_to_adapt_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -595,11 +598,13 @@ async def copy_to_adapt_endpoint(
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("library.export_pipeline_endpoint")
 @router.post("/export/{pipeline_id}")
 async def export_pipeline_endpoint(
     pipeline_id: uuid.UUID,
+    format: str = Query("v1", regex="^(v1|v2)$"),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> Response:
     try:
         async with session.begin():
@@ -611,12 +616,15 @@ async def export_pipeline_endpoint(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Pipeline {pipeline_id} not found",
                 )
-            bundle_bytes = await export_pipeline_bundle(session, pipeline_id)
+            if format == "v2":
+                yaml_str = await export_pipeline_bundle_v2(session, pipeline_id)
+            else:
+                bundle_bytes = await export_pipeline_bundle(session, pipeline_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -629,6 +637,14 @@ async def export_pipeline_endpoint(
             detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in pipeline.name)
+    if format == "v2":
+        return Response(
+            content=yaml_str,
+            media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_name}.modulo.yaml"',
+            },
+        )
     return Response(
         content=bundle_bytes,
         media_type="application/zip",
@@ -645,7 +661,7 @@ async def export_pipeline_endpoint(
 
 async def _analyse_bundle(
     session: AsyncSession,
-    principal: AuthenticatedPrincipal,
+    principal: TenantPrincipal,
     bundle: dict[str, Any],
 ) -> ImportBundleResponse:
     """Shared analysis logic — validates a bundle and returns resolution state."""
@@ -712,7 +728,9 @@ async def _analyse_bundle(
             seen_names: set[str] = set()
             for aname in agent_names_in_bundle:
                 if aname and aname in seen_names:
-                    warnings.append(f"Duplicate agent name '{aname}' found in bundle. Each agent must have a unique name.")
+                    warnings.append(
+                        f"Duplicate agent name '{aname}' found in bundle. Each agent must have a unique name."
+                    )
                 if aname:
                     seen_names.add(aname)
 
@@ -753,15 +771,15 @@ async def _analyse_bundle(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
-        _log.warning("_analyse_bundle: ProgrammingError — missing DB table or migration")
+        _log.warning("_analyse_bundle: ProgrammingError — missing DB table or migration", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("_analyse_bundle: SQLAlchemyError — database connection failure")
+        _log.warning("_analyse_bundle: SQLAlchemyError — database connection failure", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again later.",
@@ -781,11 +799,12 @@ async def _analyse_bundle(
     )
 
 
+@handle_db_errors("library.upload_zip_and_analyse_endpoint")
 @router.post("/import/upload-zip", response_model=ImportBundleResponse)
 async def upload_zip_and_analyse_endpoint(
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ImportBundleResponse:
     """Upload a .modulo.zip file, extract bundle.json, and return analysis.
 
@@ -799,13 +818,13 @@ async def upload_zip_and_analyse_endpoint(
         )
     if file.size and file.size > _MAX_UPLOAD_SIZE:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Upload size exceeds maximum of {_MAX_UPLOAD_SIZE // (1024 * 1024)} MB",
         )
     zip_bytes = await file.read()
     if len(zip_bytes) > _MAX_UPLOAD_SIZE:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Upload size exceeds maximum of {_MAX_UPLOAD_SIZE // (1024 * 1024)} MB",
         )
     try:
@@ -819,11 +838,12 @@ async def upload_zip_and_analyse_endpoint(
     return await _analyse_bundle(session, principal, bundle)
 
 
+@handle_db_errors("library.analyse_import_bundle_endpoint")
 @router.post("/import/analyse", response_model=ImportBundleResponse)
 async def analyse_import_bundle_endpoint(
     req: AnalyseBundleRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ImportBundleResponse:
     """Analyse a bundle JSON and return resolution warnings + available teams.
 
@@ -838,11 +858,12 @@ async def analyse_import_bundle_endpoint(
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("library.confirm_import_endpoint")
 @router.post("/import/confirm", response_model=dict[str, Any])
 async def confirm_import_endpoint(
     req: ImportConfirmRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Confirm and execute the import.
 
@@ -878,15 +899,15 @@ async def confirm_import_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
-        _log.warning("confirm_import_endpoint: ProgrammingError — missing DB table or migration")
+        _log.warning("confirm_import_endpoint: ProgrammingError — missing DB table or migration", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("confirm_import_endpoint: SQLAlchemyError — database connection failure")
+        _log.warning("confirm_import_endpoint: SQLAlchemyError — database connection failure", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again later.",
@@ -909,13 +930,14 @@ async def confirm_import_endpoint(
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("library.list_ratings_endpoint")
 @router.get("/{primitive_id}/ratings", response_model=RatingListResponse)
 async def list_ratings_endpoint(
     primitive_id: uuid.UUID,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RatingListResponse:
     try:
         async with session.begin():
@@ -926,7 +948,7 @@ async def list_ratings_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -944,11 +966,12 @@ async def list_ratings_endpoint(
     )
 
 
+@handle_db_errors("library.get_rating_aggregate_endpoint")
 @router.get("/{primitive_id}/ratings/aggregate", response_model=RatingAggregateResponse)
 async def get_rating_aggregate_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RatingAggregateResponse:
     try:
         async with session.begin():
@@ -959,7 +982,7 @@ async def get_rating_aggregate_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -977,6 +1000,7 @@ async def get_rating_aggregate_endpoint(
     )
 
 
+@handle_db_errors("library.submit_rating_endpoint")
 @router.post(
     "/{primitive_id}/ratings",
     response_model=RatingResponse,
@@ -986,7 +1010,7 @@ async def submit_rating_endpoint(
     primitive_id: uuid.UUID,
     req: RatingSubmit,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RatingResponse:
     try:
         async with session.begin():
@@ -1028,6 +1052,7 @@ async def submit_rating_endpoint(
     return RatingResponse.model_validate(rating)
 
 
+@handle_db_errors("library.submit_abuse_report_endpoint")
 @router.post(
     "/{primitive_id}/ratings/abuse",
     response_model=AbuseReportResponse,
@@ -1037,7 +1062,7 @@ async def submit_abuse_report_endpoint(
     primitive_id: uuid.UUID,
     req: AbuseReportSubmit,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AbuseReportResponse:
     try:
         async with session.begin():
@@ -1055,7 +1080,7 @@ async def submit_abuse_report_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1145,6 +1170,7 @@ def _build_pipeline_from_template(
     return name, description, pipeline_nodes, pipeline_edges, len(agents), len(edges)
 
 
+@handle_db_errors("library.create_pipeline_from_template_endpoint")
 @router.post(
     "/{primitive_id}/create-pipeline",
     response_model=PipelineFromTemplateResponse,
@@ -1154,7 +1180,7 @@ async def create_pipeline_from_template_endpoint(
     primitive_id: uuid.UUID,
     req: CreatePipelineFromTemplateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineFromTemplateResponse:
     try:
         primitive = await get_primitive(session, principal.organisation_id, primitive_id)
@@ -1162,7 +1188,7 @@ async def create_pipeline_from_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1181,7 +1207,9 @@ async def create_pipeline_from_template_endpoint(
         )
 
     name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(
-        primitive, req.name, req.description,
+        primitive,
+        req.name,
+        req.description,
     )
 
     try:
@@ -1189,24 +1217,32 @@ async def create_pipeline_from_template_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             pipeline = await create_pipeline(
-                session, org_id=principal.organisation_id, name=name, account_id=principal.account_id,
+                session,
+                org_id=principal.organisation_id,
+                name=name,
+                account_id=principal.account_id,
                 description=description,
                 run_context_defaults={"library_source_id": str(primitive_id), "library_template_name": primitive.name},
             )
             pipeline.graph_nodes_json = graph_nodes
             for edge_data in edges:
-                session.add(PipelineEdge(
-                    id=uuid.uuid4(), organisation_id=principal.organisation_id, pipeline_id=pipeline.id,
-                    source_node_id=uuid.UUID(edge_data["source_node_id"]),
-                    target_node_id=uuid.UUID(edge_data["target_node_id"]),
-                    edge_type=edge_data["edge_type"], hitl_gate_config=edge_data.get("hitl_gate_config"),
-                ))
+                session.add(
+                    PipelineEdge(
+                        id=uuid.uuid4(),
+                        organisation_id=principal.organisation_id,
+                        pipeline_id=pipeline.id,
+                        source_node_id=uuid.UUID(edge_data["source_node_id"]),
+                        target_node_id=uuid.UUID(edge_data["target_node_id"]),
+                        edge_type=edge_data["edge_type"],
+                        hitl_gate_config=edge_data.get("hitl_gate_config"),
+                    )
+                )
             await session.flush()
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1214,10 +1250,17 @@ async def create_pipeline_from_template_endpoint(
         ) from None
 
     return PipelineFromTemplateResponse(
-        id=pipeline.id, organisation_id=pipeline.organisation_id, name=pipeline.name,
-        description=pipeline.description, visibility=pipeline.visibility,
-        template_source_id=primitive_id, agent_count=agent_count, edge_count=edge_count,
-        ready_to_run=True, created_at=pipeline.created_at, updated_at=pipeline.updated_at,
+        id=pipeline.id,
+        organisation_id=pipeline.organisation_id,
+        name=pipeline.name,
+        description=pipeline.description,
+        visibility=pipeline.visibility,
+        template_source_id=primitive_id,
+        agent_count=agent_count,
+        edge_count=edge_count,
+        ready_to_run=True,
+        created_at=pipeline.created_at,
+        updated_at=pipeline.updated_at,
     )
 
 
@@ -1243,11 +1286,12 @@ class CommunityContributionListResponse(BaseModel):
     page_size: int
 
 
+@handle_db_errors("library.community_contribute_endpoint")
 @router.post("/community/contribute", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
 async def community_contribute_endpoint(
     req: CommunityContributeRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveResponse:
     """Submit a community library contribution."""
     try:
@@ -1268,7 +1312,7 @@ async def community_contribute_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1283,13 +1327,14 @@ async def community_contribute_endpoint(
     return LibraryPrimitiveResponse.model_validate(result)
 
 
+@handle_db_errors("library.list_community_contributions_endpoint")
 @router.get("/community/contributions", response_model=CommunityContributionListResponse)
 async def list_community_contributions_endpoint(
     contribution_status: str | None = Query(default=None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> CommunityContributionListResponse:
     """List the org's own community contributions, optionally filtered by status."""
     try:
@@ -1303,12 +1348,15 @@ async def list_community_contributions_endpoint(
                 page_size=page_size,
             )
         except IntegrityError:
-                raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="A resource with this value already exists",
-                )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A resource with this value already exists",
+            ) from None
         except ProgrammingError:
-            _log.warning("list_community_contributions_endpoint: ProgrammingError — missing DB table or migration")
+            _log.warning(
+                "list_community_contributions_endpoint: ProgrammingError — missing DB table or migration",
+                exc_info=True,
+            )
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
@@ -1330,6 +1378,7 @@ async def list_community_contributions_endpoint(
     )
 
 
+@handle_db_errors("library.admin_publish_contribution_endpoint")
 @router.post(
     "/admin/library/community/publish/{primitive_id}",
     response_model=LibraryPrimitiveResponse,
@@ -1338,7 +1387,7 @@ async def list_community_contributions_endpoint(
 async def admin_publish_contribution_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     _: None = Depends(require_system_admin),
 ) -> LibraryPrimitiveResponse:
     """Publish a community contribution to the community library (admin only)."""
@@ -1364,7 +1413,7 @@ async def admin_publish_contribution_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1377,4 +1426,3 @@ async def admin_publish_contribution_endpoint(
             detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     return LibraryPrimitiveResponse.model_validate(result)
-

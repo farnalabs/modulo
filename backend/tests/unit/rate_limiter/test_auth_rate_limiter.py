@@ -26,6 +26,7 @@ from modulo.settings import Settings
 def _reset_singleton() -> Generator[None, None, None]:
     """Reset the module-level _auth_rate_limiter before and after each test."""
     from modulo.api.middleware import rate_limiter as rl_mod
+
     saved = rl_mod._auth_rate_limiter
     rl_mod._auth_rate_limiter = None
     yield
@@ -96,18 +97,8 @@ class TestGetAuthRateLimiter:
 
 class TestAuthRateLimitMiddlewareDisabled:
     def test_skips_rate_limiting_when_limiter_is_none(self):
-        """When _rate_limiter is None, middleware should pass through."""
-        app = _make_app(settings=_make_settings(enabled=False))
-
-        with TestClient(app) as client:
-            resp = client.post("/api/v1/auth/login")
-
-        assert resp.status_code == 200
-
-    def test_skips_rate_limiting_when_get_auth_rate_limiter_returns_none(self):
         """When modulo_auth_rate_limit_enabled=False, middleware passes through."""
-        settings = _make_settings(enabled=False)
-        app = _make_app(settings=settings)
+        app = _make_app(settings=_make_settings(enabled=False))
 
         with TestClient(app) as client:
             resp = client.post("/api/v1/auth/login")
@@ -181,10 +172,23 @@ class TestAuthRateLimitMiddlewareEnabled:
         with TestClient(app) as client:
             resp = client.get("/api/v1/auth/login")
 
-        assert resp.status_code != 429
+        assert resp.status_code == 200
 
 
 class TestClientKeyEdgeCases:
+    def test_x_forwarded_for_is_used_when_present(self):
+        """_client_ip should prefer X-Forwarded-For header when present."""
+        from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware
+
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.url.path = "/api/v1/auth/login"
+        mock_request.headers.get = MagicMock(return_value="203.0.113.42")
+        mock_request.client = None
+
+        ip = AuthRateLimitMiddleware._client_ip(mock_request)
+        assert ip == "203.0.113.42"
+
     def test_no_client_host_falls_back_to_unknown(self):
         """_client_ip should handle request.client being truthy but host being None."""
         from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware

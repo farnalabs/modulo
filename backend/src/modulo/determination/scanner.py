@@ -45,7 +45,11 @@ def _repo_name(rec: dict[str, Any]) -> str:
 
     Handles GitHub (full_name or name) and GitLab (path_with_namespace or name) formats.
     """
-    return rec.get("full_name") or rec.get("path_with_namespace") or rec.get("name", "")
+    for key in ("full_name", "path_with_namespace", "name"):
+        value = rec.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
 
 
 def _add(
@@ -60,12 +64,8 @@ def _add(
     samples.append(ScanSample(connector_id, ct, resource, records, sample_count, error))
 
 
-async def _query_with_timeout(
-    connector: ConnectorBase, query: ConnectorQuery
-) -> Any:
-    return await asyncio.wait_for(
-        connector.query(query), timeout=_QUERY_TIMEOUT
-    )
+async def _query_with_timeout(connector: ConnectorBase, query: ConnectorQuery) -> Any:
+    return await asyncio.wait_for(connector.query(query), timeout=_QUERY_TIMEOUT)
 
 
 async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -> list[ScanSample]:
@@ -82,11 +82,11 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
         case ConnectorType.GITHUB:
             repos: list[dict[str, Any]] = []
             try:
-                r = await _query_with_timeout(
-                    connector, ConnectorQuery(resource="repos", limit=_SAMPLE_LIMIT)
-                )
+                r = await _query_with_timeout(connector, ConnectorQuery(resource="repos", limit=_SAMPLE_LIMIT))
                 repos = r.records
                 _add(samples, connector_id, ct, "repos", repos, len(repos))
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.warning("GitHub repo sampling failed for connector %s: %s", connector_id, exc)
                 _add(samples, connector_id, ct, "repos", [], 0, str(exc)[:200])
@@ -101,6 +101,8 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
                         ConnectorQuery(resource="pulls", filters={"repo": name, "state": "open"}),
                     )
                     _add(samples, connector_id, ct, "pulls", r.records, len(r.records))
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     logger.warning(
                         "GitHub PR sampling failed for connector %s repo %s: %s",
@@ -113,11 +115,11 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
         case ConnectorType.GITLAB:
             projects: list[dict[str, Any]] = []
             try:
-                r = await _query_with_timeout(
-                    connector, ConnectorQuery(resource="projects", limit=_SAMPLE_LIMIT)
-                )
+                r = await _query_with_timeout(connector, ConnectorQuery(resource="projects", limit=_SAMPLE_LIMIT))
                 projects = r.records
                 _add(samples, connector_id, ct, "projects", projects, len(projects))
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.warning("GitLab project sampling failed for connector %s: %s", connector_id, exc)
                 _add(samples, connector_id, ct, "projects", [], 0, str(exc)[:200])
@@ -132,6 +134,8 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
                         ConnectorQuery(resource="mrs", filters={"project": name, "state": "opened"}),
                     )
                     _add(samples, connector_id, ct, "mrs", r.records, len(r.records))
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     logger.warning(
                         "GitLab MR sampling failed for connector %s project %s: %s",
@@ -150,16 +154,16 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
                         filters={"jql": "ORDER BY created DESC", "max_results": _SAMPLE_LIMIT},
                     ),
                 )
-                _add(samples, connector_id, ct, "issues", r.records, r.total or len(r.records))
+                _add(samples, connector_id, ct, "issues", r.records, getattr(r, "total", None) or len(r.records))
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.warning("JIRA sampling failed for connector %s: %s", connector_id, exc)
                 _add(samples, connector_id, ct, "issues", [], 0, str(exc)[:200])
 
         case ConnectorType.LINEAR:
             try:
-                r = await _query_with_timeout(
-                    connector, ConnectorQuery(resource="search", filters={"query": ""})
-                )
+                r = await _query_with_timeout(connector, ConnectorQuery(resource="search", filters={"query": ""}))
                 _add(
                     samples,
                     connector_id,
@@ -168,6 +172,8 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
                     r.records[:_SAMPLE_LIMIT],
                     min(len(r.records), _SAMPLE_LIMIT),
                 )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.warning("Linear sampling failed for connector %s: %s", connector_id, exc)
                 _add(samples, connector_id, ct, "issues", [], 0, str(exc)[:200])
@@ -188,6 +194,14 @@ async def run_scan(hub: ConnectorHub) -> list[ScanSample]:
         except KeyError:
             logger.warning("Connector %s not found in hub during scan", connector_id)
             continue
-        samples = await _sample_connector(connector_id, connector)
-        all_samples.extend(samples)
+        except Exception as exc:
+            logger.warning("Connector %s retrieval failed: %s", connector_id, exc)
+            continue
+        try:
+            samples = await _sample_connector(connector_id, connector)
+            all_samples.extend(samples)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Connector %s sampling failed: %s", connector_id, exc)
     return all_samples

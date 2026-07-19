@@ -1,8 +1,7 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-wide">
     <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminFeatureFlagsView.feature_flags') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status') }}</p>
+      <PageHeader :title="$t('views.AdminFeatureFlagsView.feature_flags')" :subtitle="$t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status')" />
       <div v-if="planStore.isLoading" class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
         <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         {{ $t('views.AdminFeatureFlagsView.loading_plan_info') }}
@@ -76,12 +75,12 @@
     </div>
 
     <div>
-      <div class="relative mb-4">
-        <Input
-          v-model="searchQuery"
-          placeholder="Search flags by name or description..." data-testid="search-input"
-        />
-      </div>
+      <FilterBar
+        :search="{ placeholder: 'Search flags by name or description...' }"
+        :search-value="searchQuery"
+        data-testid="search-input"
+        @update:search="searchQuery = $event; currentPage = 1"
+      />
 
       <LoadingSpinner v-if="loading" />
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFlags" />
@@ -194,50 +193,43 @@
         </template>
       </template>
     </div>
-    <Dialog v-if="overrideDialogFlag" :open="overrideDialogOpen" @update:open="overrideDialogOpen = $event">
-      <DialogContent class="sm:max-w-[400px]">
-        <DialogHeader>
-          <DialogTitle>{{ $t('views.AdminFeatureFlagsView.org_override_for') }} "{{ overrideDialogFlag.name }}"</DialogTitle>
-          <DialogDescription>{{ $t('views.AdminFeatureFlagsView.org_override_description') }}</DialogDescription>
-        </DialogHeader>
-        <div class="py-4">
-          <Select v-model="overrideDialogValue">
-            <SelectTrigger>
-              <SelectValue :placeholder="$t('views.AdminFeatureFlagsView.select_override')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="null">{{ $t('views.AdminFeatureFlagsView.system_default') }}</SelectItem>
-              <SelectItem value="true">{{ $t('views.AdminFeatureFlagsView.force_enabled') }}</SelectItem>
-              <SelectItem value="false">{{ $t('views.AdminFeatureFlagsView.force_disabled') }}</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" @click="overrideDialogOpen = false">{{ $t('common.cancel') }}</Button>
-          <Button @click="saveOverride">{{ $t('common.save') }}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      :open="overrideDialogOpen"
+      @update:open="overrideDialogOpen = !!$event"
+      title="Org Override"
+      :description="overrideDescription"
+      confirm-text="Save"
+      @confirm="saveOverride"
+    >
+      <div class="py-4">
+        <Select aria-label="Form control" v-model="overrideDialogValue">
+          <SelectTrigger>
+            <SelectValue :placeholder="$t('views.AdminFeatureFlagsView.select_override')" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="null">{{ $t('views.AdminFeatureFlagsView.system_default') }}</SelectItem>
+            <SelectItem value="true">{{ $t('views.AdminFeatureFlagsView.force_enabled') }}</SelectItem>
+            <SelectItem value="false">{{ $t('views.AdminFeatureFlagsView.force_disabled') }}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </FormDialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
+import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Input } from '../components/ui/input'
 import { Button } from '../components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../components/ui/dialog'
+import FormDialog from '../components/shared/FormDialog.vue'
 import {
   Select,
   SelectContent,
@@ -251,8 +243,10 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
+import { formatDateShort } from '../lib/formatDate'
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 const enabledCount = computed(() => {
   return Object.values(planStore.features).filter(Boolean).length
@@ -286,18 +280,22 @@ interface FlagGroup {
   flags: FlagItem[]
 }
 
-const flags = ref<FlagItem[]>([])
-const license = ref<LicenseInfo>({ tier: 'community', has_license_key: false, is_valid: true })
-const wouldActivate = ref<FlagItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
 const searchQuery = ref('')
 const currentPage = ref(1)
 const pageSize = 10
 
+const { data: flagsResponse, loading, error, load: loadFlags } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/feature-flags') as Promise<{ data?: FlagsResponse; error?: { detail?: string } }>,
+  { initialValue: { flags: [] as FlagItem[], license: { tier: 'community', has_license_key: false, is_valid: true } as LicenseInfo, would_activate: [] as FlagItem[] } as FlagsResponse }
+)
+
+const flags = computed(() => flagsResponse.value?.flags ?? [])
+const license = computed(() => flagsResponse.value?.license ?? { tier: 'community', has_license_key: false, is_valid: true })
+const wouldActivate = computed(() => flagsResponse.value?.would_activate ?? [])
+
 const filteredFlags = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
-  const items = flags.value ?? []
+  const items = flags.value
   return query
     ? items.filter(f =>
         f.name.toLowerCase().includes(query) ||
@@ -339,7 +337,7 @@ const paginatedGroups = computed(() => {
 
 const filteredWouldActivate = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
-  const items = wouldActivate.value ?? []
+  const items = wouldActivate.value
   if (!query) return items
   return items.filter(f =>
     f.name.toLowerCase().includes(query) ||
@@ -355,38 +353,30 @@ watch(searchQuery, () => {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
-  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+  return formatDateShort(d)
 }
 
-async function loadFlags() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/feature-flags')
-    if (err) {
-      error.value = `Failed to load feature flags: ${formatApiError(err)}`
-    } else if (data) {
-      const resp = data as FlagsResponse
-      flags.value = resp.flags
-      license.value = resp.license ?? { tier: 'community', has_license_key: false, is_valid: true }
-      wouldActivate.value = resp.would_activate ?? []
-      for (const flag of resp.flags) {
-        const override = await planStore.fetchOrgFlagOverride(flag.name)
+watch(() => flagsResponse.value?.flags, (newFlags) => {
+  if (newFlags) {
+    for (const flag of newFlags) {
+      planStore.fetchOrgFlagOverride(flag.name).then(override => {
         planStore.orgOverrides[flag.name] = override
-      }
+      })
     }
-  } catch (e: unknown) {
-    error.value = `Failed to load feature flags: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
   }
-}
+})
 
 const flagToggling = ref<Record<string, boolean>>({})
 
 const overrideDialogFlag = ref<FlagItem | null>(null)
 const overrideDialogOpen = ref(false)
 const overrideDialogValue = ref<string>('null')
+
+const overrideDescription = computed(() =>
+  overrideDialogFlag.value
+    ? `${t('views.AdminFeatureFlagsView.org_override_for')} "${overrideDialogFlag.value.name}"`
+    : ''
+)
 
 function openOverrideDialog(flag: FlagItem) {
   const current = planStore.orgOverrides[flag.name]
@@ -425,8 +415,5 @@ async function toggleFlag(flag: FlagItem) {
   flagToggling.value[flag.name] = false
 }
 
-onMounted(() => {
-  planStore.fetchPlan()
-  loadFlags()
-})
+planStore.fetchPlan()
 </script>

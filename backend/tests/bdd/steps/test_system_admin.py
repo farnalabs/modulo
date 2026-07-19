@@ -1,5 +1,6 @@
 """BDD step definitions: System admin flows — orgs, users, config."""
 
+import contextlib
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,18 +10,12 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/system_admin/system_admin_orgs.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/system_admin/system_admin_users.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/system_admin/system_admin_config.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------

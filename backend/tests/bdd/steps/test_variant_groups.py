@@ -1,5 +1,6 @@
 """Step definitions for variant_groups.feature — weighted multi-run, comparison, eval coverage."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,10 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/variants/variant_groups.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -23,10 +22,8 @@ def patches():
     collectors: list[Any] = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 @pytest.fixture
@@ -68,23 +65,13 @@ def _make_mock_variant_group(name: str, pipeline_name: str) -> MagicMock:
 # ===================================================================
 
 
-@given(
-    parsers.parse(
-        'a variant group "{name}" configured for pipeline "{pipeline_name}"'
-    )
-)
+@given(parsers.parse('a variant group "{name}" configured for pipeline "{pipeline_name}"'))
 def variant_group_configured(name: str, pipeline_name: str, ctx: dict[str, Any]) -> None:
     ctx["variant_group"] = _make_mock_variant_group(name, pipeline_name)
 
 
-@given(
-    parsers.parse(
-        'the group has weighted variants "{v_a}" ({w_a:d}) and "{v_b}" ({w_b:d})'
-    )
-)
-def group_has_weighted_variants(
-    v_a: str, w_a: int, v_b: str, w_b: int, ctx: dict[str, Any]
-) -> None:
+@given(parsers.parse('the group has weighted variants "{v_a}" ({w_a:d}) and "{v_b}" ({w_b:d})'))
+def group_has_weighted_variants(v_a: str, w_a: int, v_b: str, w_b: int, ctx: dict[str, Any]) -> None:
     group = ctx["variant_group"]
     group.variants = [
         {
@@ -104,11 +91,7 @@ def group_has_weighted_variants(
     ]
 
 
-@given(
-    parsers.parse(
-        'the group uses sequential strategy with variants "{v_a}" and "{v_b}"'
-    )
-)
+@given(parsers.parse('the group uses sequential strategy with variants "{v_a}" and "{v_b}"'))
 def group_uses_sequential(v_a: str, v_b: str, ctx: dict[str, Any]) -> None:
     group = ctx["variant_group"]
     group.selection_strategy = "sequential"
@@ -162,9 +145,7 @@ def variants_have_completed_runs(ctx: dict[str, Any]) -> None:
     }
 
 
-@given(
-    "the group has variants with divergent outputs and identical eval scores"
-)
+@given("the group has variants with divergent outputs and identical eval scores")
 def group_has_divergent_variants(ctx: dict[str, Any]) -> None:
     group = ctx["variant_group"]
     group.variants = [
@@ -196,11 +177,7 @@ def group_has_divergent_variants(ctx: dict[str, Any]) -> None:
     }
 
 
-@given(
-    parsers.parse(
-        "the group has max_concurrent_runs set to {limit:d}"
-    )
-)
+@given(parsers.parse("the group has max_concurrent_runs set to {limit:d}"))
 def group_max_concurrent(limit: int, ctx: dict[str, Any]) -> None:
     ctx["variant_group"].max_concurrent_runs = limit
 
@@ -210,11 +187,7 @@ def group_max_concurrent(limit: int, ctx: dict[str, Any]) -> None:
 # ===================================================================
 
 
-@when(
-    parsers.parse(
-        "a batch of {count:d} runs is triggered on the variant group"
-    )
-)
+@when(parsers.parse("a batch of {count:d} runs is triggered on the variant group"))
 def batch_run_triggered(count: int, ctx: dict[str, Any]) -> None:
     group = ctx["variant_group"]
     variants = group.variants
@@ -306,14 +279,13 @@ def single_run_triggered(ctx: dict[str, Any]) -> None:
                 new_callable=AsyncMock,
             ),
         ):
-            result = await run_variant_weighted(
+            return await run_variant_weighted(
                 session,
                 org_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
                 group=ctx["variant_group"],
                 input_payload={},
                 account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
             )
-        return result
 
     result = asyncio.run(_run())
     if result:
@@ -325,28 +297,17 @@ def single_run_triggered(ctx: dict[str, Any]) -> None:
 # ===================================================================
 
 
-@then(
-    parsers.parse("{count:d} runs are created across the variants")
-)
+@then(parsers.parse("{count:d} runs are created across the variants"))
 def check_run_count(count: int, ctx: dict[str, Any]) -> None:
-    assert len(ctx["run_results"]) == count, (
-        f"Expected {count} runs, got {len(ctx['run_results'])}"
-    )
+    assert len(ctx["run_results"]) == count, f"Expected {count} runs, got {len(ctx['run_results'])}"
 
 
-@then(
-    parsers.parse(
-        'the {variant} variant receives approximately {expected:d} runs'
-    )
-)
-def check_variant_distribution(
-    variant: str, expected: int, ctx: dict[str, Any]
-) -> None:
+@then(parsers.parse("the {variant} variant receives approximately {expected:d} runs"))
+def check_variant_distribution(variant: str, expected: int, ctx: dict[str, Any]) -> None:
     actual = sum(1 for r in ctx["run_results"] if r["variant_name"] == variant)
     tolerance = max(1, expected * 0.2)
     assert abs(actual - expected) <= tolerance, (
-        f"Expected ~{expected} runs for {variant!r}, got {actual} "
-        f"(tolerance {tolerance})"
+        f"Expected ~{expected} runs for {variant!r}, got {actual} (tolerance {tolerance})"
     )
 
 
@@ -355,25 +316,15 @@ def check_insertion_order(ctx: dict[str, Any]) -> None:
     assert len(ctx["run_results"]) >= 2, "Need at least 2 runs to check order"
     expected_order = [v["name"] for v in ctx["variant_group"].variants]
     actual_order = [r["variant_name"] for r in ctx["run_results"]]
-    assert actual_order == expected_order, (
-        f"Expected order {expected_order}, got {actual_order}"
-    )
+    assert actual_order == expected_order, f"Expected order {expected_order}, got {actual_order}"
 
 
-@then(
-    parsers.parse(
-        'the first run has variant_name "{expected}"'
-    )
-)
+@then(parsers.parse('the first run has variant_name "{expected}"'))
 def check_first_variant(expected: str, ctx: dict[str, Any]) -> None:
     assert ctx["run_results"][0]["variant_name"] == expected
 
 
-@then(
-    parsers.parse(
-        'the second run has variant_name "{expected}"'
-    )
-)
+@then(parsers.parse('the second run has variant_name "{expected}"'))
 def check_second_variant(expected: str, ctx: dict[str, Any]) -> None:
     assert ctx["run_results"][1]["variant_name"] == expected
 
@@ -384,9 +335,7 @@ def check_comparison_has_scores(ctx: dict[str, Any]) -> None:
     variants = result.get("variants", [])
     assert len(variants) >= 2, "Expected at least 2 variants in comparison"
     for v in variants:
-        assert "eval_scores" in v, (
-            f"Variant {v.get('name')} missing eval_scores"
-        )
+        assert "eval_scores" in v, f"Variant {v.get('name')} missing eval_scores"
 
 
 @then("the comparison includes per-variant token cost")
@@ -394,47 +343,31 @@ def check_comparison_has_token_cost(ctx: dict[str, Any]) -> None:
     result = ctx.get("comparison_result", {})
     variants = result.get("variants", [])
     for v in variants:
-        assert "token_cost" in v, (
-            f"Variant {v.get('name')} missing token_cost"
-        )
+        assert "token_cost" in v, f"Variant {v.get('name')} missing token_cost"
 
 
 @then("a coverage_warning is included in the response")
 def check_coverage_warning_present(ctx: dict[str, Any]) -> None:
     result = ctx.get("coverage_result", {})
-    assert "coverage_warning" in result, (
-        "Missing coverage_warning in result"
-    )
-    assert result["coverage_warning"] is not None, (
-        "coverage_warning is None"
-    )
+    assert "coverage_warning" in result, "Missing coverage_warning in result"
+    assert result["coverage_warning"] is not None, "coverage_warning is None"
 
 
-@then(
-    parsers.parse('the warning says "{expected}"')
-)
+@then(parsers.parse('the warning says "{expected}"'))
 def check_warning_text(expected: str, ctx: dict[str, Any]) -> None:
     result = ctx.get("coverage_result", {})
     actual = result.get("coverage_warning")
-    assert actual == expected, (
-        f"Expected warning {expected!r}, got {actual!r}"
-    )
+    assert actual == expected, f"Expected warning {expected!r}, got {actual!r}"
 
 
-@then(
-    "each variant entry includes input_tokens and output_tokens in token_cost"
-)
+@then("each variant entry includes input_tokens and output_tokens in token_cost")
 def check_token_cost_fields(ctx: dict[str, Any]) -> None:
     result = ctx.get("comparison_result", {})
     variants = result.get("variants", [])
     for v in variants:
         tc = v.get("token_cost", {})
-        assert "input_tokens" in tc, (
-            f"Variant {v.get('name')} missing input_tokens in token_cost"
-        )
-        assert "output_tokens" in tc, (
-            f"Variant {v.get('name')} missing output_tokens in token_cost"
-        )
+        assert "input_tokens" in tc, f"Variant {v.get('name')} missing input_tokens in token_cost"
+        assert "output_tokens" in tc, f"Variant {v.get('name')} missing output_tokens in token_cost"
 
 
 @then("the total cost differs between variants")
@@ -446,14 +379,11 @@ def check_cost_different(ctx: dict[str, Any]) -> None:
     assert costs[0] != costs[1], f"Expected different costs, got {costs}"
 
 
-@then(
-    parsers.parse('the selected variant is "{expected}"')
-)
+@then(parsers.parse('the selected variant is "{expected}"'))
 def check_selected_variant(expected: str, ctx: dict[str, Any]) -> None:
     assert ctx["selected_variant"] is not None, "No variant was selected"
     assert ctx["selected_variant"]["name"] == expected, (
-        f"Expected variant {expected!r}, "
-        f"got {ctx['selected_variant']['name']!r}"
+        f"Expected variant {expected!r}, got {ctx['selected_variant']['name']!r}"
     )
 
 

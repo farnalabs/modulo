@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from datetime import datetime
 
 from sqlalchemy import JSON, Boolean, DateTime, String, UniqueConstraint
@@ -11,9 +9,7 @@ from modulo.db.models.base import OrgScoped
 class ErrorForwarderConfig(OrgScoped):
     __tablename__ = "error_forwarder_configs"
 
-    __table_args__ = (
-        UniqueConstraint("organisation_id", "forwarder_type", name="uq_org_forwarder_type"),
-    )
+    __table_args__ = (UniqueConstraint("organisation_id", "forwarder_type", name="uq_org_forwarder_type"),)
 
     forwarder_type: Mapped[str] = mapped_column(String(50), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")

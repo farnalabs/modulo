@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Ed25519 signing utilities — hex-string-based API for registry protocol v2."""
 
+from __future__ import annotations
 
 import hashlib
 import json
@@ -90,7 +89,7 @@ def verify_signature(primitive_data: Mapping[str, object], signature_hex: str, p
         canonical = _canonical_json(primitive_data)
         public_key.verify(bytes.fromhex(signature_hex), canonical)
     except InvalidSignature:
-        logger.warning("verify_signature: invalid signature for key %s[:8]", public_key_hex[:8])
+        logger.warning("verify_signature: invalid signature for key %s", public_key_hex[:8])
         return False
     except ValueError:
         logger.warning("verify_signature: bad hex input (key or signature)")

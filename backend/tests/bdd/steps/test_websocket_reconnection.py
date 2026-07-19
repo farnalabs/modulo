@@ -6,6 +6,7 @@ concurrent subscribers.
 """
 
 import asyncio
+import contextlib
 import uuid
 from typing import Any
 
@@ -14,10 +15,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.pipeline_engine.event_broker import RunEventBroker
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/operations/websocket_reconnection.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -170,7 +169,7 @@ def _when_publish_105(request: Any) -> None:
         broker.publish("ev", {})
 
 
-@when(parsers.parse('the run_websocket handler processes the connection'))
+@when(parsers.parse("the run_websocket handler processes the connection"))
 def _when_run_websocket_terminal(request: Any) -> None:
     """Simulate the run_websocket handler's terminal-run branch."""
     ctx = _ctx(request)
@@ -180,11 +179,13 @@ def _when_run_websocket_terminal(request: Any) -> None:
     status = ctx.get("run_status", "completed")
     run_id = ctx["run_id"]
 
-    ctx["sent_messages"].append({
-        "status": "terminal",
-        "run_status": status,
-        "run_id": str(run_id),
-    })
+    ctx["sent_messages"].append(
+        {
+            "status": "terminal",
+            "run_status": status,
+            "run_id": str(run_id),
+        }
+    )
 
 
 @when(parsers.parse("the run_websocket handler receives since_event_seq={seq:d}"))
@@ -230,9 +231,7 @@ def _then_event_has_run_id(request: Any) -> None:
     ctx = _ctx(request)
     events = ctx.get("received_events", [])
     assert len(events) >= 1
-    assert events[0].run_id == ctx["run_id"], (
-        f"Expected run_id {ctx['run_id']}, got {events[0].run_id}"
-    )
+    assert events[0].run_id == ctx["run_id"], f"Expected run_id {ctx['run_id']}, got {events[0].run_id}"
 
 
 @then(parsers.parse("I receive {count:d} events with seq {a:d}, {b:d}, {c:d} in order"))
@@ -261,9 +260,7 @@ def _then_buffer_size(request: Any) -> None:
     ctx = _ctx(request)
     broker = ctx.get("broker")
     assert broker is not None
-    assert broker.buffered_count == 100, (
-        f"Expected buffer size 100, got {broker.buffered_count}"
-    )
+    assert broker.buffered_count == 100, f"Expected buffer size 100, got {broker.buffered_count}"
 
 
 @then("the oldest buffered event has seq 6")
@@ -271,17 +268,13 @@ def _then_oldest_seq_6(request: Any) -> None:
     ctx = _ctx(request)
     broker = ctx.get("broker")
     assert broker is not None
-    assert broker._buffer[0].seq == 6, (
-        f"Expected oldest seq 6, got {broker._buffer[0].seq}"
-    )
+    assert broker._buffer[0].seq == 6, f"Expected oldest seq 6, got {broker._buffer[0].seq}"
 
 
 @then("no events are returned")
 def _then_no_replayed(request: Any) -> None:
     ctx = _ctx(request)
-    assert ctx.get("replayed_events") == [], (
-        f"Expected empty replay, got {ctx.get('replayed_events')}"
-    )
+    assert ctx.get("replayed_events") == [], f"Expected empty replay, got {ctx.get('replayed_events')}"
 
 
 @then("seq 1 has been evicted from the buffer")
@@ -312,9 +305,7 @@ def _then_message_has_run_fields(request: Any) -> None:
 @then("the WebSocket is closed with code 4001")
 def _then_close_4001(request: Any) -> None:
     ctx = _ctx(request)
-    assert ctx.get("close_code") == 4001, (
-        f"Expected close code 4001, got {ctx.get('close_code')}"
-    )
+    assert ctx.get("close_code") == 4001, f"Expected close code 4001, got {ctx.get('close_code')}"
 
 
 # ===========================================================================
@@ -331,9 +322,7 @@ def _then_all_subscribers_receive(count: int, total: int, request: Any) -> None:
         received = []
         while not q.empty():
             received.append(q.get_nowait())
-        assert len(received) == total, (
-            f"Subscriber {i} received {len(received)} events, expected {total}"
-        )
+        assert len(received) == total, f"Subscriber {i} received {len(received)} events, expected {total}"
 
 
 @then("each subscriber receives events with correct monotonic sequence")
@@ -345,9 +334,7 @@ def _then_monotonic_seq(request: Any) -> None:
         while not q.empty():
             seqs.append(q.get_nowait().seq)
         assert seqs == sorted(seqs), f"Subscriber {i} seq not monotonic: {seqs}"
-        assert seqs == list(range(1, len(seqs) + 1)), (
-            f"Subscriber {i} seq not starting from 1: {seqs}"
-        )
+        assert seqs == list(range(1, len(seqs) + 1)), f"Subscriber {i} seq not starting from 1: {seqs}"
 
 
 @then(parsers.parse("the remaining {count:d} subscribers receive the {total:d} events"))
@@ -359,9 +346,7 @@ def _then_remaining_receive(count: int, total: int, request: Any) -> None:
         received = []
         while not q.empty():
             received.append(q.get_nowait())
-        assert len(received) == total, (
-            f"Remaining subscriber {i} received {len(received)} events, expected {total}"
-        )
+        assert len(received) == total, f"Remaining subscriber {i} received {len(received)} events, expected {total}"
 
 
 @then("the disconnected subscriber receives nothing")
@@ -371,6 +356,4 @@ def _then_disconnected_receives_nothing(request: Any) -> None:
     broker = ctx.get("broker")
     assert broker is not None
     queues = ctx.get("queues", [])
-    assert broker.subscriber_count == len(queues), (
-        f"Expected {len(queues)} subscribers, got {broker.subscriber_count}"
-    )
+    assert broker.subscriber_count == len(queues), f"Expected {len(queues)} subscribers, got {broker.subscriber_count}"

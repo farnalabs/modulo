@@ -104,7 +104,8 @@ def wait_for_run(
 ) -> dict[str, Any]:
     """Poll a run until it reaches a terminal state or the timeout expires."""
     if timeout <= 0:
-        raise ValueError(f"wait_for_run timeout must be positive, got {timeout}")
+        msg = f"wait_for_run timeout must be positive, got {timeout}"
+        raise ValueError(msg)
     deadline = time.time() + timeout
     while time.time() < deadline:
         run = get_run(client, token, run_id, base_url)
@@ -116,7 +117,8 @@ def wait_for_run(
         effective_poll = max(poll_interval, _MIN_POLL_INTERVAL)
         jitter = random.uniform(0, effective_poll * 0.5)
         time.sleep(effective_poll + jitter)
-    raise TimeoutError(f"Run {run_id} did not reach terminal state within {timeout}s")
+    msg = f"Run {run_id} did not reach terminal state within {timeout}s"
+    raise TimeoutError(msg)
 
 
 def get_ws_token(
@@ -141,7 +143,16 @@ def build_ws_url(
     parsed = urlparse(base_url)
     ws_scheme = "wss" if parsed.scheme == "https" else "ws"
     qs = quote(ws_token, safe="")
-    return urlunparse((ws_scheme, parsed.netloc, f"/api/v1/runs/{run_id}/ws", "", f"token={qs}&since_event_seq={since_event_seq}", ""))
+    return urlunparse(
+        (
+            ws_scheme,
+            parsed.netloc,
+            f"/api/v1/runs/{run_id}/ws",
+            "",
+            f"token={qs}&since_event_seq={since_event_seq}",
+            "",
+        ),
+    )
 
 
 def get_pending_hitl(
@@ -223,7 +234,12 @@ def reject_hitl(
 ) -> None:
     """Reject an interrupted HITL gate."""
     _hitl_action(
-        client, token, run_id, gate_id, claim_token, "reject",
+        client,
+        token,
+        run_id,
+        gate_id,
+        claim_token,
+        "reject",
         base_url=base_url,
         extra_payload={"reason": "Automated load test rejection"},
     )

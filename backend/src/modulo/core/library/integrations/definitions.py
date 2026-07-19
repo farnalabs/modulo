@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """24 canonical library integration primitives.
 
 Each dict provides the metadata, default configuration, credential
@@ -8,6 +6,7 @@ a :class:`~modulo.db.models.library_primitive.LibraryPrimitive` with
 ``primitive_type='integration'``.
 """
 
+from __future__ import annotations
 
 from typing import Any
 
@@ -89,8 +88,7 @@ BITBUCKET_INTEGRATION: dict[str, Any] = {
 AZURE_DEVOPS_INTEGRATION: dict[str, Any] = {
     "name": "Azure DevOps",
     "description": (
-        "Azure DevOps Services integration including Azure Repos (git), "
-        "Azure Pipelines (CI/CD), Boards, and Wiki."
+        "Azure DevOps Services integration including Azure Repos (git), Azure Pipelines (CI/CD), Boards, and Wiki."
     ),
     "version": "1.0.0",
     "author": "Modulo",
@@ -256,8 +254,7 @@ LINEAR_INTEGRATION: dict[str, Any] = {
 JIRA_INTEGRATION: dict[str, Any] = {
     "name": "Jira",
     "description": (
-        "Jira issue and project tracking integration. Supports issue "
-        "CRUD, sprint management, and custom field mapping."
+        "Jira issue and project tracking integration. Supports issue CRUD, sprint management, and custom field mapping."
     ),
     "version": "1.0.0",
     "author": "Modulo",
@@ -626,8 +623,7 @@ DISCORD_INTEGRATION: dict[str, Any] = {
 JENKINS_INTEGRATION: dict[str, Any] = {
     "name": "Jenkins",
     "description": (
-        "Jenkins CI/CD integration. Triggers builds, retrieves build "
-        "logs and status, and monitors job health."
+        "Jenkins CI/CD integration. Triggers builds, retrieves build logs and status, and monitors job health."
     ),
     "version": "1.0.0",
     "author": "Modulo",
@@ -812,8 +808,7 @@ DOCKER_INTEGRATION: dict[str, Any] = {
 CIRCLECI_INTEGRATION: dict[str, Any] = {
     "name": "CircleCI",
     "description": (
-        "CircleCI CI/CD integration. Triggers pipeline runs, monitors "
-        "job status, retrieves test results and artifacts."
+        "CircleCI CI/CD integration. Triggers pipeline runs, monitors job status, retrieves test results and artifacts."
     ),
     "version": "1.0.0",
     "author": "Modulo",

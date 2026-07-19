@@ -15,20 +15,19 @@ URLs:
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-
-logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.feedback_manager import (
     ConcurrentModificationError,
     FeedbackManager,
@@ -42,13 +41,17 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
+logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1", tags=["feedback"])
 
 
 class CreateFeedbackRequest(BaseModel):
     gate_id: str
     rejection_reason: str
-    rejected_output: dict[str, Any] = {}
+    rejected_output: ClassVar[dict[str, Any]] = {}
     producing_node_id: str
     producing_agent_id: uuid.UUID | None = None
     feedback_handler_type: str = "human"
@@ -63,7 +66,9 @@ class ReviewFeedbackRequest(BaseModel):
     annotation: str | None = None
 
 
-def _serialise_record(r: Any, pipeline_name: str | None = None, producing_node_name: str | None = None) -> dict[str, Any]:
+def _serialise_record(
+    r: Any, pipeline_name: str | None = None, producing_node_name: str | None = None
+) -> dict[str, Any]:
     return {
         "id": str(r.id),
         "run_id": str(r.run_id) if r.run_id else None,
@@ -85,12 +90,13 @@ def _serialise_record(r: Any, pipeline_name: str | None = None, producing_node_n
     }
 
 
+@handle_db_errors("feedback.create_feedback")
 @router.post("/runs/{run_id}/feedback", status_code=status.HTTP_201_CREATED)
 async def create_feedback(
     run_id: uuid.UUID,
     req: CreateFeedbackRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -113,29 +119,29 @@ async def create_feedback(
                 producing_agent_id=req.producing_agent_id,
                 feedback_handler_type=req.feedback_handler_type,
             )
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
-        )
-    except ProgrammingError:
+        ) from exc
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
-        )
+        ) from exc
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
         logger.exception("Unexpected error creating feedback for run %s", run_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from exc
 
     return {
         "id": str(record.id),
@@ -150,6 +156,7 @@ async def create_feedback(
     }
 
 
+@handle_db_errors("feedback.list_feedback")
 @router.get("/feedback", status_code=status.HTTP_200_OK)
 async def list_feedback(
     status_filter: str | None = Query(None, alias="status"),
@@ -157,7 +164,7 @@ async def list_feedback(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -169,29 +176,29 @@ async def list_feedback(
                 page=page,
                 page_size=page_size,
             )
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
-        )
-    except ProgrammingError:
+        ) from exc
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
-        )
+        ) from exc
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
         logger.exception("Unexpected error listing feedback")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from exc
 
     return {
         "items": [_serialise_record(r) for r in result["items"]],
@@ -201,6 +208,7 @@ async def list_feedback(
     }
 
 
+@handle_db_errors("feedback.list_feedback_inbox")
 @router.get("/feedback/inbox", status_code=status.HTTP_200_OK)
 async def list_feedback_inbox(
     handler_type: str | None = Query(None, alias="type"),
@@ -211,7 +219,7 @@ async def list_feedback_inbox(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     date_from_dt: datetime | None = None
     date_to_dt: datetime | None = None
@@ -220,17 +228,17 @@ async def list_feedback_inbox(
             date_from_dt = datetime.fromisoformat(date_from).replace(tzinfo=UTC)
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid date_from format: '{date_from}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
-            )
+            ) from None
     if date_to:
         try:
             date_to_dt = datetime.fromisoformat(date_to).replace(tzinfo=UTC)
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid date_to format: '{date_to}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
-            )
+            ) from None
 
     try:
         async with session.begin():
@@ -245,21 +253,21 @@ async def list_feedback_inbox(
                 page=page,
                 page_size=page_size,
             )
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
-        )
-    except ProgrammingError:
+        ) from exc
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -267,7 +275,7 @@ async def list_feedback_inbox(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     pipeline_map = result.get("pipeline_map", {})
 
@@ -279,12 +287,13 @@ async def list_feedback_inbox(
     }
 
 
+@handle_db_errors("feedback.list_eval_proposals")
 @router.get("/feedback/proposals", status_code=status.HTTP_200_OK)
 async def list_eval_proposals(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -296,35 +305,35 @@ async def list_eval_proposals(
             node_name_map: dict[str, str] = {}
             run_ids = [r.run_id for r in items if r.run_id]
             if run_ids:
-                run_rows = await session.execute(
-                    select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids))
-                )
+                run_rows = await session.execute(select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids)))
                 rows = run_rows.all()
                 snapshot_ids = [r.snapshot_id for r in rows if r.snapshot_id]
                 if snapshot_ids:
                     snap_rows = await session.execute(
-                        select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(PipelineSnapshot.id.in_(snapshot_ids))
+                        select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(
+                            PipelineSnapshot.id.in_(snapshot_ids)
+                        )
                     )
                     snap_rows_result = snap_rows.all()
-                    for snap_id, graph_json in snap_rows_result:
+                    for _, graph_json in snap_rows_result:
                         if graph_json:
                             for node in graph_json.get("nodes", []):
                                 node_name_map[str(node.get("id"))] = node.get("name") or node.get("label", "")
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
-        )
-    except ProgrammingError:
+        ) from exc
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -332,7 +341,7 @@ async def list_eval_proposals(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     return {
         "items": [_serialise_record(r, producing_node_name=node_name_map.get(r.producing_node_id)) for r in items],
@@ -342,32 +351,33 @@ async def list_eval_proposals(
     }
 
 
+@handle_db_errors("feedback.get_feedback")
 @router.get("/feedback/{record_id}", status_code=status.HTTP_200_OK)
 async def get_feedback(
     record_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.get_feedback_record(record_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
-        )
-    except ProgrammingError:
+        ) from exc
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -375,7 +385,7 @@ async def get_feedback(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
@@ -383,17 +393,18 @@ async def get_feedback(
     return _serialise_record(record)
 
 
+@handle_db_errors("feedback.update_feedback_status")
 @router.patch("/feedback/{record_id}/status", status_code=status.HTTP_200_OK)
 async def update_feedback_status(
     record_id: uuid.UUID,
     req: UpdateStatusRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
-    valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated", "dismissed"}
+    valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated"}
     if req.status not in valid_statuses:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Invalid status. Must be one of: {', '.join(sorted(valid_statuses))}",
         )
 
@@ -402,21 +413,21 @@ async def update_feedback_status(
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.update_status(record_id, req.status)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
-        )
-    except ProgrammingError:
+        ) from exc
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -424,7 +435,7 @@ async def update_feedback_status(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
@@ -435,11 +446,12 @@ async def update_feedback_status(
     }
 
 
+@handle_db_errors("feedback.detect_eval_gap")
 @router.post("/feedback/{record_id}/detect-gap", status_code=status.HTTP_200_OK)
 async def detect_eval_gap(
     record_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -448,39 +460,39 @@ async def detect_eval_gap(
             record = await mgr.get_feedback_record(record_id)
 
             if record is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found"
-                )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
             eval_suite: list[EvalDefinition] = []
             if record.run_id:
-                run = (
-                    await session.execute(select(Run).where(Run.id == record.run_id))
-                ).scalar_one_or_none()
+                run = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
                 if run is not None:
                     eval_defs = (
-                        await session.execute(
-                            select(EvalDefinition).where(EvalDefinition.pipeline_id == run.pipeline_id)
+                        (
+                            await session.execute(
+                                select(EvalDefinition).where(EvalDefinition.pipeline_id == run.pipeline_id)
+                            )
                         )
-                    ).scalars().all()
+                        .scalars()
+                        .all()
+                    )
                     eval_suite = list(eval_defs)
 
             is_gap = await mgr.detect_eval_gap(record, eval_suite=eval_suite)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
-        )
-    except ProgrammingError:
+        ) from exc
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -488,7 +500,7 @@ async def detect_eval_gap(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     return {
         "id": str(record.id),
@@ -496,11 +508,12 @@ async def detect_eval_gap(
     }
 
 
+@handle_db_errors("feedback.get_inbox_item")
 @router.get("/feedback/inbox/{record_id}", status_code=status.HTTP_200_OK)
 async def get_inbox_item(
     record_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     pipeline_name: str | None = None
     try:
@@ -517,21 +530,21 @@ async def get_inbox_item(
                     pipeline = await session.get(Pipeline, run_row.pipeline_id)
                     if pipeline:
                         pipeline_name = pipeline.name
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
-        )
-    except ProgrammingError:
+        ) from exc
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -539,7 +552,7 @@ async def get_inbox_item(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
@@ -547,17 +560,18 @@ async def get_inbox_item(
     return _serialise_record(record, pipeline_name=pipeline_name)
 
 
+@handle_db_errors("feedback.review_feedback")
 @router.post("/feedback/inbox/{record_id}/review", status_code=status.HTTP_200_OK)
 async def review_feedback(
     record_id: uuid.UUID,
     req: ReviewFeedbackRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     valid_actions = {"mark_reviewed", "dismiss", "create_correction_run"}
     if req.action not in valid_actions:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Invalid action. Must be one of: {', '.join(sorted(valid_actions))}",
         )
 
@@ -572,16 +586,13 @@ async def review_feedback(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
-            if req.action == "mark_reviewed":
+            if req.action in ("mark_reviewed", "dismiss"):
                 record = await mgr.update_status(record_id, "resolved")
-
-            elif req.action == "dismiss":
-                record = await mgr.update_status(record_id, "dismissed")
 
             elif req.action == "create_correction_run":
                 if not record.run_id:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="Feedback has no associated run — cannot create correction run",
                     )
 
@@ -619,17 +630,17 @@ async def review_feedback(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
-        )
+        ) from None
     except (InvalidTransitionError, ConcurrentModificationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -647,7 +658,7 @@ async def review_feedback(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     return {
         "id": str(record.id),

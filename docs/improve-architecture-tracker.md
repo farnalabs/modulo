@@ -1,8 +1,9 @@
 # improve-architecture Tracker
 
-Current product-map entry index: 89
-Last updated: 2026-07-03T23:55:00Z
+Current product-map entry index: 90
+Last updated: 2026-07-10T12:00:00Z
 
+- 2026-07-10: feat-observability-error-forwarders → partial, cross-cutting QA (index 90): First cross-cutting QA pass. Enriched product map from 10→13 verified [x] behaviours, populated bdd: + unit-tests: + depends-on: frontmatter. Added BDD feature file (12 scenarios), 29 unit tests (all 3 endpoints, error paths, edge cases). Confirmed all 3 routes consistently handle ProgrammingError→501, SQLAlchemyError→503, Exception→500. Added 4 new known gaps (per-type config validation, test-forwarder DB save race, redactable audit events, no type-specific config schema). Merged qa/feat-observability-error-forwarders to main (no bump).
 - 2026-07-03: feat-core-contribution-provenance → partial, cross-cutting QA (index 89): Merged feat-qa-contribution-provenance-87 to main at v0.1.21. Fixed frontmatter (bdd:[]→8 real files, unit-tests:[]→13 real files). Marked 21 behaviours [ ]→[x] (data model, registry protocol, copy-to-adapt, ratings, BDD scenarios). Added Error Handling section (14 checkboxes). Created website docs stub. Status: partial (10 known gaps remain).
 - 2026-07-03: feat-frontend-feedback-routing → partial, cross-cutting QA (index 88): Merged feat-qa-frontend-feedback-routing-87 to main at v0.1.20. Fixed CRITICAL frontend-backend contract mismatch (triggerCorrection sent wrong action), added annotation field + migration, updated product map. 57/57 tests pass. Status: partial.
 - 2026-07-02: feat-pipelines-run-trace-observability → partial, cross-cutting QA (index 58): Marked all 50+ implemented behaviours [ ]→[x] (OTel bridge lifecycle mapping, token usage, span naming, export configuration, run trace ID, per-node token consumption, cost display, execution trace UI, credential safety, BDD coverage). Added `set_run_context(org_id, pipeline_id)` to LangGraphOtelBridge. Wired set_run_context call into PipelineExecutor. Updated known gaps. 47/47 tests pass. Status: partial.

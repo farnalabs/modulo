@@ -125,6 +125,13 @@ Redis-backed sliding window and in-memory token bucket rate limiting for POST/PU
 - HITL review rate limit (20/min per PRD §7.18) is not enforced as a separate rule — `/api/v1/runs` catch-all covers HITL paths at 60/min instead of the specified 20/min
 
 ## QA History
+### 2026-07-12 — Round 3 re-QA (improve-architecture auth remaining)
+- Fixed E402 import ordering in core/rate_limiter.py: moved docstring before `from __future__ import annotations` so all imports sit at module level
+- Fixed dead code in middleware/rate_limiter.py:143-145: nested `if` after `return` statement was unreachable — restructured `auth_principal` type dispatch
+- Verified all CancelledError guards are present in both rate limiter files
+- Status: partial
+
 - 2026-07-04: Cross-cutting QA (index 153). Fixed 2 pre-existing test bugs (response format mismatch with ProblemDetail RFC 9457). Fixed BDD step definitions path. Marked 9 stale [ ]→[x] behaviour checkboxes. Added Error Handling section (7 checkboxes). Added Auth Rate Limiting section (5 checkboxes). Consolidated duplicate Known Gaps. All 59 tests pass.
 - 2026-07-05: QA-iterate (prodmap auth). Fixed TokenBucket `rate`/`burst` computation to use configured params instead of hardcoded defaults. Moved FIXED item from Known Gaps to QA History.
 - 2026-07-08: Cross-cutting QA (index 257). Fixed CRITICAL — `get_auth_rate_limiter` created an in-memory limiter when `modulo_auth_rate_limit_enabled=False` instead of disabling rate limiting entirely. Fixed CRITICAL — `_client_key()` had a None `.host` access path when `request.client` is truthy but `host` is None. Fixed MAJOR — product map incorrectly claimed "Rate limiting disabled entirely in SQLite mode" (code uses in-memory fallback, not disabled). Created `test_auth_rate_limiter.py` with 10 unit tests covering AuthRateLimiter disabled-flag behavior, AuthRateLimitMiddleware None-handler dispatch, and `_client_key` None-host edge case. Fixed 1 known gap removed from Known Gaps (auth rate limiter test coverage now exists).
+- 2026-07-11: Round 2 re-QA (improve-architecture index 388). Added `except asyncio.CancelledError: raise` guards before `except Exception` in `_create_registry()`, `get_auth_rate_limiter()`, and `shutdown_rate_limiters()` in `rate_limiter.py` — prevented silent CancelledError suppression during Redis connection/deinitialization.

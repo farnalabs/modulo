@@ -8,6 +8,8 @@ const sampleBackends = {
       display_name: 'GPT-4',
       provider: 'openai',
       model_id: 'gpt-4',
+      has_credentials: true,
+      tier: 'native',
       visibility: 'org',
       created_by: 'admin@test.com',
       created_at: '2025-01-15T10:00:00Z',
@@ -38,7 +40,7 @@ test.describe('Admin Model Backends', () => {
     await page.goto('/admin/model-backends')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.locator('text=GPT-4')).toBeVisible()
+    await expect(page.locator('text=GPT-4').first()).toBeVisible()
     await expect(page.getByTestId('admin-model-backends-edit').first()).toBeVisible()
     await expect(page.getByTestId('admin-model-backends-delete').first()).toBeVisible()
   })

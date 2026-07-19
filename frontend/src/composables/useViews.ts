@@ -1,4 +1,4 @@
-﻿import { ref, computed, readonly } from 'vue'
+import { ref, computed, readonly } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
@@ -7,8 +7,8 @@ export interface SavedView {
   name: string
   view_type: string
   filters: Record<string, any>
-  columns?: string[]
-  sort_by?: string
+  columns?: string[] | null
+  sort_by?: string | null
   sort_order: string
   created_by: string
   created_at: string
@@ -24,8 +24,8 @@ export function useViews(viewType: string) {
     views.value.find(v => v.id === currentViewId.value) ?? null
   )
 
-  async function fetchViews() {
-    if (loading.value) return
+  async function fetchViews(force?: boolean) {
+    if (!force && loading.value) return
     loading.value = true
     error.value = null
     try {
@@ -58,4 +58,3 @@ export function useViews(viewType: string) {
     setCurrentView,
   }
 }
-

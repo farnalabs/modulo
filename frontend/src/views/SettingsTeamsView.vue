@@ -2,13 +2,10 @@
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
     <div class="page-narrow">
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Teams</h1>
-        <p class="mt-1 text-muted-foreground">Manage teams and team membership</p>
-      </div>
+      <PageHeader title="Teams" subtitle="Manage teams and team membership" />
       <Button
         variant="default"
-        class="btn-glow border-primary/30 hover:border-primary/60"
+           class="border-primary/30 hover:border-primary/60"
         data-testid="settings-teams-create-team"
         @click="showCreateForm = true"
       >
@@ -24,8 +21,8 @@
         <h2 class="mb-4 text-base font-semibold">New Team</h2>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="settingsteamsview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="settingsteamsview-field-2"
               v-model="createName"
               type="text"
               data-testid="settings-teams-create-name"
@@ -34,8 +31,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
+            <label for="settingsteamsview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <textarea id="settingsteamsview-field-1"
               v-model="createDescription"
               rows="2"
               data-testid="settings-teams-create-description"
@@ -44,9 +41,9 @@
             ></textarea>
           </div>
           <div class="flex items-center gap-2">
-            <button :disabled="!createName.trim() || creatingTeam" data-testid="settings-teams-create-submit" class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="createTeam">
+            <Button :disabled="!createName.trim() || creatingTeam" data-testid="settings-teams-create-submit" @click="createTeam">
               {{ creatingTeam ? 'Creating...' : 'Create' }}
-            </button>
+            </Button>
             <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-create-cancel" @click="cancelCreate">
               Cancel
             </button>
@@ -75,25 +72,16 @@
             </div>
             <div class="flex items-center gap-3">
               <span class="text-sm text-muted-foreground">{{ team.member_count }} member{{ team.member_count !== 1 ? 's' : '' }}</span>
-              <button class="rounded p-1 text-muted-foreground hover:bg-accent" data-testid="settings-teams-rename" :aria-label="'Rename team'" title="Rename team" @click.stop="startRename(team)">
-                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                </svg>
-              </button>
-              <button class="rounded p-1 text-destructive hover:bg-destructive/10" data-testid="settings-teams-delete" :aria-label="'Delete team'" title="Delete team" @click.stop="confirmDelete(team)">
-                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                </svg>
-              </button>
+              <TableActions :actions="teamActions(team)" />
             </div>
           </div>
 
           <div v-if="expandedTeamId === team.id" class="p-4">
             <div v-if="renameTeamId === team.id" class="mb-4 flex items-center gap-2">
-              <input v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
-              <button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="saveRename">
+              <input aria-label="text" v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
+              <Button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" @click="saveRename">
                 {{ renamingTeam ? 'Saving...' : 'Save' }}
-              </button>
+              </Button>
               <button class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-rename-cancel" @click="cancelRename">
                 Cancel
               </button>
@@ -140,18 +128,19 @@
                     <td class="py-2">{{ userDisplayName(member.user_id) }}</td>
                     <td class="py-2 text-muted-foreground">{{ userEmail(member.user_id) }}</td>
                     <td class="py-2">
-                      <select v-model="member.role" data-testid="settings-teams-member-role" aria-label="Member role" class="rounded border border-input bg-background px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @change="changeMemberRole(team.id, member)">
-                        <option value="viewer">Viewer</option>
-                        <option value="runner">Runner</option>
-                        <option value="operator">Operator</option>
-                      </select>
+                      <Select v-model="member.role" @update:model-value="changeMemberRole(team.id, member)">
+                        <SelectTrigger data-testid="settings-teams-member-role" aria-label="Member role" class="rounded border border-input bg-background px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                          <SelectValue placeholder="Select role" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="viewer">Viewer</SelectItem>
+                          <SelectItem value="runner">Runner</SelectItem>
+                          <SelectItem value="operator">Operator</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </td>
                     <td class="py-2 text-right">
-                      <button class="rounded p-1 text-muted-foreground hover:text-destructive" data-testid="settings-teams-member-remove" :aria-label="'Remove member'" title="Remove member" @click="removeMember(team.id, member)">
-                        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-                        </svg>
-                      </button>
+                      <TableActions :actions="memberActions(team.id, member)" />
                     </td>
                   </tr>
                 </tbody>
@@ -159,20 +148,29 @@
             </div>
 
             <div v-if="addMemberTeamId === team.id" class="mt-4 flex items-center gap-2 rounded-lg border bg-muted/30 p-3">
-              <select v-model="addMemberUserId" data-testid="settings-teams-add-member-user" aria-label="Select user" class="flex-1 rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <option value="" disabled>Select a user...</option>
-                <option v-for="user in availableUsers(team.id)" :key="user.id" :value="user.id">
-                  {{ user.display_name }} ({{ user.email }})
-                </option>
-              </select>
-              <select v-model="addMemberRole" data-testid="settings-teams-add-member-role" aria-label="Select role" class="rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <option value="viewer">Viewer</option>
-                <option value="runner">Runner</option>
-                <option value="operator">Operator</option>
-              </select>
-              <button :disabled="!addMemberUserId || addingMember" data-testid="settings-teams-add-member-submit" class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="addMember(team.id)">
+              <Select v-model="addMemberUserId">
+                <SelectTrigger data-testid="settings-teams-add-member-user" aria-label="Select user" class="flex-1 rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectValue placeholder="Select a user..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="user in availableUsers(team.id)" :key="user.id" :value="user.id">
+                    {{ user.display_name }} ({{ user.email }})
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <Select v-model="addMemberRole">
+                <SelectTrigger data-testid="settings-teams-add-member-role" aria-label="Select role" class="rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectValue placeholder="Select role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="viewer">Viewer</SelectItem>
+                  <SelectItem value="runner">Runner</SelectItem>
+                  <SelectItem value="operator">Operator</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button :disabled="!addMemberUserId || addingMember" data-testid="settings-teams-add-member-submit" @click="addMember(team.id)">
                 {{ addingMember ? 'Adding...' : 'Add' }}
-              </button>
+              </Button>
               <button class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-add-member-cancel" @click="addMemberTeamId = null">
                 Cancel
               </button>
@@ -201,9 +199,12 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { Button } from '@/components/ui/button'
+import TableActions from '../components/shared/TableActions.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'
@@ -211,17 +212,27 @@ import FeatureGate from '../components/FeatureGate.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const planStore = usePlanStore()
 
 type AdminTeamItem = components['schemas']['AdminTeamItem']
 type MembershipResponse = components['schemas']['MembershipResponse']
-type AdminUserListItem = components['schemas']['AdminUserListItem']
+interface AdminUserListItem {
+  id: string
+  display_name: string | null
+  email: string
+}
 
-const teams = ref<AdminTeamItem[]>([])
+const { loading, error, data: teams, load: loadTeams } = useDataFetch<AdminTeamItem[]>(
+  async () => {
+    const res = await api.GET('/api/v1/admin/teams')
+    if (res.error) return { error: res.error }
+    return { data: res.data.items }
+  },
+  { initialValue: [] as AdminTeamItem[] }
+)
 const users = ref<AdminUserListItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
 
 const expandedTeamId = ref<string | null>(null)
 const membersByTeam = ref<Record<string, MembershipResponse[]>>({})
@@ -263,23 +274,6 @@ function userEmail(userId: string): string {
 function availableUsers(teamId: string): AdminUserListItem[] {
   const memberIds = new Set((membersByTeam.value[teamId] ?? []).map(m => m.user_id))
   return users.value.filter(u => !memberIds.has(u.id))
-}
-
-async function loadTeams() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/admin/teams')
-    if (err) {
-      error.value = `Failed to load teams: ${formatApiError(err)}`
-    } else if (data) {
-      teams.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load teams: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
 }
 
 async function loadUsers() {
@@ -501,8 +495,35 @@ onBeforeUnmount(() => {
   if (teamsCreateTimeout) clearTimeout(teamsCreateTimeout)
 })
 
+function teamActions(team: AdminTeamItem) {
+  return [
+    {
+      key: 'rename',
+      label: 'Rename',
+      onClick: () => startRename(team),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(team),
+      danger: true,
+    },
+  ]
+}
+
+function memberActions(teamId: string, member: MembershipResponse) {
+  return [
+    {
+      key: 'remove',
+      label: 'Remove',
+      onClick: () => removeMember(teamId, member),
+      danger: true,
+    },
+  ]
+}
+
 onMounted(async () => {
   planStore.fetchPlan()
-  await Promise.all([loadTeams(), loadUsers()])
+  await loadUsers()
 })
 </script>

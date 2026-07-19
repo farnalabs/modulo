@@ -60,7 +60,10 @@ async def _create_test_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, test_
 
 
 async def test_create_variant_group(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
 ) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     variants = _make_variants()
@@ -83,11 +86,18 @@ async def test_create_variant_group(
 
 
 async def test_get_variant_group_returns_existing(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
 ) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     group = await create_variant_group(
-        rls_session, org_id=test_org, pipeline_id=pipeline_id, name="Get Test", variants=[],
+        rls_session,
+        org_id=test_org,
+        pipeline_id=pipeline_id,
+        name="Get Test",
+        variants=[],
     )
     fetched = await get_variant_group(rls_session, group.id)
     assert fetched is not None
@@ -102,7 +112,10 @@ async def test_get_variant_group_returns_none_for_unknown(
 
 
 async def test_list_variant_groups_pagination(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
 ) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     for i in range(3):
@@ -120,7 +133,10 @@ async def test_list_variant_groups_pagination(
 
 
 async def test_list_variant_groups_filtered_by_pipeline(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
 ) -> None:
     pipe_a = await _create_test_pipeline(db_engine, test_org, test_user)
     pipe_b = await _create_test_pipeline(db_engine, test_org, test_user)
@@ -133,7 +149,10 @@ async def test_list_variant_groups_filtered_by_pipeline(
 
 
 async def test_update_variant_group(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
 ) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     group = await create_variant_group(
@@ -156,7 +175,10 @@ async def test_update_variant_group_unknown_returns_none(
 
 
 async def test_delete_variant_group(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
 ) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     group = await create_variant_group(
@@ -177,7 +199,10 @@ async def test_delete_variant_group_unknown_returns_false(
 
 
 async def test_check_pipeline_run_quota_allows_within_limit(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
 ) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     group = await create_variant_group(
@@ -192,7 +217,10 @@ async def test_check_pipeline_run_quota_allows_within_limit(
 
 
 async def test_coverage_gaps_detects_missing_evals(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
 ) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     eval_id = uuid.uuid4()
@@ -235,7 +263,10 @@ async def test_coverage_gaps_detects_missing_evals(
 
 
 async def test_no_coverage_gaps_when_all_evals_present(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
 ) -> None:
     pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     eval_id = uuid.uuid4()

@@ -1,5 +1,6 @@
 """Step definitions for run_context.feature — seeding, write guard, audit."""
 
+import contextlib
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -9,10 +10,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/run_context.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,10 +37,8 @@ def patches():
     collectors: list[Any] = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 @pytest.fixture
@@ -66,39 +63,23 @@ def ctx() -> dict[str, Any]:
 # ===================================================================
 
 
-@given(
-    parsers.parse(
-        'pipeline "{pipeline_name}" with a context_setter node "{node_name}"'
-    )
-)
-def pipeline_with_context_setter(
-    pipeline_name: str, node_name: str, ctx: dict[str, Any]
-) -> None:
+@given(parsers.parse('pipeline "{pipeline_name}" with a context_setter node "{node_name}"'))
+def pipeline_with_context_setter(pipeline_name: str, node_name: str, ctx: dict[str, Any]) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
     ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
     ctx["nodes"] = {node_name: _make_node(node_name, role="context_setter")}
 
 
-@given(
-    parsers.parse(
-        'pipeline "{pipeline_name}" with an agent node "{node_name}"'
-    )
-)
-def pipeline_with_agent(
-    pipeline_name: str, node_name: str, ctx: dict[str, Any]
-) -> None:
+@given(parsers.parse('pipeline "{pipeline_name}" with an agent node "{node_name}"'))
+def pipeline_with_agent(pipeline_name: str, node_name: str, ctx: dict[str, Any]) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
     ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
     ctx["nodes"] = {node_name: _make_node(node_name, role="agent")}
 
 
-@given(
-    parsers.parse(
-        'pipeline "{pipeline_name}" has run_context_defaults'
-    )
-)
+@given(parsers.parse('pipeline "{pipeline_name}" has run_context_defaults'))
 def pipeline_has_defaults(pipeline_name: str, ctx: dict[str, Any]) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
@@ -106,32 +87,18 @@ def pipeline_has_defaults(pipeline_name: str, ctx: dict[str, Any]) -> None:
     ctx["defaults"] = {}
 
 
-@given(
-    parsers.parse(
-        'the defaults include "{key}" = "{value}"'
-    )
-)
+@given(parsers.parse('the defaults include "{key}" = "{value}"'))
 def defaults_include(key: str, value: str, ctx: dict[str, Any]) -> None:
     ctx["defaults"][key] = value
 
 
-@given(
-    parsers.parse(
-        'a run is triggered with input_payload "{key}" = "{value}"'
-    )
-)
+@given(parsers.parse('a run is triggered with input_payload "{key}" = "{value}"'))
 def run_triggered_with_input(key: str, value: str, ctx: dict[str, Any]) -> None:
     ctx["input_payload"][key] = value
 
 
-@given(
-    parsers.parse(
-        'pipeline "{pipeline_name}" with context_setter nodes "{node_a}" and "{node_b}"'
-    )
-)
-def pipeline_with_two_setters(
-    pipeline_name: str, node_a: str, node_b: str, ctx: dict[str, Any]
-) -> None:
+@given(parsers.parse('pipeline "{pipeline_name}" with context_setter nodes "{node_a}" and "{node_b}"'))
+def pipeline_with_two_setters(pipeline_name: str, node_a: str, node_b: str, ctx: dict[str, Any]) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
     ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
@@ -141,14 +108,8 @@ def pipeline_with_two_setters(
     }
 
 
-@given(
-    parsers.parse(
-        'pipeline "{pipeline_name}" with agent nodes "{agents}"'
-    )
-)
-def pipeline_with_agents(
-    pipeline_name: str, agents: str, ctx: dict[str, Any]
-) -> None:
+@given(parsers.parse('pipeline "{pipeline_name}" with agent nodes "{agents}"'))
+def pipeline_with_agents(pipeline_name: str, agents: str, ctx: dict[str, Any]) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
     ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
@@ -157,11 +118,7 @@ def pipeline_with_agents(
         ctx["nodes"][name] = _make_node(name, role="agent")
 
 
-@given(
-    parsers.parse(
-        'run_context contains "{key}" = "{value}"'
-    )
-)
+@given(parsers.parse('run_context contains "{key}" = "{value}"'))
 def run_context_contains(key: str, value: str, ctx: dict[str, Any]) -> None:
     coerced: Any = value
     if value.lower() == "true":
@@ -171,9 +128,7 @@ def run_context_contains(key: str, value: str, ctx: dict[str, Any]) -> None:
     ctx["run_context"][key] = coerced
 
 
-@given(
-    parsers.parse('a running pipeline "{pipeline_name}" with initial state')
-)
+@given(parsers.parse('a running pipeline "{pipeline_name}" with initial state'))
 def running_pipeline_with_state(pipeline_name: str, ctx: dict[str, Any]) -> None:
     from tests.bdd.conftest import make_mock_pipeline, make_mock_run
 
@@ -192,14 +147,8 @@ def auth_in_org(org: str) -> None:
 # ===================================================================
 
 
-@when(
-    parsers.parse(
-        'the context_setter node "{node_name}" writes "{key}"="{value}" to run_context'
-    )
-)
-def context_setter_writes(
-    node_name: str, key: str, value: str, ctx: dict[str, Any]
-) -> None:
+@when(parsers.parse('the context_setter node "{node_name}" writes "{key}"="{value}" to run_context'))
+def context_setter_writes(node_name: str, key: str, value: str, ctx: dict[str, Any]) -> None:
     from modulo.core.pipeline_engine import cancellable_node
     from modulo.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
 
@@ -213,6 +162,7 @@ def context_setter_writes(
 
     async def _setter(state: dict[str, Any]) -> dict[str, Any]:
         return {"run_context": {key: coerced}}
+
     _setter.__name__ = node_name
     wrapped_setter = cancellable_node(role="context_setter")(_setter)
 
@@ -227,14 +177,8 @@ def context_setter_writes(
     ctx["write_log"] = result.get(_RUN_CONTEXT_WRITE_LOG_KEY, [])
 
 
-@when(
-    parsers.parse(
-        'the agent node "{node_name}" attempts to write "{key}"="{value}" to run_context'
-    )
-)
-def agent_attempts_write(
-    node_name: str, key: str, value: str, ctx: dict[str, Any]
-) -> None:
+@when(parsers.parse('the agent node "{node_name}" attempts to write "{key}"="{value}" to run_context'))
+def agent_attempts_write(node_name: str, key: str, value: str, ctx: dict[str, Any]) -> None:
     from modulo.core.pipeline_engine import ContextSetterViolationError, cancellable_node
 
     coerced: Any = value
@@ -271,11 +215,7 @@ def run_starts(ctx: dict[str, Any]) -> None:
     ctx["seeded_state"] = _seed_state(snapshot, dict(ctx["input_payload"]))
 
 
-@when(
-    parsers.parse(
-        'the agent node "{node_name}" attempts to write to run_context'
-    )
-)
+@when(parsers.parse('the agent node "{node_name}" attempts to write to run_context'))
 def agent_attempts_write_unspecified(node_name: str, ctx: dict[str, Any]) -> None:
     from modulo.core.pipeline_engine import ContextSetterViolationError, cancellable_node
 
@@ -311,21 +251,13 @@ def agent_attempts_write_unspecified(node_name: str, ctx: dict[str, Any]) -> Non
             )
 
 
-@when(
-    parsers.parse(
-        'each agent reads the run_context field "{field}"'
-    )
-)
+@when(parsers.parse('each agent reads the run_context field "{field}"'))
 def each_agent_reads_field(field: str, ctx: dict[str, Any]) -> None:
     for name in ctx.get("nodes", {}):
         ctx.setdefault("agent_reads", {})[name] = ctx["run_context"].get(field)
 
 
-@when(
-    parsers.parse(
-        'a node writes artifact "{key}"="{value}" to the state'
-    )
-)
+@when(parsers.parse('a node writes artifact "{key}"="{value}" to the state'))
 def node_writes_artifact(key: str, value: str, ctx: dict[str, Any]) -> None:
     coerced: Any = value
     if value.lower() == "true":
@@ -344,16 +276,10 @@ def node_writes_artifact(key: str, value: str, ctx: dict[str, Any]) -> None:
 
 @then("the write is accepted")
 def write_accepted(ctx: dict[str, Any]) -> None:
-    assert ctx["violation_error"] is None, (
-        f"Expected write to be accepted but got error: {ctx['violation_error']}"
-    )
+    assert ctx["violation_error"] is None, f"Expected write to be accepted but got error: {ctx['violation_error']}"
 
 
-@then(
-    parsers.parse(
-        'run_context contains "{key}"="{value}"'
-    )
-)
+@then(parsers.parse('run_context contains "{key}"="{value}"'))
 def run_context_contains_value(key: str, value: str, ctx: dict[str, Any]) -> None:
     coerced: Any = value
     if value.lower() == "true":
@@ -362,38 +288,23 @@ def run_context_contains_value(key: str, value: str, ctx: dict[str, Any]) -> Non
         coerced = False
     rc = ctx.get("run_context", {})
     assert key in rc, f"run_context missing key {key!r}"
-    assert rc[key] == coerced, (
-        f"run_context[{key!r}] = {rc[key]!r}, expected {coerced!r}"
-    )
+    assert rc[key] == coerced, f"run_context[{key!r}] = {rc[key]!r}, expected {coerced!r}"
 
 
-@then(
-    parsers.parse(
-        'the write-log has {count:d} entry for node "{node_name}"'
-    )
-)
+@then(parsers.parse('the write-log has {count:d} entry for node "{node_name}"'))
 def write_log_has_entry_for_node(count: int, node_name: str, ctx: dict[str, Any]) -> None:
-    entries = [
-        e for e in ctx.get("write_log", []) if e.get("node_name") == node_name
-    ]
+    entries = [e for e in ctx.get("write_log", []) if e.get("node_name") == node_name]
     assert len(entries) == count, (
-        f"Expected {count} write-log entries for node {node_name!r}, "
-        f"got {len(entries)}: {entries}"
+        f"Expected {count} write-log entries for node {node_name!r}, got {len(entries)}: {entries}"
     )
 
 
 @then("the write is rejected with ContextSetterViolationError")
 def write_rejected(ctx: dict[str, Any]) -> None:
-    assert ctx["violation_error"] is not None, (
-        "Expected ContextSetterViolationError but write was accepted"
-    )
+    assert ctx["violation_error"] is not None, "Expected ContextSetterViolationError but write was accepted"
 
 
-@then(
-    parsers.parse(
-        'the seeded run_context contains "{key}" = "{value}"'
-    )
-)
+@then(parsers.parse('the seeded run_context contains "{key}" = "{value}"'))
 def seeded_context_contains(key: str, value: str, ctx: dict[str, Any]) -> None:
     coerced: Any = value
     if value.lower() == "true":
@@ -402,16 +313,10 @@ def seeded_context_contains(key: str, value: str, ctx: dict[str, Any]) -> None:
         coerced = False
     rc = ctx["seeded_state"]["run_context"]
     assert key in rc, f"Seeded run_context missing key {key!r}"
-    assert rc[key] == coerced, (
-        f"Seeded run_context[{key!r}] = {rc[key]!r}, expected {coerced!r}"
-    )
+    assert rc[key] == coerced, f"Seeded run_context[{key!r}] = {rc[key]!r}, expected {coerced!r}"
 
 
-@then(
-    parsers.parse(
-        'the seeded run_context input has "{key}" = "{value}"'
-    )
-)
+@then(parsers.parse('the seeded run_context input has "{key}" = "{value}"'))
 def seeded_context_input_has(key: str, value: str, ctx: dict[str, Any]) -> None:
     inp = ctx["seeded_state"]["run_context"].get("input", {})
     coerced: Any = value
@@ -420,16 +325,10 @@ def seeded_context_input_has(key: str, value: str, ctx: dict[str, Any]) -> None:
     elif value.lower() == "false":
         coerced = False
     assert key in inp, f"run_context.input missing key {key!r}"
-    assert inp[key] == coerced, (
-        f"run_context.input[{key!r}] = {inp[key]!r}, expected {coerced!r}"
-    )
+    assert inp[key] == coerced, f"run_context.input[{key!r}] = {inp[key]!r}, expected {coerced!r}"
 
 
-@then(
-    parsers.parse(
-        'seeded run_context has cancelled = "{expected}"'
-    )
-)
+@then(parsers.parse('seeded run_context has cancelled = "{expected}"'))
 def seeded_context_cancelled(expected: str, ctx: dict[str, Any]) -> None:
     expected_bool = expected.lower() == "true"
     rc = ctx["seeded_state"]["run_context"]
@@ -438,37 +337,21 @@ def seeded_context_cancelled(expected: str, ctx: dict[str, Any]) -> None:
     )
 
 
-@then(
-    parsers.parse(
-        "the write-log has {count:d} entries"
-    )
-)
+@then(parsers.parse("the write-log has {count:d} entries"))
 def write_log_has_count(count: int, ctx: dict[str, Any]) -> None:
     assert len(ctx.get("write_log", [])) == count, (
         f"Expected {count} write-log entries, got {len(ctx.get('write_log', []))}"
     )
 
 
-@then(
-    parsers.parse(
-        "write-log entry {index:d} node_name is \"{expected}\""
-    )
-)
+@then(parsers.parse('write-log entry {index:d} node_name is "{expected}"'))
 def write_log_entry_node_name(index: int, expected: str, ctx: dict[str, Any]) -> None:
-    assert index < len(ctx["write_log"]), (
-        f"Write-log has {len(ctx['write_log'])} entries, cannot index {index}"
-    )
+    assert index < len(ctx["write_log"]), f"Write-log has {len(ctx['write_log'])} entries, cannot index {index}"
     actual = ctx["write_log"][index]["node_name"]
-    assert actual == expected, (
-        f"Entry {index} node_name = {actual!r}, expected {expected!r}"
-    )
+    assert actual == expected, f"Entry {index} node_name = {actual!r}, expected {expected!r}"
 
 
-@then(
-    parsers.parse(
-        'each agent sees "{key}" = "{value}"'
-    )
-)
+@then(parsers.parse('each agent sees "{key}" = "{value}"'))
 def each_agent_sees(key: str, value: str, ctx: dict[str, Any]) -> None:
     coerced: Any = value
     if value.lower() == "true":
@@ -478,9 +361,7 @@ def each_agent_sees(key: str, value: str, ctx: dict[str, Any]) -> None:
     reads = ctx.get("agent_reads", {})
     assert len(reads) > 0, "No agent reads recorded"
     for name, val in reads.items():
-        assert val == coerced, (
-            f"Agent {name!r} read {key}={val!r}, expected {coerced!r}"
-        )
+        assert val == coerced, f"Agent {name!r} read {key}={val!r}, expected {coerced!r}"
 
 
 @then('the state has top-level keys "run_context" and "artifacts"')
@@ -495,9 +376,7 @@ def run_context_not_nested(ctx: dict[str, Any]) -> None:
     state = ctx.get("state") or ctx.get("seeded_state", {})
     artifacts = state.get("artifacts", [])
     for a in artifacts:
-        assert "run_context" not in a, (
-            f"Found run_context nested inside artifact: {a}"
-        )
+        assert "run_context" not in a, f"Found run_context nested inside artifact: {a}"
 
 
 @then('"artifacts" is not nested inside run_context')
@@ -507,36 +386,22 @@ def artifacts_not_nested(ctx: dict[str, Any]) -> None:
     assert "artifacts" not in rc, "Found artifacts nested inside run_context"
 
 
-@then(
-    parsers.parse(
-        'a warning is logged containing "{message}"'
-    )
-)
+@then(parsers.parse('a warning is logged containing "{message}"'))
 def warning_logged_containing(message: str, ctx: dict[str, Any]) -> None:
     records = ctx.get("warning_records", [])
-    assert any(
-        message in r.get("message", "") for r in records
-    ), f"No warning record contains {message!r}"
+    assert any(message in r.get("message", "") for r in records), f"No warning record contains {message!r}"
 
 
-@then(
-    parsers.parse(
-        'the warning includes the node name "{node_name}"'
-    )
-)
+@then(parsers.parse('the warning includes the node name "{node_name}"'))
 def warning_includes_node_name(node_name: str, ctx: dict[str, Any]) -> None:
     records = ctx.get("warning_records", [])
-    assert any(
-        r.get("node_name") == node_name for r in records
-    ), f"No warning record found for node {node_name!r}"
+    assert any(r.get("node_name") == node_name for r in records), f"No warning record found for node {node_name!r}"
 
 
 @then("the warning includes the attempted fields")
 def warning_includes_fields(ctx: dict[str, Any]) -> None:
     records = ctx.get("warning_records", [])
-    assert any(
-        r.get("fields") for r in records
-    ), "No warning record includes attempted fields"
+    assert any(r.get("fields") for r in records), "No warning record includes attempted fields"
 
 
 # ===================================================================
@@ -544,28 +409,16 @@ def warning_includes_fields(ctx: dict[str, Any]) -> None:
 # ===================================================================
 
 
-@given(
-    parsers.parse(
-        'pipeline "{pipeline_name}" has autonomy default "{level}"'
-    )
-)
-def pipeline_has_autonomy_default(
-    pipeline_name: str, level: str, ctx: dict[str, Any]
-) -> None:
+@given(parsers.parse('pipeline "{pipeline_name}" has autonomy default "{level}"'))
+def pipeline_has_autonomy_default(pipeline_name: str, level: str, ctx: dict[str, Any]) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
     ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
     ctx["autonomy_default"] = level
 
 
-@given(
-    parsers.parse(
-        'pipeline "{pipeline_name}" has no autonomy defaults'
-    )
-)
-def pipeline_has_no_autonomy_defaults(
-    pipeline_name: str, ctx: dict[str, Any]
-) -> None:
+@given(parsers.parse('pipeline "{pipeline_name}" has no autonomy defaults'))
+def pipeline_has_no_autonomy_defaults(pipeline_name: str, ctx: dict[str, Any]) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
     ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
@@ -581,11 +434,7 @@ def hitl_gate_checks_autonomy(ctx: dict[str, Any]) -> None:
     ctx["resolved_autonomy"] = effective_autonomy_level(pipeline_default, rc)
 
 
-@when(
-    parsers.parse(
-        'a context-setter node changes autonomy_recommendation to "{new_level}"'
-    )
-)
+@when(parsers.parse('a context-setter node changes autonomy_recommendation to "{new_level}"'))
 def context_setter_changes_autonomy(new_level: str, ctx: dict[str, Any]) -> None:
     ctx["run_context"]["autonomy_recommendation"] = new_level
 
@@ -598,9 +447,7 @@ def gate_is_skipped(ctx: dict[str, Any]) -> None:
 
     autonomy = ctx.get("resolved_autonomy")
     assert autonomy is not None, "No resolved_autonomy in context"
-    assert should_skip_hitl_gate(autonomy), (
-        f"Expected gate to be skipped but autonomy={autonomy.value}"
-    )
+    assert should_skip_hitl_gate(autonomy), f"Expected gate to be skipped but autonomy={autonomy.value}"
 
 
 @then("no human interrupt is raised")
@@ -608,19 +455,13 @@ def no_human_interrupt(ctx: dict[str, Any]) -> None:
     pass  # Gate was skipped — no interrupt possible
 
 
-@then(
-    parsers.parse(
-        'the gate uses the pipeline default "{level}"'
-    )
-)
+@then(parsers.parse('the gate uses the pipeline default "{level}"'))
 def gate_uses_pipeline_default(level: str, ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import AutonomyLevel
 
     autonomy = ctx.get("resolved_autonomy")
     assert autonomy is not None, "No resolved_autonomy in context"
-    assert autonomy == AutonomyLevel(level), (
-        f"Expected autonomy={level!r}, got {autonomy.value!r}"
-    )
+    assert autonomy == AutonomyLevel(level), f"Expected autonomy={level!r}, got {autonomy.value!r}"
 
 
 @then("the gate interrupts for human review")
@@ -631,16 +472,10 @@ def gate_interrupts(ctx: dict[str, Any]) -> None:
 
     autonomy = ctx.get("resolved_autonomy")
     assert autonomy is not None, "No resolved_autonomy in context"
-    assert not should_skip_hitl_gate(autonomy), (
-        f"Expected interrupt but gate was skipped (autonomy={autonomy.value})"
-    )
+    assert not should_skip_hitl_gate(autonomy), f"Expected interrupt but gate was skipped (autonomy={autonomy.value})"
 
 
-@then(
-    parsers.parse(
-        'the next HITL gate checks the new autonomy level'
-    )
-)
+@then(parsers.parse("the next HITL gate checks the new autonomy level"))
 def next_gate_checks_new_level(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import effective_autonomy_level
 
@@ -649,29 +484,17 @@ def next_gate_checks_new_level(ctx: dict[str, Any]) -> None:
     ctx["resolved_autonomy"] = effective_autonomy_level(pipeline_default, rc)
 
 
-@then(
-    parsers.parse(
-        'the gate uses "{level}"'
-    )
-)
+@then(parsers.parse('the gate uses "{level}"'))
 def gate_uses_level(level: str, ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import AutonomyLevel
 
     autonomy = ctx.get("resolved_autonomy")
     assert autonomy is not None, "No resolved_autonomy in context"
-    assert autonomy == AutonomyLevel(level), (
-        f"Expected autonomy={level!r}, got {autonomy.value!r}"
-    )
+    assert autonomy == AutonomyLevel(level), f"Expected autonomy={level!r}, got {autonomy.value!r}"
 
 
-@when(
-    parsers.parse(
-        'the context_setter node "{node_name}" writes nothing to run_context'
-    )
-)
-def context_setter_writes_nothing(
-    node_name: str, ctx: dict[str, Any]
-) -> None:
+@when(parsers.parse('the context_setter node "{node_name}" writes nothing to run_context'))
+def context_setter_writes_nothing(node_name: str, ctx: dict[str, Any]) -> None:
     import asyncio
 
     from modulo.core.pipeline_engine import cancellable_node

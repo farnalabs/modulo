@@ -30,7 +30,8 @@ services:
     ports:
       - "${PORT:-80}:80"
     environment:
-      MODULO_DB_URL: postgresql://modulo:${MODULO_DB_PASSWORD:-changeme}@postgres:5432/modulo
+      DATABASE_URL: postgresql+asyncpg://modulo_app:${MODULO_DB_PASSWORD:-changeme}@postgres:5432/modulo
+      DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:${MODULO_DB_PASSWORD:-changeme}@postgres:5432/modulo
       MODULO_REDIS_URL: redis://redis:6379/0
       MODULO_PUBLIC_URL: ${MODULO_PUBLIC_URL:-http://localhost:80}
       MODULO_ENV: production

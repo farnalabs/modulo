@@ -4,6 +4,7 @@ Covers cross-pipeline signal triggers (PRD §8.5).
 """
 
 import asyncio
+import contextlib
 import uuid
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,10 +14,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from tests.bdd.conftest import ALT_ORG_ID, ORG_ID
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/agent_signal.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -106,7 +105,9 @@ def _given_source_pipeline(name: str, request: Any) -> None:
     ctx["source_pipeline_id"] = uuid.uuid4()
 
 
-@given(parsers.parse('pipeline "{name}" has an agent_signal trigger watching source pipeline "{source}" node "{node_id}"'))  # noqa: E501
+@given(
+    parsers.parse('pipeline "{name}" has an agent_signal trigger watching source pipeline "{source}" node "{node_id}"')
+)
 def _given_trigger_watching(name: str, source: str, node_id: str, request: Any) -> None:
     ctx = _ctx(request)
     spid = ctx["source_pipeline_id"]
@@ -152,7 +153,11 @@ def _given_one_active_run(name: str, request: Any) -> None:
     ctx["active_runs_count"] = 1
 
 
-@given(parsers.parse('pipeline "{name}" has an inactive agent_signal trigger watching source pipeline "{source}" node "{node_id}"'))  # noqa: E501
+@given(
+    parsers.parse(
+        'pipeline "{name}" has an inactive agent_signal trigger watching source pipeline "{source}" node "{node_id}"'
+    )
+)
 def _given_inactive_trigger(name: str, source: str, node_id: str, request: Any) -> None:
     ctx = _ctx(request)
     spid = ctx["source_pipeline_id"]
@@ -214,18 +219,22 @@ def _when_node_completes(node_id: str, source: str, mock_session: MagicMock, req
         ctx["mock_create_run"] = mock_cr
         ctx["created_child_run"] = child_run
 
-        ctx["results"] = asyncio.run(fire_agent_signal(
-            mock_session,
-            org_id=ctx["org_id"],
-            source_run_id=ctx["source_run_id"],
-            source_pipeline_id=ctx["source_pipeline_id"],
-            completed_node_id=node_id,
-            node_output=ctx.get("node_output"),
-        ))
+        ctx["results"] = asyncio.run(
+            fire_agent_signal(
+                mock_session,
+                org_id=ctx["org_id"],
+                source_run_id=ctx["source_run_id"],
+                source_pipeline_id=ctx["source_pipeline_id"],
+                completed_node_id=node_id,
+                node_output=ctx.get("node_output"),
+            )
+        )
 
 
 @when(parsers.parse('node "{node_id}" completes in pipeline "{source}" with output {output}'))
-def _when_node_completes_with_output(node_id: str, source: str, output: str, mock_session: MagicMock, request: Any) -> None:  # noqa: E501
+def _when_node_completes_with_output(
+    node_id: str, source: str, output: str, mock_session: MagicMock, request: Any
+) -> None:
     ctx = _ctx(request)
     ctx["completed_node_id"] = node_id
     ctx["node_output"] = output if isinstance(output, dict) else {"result": output}
@@ -239,14 +248,16 @@ def _when_node_completes_with_output(node_id: str, source: str, output: str, moc
         ctx["mock_create_run"] = mock_cr
         ctx["created_child_run"] = child_run
 
-        ctx["results"] = asyncio.run(fire_agent_signal(
-            mock_session,
-            org_id=ctx["org_id"],
-            source_run_id=ctx["source_run_id"],
-            source_pipeline_id=ctx["source_pipeline_id"],
-            completed_node_id=node_id,
-            node_output=ctx["node_output"],
-        ))
+        ctx["results"] = asyncio.run(
+            fire_agent_signal(
+                mock_session,
+                org_id=ctx["org_id"],
+                source_run_id=ctx["source_run_id"],
+                source_pipeline_id=ctx["source_pipeline_id"],
+                completed_node_id=node_id,
+                node_output=ctx["node_output"],
+            )
+        )
 
 
 @when(parsers.parse('node "{node_id}" completes with output {output}'))
@@ -264,14 +275,16 @@ def _when_node_completes_with_output_simple(node_id: str, output: str, mock_sess
         ctx["mock_create_run"] = mock_cr
         ctx["created_child_run"] = child_run
 
-        ctx["results"] = asyncio.run(fire_agent_signal(
-            mock_session,
-            org_id=ctx["org_id"],
-            source_run_id=ctx["source_run_id"],
-            source_pipeline_id=ctx["source_pipeline_id"],
-            completed_node_id=node_id,
-            node_output=ctx["node_output"],
-        ))
+        ctx["results"] = asyncio.run(
+            fire_agent_signal(
+                mock_session,
+                org_id=ctx["org_id"],
+                source_run_id=ctx["source_run_id"],
+                source_pipeline_id=ctx["source_pipeline_id"],
+                completed_node_id=node_id,
+                node_output=ctx["node_output"],
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

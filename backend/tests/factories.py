@@ -4,7 +4,7 @@ import uuid
 
 import factory
 
-from modulo.db.models import Organisation, Pipeline, PipelineSnapshot, Run, User
+from modulo.db.models import Account, Organisation, Pipeline, PipelineSnapshot, Run
 
 
 class OrganisationFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -19,16 +19,14 @@ class OrganisationFactory(factory.alchemy.SQLAlchemyModelFactory):
     settings_json = factory.LazyFunction(dict)
 
 
-class UserFactory(factory.alchemy.SQLAlchemyModelFactory):
+class AccountFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
-        model = User
+        model = Account
         sqlalchemy_session_persistence = "flush"
 
     id = factory.LazyFunction(uuid.uuid4)
-    organisation = factory.SubFactory(OrganisationFactory)
     email = factory.Sequence(lambda n: f"user{n}@example.com")
     display_name = factory.Sequence(lambda n: f"Test User {n}")
-    org_role = "runner"
     auth_provider = "local"
     active = True
 
@@ -40,8 +38,8 @@ class PipelineFactory(factory.alchemy.SQLAlchemyModelFactory):
 
     id = factory.LazyFunction(uuid.uuid4)
     name = factory.Sequence(lambda n: f"Pipeline {n}")
-    creator = factory.SubFactory(UserFactory)
-    organisation = factory.SelfAttribute("creator.organisation")
+    creator = factory.SubFactory(AccountFactory)
+    organisation = factory.SubFactory(OrganisationFactory)
     visibility = "org"
     run_context_defaults = factory.LazyFunction(dict)
 
@@ -60,6 +58,7 @@ class PipelineSnapshotFactory(factory.alchemy.SQLAlchemyModelFactory):
     schema_pins_json = factory.LazyFunction(list)
     prompt_pins_json = factory.LazyFunction(list)
     model_backend_pins_json = factory.LazyFunction(list)
+    parameter_bindings_json = None
     run_context_defaults = factory.LazyFunction(dict)
 
 

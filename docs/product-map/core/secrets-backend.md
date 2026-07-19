@@ -2,7 +2,8 @@
 id: feat-core-secrets-backend
 prd: 7.13
 delivery-tasks: [task-nv10-secrets-backend]
-bdd: [backend/tests/bdd/features/security/credential_store.feature]
+bdd:
+  - backend/tests/bdd/features/security/credential_store.feature
 code:
   - backend/src/modulo/core/secrets_backend/__init__.py
   - backend/src/modulo/core/secrets_backend/fernet.py
@@ -13,7 +14,11 @@ code:
   - backend/tests/unit/secrets_backend/test_vault_backend.py
   - backend/tests/unit/secrets_backend/test_aws_backend.py
 depends-on: [feat-core-db-abstraction-core]
-unit-tests: [backend/tests/unit/secrets_backend/test_factory.py, backend/tests/unit/secrets_backend/test_fernet_backend.py, backend/tests/unit/secrets_backend/test_vault_backend.py, backend/tests/unit/secrets_backend/test_aws_backend.py]
+unit-tests:
+  - backend/tests/unit/secrets_backend/test_factory.py
+  - backend/tests/unit/secrets_backend/test_fernet_backend.py
+  - backend/tests/unit/secrets_backend/test_vault_backend.py
+  - backend/tests/unit/secrets_backend/test_aws_backend.py
 status: partial
 ---
 

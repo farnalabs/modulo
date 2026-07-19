@@ -240,7 +240,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 
 - [x] `ConnectorType.GITLAB` with capabilities: `read`, `write`, `git_push`, `create_pr`
 - [x] Built-in connector type in `ConnectorType` enum and `_build_connector` switch
-- [x] Missing: comprehensive BDD scenarios — no GitLab-specific feature file exists
+- [x] BDD coverage via `gitlab_issues.feature` (8 scenarios) — issues, issue, projects, search, error paths
 
 ### Jira Connector
 
@@ -366,3 +366,4 @@ All 5 CRUD routes in `connectors.py` have complete error handling chains:
 - 2026-07-07: Cross-cutting QA (index 318). Fixed stale BDD checkbox for Linear connector (`linear_connector.feature` has 8 real scenarios since July 1 QA — no longer a placeholder). Status: partial.
 - 2026-07-08: Cross-cutting QA (index 249). Fixed CRITICAL — added IntegrityError→409 catch to create_connector_endpoint and update_connector_endpoint (FK/constraint violations previously returned misleading 503). Fixed MAJOR — created `test_connectors_programming_error.py` with 11 tests covering ProgrammingError→501, SQLAlchemyError→503, and IntegrityError→409 for all 5 CRUD routes. Added Error Handling and Test Coverage sections to product map.
 - 2026-07-09: Cross-cutting QA (index 346). Fixed CRITICAL — added `asyncio.Lock` to `ConnectorHub.initialise()` to prevent race condition when two coroutines call `initialise()` concurrently on the same hub instance (the `_initialised` flag was set after the loop, creating a window where concurrent calls could interleave connector registrations). Double-checked locking pattern with lock acquired before the loop. MINOR findings: no timeout on `_build_connector()` constructor calls (all current constructors are synchronous, but untimed), unnecessary IntegrityError→409 catch on list/get/delete routes (harmless but imprecise), stale test in `test_youtrack_connector.py` (URL path mismatch in respx mock). Status: partial.
+- 2026-07-12: Round 3 QA (improve-architecture batch 2). Clean pass — no code issues found. Ruff check clean. ConnectorHub remains well-structured with double-checked locking, proper OTel tracing, ACL enforcement, credential lifecycle management, and comprehensive error handling. Status: partial.

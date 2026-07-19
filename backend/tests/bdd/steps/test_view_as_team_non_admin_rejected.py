@@ -1,15 +1,14 @@
-"""BDD step definitions: View as team â€” non-admin rejection."""
+"""BDD step definitions: View as team — non-admin rejection."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/view_as_team_non_admin_rejected.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -34,16 +33,12 @@ def auth_as_role2(role: str, org: str, ctx) -> None:
     ctx["auth_role"] = role
 
 
-@given(
-    parsers.parse('I authenticate with an API key with role "{role}"')
-)
+@given(parsers.parse('I authenticate with an API key with role "{role}"'))
 def auth_api_key_role(role: str, ctx) -> None:
     ctx["auth_role"] = f"api_key_{role}"
 
 
-@when(
-    parsers.parse('I GET /api/viewmodel/current with view_as_team "{team_name}"')
-)
+@when(parsers.parse('I GET /api/viewmodel/current with view_as_team "{team_name}"'))
 def get_viewmodel_with_view_as_team(team_name: str, request, ctx) -> None:
     auth_role = ctx.get("auth_role", "")
 
@@ -57,9 +52,7 @@ def get_viewmodel_with_view_as_team(team_name: str, request, ctx) -> None:
     request.node._resp = resp
 
 
-@when(
-    parsers.parse('I GET /api/pipelines with view_as_team "{team_name}"')
-)
+@when(parsers.parse('I GET /api/pipelines with view_as_team "{team_name}"'))
 def get_pipelines_with_view_as_team(team_name: str, request, ctx) -> None:
     auth_role = ctx.get("auth_role", "")
 
@@ -81,4 +74,3 @@ def role_changed(role: str, ctx) -> None:
 @then("the view_as_team parameter is ignored")
 def view_as_team_ignored() -> None:
     pass
-

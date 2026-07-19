@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
+import { createPinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../composables/useApi', () => ({
   useApi: vi.fn(() => ({
     get: vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
       if (url.includes('/graph')) return Promise.resolve({ nodes: [], edges: [] })
       if (url.includes('/agents')) return Promise.resolve({ items: [] })
       if (url.includes('/connectors')) return Promise.resolve({ items: [] })
@@ -16,6 +19,17 @@ vi.mock('../composables/useApi', () => ({
     }),
     post: vi.fn().mockResolvedValue({}),
   })),
+}))
+
+vi.mock('../lib/api/client', () => ({
+  api: {
+    GET: vi.fn().mockResolvedValue({ data: { items: [] }, error: undefined }),
+    POST: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+    PATCH: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+    PUT: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+    DELETE: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+  },
+  getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
 import PipelineEditorView from '../views/PipelineEditorView.vue'
@@ -37,7 +51,7 @@ describe('PipelineEditorView', () => {
     await router.isReady()
     const wrapper = mount(PipelineEditorView, {
       global: {
-        plugins: [router],
+        plugins: [createPinia(), router],
         stubs: {
           VueFlow: { template: '<div><slot /></div>' },
           Background: true,

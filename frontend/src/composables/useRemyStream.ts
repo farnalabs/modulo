@@ -1,10 +1,9 @@
-import { ref, onUnmounted } from 'vue'
+import { getCurrentInstance, ref, onUnmounted } from 'vue'
 import { useRemyStore } from './useRemyStore'
 import { usePlanStore } from '../stores/planStore'
 import { getAuthHeaders } from '@/lib/api/client'
 import { parseSSEStream } from '@/lib/sse'
-import { executeCommandBatch, isPaused as isExecutorPaused, resumeUiCommands } from './useUiCommandExecutor'
-import type { UiCommandResult } from './useUiCommandExecutor'
+import { executeCommandBatch, isPaused as isExecutorPaused } from './useUiCommandExecutor'
 
 export interface ToolCallEvent {
   tool_call_id: string
@@ -119,7 +118,11 @@ export function useRemyStream() {
             try {
               const results = await executeCommandBatch(commands)
               store.isExecutingUi = false
+              const streamSignal = abortController?.signal
+              const pauseDeadline = Date.now() + 60000
               while (isExecutorPaused()) {
+                if (Date.now() > pauseDeadline) break
+                if (streamSignal?.aborted) break
                 await new Promise(r => setTimeout(r, 200))
               }
               const body = JSON.stringify({ results })
@@ -179,9 +182,11 @@ export function useRemyStream() {
     store.isStreaming = false
   }
 
-  onUnmounted(() => {
-    disconnectStream()
-  })
+  if (getCurrentInstance()) {
+    onUnmounted(() => {
+      disconnectStream()
+    })
+  }
 
   return { connected, connectStream, disconnectStream }
 }

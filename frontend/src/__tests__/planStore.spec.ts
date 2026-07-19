@@ -16,7 +16,8 @@ const mockTiersResponse = {
   tiers: [
     { tier_id: 'community', label: 'Community', rank: 0 },
     { tier_id: 'team', label: 'Team', rank: 1 },
-    { tier_id: 'enterprise', label: 'Enterprise', rank: 2 },
+    { tier_id: 'v1', label: 'V1', rank: 2 },
+    { tier_id: 'v2', label: 'V2', rank: 3 },
   ],
 }
 

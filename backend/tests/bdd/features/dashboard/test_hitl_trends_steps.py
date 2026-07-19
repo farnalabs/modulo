@@ -114,17 +114,17 @@ def _(client: TestClient) -> None:
     pass
 
 
-@when('I request GET /api/v1/dashboard/trends?days=7')
+@when("I request GET /api/v1/dashboard/trends?days=7")
 def _(client: TestClient) -> None:
     _request_trends(client, 7)
 
 
-@when('I request GET /api/v1/dashboard/trends?days=30')
+@when("I request GET /api/v1/dashboard/trends?days=30")
 def _(client: TestClient) -> None:
     _request_trends(client, 30)
 
 
-@when('I request GET /api/v1/dashboard/trends?days=0')
+@when("I request GET /api/v1/dashboard/trends?days=0")
 def _(client: TestClient) -> None:
     _request_trends(client, 0)
 
@@ -149,56 +149,59 @@ def _(client: TestClient) -> None:
     assert True
 
 
-@then('the response contains hitl_volume with 7 entries')
+@then("the response contains hitl_volume with 7 entries")
 def _(client: TestClient) -> None:
     pass
 
 
-@then('each hitl_volume entry has total_decisions, approved_count, rejected_count, rejection_rate, and avg_time_to_approve_ms')
+@then(
+    "each hitl_volume entry has total_decisions, approved_count,"
+    " rejected_count, rejection_rate, and avg_time_to_approve_ms"
+)
 def _(client: TestClient) -> None:
     pass
 
 
-@then('the response contains rejection_trend with 7 entries')
+@then("the response contains rejection_trend with 7 entries")
 def _(client: TestClient) -> None:
     pass
 
 
-@then('each rejection_trend entry has rolling_rejection_rate and raw_rejection_rate')
+@then("each rejection_trend entry has rolling_rejection_rate and raw_rejection_rate")
 def _(client: TestClient) -> None:
     pass
 
 
-@then('the response contains correlation with 30 entries')
+@then("the response contains correlation with 30 entries")
 def _(client: TestClient) -> None:
     pass
 
 
-@then('the response contains correlation with 7 entries')
+@then("the response contains correlation with 7 entries")
 def _(client: TestClient) -> None:
     pass
 
 
-@then('each correlation entry has rejection_rate and eval_pass_rate')
+@then("each correlation entry has rejection_rate and eval_pass_rate")
 def _(client: TestClient) -> None:
     pass
 
 
-@then('the response contains feedback_volume with 7 entries')
+@then("the response contains feedback_volume with 7 entries")
 def _(client: TestClient) -> None:
     pass
 
 
-@then('each feedback_volume entry has feedback_count, resolved_count, and correcting_count')
+@then("each feedback_volume entry has feedback_count, resolved_count, and correcting_count")
 def _(client: TestClient) -> None:
     pass
 
 
-@then('hitl_volume, rejection_trend, correlation, and feedback_volume all have the same length')
+@then("hitl_volume, rejection_trend, correlation, and feedback_volume all have the same length")
 def _(client: TestClient) -> None:
     pass
 
 
-@then('every hitl_volume entry has total_decisions=0 and rejection_rate=0.0')
+@then("every hitl_volume entry has total_decisions=0 and rejection_rate=0.0")
 def _(client: TestClient) -> None:
     pass

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os as _os
 import time
 import uuid
@@ -14,9 +15,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.api.routes.events import _test_reset_connections
 from modulo.core.events.event_bus import EventBus, get_event_bus
 
-_features_dir = _os.path.normpath(
-    _os.path.join(_os.path.dirname(__file__), "..", "features", "events")
-)
+_features_dir = _os.path.normpath(_os.path.join(_os.path.dirname(__file__), "..", "features", "events"))
 scenarios(_features_dir)
 
 _ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -45,10 +44,8 @@ def _publish_sync(
         "org_id": org_id,
     }
     for q in list(bus._subscribers.get(org_id, [])):
-        try:
+        with contextlib.suppress(Exception):
             q.put_nowait(event)
-        except Exception:
-            pass
 
 
 def _queue_get_with_timeout(q, timeout: float = 2.0) -> dict[str, Any]:
@@ -172,10 +169,8 @@ def client_disconnects(ctx) -> None:
     q = ctx.get("queue")
     if q is not None:
         subs = bus._subscribers.get(_ORG_ID, [])
-        try:
+        with contextlib.suppress(ValueError):
             subs.remove(q)
-        except ValueError:
-            pass
 
 
 @when(parsers.parse("a new pipeline is created"))
@@ -195,22 +190,14 @@ def pipeline_deleted(ctx) -> None:
 # ===========================================================================
 
 
-@then(
-    parsers.parse(
-        'the client receives a resource_changed event with type "{resource_type}" and action "{action}"'
-    )
-)
+@then(parsers.parse('the client receives a resource_changed event with type "{resource_type}" and action "{action}"'))
 def client_receives_event(resource_type: str, action: str, ctx) -> None:
     """Verify the client's queue received the expected resource-changed event."""
     q = ctx.get("queue")
     assert q is not None, "No event queue — client was not connected"
     event = _queue_get_with_timeout(q, timeout=2.0)
-    assert event["type"] == resource_type, (
-        f"Expected type {resource_type!r}, got {event['type']!r}"
-    )
-    assert event["action"] == action, (
-        f"Expected action {action!r}, got {event['action']!r}"
-    )
+    assert event["type"] == resource_type, f"Expected type {resource_type!r}, got {event['type']!r}"
+    assert event["action"] == action, f"Expected action {action!r}, got {event['action']!r}"
 
 
 @then(parsers.parse("only the client in organisation A receives the event"))
@@ -244,6 +231,4 @@ def connection_rejected_401(ctx) -> None:
     """Verify the SSE endpoint returned 401 for unauthenticated requests."""
     resp = ctx.get("_resp")
     assert resp is not None, "No response stored — expected an HTTP call"
-    assert resp.status_code == 401, (
-        f"Expected 401, got {resp.status_code}: {resp.text[:200]}"
-    )
+    assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text[:200]}"

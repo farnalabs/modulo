@@ -58,8 +58,7 @@ async def org_a(db_engine: AsyncEngine) -> uuid.UUID:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json)",
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
             ),
             {"id": str(org_id), "name": "Integration-OrgA", "slug": f"int-orga-{org_id.hex[:8]}"},
         )
@@ -72,8 +71,7 @@ async def org_b(db_engine: AsyncEngine) -> uuid.UUID:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json)",
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
             ),
             {"id": str(org_id), "name": "Integration-OrgB", "slug": f"int-orgb-{org_id.hex[:8]}"},
         )
@@ -273,7 +271,9 @@ class TestRLSIsolation:
         async with factory() as session, session.begin():
             await set_rls_org(session, org_b)
             result = await update_environment_profile(
-                session, org_a_profile, {"name": "hacked"},
+                session,
+                org_a_profile,
+                {"name": "hacked"},
             )
         assert result is None
 

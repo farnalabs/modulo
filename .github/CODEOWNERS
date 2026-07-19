@@ -1,1 +1,21 @@
-* @Modulo/core
+﻿# Modulo CODEOWNERS
+# Each line is a file pattern followed by one or more owners.
+# PRs modifying matching files require approval from at least one owner.
+
+# Default: require review from duncantait
+* @duncantait
+
+# Backend changes also require review
+backend/src/modulo/** @duncantait
+
+# Frontend changes also require review
+frontend/src/** @duncantait
+
+# Infrastructure and CI changes require review
+.github/workflows/** @duncantait
+deploy/** @duncantait
+
+# Config files
+*.toml @duncantait
+*.yml @duncantait
+*.yaml @duncantait

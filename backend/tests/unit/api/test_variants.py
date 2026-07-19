@@ -19,12 +19,12 @@ from modulo.api.routes.variants import (
     run_variant,
     update_group,
 )
+from tests.unit.api.mock_session import configure_mock_session
 
 
 def make_session_mock() -> AsyncMock:
     """Create an AsyncSession mock that supports async with session.begin()."""
-    session = AsyncMock()
-    session.in_transaction.return_value = True
+    session = configure_mock_session(AsyncMock())
     session.execute = AsyncMock()
     begin_ctx = AsyncMock()
     begin_ctx.__aenter__ = AsyncMock(return_value=session)

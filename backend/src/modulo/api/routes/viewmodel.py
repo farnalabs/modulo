@@ -7,7 +7,7 @@ GET /api/v1/viewmodel/current — single-request aggregate for the frontend
 import logging
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -32,6 +33,8 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["viewmodel"])
 
@@ -61,7 +64,7 @@ class MeResponse(BaseModel):
     team_memberships: list[TeamMembershipInfo]
     team_memberships_truncated: bool
     org_role: str
-    preferences: dict[str, Any] = {}
+    preferences: ClassVar[dict[str, Any]] = {}
     is_system_admin: bool = False
 
 
@@ -112,7 +115,7 @@ class ViewInfo(BaseModel):
     name: str
     description: str | None
     view_type: str
-    filters: dict
+    filters: dict[str, Any]
     columns: list[str] | None
     sort_by: str | None
     sort_order: str
@@ -121,7 +124,7 @@ class ViewInfo(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class ViewModelViewsResponse(BaseModel):
@@ -170,6 +173,7 @@ class ViewModelCurrent(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+@handle_db_errors("viewmodel.license_info")
 @router.get("/api/v1/license", response_model=LicenseInfo)
 async def license_info(
     settings: Settings = Depends(get_settings),
@@ -189,9 +193,10 @@ async def license_info(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve license information",
-        )
+        ) from None
 
 
+@handle_db_errors("viewmodel.me")
 @router.get("/api/v1/me", response_model=MeResponse)
 async def me(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -200,19 +205,19 @@ async def me(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role or "admin")
             memberships = await list_team_memberships_for_account(session, current_user.account_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         logger.exception("me.failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while loading user info.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -220,7 +225,7 @@ async def me(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to load user info.",
-        )
+        ) from None
 
     return MeResponse(
         user=UserInfo(username=current_user.username),
@@ -229,16 +234,14 @@ async def me(
             org_name="Modulo",
             settings={},
         ),
-        team_memberships=[
-            TeamMembershipInfo(team_id=m.team_id, team_role=m.role)
-            for m in memberships
-        ],
+        team_memberships=[TeamMembershipInfo(team_id=m.team_id, team_role=m.role) for m in memberships],
         team_memberships_truncated=False,
         org_role=current_user.org_role,
         is_system_admin=current_user.is_system_admin,
     )
 
 
+@handle_db_errors("viewmodel.viewmodel_current")
 @router.get("/api/v1/viewmodel/current", response_model=ViewModelCurrent)
 async def viewmodel_current(
     session: AsyncSession = Depends(get_db_session),
@@ -255,12 +258,13 @@ async def viewmodel_current(
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role or "")
 
+            if view_as_team is not None and current_user.organisation_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot use view_as_team without an organisation",
+                )
+
             if view_as_team is not None:
-                if current_user.organisation_id is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Cannot use view_as_team without an organisation",
-                    )
                 team_result = await session.execute(
                     select(Team).where(
                         Team.id == view_as_team,
@@ -300,8 +304,7 @@ async def viewmodel_current(
                 )
                 if user_team_ids:
                     hitl_query = hitl_query.where(
-                        HitlClaim.required_team_id.is_(None)
-                        | HitlClaim.required_team_id.in_(user_team_ids)
+                        HitlClaim.required_team_id.is_(None) | HitlClaim.required_team_id.in_(user_team_ids)
                     )
                 else:
                     hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None))
@@ -341,13 +344,13 @@ async def viewmodel_current(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         logger.exception("viewmodel.current_failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while loading viewmodel data.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -355,7 +358,7 @@ async def viewmodel_current(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to load viewmodel data.",
-        )
+        ) from None
     enabled_features = plan_ctx.list_enabled_features()
     feature_flags = [
         FeatureFlagInfo(
@@ -375,19 +378,14 @@ async def viewmodel_current(
             settings=org.settings_json if org else {},
         ),
         org_role=current_user.org_role or "",
-        team_memberships=[
-            TeamMembershipInfo(team_id=m.team_id, team_role=m.role)
-            for m in memberships
-        ],
+        team_memberships=[TeamMembershipInfo(team_id=m.team_id, team_role=m.role) for m in memberships],
         team_memberships_truncated=False,
         preferences=account.preferences,
         feature_flags=feature_flags,
         plan=PlanInfo(
             tier=_resolve_tier(settings, org=org),
             daily_spend_limit=(
-                float(org.daily_spend_limit)
-                if org is not None and org.daily_spend_limit is not None
-                else None
+                float(org.daily_spend_limit) if org is not None and org.daily_spend_limit is not None else None
             ),
         ),
         pipelines=[PipelineSummary.model_validate(p) for p in (pipelines_page.items if pipelines_page else [])],
@@ -401,6 +399,7 @@ async def viewmodel_current(
     )
 
 
+@handle_db_errors("viewmodel.viewmodel_list_views")
 @router.get("/api/v1/viewmodel/views", response_model=ViewModelViewsResponse)
 async def viewmodel_list_views(
     session: AsyncSession = Depends(get_db_session),
@@ -411,19 +410,19 @@ async def viewmodel_list_views(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role or "admin")
             result = await list_views(session, page=page, page_size=page_size)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         logger.exception("viewmodel.list_views_failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing views.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -431,7 +430,7 @@ async def viewmodel_list_views(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list views.",
-        )
+        ) from None
 
     items = [_enrich_view(v, current_user.account_id) for v in result.items]
     return ViewModelViewsResponse(

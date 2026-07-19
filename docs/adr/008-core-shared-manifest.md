@@ -1,6 +1,6 @@
 # ADR 008 — Core Shared Manifest: Single Source of Truth for Page Structure
 
-**Date**: 2026-07-03  
+**Date**: 2026-07-03
 **Status**: Active
 
 ---

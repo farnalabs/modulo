@@ -1,6 +1,9 @@
 """Unit tests for Remy UI tools — tool definitions, permission resolution, session approvals."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
+
+import pytest
 
 from modulo.api.routes.remy import (
     _has_destructive_pattern,
@@ -25,10 +28,8 @@ from modulo.core.remy.config_service import (
 
 
 class TestUIToolDefinitions:
-    """Tests for _UI_TOOLS definitions and constants."""
-
-    def test_all_11_tools_defined(self):
-        assert len(_UI_TOOLS) == 11
+    def test_all_tools_defined(self):
+        assert len(_UI_TOOLS) == 13
 
     def test_tool_names_match_dict(self):
         assert set(_UI_TOOLS.keys()) == UI_TOOL_NAMES
@@ -46,6 +47,8 @@ class TestUIToolDefinitions:
             "go_back",
             "get_url",
             "press",
+            "get_manifest",
+            "undo_last_action",
         }
         assert required == UI_TOOL_NAMES
 
@@ -66,8 +69,6 @@ class TestUIToolDefinitions:
 
 
 class TestToolConstants:
-    """Tests for READ_TOOLS, NAV_TOOLS, WRITE_TOOLS, DESTRUCTIVE_PATTERNS."""
-
     def test_read_tools(self):
         assert {"extract", "extract_all", "get_page_interactables", "get_url"} == READ_TOOLS
 
@@ -85,7 +86,9 @@ class TestToolConstants:
     def test_all_tools_covered_by_categories(self):
         categorized = READ_TOOLS | NAV_TOOLS | WRITE_TOOLS
         uncategorized = UI_TOOL_NAMES - categorized
-        assert uncategorized == {"wait"}, f"Unexpected uncategorized tools: {uncategorized}"
+        assert uncategorized == {"wait", "get_manifest", "undo_last_action"}, (
+            f"Unexpected uncategorized tools: {uncategorized}"
+        )
 
     def test_destructive_patterns(self):
         assert "delete" in DESTRUCTIVE_PATTERNS
@@ -94,26 +97,41 @@ class TestToolConstants:
 
 
 class TestDestructivePatternDetection:
-    """Tests for _has_destructive_pattern."""
+    @pytest.mark.parametrize(
+        "selector",
+        [
+            pytest.param("[data-testid='delete-btn']", id="delete_btn"),
+            pytest.param(".remove-item", id="remove_item"),
+            pytest.param("destroy-all", id="destroy_all"),
+            pytest.param("archive-project", id="archive_project"),
+            pytest.param("suspend-user", id="suspend_user"),
+            pytest.param("ban-account", id="ban_account"),
+            pytest.param("[data-testid='message-deleted']", id="message_deleted"),
+            pytest.param(".message-deleted-badge", id="message_deleted_badge"),
+            pytest.param("notification-deleted-label", id="notification_deleted_label"),
+            pytest.param("DELETE-button", id="delete_uppercase"),
+            pytest.param("RemoveItem", id="remove_camelcase"),
+            pytest.param("ARCHIVE", id="archive_uppercase"),
+        ],
+    )
+    def test_destructive_selectors(self, selector: str):
+        assert _has_destructive_pattern(selector)
 
-    def test_destructive_selectors(self):
-        assert _has_destructive_pattern("[data-testid='delete-btn']")
-        assert _has_destructive_pattern(".remove-item")
-        assert _has_destructive_pattern("destroy-all")
-        assert _has_destructive_pattern("archive-project")
-        assert _has_destructive_pattern("suspend-user")
-        assert _has_destructive_pattern("ban-account")
-
-    def test_safe_selectors(self):
-        assert not _has_destructive_pattern("[data-testid='save-btn']")
-        assert not _has_destructive_pattern(".create-new")
-        assert not _has_destructive_pattern("input[name='email']")
-        assert not _has_destructive_pattern(".search-box")
-
-    def test_case_insensitive(self):
-        assert _has_destructive_pattern("DELETE-button")
-        assert _has_destructive_pattern("RemoveItem")
-        assert _has_destructive_pattern("ARCHIVE")
+    @pytest.mark.parametrize(
+        "selector",
+        [
+            pytest.param("[data-testid='save-btn']", id="save_btn"),
+            pytest.param(".create-new", id="create_new"),
+            pytest.param("input[name='email']", id="email_input"),
+            pytest.param(".search-box", id="search_box"),
+            pytest.param(".edit-profile", id="edit_profile"),
+            pytest.param("[data-testid='add-user']", id="add_user"),
+            pytest.param(".view-details", id="view_details"),
+            pytest.param(".export-csv", id="export_csv"),
+        ],
+    )
+    def test_safe_selectors(self, selector: str):
+        assert not _has_destructive_pattern(selector)
 
     def test_all_destructive_keywords_are_caught(self):
         for pattern in DESTRUCTIVE_PATTERNS:
@@ -133,15 +151,8 @@ class TestDestructivePatternDetection:
         for sel in innocent:
             assert not _has_destructive_pattern(sel), f"'{sel}' should not flag as destructive"
 
-    def test_message_deleted_does_not_false_positive(self):
-        assert not _has_destructive_pattern("[data-testid='message-deleted']")
-        assert not _has_destructive_pattern(".message-deleted-badge")
-        assert not _has_destructive_pattern("notification-deleted-label")
-
 
 class TestRemyConfigDefaults:
-    """Tests for new RemyConfig fields."""
-
     def test_default_tool_permissions_empty(self):
         config = RemyConfig()
         assert config.tool_permissions == {}
@@ -150,9 +161,9 @@ class TestRemyConfigDefaults:
         config = RemyConfig()
         assert config.permission_mode == "safe"
 
-    def test_schema_version_bumped_to_2(self):
+    def test_schema_version_bumped_to_3(self):
         config = RemyConfig()
-        assert config.schema_version == 2
+        assert config.schema_version == 3
 
     def test_tool_permissions_defaults_are_independent(self):
         config1 = RemyConfig()
@@ -162,8 +173,6 @@ class TestRemyConfigDefaults:
 
 
 class TestPermissionModePresets:
-    """Tests for PERMISSION_MODE_PRESETS and apply_permission_mode_preset."""
-
     def test_full_auto_preset(self):
         preset = PERMISSION_MODE_PRESETS["full_auto"]
         for tool_name in UI_TOOL_NAMES:
@@ -172,7 +181,6 @@ class TestPermissionModePresets:
     def test_safe_preset(self):
         preset = PERMISSION_MODE_PRESETS["safe"]
         assert preset["press"] == "requires_approval"
-        # Other tools are not in the preset (inherit defaults)
         assert "click" not in preset
 
     def test_locked_down_preset(self):
@@ -183,36 +191,53 @@ class TestPermissionModePresets:
         for tool_name in {"click", "fill", "select", "go_back", "press"}:
             assert preset[tool_name] == "requires_approval"
 
-    def test_apply_full_auto(self):
-        result = apply_permission_mode_preset("full_auto")
-        assert result["click"] == "always_allowed"
-        assert result["press"] == "always_allowed"
-
-    def test_apply_safe(self):
-        result = apply_permission_mode_preset("safe")
-        assert result["press"] == "requires_approval"
-        assert "click" not in result
-
-    def test_apply_locked_down(self):
-        result = apply_permission_mode_preset("locked_down")
-        assert result["click"] == "requires_approval"
-        assert result["navigate"] == "always_allowed"
-
-    def test_apply_custom_with_overrides(self):
-        result = apply_permission_mode_preset("custom", {"click": "disabled"})
-        assert result["click"] == "disabled"
-
-    def test_apply_unknown_mode_returns_empty(self):
-        result = apply_permission_mode_preset("nonexistent")
-        assert result == {}
-
-    def test_apply_custom_without_overrides_returns_empty(self):
-        result = apply_permission_mode_preset("custom")
-        assert result == {}
+    @pytest.mark.parametrize(
+        ("mode", "overrides", "expected_checks"),
+        [
+            pytest.param("full_auto", None, {"click": "always_allowed", "press": "always_allowed"}, id="full_auto"),
+            pytest.param("safe", None, {"press": "requires_approval", "click_missing": True}, id="safe"),
+            pytest.param(
+                "locked_down", None, {"click": "requires_approval", "navigate": "always_allowed"}, id="locked_down"
+            ),
+            pytest.param("custom", {"click": "disabled"}, {"click": "disabled"}, id="custom_with_overrides"),
+            pytest.param("nonexistent", None, {}, id="unknown_mode_returns_empty"),
+            pytest.param("custom", None, {}, id="custom_without_overrides_returns_empty"),
+        ],
+    )
+    def test_apply_preset(self, mode: str, overrides: dict | None, expected_checks: dict):
+        result = apply_permission_mode_preset(mode, overrides or {})
+        for key, expected in expected_checks.items():
+            if key.endswith("_missing"):
+                tool = key.replace("_missing", "")
+                assert tool not in result, f"{tool} should not be in result"
+            else:
+                assert result.get(key) == expected, f"{key}: expected {expected}, got {result.get(key)}"
 
 
 class TestPermissionResolution:
     """Tests for _resolve_tool_permission logic via RemyConfig."""
+
+    @pytest.mark.parametrize(
+        ("mode", "tool", "selector", "expected"),
+        [
+            pytest.param("safe", "click", ".save-btn", "always_allowed", id="safe_click_safe_selector"),
+            pytest.param("safe", "fill", "input[name=email]", "always_allowed", id="safe_fill_safe_selector"),
+            pytest.param("safe", "click", ".delete-btn", "requires_approval", id="safe_click_destructive"),
+            pytest.param("safe", "fill", "#remove-field", "requires_approval", id="safe_fill_destructive"),
+            pytest.param("safe", "press", None, "requires_approval", id="safe_press_requires_approval"),
+            pytest.param("full_auto", "click", ".save-btn", "always_allowed", id="full_auto_click_safe"),
+            pytest.param("full_auto", "press", None, "always_allowed", id="full_auto_press_allowed"),
+            pytest.param("full_auto", "click", "delete-btn", "requires_approval", id="full_auto_click_destructive"),
+            pytest.param("locked_down", "click", ".save-btn", "requires_approval", id="locked_down_click_blocked"),
+            pytest.param("locked_down", "press", None, "requires_approval", id="locked_down_press_blocked"),
+            pytest.param("locked_down", "extract", None, "always_allowed", id="locked_down_read_allowed"),
+            pytest.param("locked_down", "navigate", None, "always_allowed", id="locked_down_nav_allowed"),
+        ],
+    )
+    def test_permission_for_mode(self, mode: str, tool: str, selector: str | None, expected: str):
+        config = RemyConfig(permission_mode=mode)
+        kwargs = {"selector": selector} if selector else {}
+        assert _resolve_tool_permission(config, tool, kwargs) == expected
 
     def test_safe_mode_allows_read_tools(self):
         config = RemyConfig()
@@ -221,48 +246,6 @@ class TestPermissionResolution:
 
     def test_safe_mode_allows_nav_tools(self):
         config = RemyConfig()
-        for tool in NAV_TOOLS:
-            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
-
-    def test_safe_mode_allows_write_tools_with_safe_selector(self):
-        config = RemyConfig()
-        assert _resolve_tool_permission(config, "click", {"selector": ".save-btn"}) == "always_allowed"
-        assert _resolve_tool_permission(config, "fill", {"selector": "input[name=email]"}) == "always_allowed"
-
-    def test_safe_mode_blocks_write_tools_with_destructive_selector(self):
-        config = RemyConfig()
-        assert _resolve_tool_permission(config, "click", {"selector": ".delete-btn"}) == "requires_approval"
-        assert _resolve_tool_permission(config, "fill", {"selector": "#remove-field"}) == "requires_approval"
-
-    def test_safe_mode_press_requires_approval(self):
-        config = RemyConfig()
-        assert _resolve_tool_permission(config, "press", {"key": "Enter"}) == "requires_approval"
-
-    def test_full_auto_allows_safe_selectors(self):
-        config = RemyConfig(permission_mode="full_auto")
-        assert _resolve_tool_permission(config, "click", {"selector": ".save-btn"}) == "always_allowed"
-        assert _resolve_tool_permission(config, "press", {"key": "Enter"}) == "always_allowed"
-
-    def test_full_auto_still_checks_destructive_selectors(self):
-        config = RemyConfig(permission_mode="full_auto")
-        assert _resolve_tool_permission(config, "click", {"selector": "delete-btn"}) == "requires_approval"
-
-    def test_locked_down_blocks_write_tools(self):
-        config = RemyConfig(permission_mode="locked_down")
-        for tool in WRITE_TOOLS:
-            assert _resolve_tool_permission(config, tool, {"selector": ".save-btn"}) == "requires_approval"
-
-    def test_locked_down_blocks_press(self):
-        config = RemyConfig(permission_mode="locked_down")
-        assert _resolve_tool_permission(config, "press", {"key": "Enter"}) == "requires_approval"
-
-    def test_locked_down_allows_read_tools(self):
-        config = RemyConfig(permission_mode="locked_down")
-        for tool in READ_TOOLS:
-            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
-
-    def test_locked_down_allows_nav_tools(self):
-        config = RemyConfig(permission_mode="locked_down")
         for tool in NAV_TOOLS:
             assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
 
@@ -297,42 +280,9 @@ class TestPermissionResolution:
                 result = _resolve_tool_permission(config, tool, {"selector": ".delete-btn"})
                 assert result == "requires_approval", f"{tool} in {mode} should be requires_approval"
 
-    def test_comprehensive_safe_mode_all_11_tools(self):
-        config = RemyConfig()
-        for tool in READ_TOOLS:
-            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
-        for tool in NAV_TOOLS:
-            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
-        for tool in {"click", "fill", "select"}:
-            assert _resolve_tool_permission(config, tool, {"selector": ".save-btn"}) == "always_allowed"
-        assert _resolve_tool_permission(config, "press", {"key": "Enter"}) == "requires_approval"
-        assert _resolve_tool_permission(config, "wait", {"ms": 500}) == "always_allowed"
-
-    def test_comprehensive_full_auto_mode_all_11_tools(self):
-        config = RemyConfig(permission_mode="full_auto")
-        for tool in UI_TOOL_NAMES:
-            if tool in WRITE_TOOLS:
-                assert _resolve_tool_permission(config, tool, {"selector": ".save-btn"}) == "always_allowed"
-            else:
-                assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
-
-    def test_comprehensive_locked_down_mode_all_11_tools(self):
-        config = RemyConfig(permission_mode="locked_down")
-        for tool in READ_TOOLS:
-            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
-        for tool in NAV_TOOLS:
-            assert _resolve_tool_permission(config, tool, {}) == "always_allowed"
-        assert _resolve_tool_permission(config, "wait", {"ms": 500}) == "always_allowed"
-        assert _resolve_tool_permission(config, "get_url", {}) == "always_allowed"
-        for tool in WRITE_TOOLS:
-            assert _resolve_tool_permission(config, tool, {"selector": ".save-btn"}) == "requires_approval"
-
 
 class TestGetAllToolDefinitions:
-    """Tests for _get_all_tool_definitions."""
-
     def _get_definitions(self):
-        """Duplicate of the helper for testing."""
         from modulo.api.ui_tools import _UI_TOOLS
 
         tools = []
@@ -355,7 +305,7 @@ class TestGetAllToolDefinitions:
     def test_returns_list_of_dicts(self):
         result = self._get_definitions()
         assert isinstance(result, list)
-        assert len(result) == 11
+        assert len(result) == 13
 
     def test_each_entry_has_type_function(self):
         for entry in self._get_definitions():
@@ -372,8 +322,6 @@ class TestGetAllToolDefinitions:
 
 
 class TestBuildToolDefinitionsForText:
-    """Tests for build_tool_definitions_for_text."""
-
     def test_returns_non_empty_string(self):
         result = build_tool_definitions_for_text()
         assert isinstance(result, str)
@@ -383,7 +331,7 @@ class TestBuildToolDefinitionsForText:
         result = build_tool_definitions_for_text()
         assert "## Browser Tools Available (Text Mode)" in result
 
-    def test_includes_all_11_tools(self):
+    def test_includes_all_tools(self):
         result = build_tool_definitions_for_text()
         for name in UI_TOOL_NAMES:
             assert name in result
@@ -414,64 +362,64 @@ class TestBuildToolDefinitionsForText:
 
 
 class TestSessionApproval:
-    """Tests for _is_approved_for_session — TTL, page_path matching, expiry cleanup."""
-
     def setup_method(self) -> None:
         _session_approvals.clear()
+        self._registry_patcher = patch("modulo.api.routes.remy._get_registry", return_value=None)
+        self._registry_patcher.start()
 
-    def test_approved_same_page_not_expired(self) -> None:
+    def teardown_method(self) -> None:
+        self._registry_patcher.stop()
+
+    async def test_approved_same_page_not_expired(self) -> None:
         _session_approvals["session-1"] = {
             "click": {
                 "page_path": "/admin/users",
                 "expires_at": datetime.now(UTC) + timedelta(minutes=30),
             },
         }
-        assert _is_approved_for_session("session-1", "click", "/admin/users")
+        assert await _is_approved_for_session("session-1", "click", "/admin/users")
 
-    def test_different_page_not_approved(self) -> None:
+    async def test_different_page_not_approved(self) -> None:
         _session_approvals["session-1"] = {
             "click": {
                 "page_path": "/admin/users",
                 "expires_at": datetime.now(UTC) + timedelta(minutes=30),
             },
         }
-        assert not _is_approved_for_session("session-1", "click", "/admin/settings")
+        assert not await _is_approved_for_session("session-1", "click", "/admin/settings")
 
-    def test_expired_approval_returns_false(self) -> None:
+    async def test_expired_approval_returns_false(self) -> None:
         _session_approvals["session-1"] = {
             "click": {
                 "page_path": "/admin/users",
                 "expires_at": datetime.now(UTC) - timedelta(minutes=1),
             },
         }
-        assert not _is_approved_for_session("session-1", "click", "/admin/users")
+        assert not await _is_approved_for_session("session-1", "click", "/admin/users")
 
-    def test_expired_approval_is_cleaned_up(self) -> None:
+    async def test_expired_approval_is_cleaned_up(self) -> None:
         _session_approvals["session-1"] = {
             "click": {
                 "page_path": "/admin/users",
                 "expires_at": datetime.now(UTC) - timedelta(minutes=1),
             },
         }
-        _is_approved_for_session("session-1", "click", "/admin/users")
-        assert "click" not in _session_approvals["session-1"]
+        await _is_approved_for_session("session-1", "click", "/admin/users")
+        assert "session-1" not in _session_approvals
 
-    def test_no_session_returns_false(self) -> None:
-        assert not _is_approved_for_session("nonexistent", "click", "/admin/users")
+    async def test_no_session_returns_false(self) -> None:
+        assert not await _is_approved_for_session("nonexistent", "click", "/admin/users")
 
-    def test_tool_not_in_session_returns_false(self) -> None:
+    async def test_tool_not_in_session_returns_false(self) -> None:
         _session_approvals["session-1"] = {}
-        assert not _is_approved_for_session("session-1", "click", "/admin/users")
+        assert not await _is_approved_for_session("session-1", "click", "/admin/users")
 
 
 # ── Agentic Loop Routing ────────────────────────────────────────────────
 
 
 class TestAgenticLoopRouting:
-    """Tests for tool separation, non-tool fallback, and agentic loop logic."""
-
     def test_ui_tools_separated_from_mcp_tools(self):
-        """UI tool names are correctly separated from non-UI names."""
         ui_tool_calls = [{"name": n, "id": f"call_{n}", "args": {}} for n in UI_TOOL_NAMES]
         mcp_tool_calls = [{"name": "list_pipelines", "id": "call_mcp", "args": {}}]
 
@@ -484,7 +432,6 @@ class TestAgenticLoopRouting:
         assert separated_mcp[0]["name"] == "list_pipelines"
 
     def test_mcp_tools_are_never_in_ui_tool_set(self):
-        """Ensure common MCP tool names are not accidentally in UI_TOOL_NAMES."""
         mcp_tools = {
             "list_pipelines",
             "get_pipeline",
@@ -497,7 +444,6 @@ class TestAgenticLoopRouting:
         assert intersection == set(), f"MCP tool names leaked into UI tools: {intersection}"
 
     def test_non_tool_model_does_not_pass_tools_param(self):
-        """When supports_tools is False, tools_param is None."""
         from unittest.mock import MagicMock
 
         backend = MagicMock()
@@ -512,7 +458,6 @@ class TestAgenticLoopRouting:
         assert tools_param is None
 
     def test_tool_model_passes_tools_param(self):
-        """When supports_tools is True, tools_param is set."""
         from unittest.mock import MagicMock
 
         from modulo.api.routes.remy import _get_all_tool_definitions
@@ -525,24 +470,19 @@ class TestAgenticLoopRouting:
             tools_param = _get_all_tool_definitions()
 
         assert tools_param is not None
-        assert len(tools_param) == 11
+        assert len(tools_param) == 13
 
     def test_agentic_loop_continues_when_tool_calls_exist(self):
-        """The while-true loop continues when tool calls exist."""
         tool_calls = [{"name": "navigate", "id": "call_1", "args": {"path": "/admin"}}]
-        # In the actual loop, after processing tool results, the loop continues
-        # if tool_calls is non-empty (it appends results and does the next LLM turn)
         should_continue = len(tool_calls) > 0
         assert should_continue is True
 
     def test_agentic_loop_exits_when_no_tool_calls(self):
-        """The while-true loop exits when no tool calls remain."""
         tool_calls: list[dict] = []
         should_exit = len(tool_calls) == 0
         assert should_exit is True
 
     def test_agentic_loop_continues_for_mixed_ui_and_mcp(self):
-        """Mixed UI + MCP tool calls keep the loop alive."""
         tool_calls = [
             {"name": "navigate", "id": "call_1", "args": {"path": "/admin"}},
             {"name": "list_pipelines", "id": "call_2", "args": {}},
@@ -551,7 +491,6 @@ class TestAgenticLoopRouting:
         assert should_continue is True
 
     def test_agentic_loop_with_empty_tool_call_buffers(self):
-        """When tool call buffers are empty (tool_call_chunks with no content), no reconstruction happens."""
         from modulo.api.routes.remy import _reconstruct_tool_calls
 
         buffers: dict[int, dict] = {}
@@ -559,7 +498,6 @@ class TestAgenticLoopRouting:
         assert result == []
 
     def test_agentic_loop_reconstructs_single_tool_call(self):
-        """A single tool call buffer is correctly reconstructed."""
         from modulo.api.routes.remy import _reconstruct_tool_calls
 
         buffers = {
@@ -572,7 +510,6 @@ class TestAgenticLoopRouting:
         assert result[0]["args"] == {"path": "/admin"}
 
     def test_agentic_loop_reconstructs_multiple_tool_calls(self):
-        """Multiple tool call buffers are reconstructed in index order."""
         from modulo.api.routes.remy import _reconstruct_tool_calls
 
         buffers = {
@@ -587,7 +524,6 @@ class TestAgenticLoopRouting:
         assert result[2]["name"] == "fill"
 
     def test_reconstruct_handles_malformed_json_gracefully(self):
-        """Malformed args JSON results in empty dict, not crash."""
         from modulo.api.routes.remy import _reconstruct_tool_calls
 
         buffers = {
@@ -597,12 +533,11 @@ class TestAgenticLoopRouting:
         assert result[0]["args"] == {}
 
     def test_tool_param_is_omitted_for_non_tool_backend_definition(self):
-        """Verify the _get_all_tool_definitions function returns proper OpenAI-style tool definitions."""
         from modulo.api.routes.remy import _get_all_tool_definitions
 
         tools = _get_all_tool_definitions()
         assert isinstance(tools, list)
-        assert len(tools) == 11
+        assert len(tools) == 13
         for t in tools:
             assert t["type"] == "function"
             assert "function" in t

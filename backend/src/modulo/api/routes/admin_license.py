@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Admin license endpoint — view and update the deployment license key."""
 
+from __future__ import annotations
 
 import logging
 
@@ -10,9 +9,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.license import (
     LicenseError,
     get_license,
@@ -24,6 +24,8 @@ from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/license", tags=["admin-license"])
 
@@ -48,7 +50,7 @@ class LicenseUploadResponse(BaseModel):
     org_id: str | None = None
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -99,13 +101,15 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
                 org_id=d.org_id or None,
             )
 
-    return LicenseStatusResponse(has_license=False, tier="team")
+    return LicenseStatusResponse(has_license=False, tier="community")
 
 
 @router.get("", response_model=LicenseStatusResponse)
+@handle_db_errors("admin.license.get_license_status")
+@router.get("", response_model=LicenseStatusResponse)
 async def get_license_status(
     settings: Settings = Depends(get_settings),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> LicenseStatusResponse:
     _require_admin(current_user)
@@ -136,13 +140,15 @@ async def get_license_status(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve license status.",
-        )
+        ) from None
 
 
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
+@handle_db_errors("admin.license.upload_license")
+@router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
 async def upload_license(
     req: LicenseUploadRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LicenseUploadResponse:
     _require_admin(current_user)
 
@@ -150,13 +156,13 @@ async def upload_license(
         validation = parse_and_verify(req.license_key)
     except LicenseError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
     if not validation.valid or validation.license_data is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=validation.error or "Invalid license key",
         )
 

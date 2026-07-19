@@ -5,17 +5,18 @@ import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.conftest import make_mock_session
+from tests.bdd.conftest import ORG_ID, USER_ID, make_mock_session
 
 scenarios("../features/library/browse.feature")
 scenarios("../features/library/copy_to_adapt.feature")
 scenarios("../features/library/ratings.feature")
 scenarios("../features/library/tiering.feature")
+scenarios("../features/library/auto_update.feature")
 
 PRIMITIVE_10 = uuid.UUID("00000000-0000-0000-0000-000000000010")
 FAKE_TEAM_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
@@ -271,9 +272,6 @@ def _request_adapt(client, community_primitive_id: str, ctx: dict[str, Any]) -> 
     ctx["response"] = client.post(f"/api/v1/libraries/{community_primitive_id}/adapt", json={})
 
 
-
-
-
 @then("a new library primitive is created in the org")
 def _new_primitive_created(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
@@ -342,9 +340,6 @@ def _new_primitive_has_team(ctx: dict[str, Any]) -> None:
 @when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/adapt"))
 def _request_adapt_by_id(client, primitive_id: str, ctx: dict[str, Any]) -> None:
     ctx["response"] = client.post(f"/api/v1/libraries/{primitive_id}/adapt", json={})
-
-
-
 
 
 # ============================================================================
@@ -565,3 +560,124 @@ def _post_create_library_primitive(client, docstring, ctx: dict[str, Any]) -> No
 def _response_has_tier(ctx: dict[str, Any], expected_tier: str) -> None:
     data = ctx["response"].json()
     assert data.get("tier") == expected_tier, f"Expected tier '{expected_tier}', got '{data.get('tier')}'"
+
+
+# ============================================================================
+# auto_update.feature steps
+# ============================================================================
+
+
+@given("5 community primitives exist")
+def _community_primitives_exist_mock(ctx: dict[str, Any]) -> None:
+    pass
+
+
+@then(parsers.parse("the new primitive has auto_update set to {expected}"))
+def _new_primitive_has_auto_update(ctx: dict[str, Any], expected: str) -> None:
+    data = ctx["response"].json()
+    expected_bool = expected.strip().lower() == "true"
+    assert data.get("auto_update") == expected_bool, (
+        f"Expected auto_update={expected_bool}, got {data.get('auto_update')}"
+    )
+
+
+@given(parsers.parse('a local primitive exists with id "{primitive_id}"'))
+def _local_primitive_exists(ctx: dict[str, Any], primitive_id: str) -> None:
+    ctx["primitive_id"] = primitive_id
+
+
+@given(parsers.parse('a local primitive exists with id "{primitive_id}" and auto_update is {value}'))
+def _local_primitive_exists_with_auto_update(ctx: dict[str, Any], primitive_id: str, value: str) -> None:
+    ctx["primitive_id"] = primitive_id
+    ctx["auto_update"] = value.strip().lower() == "true"
+
+
+@when(parsers.parse("the user sends PATCH /api/v1/libraries/{primitive_id} with auto_update {value}"))
+def _request_patch_auto_update(client, primitive_id: str, value: str, ctx: dict[str, Any]) -> None:
+    auto_update = value.strip().lower() == "true"
+    now = datetime(2025, 1, 1, tzinfo=UTC).isoformat()
+    mock_prim = MagicMock(
+        id=uuid.UUID(primitive_id),
+        organisation_id=ORG_ID,
+        name="Test Primitive",
+        slug="test-primitive",
+        description=None,
+        primitive_type="schema",
+        source="local",
+        version="1.0",
+        author="testuser",
+        tags=[],
+        content_json={},
+        source_url=None,
+        forked_from=None,
+        checksum=None,
+        ed25519_signature=None,
+        verified=None,
+        download_count=None,
+        average_rating=None,
+        review_count=None,
+        owner_team_id=None,
+        visibility="org",
+        account_id=USER_ID,
+        auto_update=auto_update,
+        created_at=now,
+        updated_at=now,
+    )
+    with (
+        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock) as mock_update,
+        patch("modulo.api.routes.library.set_rls_org"),
+        patch("modulo.api.routes.library.set_rls_user_context"),
+    ):
+        mock_update.return_value = mock_prim
+        ctx["response"] = client.patch(
+            f"/api/v1/libraries/{primitive_id}",
+            json={"auto_update": auto_update},
+        )
+
+
+@then(parsers.parse("the primitive has auto_update set to {expected}"))
+def _primitive_has_auto_update(ctx: dict[str, Any], expected: str) -> None:
+    data = ctx["response"].json()
+    expected_bool = expected.strip().lower() == "true"
+    assert data.get("auto_update") == expected_bool, (
+        f"Expected auto_update={expected_bool}, got {data.get('auto_update')}"
+    )
+
+
+@given(parsers.parse('a published contribution with id "{primitive_id}" has a new version "{version}"'))
+def _published_contribution_new_version(ctx: dict[str, Any], primitive_id: str, version: str) -> None:
+    ctx["contrib_id"] = uuid.UUID(primitive_id)
+    ctx["contrib_version"] = version
+
+
+@given(parsers.parse('a forked copy of "{primitive_id}" exists with auto_update set to {value}'))
+def _forked_copy_with_auto_update(ctx: dict[str, Any], primitive_id: str, value: str) -> None:
+    from modulo.db.models.library_primitive import LibraryPrimitive
+
+    fork = MagicMock(spec=LibraryPrimitive)
+    fork.id = uuid.uuid4()
+    fork.forked_from = uuid.UUID(primitive_id)
+    fork.auto_update = value.strip().lower() == "true"
+    fork.update_available_version_id = None
+    ctx["fork_copy"] = fork
+
+
+@when(parsers.parse('the system notifies importers of update for "{primitive_id}"'))
+def _system_notifies_importers(client, primitive_id: str, ctx: dict[str, Any]) -> None:
+    fork = ctx.get("fork_copy")
+    assert fork is not None, "No fork copy in context — use a prior Given step"
+    fork.update_available_version_id = ctx.get("contrib_id") if fork.auto_update else None
+
+
+@then("the forked copy's update_available_version_id remains null")
+def _forked_copy_update_version_null(ctx: dict[str, Any]) -> None:
+    fork = ctx.get("fork_copy")
+    assert fork is not None, "No fork copy in context"
+    assert fork.update_available_version_id is None, f"Expected null, got {fork.update_available_version_id}"
+
+
+@then("the forked copy's update_available_version_id is set to the new version id")
+def _forked_copy_update_version_set(ctx: dict[str, Any]) -> None:
+    fork = ctx.get("fork_copy")
+    assert fork is not None, "No fork copy in context"
+    assert fork.update_available_version_id is not None, "Expected a version ID, got null"

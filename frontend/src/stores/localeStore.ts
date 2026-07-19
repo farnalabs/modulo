@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { useStorage } from '@vueuse/core'
 import i18n, { detectBrowserLocale, isSupportedLocale, loadLocaleMessages, type SupportedLocale, SUPPORTED_LOCALES } from '../i18n'
 import { api, getAccessToken } from '../lib/api/client'
 import { withTimeout } from '../lib/asyncUtils'
@@ -11,14 +12,11 @@ export const useLocaleStore = defineStore('locale', () => {
   const locale = ref<SupportedLocale>('en-US')
   const initialized = ref(false)
   const error = ref<string | null>(null)
+  const stored = useStorage<string>(STORAGE_KEY, DEFAULT_LOCALE)
   let initPromise: Promise<void> | null = null
 
   function persist(code: SupportedLocale): void {
-    try {
-      localStorage.setItem(STORAGE_KEY, code)
-    } catch (err) {
-      console.warn('[locale] Failed to persist locale to localStorage', err)
-    }
+    stored.value = code
   }
 
   async function setLocale(code: SupportedLocale): Promise<void> {
@@ -46,7 +44,7 @@ export const useLocaleStore = defineStore('locale', () => {
     if (!getAccessToken()) return
     try {
       await withTimeout(
-        api.PUT('/api/v1/me/settings', { locale: code }),
+        api.PUT('/api/v1/me/settings', { body: { locale: code } }),
         10000,
         'Locale sync request',
       )
@@ -62,32 +60,29 @@ export const useLocaleStore = defineStore('locale', () => {
     initPromise = (async () => {
       let detected: SupportedLocale = DEFAULT_LOCALE
 
-      // 1. Try backend preferences (returns flat account.preferences dict)
-      try {
-        const res = await withTimeout(
-          api.GET('/api/v1/me/settings'),
-          10000,
-          'Locale fetch request',
-        )
-        if (res.data) {
-          const backendLocale = (res.data as Record<string, unknown>).locale as string | undefined
-          if (backendLocale && isSupportedLocale(backendLocale)) {
-            detected = backendLocale
+      // 1. Try backend preferences — skip if not authenticated to avoid
+      //    401 race on initial page load before auto-login completes.
+      if (getAccessToken()) {
+        try {
+          const res = await withTimeout(
+            api.GET('/api/v1/me/settings'),
+            10000,
+            'Locale fetch request',
+          )
+          const settingsData = res.data as { locale?: string } | undefined
+          if (settingsData?.locale && isSupportedLocale(settingsData.locale)) {
+            detected = settingsData.locale
           }
+        } catch (err) {
+          console.warn('[locale] Failed to fetch locale from backend', err)
         }
-      } catch (err) {
-        console.warn('[locale] Failed to fetch locale from backend', err)
       }
 
       // 2. Try localStorage
       if (detected === DEFAULT_LOCALE) {
-        try {
-          const stored = localStorage.getItem(STORAGE_KEY)
-          if (stored && isSupportedLocale(stored)) {
-            detected = stored
-          }
-        } catch (err) {
-          console.warn('[locale] Failed to read locale from localStorage', err)
+        const storedVal = stored.value
+        if (storedVal && isSupportedLocale(storedVal)) {
+          detected = storedVal
         }
       }
 

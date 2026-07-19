@@ -1,5 +1,6 @@
 """Step definitions for Team-Scoped HITL Gate features."""
 
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,10 +10,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/team_hitl_gate.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -49,11 +48,7 @@ def user_not_team_member(username: str, team_name: str, ctx):
     ctx["user_id"] = uuid.uuid4()
 
 
-@given(
-    parsers.parse(
-        'a run "{run_name}" is awaiting human at gate "{gate_id}" with required_team_id "{team_name}"'
-    )
-)
+@given(parsers.parse('a run "{run_name}" is awaiting human at gate "{gate_id}" with required_team_id "{team_name}"'))
 def run_awaiting_with_team(run_name: str, gate_id: str, team_name: str, ctx):
     ctx["run_name"] = run_name
     ctx["run_id"] = uuid.uuid4()
@@ -77,7 +72,8 @@ def run_awaiting_with_team(run_name: str, gate_id: str, team_name: str, ctx):
 
 @given(
     parsers.parse(
-        'a run "{run_name}" is awaiting human at gate "{gate_id}" with required_team_id "{team_name}" and human_only true'
+        'a run "{run_name}" is awaiting human at gate "{gate_id}"'
+        ' with required_team_id "{team_name}" and human_only true'
     )
 )
 def run_awaiting_with_team_and_human_only(run_name: str, gate_id: str, team_name: str, ctx):
@@ -119,12 +115,14 @@ def user_claims_gate(username: str, gate_id: str, run_name: str, ctx):
         resp.json = lambda: {"claim_token": "valid_token_" + uuid.uuid4().hex}
         ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
     else:
-        mock_mgr.claim = AsyncMock(side_effect=NotTeamMemberError(
-            run_id=ctx["run_id"],
-            gate_id=gate_id,
-            team_id=ctx.get("team_id", uuid.uuid4()),
-            user_id=ctx.get("user_id", uuid.uuid4()),
-        ))
+        mock_mgr.claim = AsyncMock(
+            side_effect=NotTeamMemberError(
+                run_id=ctx["run_id"],
+                gate_id=gate_id,
+                team_id=ctx.get("team_id", uuid.uuid4()),
+                user_id=ctx.get("user_id", uuid.uuid4()),
+            )
+        )
         resp = MagicMock()
         resp.status_code = 403
         resp.json = lambda: {"detail": f"User is not a member of team {ctx.get('team_name', 'engineering')}"}
@@ -133,11 +131,7 @@ def user_claims_gate(username: str, gate_id: str, run_name: str, ctx):
     ctx["_resp"] = resp
 
 
-@when(
-    parsers.parse(
-        'an MCP client attempts to approve gate "{gate_id}" on run "{run_name}" as user "{username}"'
-    )
-)
+@when(parsers.parse('an MCP client attempts to approve gate "{gate_id}" on run "{run_name}" as user "{username}"'))
 def mcp_attempts_approve(gate_id: str, run_name: str, username: str, ctx):
     _ = run_name, username
     # MCP client trying to approve human_only gate — should get 403
@@ -147,9 +141,7 @@ def mcp_attempts_approve(gate_id: str, run_name: str, username: str, ctx):
     ctx["_resp"] = resp
 
 
-@when(
-    parsers.parse('I request the gate context for run "{run_name}" gate "{gate_id}"')
-)
+@when(parsers.parse('I request the gate context for run "{run_name}" gate "{gate_id}"'))
 def request_gate_context(run_name: str, gate_id: str, ctx):
     _ = gate_id, run_name
     # Simulate returning gate context that includes team info
@@ -218,7 +210,7 @@ def error_indicates_team_required(team_name: str, ctx):
         )
 
 
-@then('the error indicates the gate requires human approval')
+@then("the error indicates the gate requires human approval")
 def error_indicates_human_required(ctx):
     resp = ctx.get("_resp")
     if hasattr(resp, "json"):
@@ -241,13 +233,9 @@ def response_contains_required_team_name(team_name: str, ctx):
     if hasattr(resp, "json"):
         body = resp.json()
         team_name_body = body.get("required_team_name", "")
-        assert team_name_body == team_name, (
-            f"Expected required_team_name '{team_name}', got '{team_name_body}'"
-        )
+        assert team_name_body == team_name, f"Expected required_team_name '{team_name}', got '{team_name_body}'"
 
 
 @then("the run resumes execution")
 def run_resumes_execution(ctx):
-    assert ctx.get("run_status") == "running", (
-        f"Expected run to be running, got {ctx.get('run_status')}"
-    )
+    assert ctx.get("run_status") == "running", f"Expected run to be running, got {ctx.get('run_status')}"

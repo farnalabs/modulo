@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { PopoverRoot, PopoverTrigger, PopoverContent } from "radix-vue";
 import type { Component } from "vue";
@@ -47,7 +47,7 @@ const selectedLabel = computed(() => {
   if (!props.modelValue) return null;
   if (props.modelValue.visibility === "org") return t("components.OwnershipPicker.orgwide");
   const team = teams.value.find(
-    (t) => t.id === props.modelValue!.owner_team_id,
+    (t) => t.id === props.modelValue?.owner_team_id,
   );
   return team?.name ?? t("components.OwnershipPicker.unknown_team");
 });
@@ -84,9 +84,9 @@ onMounted(loadTeams);
 
 <template>
   <div class="space-y-1.5">
-    <label v-if="label" class="text-sm font-medium leading-none">
+    <span v-if="label" class="text-sm font-medium leading-none">
       {{ label }}
-    </label>
+    </span>
     <PopoverRoot v-model:open="open">
       <PopoverTrigger
         as="button"

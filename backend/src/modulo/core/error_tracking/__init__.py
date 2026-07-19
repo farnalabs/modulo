@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Error ingestion service — fingerprinting, batch ingest, HMAC session key store."""
 
+from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -10,7 +9,10 @@ import logging
 import re
 import secrets
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
 
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
@@ -38,10 +40,7 @@ _alert_engine_lock = asyncio.Lock()
 
 def _normalize_stacktrace(stacktrace: str) -> str:
     lines = stacktrace.strip().split("\n")[:5]
-    return "\n".join(
-        _STACKTRACE_FILE_RE.sub("", line).strip()
-        for line in lines
-    )
+    return "\n".join(_STACKTRACE_FILE_RE.sub("", line).strip() for line in lines)
 
 
 class FingerprintError(Exception):
@@ -55,8 +54,9 @@ class ErrorIngestionService:
     async session) and an ``org_id`` (typically ``uuid.UUID``).
     """
 
-    def __init__(self, redis_client: Any | None = None) -> None:
+    def __init__(self, redis_client: Redis | None = None) -> None:
         self._redis = redis_client
+        init_metrics()
 
     @staticmethod
     def fingerprint(message: str, stacktrace: str | None = None, source: str = "") -> str:
@@ -115,7 +115,6 @@ class ErrorIngestionService:
         )
 
         # Record Prometheus metrics
-        init_metrics()
         record_error_ingest(level, source, environment)
 
         # Fire-and-forget alert evaluation
@@ -171,6 +170,8 @@ class _SessionKeyEntry:
     __slots__ = ("expires_at", "key")
 
     def __init__(self, key: str, ttl: int = _HMAC_KEY_TTL) -> None:
+        if ttl <= 0:
+            raise ValueError(f"ttl must be positive, got {ttl}")
         self.key = key
         self.expires_at = time.time() + ttl
 
@@ -185,13 +186,20 @@ class SessionKeyStore:
     Keys are identified by ``account_id`` (str). Each key has a 1-hour TTL.
     """
 
-    def __init__(self, redis_client: Any | None = None) -> None:
+    def __init__(self, redis_client: Redis | None = None) -> None:
         self._redis = redis_client
         self._memory: dict[str, _SessionKeyEntry] = {}
         if redis_client is None:
             _log.warning("No Redis client for HMAC session keys — using in-memory store (non-persistent)")
 
+    async def _cleanup_expired(self) -> None:
+        now = time.time()
+        expired = [k for k, v in self._memory.items() if v.expires_at <= now]
+        for k in expired[:10]:
+            self._memory.pop(k, None)
+
     async def generate_key(self, account_id: str) -> str:
+        await self._cleanup_expired()
         key = secrets.token_hex(32)
         if self._redis is not None:
             try:
@@ -204,6 +212,7 @@ class SessionKeyStore:
         return key
 
     async def get_key(self, account_id: str) -> str | None:
+        await self._cleanup_expired()
         if self._redis is not None:
             try:
                 val = await self._redis.get(f"error_hmac_key:{account_id}")
@@ -261,20 +270,17 @@ async def _dispatch_forwarders(
     per_org_configs: dict[str, dict[str, Any]] = {}
     if session is not None:
         try:
-
-            async with session.begin():
-                result = await session.execute(
-                    select(ErrorForwarderConfig).where(
-                        ErrorForwarderConfig.organisation_id == org_id,
-                        ErrorForwarderConfig.enabled.is_(True),
-                    ),
-                )
-                for row in result.scalars().all():
-                    if row.config_json:
-                        per_org_configs[row.forwarder_type] = row.config_json
+            result = await session.execute(
+                select(ErrorForwarderConfig).where(
+                    ErrorForwarderConfig.organisation_id == org_id,
+                    ErrorForwarderConfig.enabled.is_(True),
+                ),
+            )
+            for row in result.scalars().all():
+                if row.config_json:
+                    per_org_configs[row.forwarder_type] = row.config_json
 
         except ProgrammingError:
-
             logger.exception("core.error_tracking")
 
             raise
@@ -296,6 +302,8 @@ async def _dispatch_forwarders(
                 error_event=error_event,
                 config=fwd_config,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception(
                 "dispatch_forwarders.failed",

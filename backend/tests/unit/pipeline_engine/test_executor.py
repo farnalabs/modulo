@@ -2,16 +2,48 @@
 
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any
+from decimal import Decimal
+from typing import Any, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunNotFoundError,
     _seed_state,
 )
+
+
+class _InterruptState(TypedDict, total=False):
+    artifacts: list[dict[str, Any]]
+
+
+def test_compute_token_costs_treats_null_counters_as_zero():
+    usage: Any = {
+        "node-a": {"total_tokens": None, "input_tokens": None, "output_tokens": None},
+    }
+
+    total_tokens, total_cost, result_usage = PipelineExecutor._compute_token_costs(
+        usage,
+        input_rate=Decimal("0.1"),
+        output_rate=Decimal("0.2"),
+    )
+
+    assert total_tokens == 0
+    assert total_cost == Decimal(0)
+    assert result_usage == {
+        "node-a": {
+            "total_tokens": None,
+            "input_tokens": None,
+            "output_tokens": None,
+            "cost_usd": 0.0,
+        }
+    }
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,6 +80,9 @@ def _make_pipeline() -> MagicMock:
     pipeline = MagicMock()
     pipeline.max_concurrent_runs = 5
     pipeline.lock_wait_timeout_seconds = 30
+    pipeline.max_duration_seconds = 3600
+    pipeline.max_steps = 100
+    pipeline.token_budget = None
     return pipeline
 
 
@@ -77,11 +112,16 @@ def _make_session(snapshot: MagicMock) -> AsyncMock:
         except StopIteration:
             return count_result
 
-    session = AsyncMock()
+    session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    nested_cm = MagicMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
+    session.add = MagicMock()
     session.execute = _execute
     return session
 
@@ -356,19 +396,20 @@ async def test_execute_error_code_matches_exception_type():
 
 
 # ---------------------------------------------------------------------------
-# PipelineExecutor.execute — NodeInterrupt → awaiting_human
+# PipelineExecutor.execute — GraphInterrupt → awaiting_human
 # ---------------------------------------------------------------------------
 
 
 async def test_execute_sets_awaiting_human_on_node_interrupt():
-    from langgraph.errors import NodeInterrupt
+    from langgraph.errors import GraphInterrupt
+    from langgraph.types import Interrupt
 
     run = _make_run()
     final_run = _make_run(run_id=run.id, status="awaiting_human")
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(NodeInterrupt({"gate_id": "step-1"}))
+    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"gate_id": "step-1"}),)))
     registry = _mock_registry()
 
     with (
@@ -395,14 +436,15 @@ async def test_execute_sets_awaiting_human_on_node_interrupt():
 
 
 async def test_execute_publishes_hitl_awaiting_event():
-    from langgraph.errors import NodeInterrupt
+    from langgraph.errors import GraphInterrupt
+    from langgraph.types import Interrupt
 
     run = _make_run()
     final_run = _make_run(run_id=run.id, status="awaiting_human")
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(NodeInterrupt({"gate_id": "gate-1"}))
+    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"gate_id": "gate-1"}),)))
     registry = _mock_registry()
 
     with (
@@ -421,6 +463,50 @@ async def test_execute_publishes_hitl_awaiting_event():
     broker = registry.get_or_create.return_value
     published_types = [call.args[0] for call in broker.publish.call_args_list]
     assert "hitl_awaiting" in published_types
+
+
+async def test_execute_handles_streamed_interrupt_from_real_graph():
+    async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
+        interrupt({"gate_id": "native-gate"})
+        return {}
+
+    graph = StateGraph(_InterruptState)
+    graph.add_node("native-gate", interrupting_gate)
+    graph.add_edge(START, "native-gate")
+    graph.add_edge("native-gate", END)
+    compiled = graph.compile()
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="awaiting_human")
+    snapshot = _make_snapshot({"nodes": [{"id": "native-gate", "role": None}], "edges": []})
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    hitl_manager = MagicMock()
+    hitl_manager.create_gate = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.HITLManager", return_value=hitl_manager),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    assert result is final_run
+    assert mock_update.call_args_list[-1].args[2] == "awaiting_human"
+    hitl_manager.create_gate.assert_awaited_once()
+    broker = registry.get_or_create.return_value
+    published_types = [call.args[0] for call in broker.publish.call_args_list]
+    assert "hitl_awaiting" in published_types
+    assert "run_completed" not in published_types
+    registry.close.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

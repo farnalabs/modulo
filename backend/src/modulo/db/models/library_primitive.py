@@ -21,12 +21,10 @@ from modulo.db.models.base import OrgScoped
 class LibraryPrimitive(OrgScoped):
     __tablename__ = "library_primitives"
     __table_args__ = (
-        CheckConstraint(
-            "source IN ('local', 'registry', 'modulo', 'community')", name="ck_library_primitives_source"
-        ),
+        CheckConstraint("source IN ('local', 'registry', 'modulo', 'community')", name="ck_library_primitives_source"),
         CheckConstraint(
             "primitive_type IN ('schema', 'workflow', 'agent', 'integration', "
-            "'test_fixture', 'pipeline_template', 'composite')",
+            "'test_fixture', 'pipeline_template', 'composite', 'lifecycle_map')",
             name="ck_library_primitives_type",
         ),
         CheckConstraint(

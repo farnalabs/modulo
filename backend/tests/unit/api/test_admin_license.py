@@ -2,7 +2,8 @@
 
 import base64
 import json
-from collections.abc import Generator
+import uuid
+from collections.abc import Generator, Mapping
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,6 +25,8 @@ from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
+_TEST_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_TEST_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 # Use a known test keypair so we can sign payloads for testing
 _TEST_KP = generate_keypair()
@@ -41,7 +44,7 @@ def _make_settings() -> Settings:
     )
 
 
-def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
+def _sign_license_payload(payload: Mapping[str, object], private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
     sig_bytes = bytes.fromhex(sig_hex)
     payload_b64 = (
@@ -53,7 +56,7 @@ def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
     return f"{payload_b64}.{sig_b64}"
 
 
-def _make_valid_payload(**overrides: object) -> dict:
+def _make_valid_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "tier": "team",
         "features": ["sso", "team_rbac", "audit_viewer"],
@@ -67,7 +70,7 @@ def _make_valid_payload(**overrides: object) -> dict:
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
-def _mock_org(settings_json: dict | None = None) -> MagicMock:
+def _mock_org(settings_json: dict[str, object] | None = None) -> MagicMock:
     org = MagicMock()
     org.settings_json = settings_json
     return org
@@ -97,8 +100,8 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
-        organisation_id="00000000-0000-0000-0000-000000000001",
-        account_id="00000000-0000-0000-0000-000000000002",
+        organisation_id=_TEST_ORG_ID,
+        account_id=_TEST_ACCOUNT_ID,
         org_role="admin",
     )
     mock_plan = MagicMock()
@@ -119,14 +122,27 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 
 @pytest.fixture()
+def tenantless_admin_client() -> Generator[TestClient, None, None]:
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=None,
+        account_id=_TEST_ACCOUNT_ID,
+        org_role="admin",
+    )
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
 def operator_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = _make_mock_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="operator",
-        organisation_id="00000000-0000-0000-0000-000000000001",
-        account_id="00000000-0000-0000-0000-000000000002",
+        organisation_id=_TEST_ORG_ID,
+        account_id=_TEST_ACCOUNT_ID,
         org_role="operator",
     )
     mock_plan = MagicMock()
@@ -240,7 +256,7 @@ class TestGetLicense:
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is False
-        assert data["tier"] == "team"
+        assert data["tier"] == "community"
         assert data["features"] == []
 
     def test_returns_license_when_set(self, client: TestClient) -> None:
@@ -332,3 +348,8 @@ class TestUploadLicense:
     def test_requires_admin(self, operator_client: TestClient) -> None:
         resp = operator_client.post(self.URL, json={"license_key": "dGVzdA==.dGVzdA=="})
         assert resp.status_code == 403
+
+    def test_requires_organisation_membership(self, tenantless_admin_client: TestClient) -> None:
+        resp = tenantless_admin_client.post(self.URL, json={"license_key": "dGVzdA==.dGVzdA=="})
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Organisation membership required"

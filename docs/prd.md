@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.32  
-**Date**: 2026-07-04  
-**Status**: Pre-development  
-**Changelog**:  
+**Version**: 0.33
+**Date**: 2026-07-10
+**Status**: Pre-development
+**Changelog**:
+- v0.33 — §8.31 Lifecycle Map: declarative multi-diagram SDLC model with stage node types (`modulo`\|`external`\|`manual`\|`placeholder`), transition edge trigger metadata, fractal double-click navigation, graduation path from model-only to Modulo-managed. v0.31.
 - v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (get_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
 - v0.31 — §8.25.1 Frontend Monitor Backend Abstraction: plugable MonitorBackend interface (builtin/sentry/datadog-rum/grafana-faro), dual-layer config (build-time VITE_* + runtime MODULO_MONITOR_CONFIG), ErrorTracker refactor with MonitorBackendRegistry dispatch, CSP superset strategy, per-backend privacy data sheets, unauthenticated error ingest endpoint, i18n missing-key capture, 2 existing pipeline bugfixes. ADR 009.
 - v0.30 — §8.28 Core Shared Manifest: single YAML source of truth for routes, elements, sidebar, permissions, tiers, product map refs, i18n keys. Binary consumption (frontend Vite import + backend startup load). `get_manifest(path?)` Remy tool. 7-rule pre-commit + CI validator. ADR 008.
@@ -16,10 +17,10 @@
 - v0.23 — §8.21 View Modes (Enterprise): multiple named UI views with admin-defined feature visibility per view, assignment to users/teams/org roles, enforcement, self-lockout prevention guards; `view_modes` enterprise feature flag replaces previously planned `view_mode` + `view_mode_enforcement`
 - v0.22 — Enterprise tier clarified: no SLAs, no dedicated support, no bespoke services. Enterprise = self-serve feature gate only (SSO, RBAC, audit viewer, admin spend limits). Pricing page updated. BSL 1.1 LICENSE file created at repo root; `Dev-Harness/tools/release.ps1` release script created with placeholder steps for Docker Hub, GitHub release, etc.
 - v0.21 — shadcn-vue + Radix Vue added as component library foundation (replaces build-from-scratch UI primitives); tier badge spec (Free/Enterprise pill in sidebar nav footer; lock icon on gated features); `/settings/license` page spec; `planStore` added to Pinia stores; `GET /api/v1/license` endpoint; frontend tech stack table updated
-- v0.20 — Licensing and monetization model: BSL/Fair Source with 3-year Apache 2.0 auto-conversion; cryptographic offline license key replaces modulo-cloud plan injection for self-hosted; DefaultPlanContext now defaults to Free Tier (not permissive); enterprise feature gate defined (SSO, team RBAC, audit viewer, admin spend limits); modulo-cloud deferred to V3; billing changed from telemetry-metered to flat annual fee (token counting remains for internal cost controls only); MODULO_LICENSE_KEY env var added; audit event *recording* stays free, viewer/export is enterprise; open question on audit gate documented  
-- v0.2 — first reviewer critique; shareable workflows, user management, SSO  
+- v0.20 — Licensing and monetization model: BSL/Fair Source with 3-year Apache 2.0 auto-conversion; cryptographic offline license key replaces modulo-cloud plan injection for self-hosted; DefaultPlanContext now defaults to Free Tier (not permissive); enterprise feature gate defined (SSO, team RBAC, audit viewer, admin spend limits); modulo-cloud deferred to V3; billing changed from telemetry-metered to flat annual fee (token counting remains for internal cost controls only); MODULO_LICENSE_KEY env var added; audit event *recording* stays free, viewer/export is enterprise; open question on audit gate documented
+- v0.2 — first reviewer critique; shareable workflows, user management, SSO
 - v0.3 — security hardening, distribution strategy, community library, runner role, plugin API
-- v0.4 — SaaS-first multi-tenant architecture; 2 implementations per primitive; removed time estimates  
+- v0.4 — SaaS-first multi-tenant architecture; 2 implementations per primitive; removed time estimates
 - v0.5 — RLS `SET LOCAL` fix; API key format; registry Ed25519 signing; model backend management (new); connector_binding spec; webhook payload_mapping; TriggerEvent log; run concurrency controls; modulo-cloud boundary; org migration/deletion policy; prompt versioning; long-run retention; pre-run input validation; rating system spec
 - v0.6 — Remote MCP server as first-class MVVM view (replaces LLM driveability stretch goal with standards-based protocol)
 - v0.7 — OAuth 2.0 deferred to v1 (API key only in alpha MCP); review_hitl tool merged; human_only HITL flag; SSE conflation fixed; MCP onboarding page; accessibility spec; dual-layer scope enforcement; per-event SSE org validation; pipeline writes browser-only until v2
@@ -140,7 +141,9 @@ The closest alternatives in each layer, and why Modulo makes a different bet:
 
 | Term | Definition |
 |---|---|
-| **Agent** | An atomic unit of work. Takes a defined input, applies a sandboxed prompt against a model backend, produces a defined output. |
+| **Agent** | An atomic unit of work. Dispatches to an external agent runtime (e.g. Claude Code in an E2B sandbox) with a prompt and context, receives structured output, and evaluates against the output contract. Modulo owns dispatch, auth, audit, cost tracking, and eval — the external agent runtime owns the tool-using execution loop. |
+| **Sandbox Agent** | A pipeline node type that creates an isolated E2B sandbox, runs an external AI agent (e.g. Claude Code) with a task prompt, collects structured output, and tears down the sandbox. All observable metrics (wall-clock time, exit code, output validity) are captured natively by Modulo — no follow-up step required. |
+| **Output Contract** | The expected structured JSON return value from a sandbox agent execution. Always includes: status, summary, changed_files, wall_clock_time_ms, exit_code. May include additional fields defined by the node's output schema. |
 | **Schema** | A versioned, reusable data structure definition. The schema is the "remainder" the user controls. |
 | **ModelBackend** | A configured, authenticated binding to a specific AI model provider (Claude, GPT-4o, Bedrock, Ollama, etc.). Per-org. Fernet-encrypted credentials. |
 | **ConnectorType** | Abstract capability category (e.g. `git-host`, `issue-tracker`). Defines the operations interface. |
@@ -230,7 +233,7 @@ RLS context is set using `SET LOCAL app.organisation_id = :org_id` **inside a tr
 #### LangGraph Checkpoint Isolation
 LangGraph's `PostgresSaver` creates its own tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) with no `organisation_id` column. RLS cannot be applied to these tables without schema modification. Thread ID prefixing (`org_id:thread_id`) is application-layer isolation only — insufficient for SaaS.
 
-**Alpha**: Acceptable. Alpha is single-org. Thread ID prefix is documented as partial isolation.  
+**Alpha**: Acceptable. Alpha is single-org. Thread ID prefix is documented as partial isolation.
 **V2 (before SaaS launch)**: Subclass `PostgresSaver` to add `organisation_id` to all checkpoint tables and enforce it on every read/write. This is required work before multi-tenant SaaS deployment. Documented as a known gap.
 
 #### modulo-cloud Service Layer
@@ -397,8 +400,8 @@ The ViewModel is consumed by three first-class view surfaces. All three share th
 
 The browser UI views are the **same Vue application and the same component tree**. Theme switching is CSS-only — no duplicate components, no separate routes, no alternative HTML structures.
 
-**ViewModel**: serialisable state and named commands — REST contract. Every user action is a named command.  
-**Event bus**: real-time push via WebSocket consuming LangGraph `astream_events()` — separate contract. MCP clients subscribe to run events via SSE (MCP's native streaming transport).  
+**ViewModel**: serialisable state and named commands — REST contract. Every user action is a named command.
+**Event bus**: real-time push via WebSocket consuming LangGraph `astream_events()` — separate contract. MCP clients subscribe to run events via SSE (MCP's native streaming transport).
 These must not be conflated. The ViewModel does not manage subscriptions.
 
 **WebSocket fan-out**: `astream_events()` is a single async generator per run. Multiple browser tabs or MCP clients watching the same run must not each trigger a separate `astream_events()` call (which would double-stream events and waste resources). Architecture: one `astream_events()` consumer per active run, managed by a per-run **event broker** (in-process pub/sub). WebSocket and SSE connections subscribe to the broker for their run. The broker fans events to all subscribers. In multi-process deployments (Gunicorn/uvicorn workers), the broker uses Redis pub/sub — Redis is required for production multi-worker deployments (alpha: single-process, in-memory broker acceptable with startup warning).
@@ -521,14 +524,27 @@ This replaces the previous "LLM driveability" stretch goal with a standards-base
 | `get_run_status` | `GET /api/v1/runs/{id}` | Summary by default; `detail: true` for per-node breakdown |
 | `get_run_output` | `GET /api/v1/runs/{id}/nodes/{node_id}/output` | Retrieve output of a specific completed node |
 | `cancel_run` | `POST /api/v1/runs/{id}/cancel` | Cancel a running or queued run |
-| `review_hitl` | `POST /runs/{id}/hitl/{gate_id}/review` | Unified HITL action: `action` = `claim` \| `approve` \| `reject`; `approve`/`reject` require `claim_token`; `reject` requires `reason`; marked `destructive: true` |
+| `review_hitl` | `POST /runs/{id}/hitl/{gate_id}/review` | Unified HITL action: `action` = `claim` \| `approve` \| `reject` \| `deliver_manual`; `approve`/`reject` require `claim_token`; `reject` requires `reason`; marked `destructive: true` |
 | `list_pipelines` | `GET /api/v1/pipelines` | Summary by default; paginated |
 | `list_pending_hitl` | `GET /api/v1/runs?status=awaiting_human` | All runs awaiting human action |
 | `browse_library` | `GET /api/v1/library` | Search and filter; paginated |
 | `copy_library_primitive` | `POST /api/v1/library/{slug}/copy` | Community (unverified) primitives: returns 403 via MCP — MCP clients cannot copy community primitives at all; only verified primitives may be copied via MCP. Browser-only: requires explicit user acknowledgement in the CopyToAdaptWizard (not a `confirm: true` API parameter — a UI gate). This prevents an autonomous LLM client from self-supplying `confirm: true` to bypass the warning. |
 | `get_trigger_events` | `GET /api/v1/triggers/{id}/events` | View trigger event log |
+| `create_pipeline` | `POST /api/v1/pipelines` | Operator role required. Creates a new pipeline definition with name, description, visibility, and default config. |
+| `update_pipeline_graph` | `PUT /api/v1/pipelines/{id}/graph` | Operator role required. Replaces the node/edge graph of a pipeline. |
+| `create_model_backend` | `POST /api/v1/model-backends` | Operator role required. Registers a new LLM provider. API key is provided via a one-time browser setup URL returned by the tool — the key never transits the LLM context. |
+| `list_runs` | `GET /api/v1/runs` | List runs with cursor-based pagination, optional pipeline_id/status filters. |
+| `list_triggers` | `GET /api/v1/triggers` | List trigger configurations, optional pipeline_id filter. |
+| `get_run_evals` | `GET /api/v1/runs/{id}/evals` | Get eval results for a completed run. |
+| `list_eval_definitions` | `GET /api/v1/eval-definitions` | List eval configurations, optional pipeline_id filter. |
+| `search_library` | `GET /api/v1/library` | Search the library with type filter, text search, cursor pagination. (Renamed from `browse_library`; old name preserved as alias.) |
+| `search_documentation` | `GET /api/v1/docs/search` | Search product documentation with free-text query. (Renamed from `get_documentation`; old name preserved as alias.) |
+| `list_trigger_events` | `GET /api/v1/triggers/{id}/events` | View trigger event log. (Renamed from `get_trigger_events`; old name preserved as alias.) |
+| `get_integration_status` | `GET /api/v1/integrations/status` | Health status of all connectors, model backends, and triggers. |
+| `get_org_config` | `GET /api/v1/admin/config` | Org-level configuration, filterable by section (remy, plan, rate_limits). |
+| `get_available_features` | `GET /api/v1/features` | List product features enabled on the current plan tier. |
 
-**`review_hitl` detail**: the claim step returns a `claim_token` (alpha: cryptographically random opaque string with 15-min TTL; v1: short-lived JWT scoped to `run_id + gate_id + client_id`). Subsequent `approve` or `reject` calls must include this token. This prevents replay across clients and enforces that the reviewing client inspected the gate context before acting.
+**`review_hitl` detail**: the claim step returns a `claim_token` (alpha: cryptographically random opaque string with 15-min TTL; v1: short-lived JWT scoped to `run_id + gate_id + client_id`). Subsequent `approve` or `reject` calls must include this token. The `deliver_manual` action allows supplying an output dict directly — useful for MCP clients that want to provide human-authored content through a gate. The `reject` action accepts an optional `reason` string for audit trail purposes. This prevents replay across clients and enforces that the reviewing client inspected the gate context before acting.
 
 **HITL `human_only` flag**: each HITL gate definition carries a `human_only: boolean` field (default: `false`). When `true`, calling `review_hitl` with `action: approve` via MCP returns 403. This allows pipeline authors to explicitly block LLM autonomous approval for gates that require human judgement. The flag is visible in the gate context resource at `modulo://runs/{id}/hitl/{gate_id}` so the LLM client understands why the action is rejected.
 
@@ -536,7 +552,7 @@ This replaces the previous "LLM driveability" stretch goal with a standards-base
 
 **MCP resource content annotation**: resources that contain agent-generated content (e.g. `modulo://runs/{id}/nodes/{node_id}/output`) are annotated with `content_type: agent_output` in the resource description. LLM clients should treat this content as untrusted and potentially containing prompt injection attempts. Modulo documents this in the MCP resource manifest; enforcement is the client's responsibility.
 
-**MCP write scope boundary**: pipeline creation and editing are browser-UI operations in alpha and v1. MCP clients can read pipeline definitions and trigger runs, but cannot create or modify pipelines via MCP. This boundary is explicit and documented. MCP write operations beyond run triggering and HITL review are deferred to v2, when the security model for remote pipeline authoring is defined.
+**MCP write scope boundary**: write operations beyond run triggering and HITL review are restricted to clients authenticated with the `operator` role. MCP clients with `runner`-role credentials can trigger runs and review HITL gates, but cannot create or modify pipelines, manage model backends, or perform other administrative operations. The `operator` role is assigned at API key creation time (see §5.2). This role-based boundary replaces the earlier browser-only restriction — the `operator` scope gate (`check_tool_scope`) is enforced at the tool handler level for every write operation.
 
 #### MCP Authentication
 
@@ -600,6 +616,39 @@ OTel env var configuration follows the OTel specification:
 - Default: stdout JSON
 
 Every LLM call, every connector operation, and every trigger event emits a span.
+
+### 6.20 Agent Dispatch Model
+
+Modulo dispatches work to external agent runtimes in sandboxes, then evaluates the output. Modulo is the SDLC orchestration layer — it owns dispatch, auth, audit, cost tracking, eval gates, and HITL — not the agent loop itself.
+
+#### Sandbox templates vs agent runtimes
+
+Each E2B sandbox template (e.g. `claude-code-v1`, `opencode-v1`, `generic-python`) defines the agent runtime environment. The template pre-installs a specific agent CLI (Claude Code, opencode, etc.) plus supporting tools (git, GitHub/Jira CLIs). Modulo references templates by ID — it does not manage the runtime environment beyond provisioning and teardown.
+
+#### Output contract pattern
+
+Every sandbox agent execution returns structured JSON from a well-known path (`/home/user/output.json`):
+
+```json
+{
+  "status": "completed" | "failed",
+  "summary": "Description of what was done",
+  "changed_files": ["path/to/file1.py"],
+  "pr_url": "https://github.com/org/repo/pull/123",
+  "exit_code": 0,
+  "wall_clock_time_ms": 45000
+}
+```
+
+The output contract is validated at the pipeline level, not inside the sandbox. All observable metrics are captured natively by Modulo — no follow-up step required.
+
+#### Observability
+
+Wall-clock time and exit code are captured on every dispatch natively by the `sandbox_agent` node type. This requires no additional instrumentation — the node records `time.monotonic()` before sandbox creation and after output collection, always returning `wall_clock_time_ms` even on failure.
+
+#### Post-hoc eval as separate concern
+
+The agent's output is evaluated by a separate Modulo pipeline (code review, test coverage check, security scan). This keeps evaluation separate from execution and allows different evaluators to be composed independently.
 
 ---
 
@@ -802,6 +851,11 @@ Left-to-right kanban of user-defined Stages. Each card: name, active run count, 
 
 **Stage board controls**: search by pipeline name, filter by status (`running`, `awaiting_human`, `failed`, `idle`), sort by last run (default) / name / status. Filter by team added in v1 when team management ships. The `awaiting_human` filter is surfaced prominently — time-sensitive items should be easy to reach.
 
+#### Pipeline Folders
+The pipeline library supports organisation-scoped, nested folders for grouping pipelines. Users can create, rename, reorder, and delete folders, filter the pipeline list by folder, and move a pipeline into a folder or back to the unfiled list. Folder access uses the same organisation RLS context as pipeline access.
+
+Deleting a folder does not delete pipelines: pipelines directly assigned to it become unfiled, and direct child folders become top-level folders. Folder ordering is represented by a non-negative `sort_order`; names are required and limited to 255 characters. The folder API returns `501 Not Implemented` when the required database migration has not been applied.
+
 #### Agent Picker
 Adding a node to the pipeline canvas opens a slide-out agent picker panel: searchable by name and tag; shows agent description, input schema name, output schema name, and last-modified date; lists org agents and accessible library agents in separate tabs; "Add to pipeline" closes the panel and places the node. Schema compatibility is indicated: if the selected agent's input schema is incompatible with the previous node's output schema, a warning badge is shown (does not block selection — user may resolve in agent config).
 
@@ -886,6 +940,8 @@ Errors shown inline on canvas with user-readable messages.
 - `cron` (v1): `{schedule: cron-string, timezone: IANA-tz, input_template: JSON-object}`
 - `polling` (v1): `{connector_instance_id, poll_query, condition_expression, poll_interval_seconds}`
 - `agent_signal` (v1): `{source_pipeline_id, source_node_id, signal_schema_id}`
+
+Cron expressions are evaluated as wall-clock schedules in their named IANA timezone, while `next_fire_at` is persisted in UTC. Across daylight-saving transitions, a nonexistent local time advances to the first valid instant and an ambiguous local time uses its first occurrence, matching `croniter` with `zoneinfo`.
 
 **Cardinality**: one trigger belongs to exactly one pipeline. One pipeline may have multiple triggers. When a trigger is deleted: in-flight runs continue against their snapshot to completion; no new runs initiated. Trigger record cascade-deleted; run records retained.
 
@@ -1043,9 +1099,15 @@ Each gate carries:
 
 #### Long-Running Pipeline Retention
 Pipelines paused at HITL may persist for days or weeks. LangGraph checkpoints accumulate:
-- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job**: runs nightly (01:00 UTC). Query: runs where `terminal_reached_at < NOW() - retention_days * interval '1 day'`. Action: delete LangGraph checkpoint blobs (`langgraph.*` schema rows for the run's thread ID); retain `runs` metadata row and `audit_events`. Runs configured for purge (rather than archive) also delete the `runs` metadata row. Processes in batches of 500 to avoid long-running transactions. Advisory lock `'run_retention_job'`. Job failure is logged as OTel error span; does not affect active runs.
+- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job** (`cleanup_old_runs`): processes in batches of 500. Query: runs where `created_at < NOW() - retention_days * interval '1 day'` and `status IN (complete, failed, eval_failed, cancelled)`. Action: delete the entire `runs` metadata row (LangGraph checkpoint blobs cascade on delete). Job failure is logged to the application logger; does not affect active runs.
 - **HITL overdue warning**: configurable per-gate. If a run remains in `awaiting_human` beyond N hours, a new notification fires and the UI surfaces a warning badge.
 - **Admin purge action**: admins can force-terminate and archive stale runs.
+
+##### Run Payload Retention
+When `retain_payload` is enabled on a run, the run's `input_payload` and `outputs_json` columns are retained past the run's lifecycle. The **payload retention job** (`cleanup_retained_payloads`) nulls these columns for runs older than the retention period (default: 30 days) in terminal states. Processes in batches of 500.
+
+##### TriggerEvent Log Cleanup
+The `TriggerEvent` log accumulates records for every webhook trigger activation. The **trigger event cleanup job** (`cleanup_old_webhook_events`) deletes events older than the retention period (default: 30 days) in batches of 1000. Runs on a scheduled loop (`cleanup_scheduler_loop`, every 60 minutes) and as a Celery periodic task. Failure of the cleanup job does not block webhook processing — stale events cause no functional harm beyond table bloat.
 
 ### 8.9 Error Handling
 
@@ -1323,6 +1385,25 @@ Missing ConnectorType instance: creates placeholder connector entry (`status: un
 
 #### Workflow Updates
 No automatic updates. V2 registry: "check for updates" compares local checksum to registry. Manual re-import with re-binding. Local customisations are not merged automatically.
+
+#### V2 Format (YAML)
+
+The v2 bundle format moves from ZIP+JSON to a single YAML file with expanded capabilities. The full specification is documented in ADR 015 (`docs/adr/015-bundle-format-v2.md`).
+
+**What's new in v2:**
+- **YAML instead of ZIP+JSON** — single file, human-readable, diffable in PRs
+- **Triggers** — bundles ship pre-configured webhook, cron, polling, and agent_signal triggers
+- **Team ownership** — `owner_team` field resolved by team name on import
+- **Visibility** — `org`, `team`, or `private` (defaults to `org` on import)
+- **Lifecycle map reference** — bundles declare which lifecycle stage they participate in
+- **Composite template refs** — multi-template workflow references
+- **Partial bundles** — incomplete pipelines (status: `partial: true`) for assembly
+- **Agent runtime config** — `template_id` and `agent_command` travel with agent definitions
+- **Ed25519 signature envelope** — optional publisher verification for community library
+
+**Migration path:** v1 ZIP+JSON bundles remain importable. Detection is by file extension (`.zip` → v1, `.yaml`/`.yml` → v2). A conversion script is provided at `docs/ops/bundle-migration-v1-to-v2.md`. v1 import emits a deprecation warning from v2.1 and is removed in v3.0.
+
+**Validation:** v2 bundles are validated against JSON Schema at `docs/schemas/bundle-v2-schema.json`.
 
 ### 8.16 Schema Inference (v1)
 
@@ -2406,6 +2487,8 @@ The SSE stream handler runs a `while True` loop:
 6. Feed results into the next LLM call (loop continues)
 7. When LLM emits no tool calls, yield `done`
 
+`mcp_api_key` is optional and is required only for MCP calls. If a turn mixes UI and MCP calls without an MCP credential, each MCP call produces a failed `tool_call` result while manifest and browser UI calls continue; all results are fed back to the LLM on the next turn. A missing MCP credential does not abort the SSE stream.
+
 This allows multi-step workflows in a single stream: "Let me check the current config… [extract] → I see X is not set. Let me update it. [navigate → click → fill → click → go_back] → Done!"
 
 #### 8.27.7 Component Support
@@ -2667,7 +2750,7 @@ class RemyConfig(BaseModel):
 The admin Remy page (`/admin/remy`, `AdminRemyView.vue`) gains a **"Knowledge Sources"** section:
 
 ```
-## Knowledge Sources
+#### 8.29.7.1 Knowledge Sources
 
 Control what Remy knows and how it loads that knowledge.
 
@@ -2754,7 +2837,7 @@ Remy needs a baseline understanding of what Modulo is and how it works, present 
 The primer is a Markdown block injected before page context:
 
 ```
-## Product Overview
+#### 8.30.1.1 Product Overview
 
 ### What is Modulo
 Governed orchestration for AI-powered SDLC pipelines — automated workflows that
@@ -3030,7 +3113,7 @@ Telemetry is opt-in and disabled by default. The OTel bridge (`setup_otel`) is c
 | Encryption | cryptography (Fernet) | Connector credentials + model backend credentials |
 | API keys | SHA-256 hash storage | `mk_<lookup_prefix>_<secret>` format |
 | Task queue | Celery + Redis | Optional alpha; required for v1 cron/polling triggers |
-| Auth (v1+) | python-jose (JWT), passlib (bcrypt), python-saml, authlib (OIDC) | |
+| Auth (v1+) | PyJWT[crypto] (JWT/JWK), passlib (bcrypt), python-saml, authlib (OIDC) | |
 
 ### Frontend
 | Layer | Technology | Notes |
@@ -3295,8 +3378,8 @@ These are not required for the initial release but should follow shortly after.
 
 ### 8.24 Parameterizable Composite Nodes
 
-**Status**: Pre-development  
-**PRD ref**: §8.2 Agent Model, §8.4 Pipeline Builder, §8.14 Community Library  
+**Status**: Pre-development
+**PRD ref**: §8.2 Agent Model, §8.4 Pipeline Builder, §8.14 Community Library
 **RFC ref**: `docs/proposals/rfc-node-metacategories.md` (§2.5 Composite)
 
 #### Concept
@@ -3693,6 +3776,198 @@ The feature decomposes into these delivery tasks:
 
 ---
 
+### 8.31 Lifecycle Map
+
+A Lifecycle Map is a declarative, multi-diagram model of an organisation's SDLC — or any business process that moves work through governed stages. It is the top-level view of "how does work get from idea to customer?" Each stage in the map is a node; each handoff between stages is a transition edge. Stages can be linked to executable Modulo pipelines (clickable → shows the pipeline graph), marked as external (documented but not managed by Modulo), or left as manual (human process with no automation).
+
+Lifecycle Maps exist because a single pipeline cannot capture an entire SDLC. Pipelines are linear or branching execution graphs — they start, run, and finish. A Lifecycle Map is a **state machine** that describes how a unit of work (a task, a ticket, a PR, a deploy) moves through logically ordered stages over hours, days, or weeks. The pipeline is the *execution* primitive. The Lifecycle Map is the *orchestration* primitive.
+
+From the user's perspective: the Lifecycle Map is the first thing they see when they want to understand or design "how we deliver software." It is the TL;DR of their SDLC — each heading is a clickable stage, each arrow is a documented handoff. It is useful on day 0 with zero Modulo-managed steps. Over time, stages graduate to Modulo-managed pipelines. The goal is not 100% management — it is 100% model fidelity. Some stages will always live in external systems (deploy pipelines in CircleCI, incident response in PagerDuty), and the map documents that honestly.
+
+**Core philosophy**: the Lifecycle Map is a semantic model, not a workflow engine. It says "tasks should flow through these stages in this order" without prescribing *how* each transition happens. Some transitions are tight (pipeline A's output triggers pipeline B via Modulo signals). Others are loose (a label change on a Jira ticket is detected by an external cron; Modulo just documents the relationship). Both belong in the same map.
+
+#### 8.31.1 Map Concepts
+
+| Term | Definition |
+|---|---|
+| **Lifecycle Map** | A DAG of stage nodes and transition edges describing a logical work lifecycle. Versioned, org-scoped, renderable as an interactive diagram. |
+| **Stage Node** | A named step in the lifecycle. Has a `type` (see §8.31.2) and optionally links to a Modulo pipeline or an external system URL. |
+| **Transition Edge** | A directed connection between two stage nodes. Carries trigger metadata describing *how* work moves from one stage to the next — even if Modulo doesn't own the trigger. |
+| **Trigger Metadata** | A structured annotation on a transition edge: `trigger_type: "pipeline_completed" \| "webhook" \| "cron" \| "manual" \| "external"`, a human-readable description of who/what fires it, and optionally a link to the trigger definition if Modulo-managed. |
+| **Graduated Stage** | A stage node that started as `external` or `manual` and was later linked to a Modulo pipeline. The map preserves its history — previous versions show what it looked like before graduation. |
+| **Map Version** | An immutable snapshot of the entire map DAG. Versions are created on explicit save. Older versions remain viewable to track process evolution. |
+
+#### 8.31.2 Stage Node Types
+
+| Type | Rendered | Meaning |
+|---|---|---|
+| `modulo` | Solid border, clickable to pipeline graph | This stage is a Modulo pipeline. Clicking opens the pipeline editor or run history. |
+| `external` | Dashed border, clickable to external URL | This stage runs in an external system (CircleCI, GitHub Actions, PagerDuty). The map documents its existence; Modulo does not own execution. |
+| `manual` | Dotted border, no click-through | This stage is a human process with no automation or tooling. The map documents it for completeness. |
+| `placeholder` | Ghost/faded border | This stage is planned but not yet implemented in any system. Represents a gap in the current process. |
+
+Each stage node carries:
+- `name`, `description`, `type`
+- `pipeline_id` (if type `modulo`) — links to the pipeline definition
+- `external_url` (if type `external`) — links to the external system
+- `owner` — which team or person owns this stage
+- `required_schema_in` / `schemas_produced` — what artifacts this stage expects and produces (optional, documentary)
+
+#### 8.31.3 Transition Edges
+
+Each edge carries:
+- `from_stage_id`, `to_stage_id`
+- `trigger_type` — `pipeline_completed` \| `webhook` \| `cron` \| `manual` \| `external`
+- `trigger_description` — human-readable explanation: "A human clicks 'Deploy' in CircleCI after soak tests pass"
+- `trigger_id` — optional, links to a Modulo Trigger entity if Modulo-managed
+- `condition` — optional JMESPath expression describing when this transition fires (e.g. only on green builds)
+- `estimated_frequency` — how often this transition typically fires (daily, per-PR, hourly)
+
+#### 8.31.4 Fractal Navigation
+
+A Lifecycle Map is the outermost layer of a fractal hierarchy:
+
+```
+Lifecycle Map (the DAG you drew)
+  └── Stage Node: "Task Delivery"
+        └── Pipeline (clickable → opens pipeline editor)
+              └── Agent Node: "Coder"
+                    └── Agent config (prompt, schema, model backend)
+                          └── Sub-pipeline (if composite node)
+```
+
+At every level, the user can "double-click" to drill down. A `modulo` stage node opens its pipeline graph. An agent node opens its config panel. A composite node opens its sub-pipeline. Navigation is breadcrumb-based with viewport state preserved per level (§8.4).
+
+Not every stage needs a Modulo pipeline attached. An `external` stage node with no `pipeline_id` renders as documentation — clicking it opens the `external_url` in a new tab. The map is still useful: it shows the complete lifecycle even when Modulo only owns pieces of it.
+
+#### 8.31.5 Graduation Path
+
+The graduating-track is the core adoption model. A stage starts as `placeholder` (planned), becomes `manual` or `external` (documented), and optionally graduates to `modulo` (managed):
+
+1. **Day 0**: A team creates a Lifecycle Map of their current SDLC. All stages are `external` or `manual`. Transitions are annotated with trigger descriptions but no Modulo trigger IDs. The map is a documentation artifact — useful for onboarding, process review, and gap analysis.
+2. **Day 1**: The team replaces one `manual` stage with a Modulo pipeline. The stage node type changes to `modulo` and links to the pipeline. The incoming transition edge gains a `trigger_id`. The map now has one graduated stage.
+3. **Day N**: More stages graduate. Some never do — the external deploy pipeline in CircleCI stays `external`. The map remains accurate because `external` is a first-class stage type, not a shortcoming.
+4. **Maturity**: Over time, the map becomes a hybrid — some stages Modulo-managed, some external, some manual. The map truthfully reflects the real SDLC at every point in its evolution.
+
+**Why not force 100%:** Forcing all stages into Modulo pipelines creates perverse incentives — teams either stop using the map (because it doesn't reflect reality) or they build shallow pipelines that obscure where the real work happens. Honest stage types keep the map useful forever.
+
+#### 8.31.6 Multiple Maps
+
+Any org member can create a Lifecycle Map. Maps are not limited to "the main SDLC." Teams and individuals create maps for any process they want to document or evolve:
+
+| Map | Audience | Stages |
+|---|---|---|
+| **Main SDLC** | Entire team | Issue → Groom → Dev → Review → Staging → Prod |
+| **Dependency Renovation** | Platform team | Crawl → Triage → PR → Merge → Deploy |
+| **Incident Response** | On-call | Alert → Classify → Remediate → Postmortem |
+| **Content Publishing** | Marketing | Draft → Review → Approve → Publish |
+
+Maps are independent — a single task might appear in multiple maps (a deploy shows up in both "Main SDLC" and "Infra Change" maps). Maps carry `owner_team_id` and `visibility` (`org` \| `team`), following the same pattern as other Modulo resources.
+
+#### 8.31.7 Visual Editor
+
+The Lifecycle Map editor is an interactive canvas (built on Vue Flow, same as the pipeline editor):
+
+- **Drag-and-drop stage nodes** from a palette
+- **Click to configure** each node: type, name, pipeline link, external URL
+- **Draw transition edges** between nodes by dragging from one node's output port to another's input
+- **Edge properties panel**: trigger type picker, description field, condition expression, trigger link
+- **Version history browser**: time-machine slider to see how the map has evolved
+- **Graduation indicator**: graduated stages show a small badge (shield icon) with the graduation date
+- **Map list page**: card grid of all maps in the org, searchable, filterable by team
+
+The editor is available from `/lifecycle-maps` in the sidebar (Core group, or a new "Lifecycle" group if maps reach sufficient adoption).
+
+**Alpha scope**: view-only map rendering from JSON/YAML. Creating and editing maps via JSON editor. No drag-and-drop canvas. Stage node types render with correct border styles. Clicking a `modulo` stage navigates to the pipeline editor. Clicking an `external` stage opens the URL.
+
+**V1 scope**: Full drag-and-drop visual editor. Transition edge drawing. Version history browser. Map list page. Team ownership. Graduation badge.
+
+**V2 scope**: Multiple maps per org. Community map templates ("Start from SDLC template"). Map diff view (side-by-side version comparison). Map export as PNG/SVG for embedding in Confluence/Notion.
+
+#### 8.31.8 Relationship to Existing Primitives
+
+| Existing Concept | How It Relates |
+|---|---|
+| **Pipeline** (§8.4) | An executable pipeline is attached to a `modulo` stage node. The same pipeline can appear in multiple maps. |
+| **Stage Board** (§8.4) | The Stage Board shows cards for pipelines. The Lifecycle Map shows the *logical flow* that those pipelines belong to. They are complementary views: the board is "what's running now"; the map is "what are all the steps." |
+| **Trigger** (§8.5) | A transition edge with `trigger_type: "webhook"` or `"cron"` can link to a Modulo Trigger entity. The trigger definition lives separately; the edge just references it. |
+| **Manual Node** (§8.4) | A `manual` stage node is the lifecycle-level equivalent of a Manual pipeline node — a human step with no automation. Manual stages document the handoff; Manual pipeline nodes pause execution for human input. They are independent concepts at different fractal levels. |
+| **Pipeline Template** (library) | A Pipeline Template can be "slotted into" a stage node as a starting point. "Use template" in the stage config creates a new pipeline from the template and links it. |
+| **Composite Node** (§8.24) | A composite node within a pipeline is sub-pipeline execution. A Lifecycle Map stage is cross-pipeline orchestration. They operate at different fractal levels and are not interchangeable. |
+
+#### 8.31.9 Primitive Model
+
+Lifecycle Maps are stored as a new `lifecycle_map` primitive type in the library system (same pattern as `pipeline_template` and `workflow`):
+
+```yaml
+primitive_type: lifecycle_map
+content_json:
+  stages:
+    - id: "stage-gen"
+      name: "Task Generation"
+      description: "Issues, bugs, and feature requests enter here"
+      type: modulo  # or external, manual, placeholder
+      pipeline_id: "uuid-of-pipeline"         # if type=modulo
+      external_url: "https://github.com/..."  # if type=external
+      owner: "platform-team"
+      position:
+        x: 100
+        y: 200
+  transitions:
+    - from: "stage-gen"
+      to: "stage-delivery"
+      trigger_type: external
+      trigger_description: >
+        A human adds a 'ready_for_dev' label on the
+        GitHub issue, which is detected by a scheduled
+        GitHub Actions workflow that fires the delivery
+        pipeline via webhook.
+      trigger_id: "uuid-of-trigger"  # optional
+      condition: "issue.labels contains 'ready_for_dev'"
+      estimated_frequency: daily
+```
+
+Versioning follows the same pattern as schemas: explicit save creates a new version. Old versions are browsable. The `lifecycle_map` primitive can be exported, imported, and shared via bundles.
+
+#### 8.31.10 The 80% Target
+
+The product target is that 80% of an organisation's SDLC stages are *managed* by Modulo (type `modulo` with a live pipeline), while 100% of stages are *modeled* in the Lifecycle Map. The remaining 20% are honestly annotated as `external` or `manual` — not because we want them there permanently, but because honest annotation is more valuable than forced coverage.
+
+Metrics surfaced in the map UI:
+- **Coverage**: "8 of 12 stages graduated (67%)" — a progress indicator, not a shame metric
+- **Gap analysis**: stages that have been `placeholder` for >30 days are surfaced as "consider graduating"
+- **Velocity**: average time per stage (only for Modulo-managed stages where timing data exists)
+
+#### 8.31.11 Delivery Tasks
+
+1. `task-lm-data-model` (L) — LifecycleMap entity, StageNode model, TransitionEdge model, JSON schema, migration, CRUD service + API routes
+2. `task-lm-library-primitive` (M) — `lifecycle_map` primitive type in library system, bundle export/import support, versioning
+3. `task-lm-readonly-render` (M) — Vue Flow read-only renderer: stage nodes with type-based border styling, transition arrows, click-to-navigate on `modulo` / `external` stages, version browser
+4. `task-lm-visual-editor` (XL) — Full drag-and-drop canvas: stage palette, node config panel, edge drawing, trigger metadata panel, save/publish flow
+5. `task-lm-map-list` (S) — Card grid of all maps, searchable, filterable, create-new flow
+6. `task-lm-graduation-flow` (M) — "Graduate stage" action: promote manual/external to modulo, link to existing pipeline or create new, version snapshot
+7. `task-lm-bdd-tests` (M) — BDD feature files for map CRUD, rendering, navigation, graduation
+8. `task-lm-dogfood` (L) — Modulo's own Lifecycle Map defined, stages graduated to Modulo pipelines progressively, used as the primary onboarding example
+
+**Phase**: `phase-lm` (new — independent of alpha/v1 phases; can ship incrementally)
+
+#### 8.31.12 Flag / Gating
+
+| Component | Tier |
+|---|---|
+| Read-only map rendering (from JSON) | Community |
+| Visual map editor | Community |
+| Multiple maps per org | Community |
+| Map version history browser | Team |
+| Team-owned maps | Team |
+| Graduation metrics / gap analysis | Team |
+| Map templates ("Start from SDLC") | Community (library) |
+| Map diff view (version comparison) | Team |
+
+Lifecycle Maps are a core onboarding and documentation feature. The base feature (create, view, navigate stages) is Community-tier. Advanced features (version history, team scoping, analytics) are Team-tier.
+
+---
+
 ## 15. Resolved Design Decisions
 
 | Decision | Resolution |
@@ -3809,6 +4084,7 @@ The feature decomposes into these delivery tasks:
 | WebSocket fan-out | Per-run event broker; one `astream_events()` consumer per active run; N subscriber connections. In-memory alpha; Redis pub/sub for multi-process v1. |
 | Async driver mandate | AsyncPostgresSaver + asyncpg; AsyncSqliteSaver + aiosqlite. psycopg2/sqlite3 not permitted in async path — blocks event loop. Hard rule. |
 | LangGraph startup sequence | Alembic upgrade head → AsyncPostgresSaver.setup() → app start. Postgres advisory lock for multi-worker. Both operations idempotent. |
+| Lifecycle Map vs Pipeline | A Lifecycle Map is a state machine for cross-run task progression. A Pipeline is a single-run execution graph. Maps contain stages, optionally linked to pipelines. Pipelines are not maps. They coexist at different fractal levels. |
 | Pipeline edge entity | First-class DB entity with `hitl_gate_config JSON`. HITL gate is an edge property, not a node property. Compiles to conditional edge + interrupt wrapper in LangGraph. |
 | ConnectorHub credential lifetime | Decrypt once at run-start into run-scoped context object. Discarded at run end. Never enters LangGraph state. One Fernet decrypt per connector per run. |
 | StubModelBackend interface | Implements LangChain BaseChatModel (async). Returns AIMessage from fixture map. No special-casing in agent runtime. Built before any pipeline tests. |

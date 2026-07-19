@@ -3,7 +3,7 @@
 import asyncio
 import json
 import random
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -38,9 +38,9 @@ def _compute_delay(attempt: int, response: httpx.Response | None = None) -> floa
     if response:
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
-            return min(retry_after, _MAX_DELAY)
-    jitter = random.uniform(0, 1)
-    return min(_BASE_DELAY * (2 ** attempt) + jitter, _MAX_DELAY)
+            return float(min(retry_after, _MAX_DELAY))
+    jitter = random.uniform(0, 1)  # noqa: S311 — non-cryptographic jitter for retry delays
+    return float(min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY))
 
 
 class JiraConnector(ConnectorBase):
@@ -82,7 +82,7 @@ class JiraConnector(ConnectorBase):
             self._auth = httpx.BasicAuth(username=creds["email"], password=creds["api_token"])
         else:
             raise ValueError(
-                "Jira credentials must contain either 'token' (PAT/OAuth) or 'email' + 'api_token' (Basic auth)"
+                "Jira credentials must contain either 'token' (PAT/OAuth) or 'email' + 'api_token' (Basic auth)",
             )
 
     @property
@@ -150,7 +150,7 @@ class JiraConnector(ConnectorBase):
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
         try:
-            return response.json()
+            return cast(dict[str, Any], response.json())
         except json.JSONDecodeError as exc:
             raise ValueError(f"Jira API invalid response: {response.text[:200]}") from exc
 
@@ -163,6 +163,8 @@ class JiraConnector(ConnectorBase):
             return HealthResult(ok=True, detail=display_name)
         except ValueError as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -195,19 +197,19 @@ class JiraConnector(ConnectorBase):
                 if "issue_key" not in q.filters:
                     raise ValueError("Jira issue_comments query requires 'issue_key' filter")
                 issue_key = q.filters["issue_key"]
-                params: dict[str, Any] = {}
+                comment_params: dict[str, Any] = {}
                 if q.cursor:
-                    params["startAt"] = int(q.cursor)
-                r = await self._call_api("GET", f"/issue/{issue_key}/comment", params=params)
+                    comment_params["startAt"] = int(q.cursor)
+                r = await self._call_api("GET", f"/issue/{issue_key}/comment", params=comment_params)
                 body = await self._parse_json(r)
                 comments = body.get("comments", [])
                 total = body.get("total", len(comments))
                 start_at = body.get("startAt", 0)
                 max_results = body.get("maxResults", 50)
-                next_cursor: str | None = None
+                comment_next_cursor: str | None = None
                 if start_at + max_results < total:
-                    next_cursor = str(start_at + max_results)
-                return ConnectorResult(records=comments, total=total, next_cursor=next_cursor)
+                    comment_next_cursor = str(start_at + max_results)
+                return ConnectorResult(records=comments, total=total, next_cursor=comment_next_cursor)
             case "transitions":
                 if "issue_key" not in q.filters:
                     raise ValueError("Jira transitions query requires 'issue_key' filter")
@@ -254,7 +256,8 @@ class JiraConnector(ConnectorBase):
                     raise ValueError("Jira transition requires 'transition_id' in data")
                 transition_id = payload.data["transition_id"]
                 r = await self._call_api(
-                    "POST", f"/issue/{issue_key}/transitions",
+                    "POST",
+                    f"/issue/{issue_key}/transitions",
                     json={"transition": {"id": transition_id}},
                 )
                 return {"issue_key": issue_key, "transitioned": True}

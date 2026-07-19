@@ -43,24 +43,35 @@ async def create_node_category(
     return category
 
 
-async def get_node_category(session: AsyncSession, category_id: uuid.UUID) -> NodeCategory | None:
-    result = await session.execute(select(NodeCategory).where(NodeCategory.id == category_id))
+async def get_node_category(session: AsyncSession, category_id: uuid.UUID, *, org_id: uuid.UUID) -> NodeCategory | None:
+    result = await session.execute(
+        select(NodeCategory).where(
+            NodeCategory.id == category_id,
+            NodeCategory.organisation_id == org_id,
+        )
+    )
     return result.scalar_one_or_none()
 
 
 async def list_node_categories(
     session: AsyncSession,
     *,
+    org_id: uuid.UUID,
     page: int = 1,
     page_size: int = 20,
 ) -> PageResult[NodeCategory]:
     offset = (page - 1) * page_size
     try:
-        total = (await session.execute(select(func.count()).select_from(NodeCategory))).scalar_one()
+        total = (
+            await session.execute(
+                select(func.count()).select_from(NodeCategory).where(NodeCategory.organisation_id == org_id)
+            )
+        ).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     stmt = (
         select(NodeCategory)
+        .where(NodeCategory.organisation_id == org_id)
         .order_by(NodeCategory.sort_order, NodeCategory.name)
         .offset(offset)
         .limit(page_size)
@@ -73,8 +84,10 @@ async def update_node_category(
     session: AsyncSession,
     category_id: uuid.UUID,
     updates: dict[str, Any],
+    *,
+    org_id: uuid.UUID,
 ) -> NodeCategory | None:
-    category = await get_node_category(session, category_id)
+    category = await get_node_category(session, category_id, org_id=org_id)
     if category is None:
         return None
     apply_updates(category, updates)
@@ -82,8 +95,8 @@ async def update_node_category(
     return category
 
 
-async def delete_node_category(session: AsyncSession, category_id: uuid.UUID) -> bool:
-    category = await get_node_category(session, category_id)
+async def delete_node_category(session: AsyncSession, category_id: uuid.UUID, *, org_id: uuid.UUID) -> bool:
+    category = await get_node_category(session, category_id, org_id=org_id)
     if category is None:
         return False
     await session.delete(category)

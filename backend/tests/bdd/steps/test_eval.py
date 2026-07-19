@@ -1,5 +1,6 @@
 """Step definitions for Eval Run and related eval features."""
 
+import contextlib
 import json
 import uuid
 from types import SimpleNamespace
@@ -14,10 +15,8 @@ USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/eval/eval_run.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -216,10 +215,9 @@ def see_per_case_scores_and_aggregate(request, ctx):
 # ============================================================================
 # eval/eval_scorer.feature  —  5 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/eval/eval_scorer.feature")
-except (FileNotFoundError, OSError):
-    pass
+
 
 @given("an eval suite with multiple scorer types")
 def step_eval_suite_multiple_scorers(ctx):
@@ -355,10 +353,8 @@ def step_valid_data_passes_json_schema(ctx):
 # ============================================================================
 # eval/eval_suite_crud.feature  —  5 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/eval/eval_suite_crud.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 def _eval_resp(status_code, **kwargs):
@@ -433,7 +429,7 @@ def step_update_eval_def(name, request, ctx):
     request.node._resp = _eval_resp(200, id=str(eval_id), name=name, eval_type=ctx.get("eval_def_type", "regex"))
 
 
-@when(parsers.parse('I DELETE /api/evals/{eval_id}'))
+@when(parsers.parse("I DELETE /api/evals/{eval_id}"))
 def step_delete_eval_def(request, ctx):
     request.node._resp = _eval_resp(204)
 
@@ -442,11 +438,13 @@ def step_delete_eval_def(request, ctx):
 def step_list_evals(request, ctx):
     items = []
     if ctx.get("eval_def_name"):
-        items.append({
-            "id": str(ctx["eval_def_id"]),
-            "name": ctx["eval_def_name"],
-            "eval_type": ctx.get("eval_def_type", "regex"),
-        })
+        items.append(
+            {
+                "id": str(ctx["eval_def_id"]),
+                "name": ctx["eval_def_name"],
+                "eval_type": ctx.get("eval_def_type", "regex"),
+            }
+        )
     request.node._resp = _eval_resp(200, items=items, total=len(items), page=1, page_size=20)
 
 
@@ -461,10 +459,8 @@ def step_response_contains_eval_def(name, request, ctx):
 # ============================================================================
 # eval/feedback_system.feature  —  5 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/eval/feedback_system.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a pipeline run produced output")
@@ -554,9 +550,7 @@ def step_feedback_change_status(new_status, ctx, request):
                 mock_record.feedback_status = "resolved"
                 mock_session.get = AsyncMock(return_value=mock_record)
 
-                result = loop.run_until_complete(
-                    mgr.update_status(record_id, new_status)
-                )
+                result = loop.run_until_complete(mgr.update_status(record_id, new_status))
                 ctx["transition_error"] = "Transition should have failed"
             except ValueError as exc:
                 ctx["transition_error"] = str(exc)
@@ -568,9 +562,7 @@ def step_feedback_change_status(new_status, ctx, request):
             mock_record.feedback_status = ctx.get("feedback_status", "pending")
             mock_session.get = AsyncMock(return_value=mock_record)
 
-            result = loop.run_until_complete(
-                mgr.update_status(record_id, new_status)
-            )
+            result = loop.run_until_complete(mgr.update_status(record_id, new_status))
             if result:
                 ctx["feedback_status"] = new_status
                 ctx["transition_error"] = None
@@ -613,9 +605,7 @@ def step_feedback_detect_eval_gap(ctx, request):
 
     loop = asyncio.new_event_loop()
     try:
-        is_gap = loop.run_until_complete(
-            mgr.detect_eval_gap(mock_record, eval_suite=[passing_def])
-        )
+        is_gap = loop.run_until_complete(mgr.detect_eval_gap(mock_record, eval_suite=[passing_def]))
         ctx["eval_gap"] = is_gap
     finally:
         loop.close()
@@ -669,9 +659,7 @@ def step_feedback_spawn_correction(ctx, request):
 
             # Also patch get_feedback_record to return the mock
             with patch.object(mgr, "get_feedback_record", AsyncMock(return_value=mock_record)):
-                new_run_id = loop.run_until_complete(
-                    mgr.spawn_correction_run(record_id)
-                )
+                new_run_id = loop.run_until_complete(mgr.spawn_correction_run(record_id))
                 ctx["correction_run_id"] = new_run_id
                 ctx["feedback_status"] = "correcting"
     finally:
@@ -689,9 +677,7 @@ def step_feedback_record_created_human(ctx):
 @then(parsers.parse('the feedback status is "{expected}"'))
 def step_feedback_status_is(expected, ctx, request):
     actual = ctx.get("feedback_status")
-    assert actual == expected, (
-        f"Expected feedback status {expected!r}, got {actual!r}"
-    )
+    assert actual == expected, f"Expected feedback status {expected!r}, got {actual!r}"
 
 
 @then(parsers.parse('the feedback status becomes "{expected}"'))
@@ -701,23 +687,17 @@ def step_feedback_status_becomes(expected, ctx, request):
 
 @then("the transition is allowed")
 def step_feedback_transition_allowed(ctx):
-    assert ctx.get("transition_error") is None, (
-        f"Transition was rejected: {ctx['transition_error']}"
-    )
+    assert ctx.get("transition_error") is None, f"Transition was rejected: {ctx['transition_error']}"
 
 
 @then("the transition is rejected")
 def step_feedback_transition_rejected(ctx):
-    assert ctx.get("transition_error") is not None, (
-        "Transition should have been rejected but it succeeded"
-    )
+    assert ctx.get("transition_error") is not None, "Transition should have been rejected but it succeeded"
 
 
 @then("the feedback record has eval_gap true")
 def step_feedback_eval_gap_true(ctx):
-    assert ctx.get("eval_gap") is True, (
-        f"Expected eval_gap=True, got {ctx.get('eval_gap')}"
-    )
+    assert ctx.get("eval_gap") is True, f"Expected eval_gap=True, got {ctx.get('eval_gap')}"
 
 
 @then("a new correction run is created")

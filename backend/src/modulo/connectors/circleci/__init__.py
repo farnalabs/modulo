@@ -89,7 +89,10 @@ class CircleCIConnector(CIRunnerBase):
                 return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
             return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False,
+                detail=f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="CircleCI API timeout")
         except httpx.ConnectError:
@@ -251,7 +254,7 @@ class CircleCIConnector(CIRunnerBase):
         async with self._client() as client:
             r = await client.post(f"/project/{project_slug}/pipeline", json=body)
             r.raise_for_status()
-            return cast(dict[str, Any], r.json())
+            return cast("dict[str, Any]", r.json())
 
 
 class _CircleCITestDouble(CircleCIConnector):
@@ -295,19 +298,19 @@ class _CircleCITestDouble(CircleCIConnector):
             status=self._status,
         )
 
-    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
+    async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=self._run_logs)
 
     async def list_runs(
         self,
         pipeline_id: str | None = None,
         status: CIRunStatus | None = None,
-        limit: int = 20,
+        _limit: int = 20,
     ) -> list[CIRun]:
         return [
             CIRun(
                 id="pipeline-uuid-1",
                 pipeline_id=pipeline_id or "gh/owner/repo",
                 status=status or CIRunStatus.SUCCESS,
-            )
+            ),
         ]

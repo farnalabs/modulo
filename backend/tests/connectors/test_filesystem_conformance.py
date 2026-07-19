@@ -11,7 +11,6 @@ from modulo.connectors.filesystem import FilesystemConnector, PathTraversalError
 
 
 class TestFilesystemConnector:
-
     async def test_health_check_ok(self, fs_connector: FilesystemConnector) -> None:
         result = await fs_connector.health_check()
         assert result.ok is True
@@ -34,9 +33,7 @@ class TestFilesystemConnector:
         assert isinstance(write_result, dict)
         assert write_result.get("bytes_written") == 5
 
-        read_result = await fs_connector.query(
-            ConnectorQuery(resource="file", filters={"path": "hello.txt"})
-        )
+        read_result = await fs_connector.query(ConnectorQuery(resource="file", filters={"path": "hello.txt"}))
         assert isinstance(read_result, ConnectorResult)
         assert len(read_result.records) == 1
         assert read_result.records[0]["content"] == "world"

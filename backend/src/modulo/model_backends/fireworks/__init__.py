@@ -48,6 +48,9 @@ class FireworksBackend(ModelBackendBase):
         return await self._model.ainvoke(messages, **kwargs)
 
     def stream(
-    self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
-) -> AsyncIterator[BaseMessage]:
+        self,
+        messages: list[BaseMessage],
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, tools=tools, **kwargs)

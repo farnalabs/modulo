@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Schema validation — union types (oneOf/anyOf) and array schemas."""
 
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -75,7 +74,7 @@ def validate_union_schema(
                     )
                 )
                 continue
-            if all(k not in variant for k in _VALID_ITEM_KEYWORDS_TUPLE):
+            if not any(key in variant for key in _VALID_ITEM_KEYWORDS_TUPLE):
                 result.errors.append(
                     SchemaValidationError(
                         path=f"{current}/{i}",

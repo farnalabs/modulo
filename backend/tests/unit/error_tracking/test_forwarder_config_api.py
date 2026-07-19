@@ -42,11 +42,29 @@ def _make_app():
 
         return session
 
-    from modulo.api.dependencies import get_db_session
+    from modulo.api.dependencies import get_db_session, get_plan_context
     from modulo.auth.dependencies import get_current_user
 
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
+
+    class _AllFeatures:
+        def feature_enabled(self, name: str) -> bool:
+            return True
+
+        def list_enabled_features(self) -> list:
+            return []
+
+        def tier(self) -> str:
+            return "enterprise"
+
+        def has_license_key(self) -> bool:
+            return True
+
+    async def _override_plan_context() -> _AllFeatures:
+        return _AllFeatures()
+
+    app.dependency_overrides[get_plan_context] = _override_plan_context
     return app
 
 
@@ -122,11 +140,29 @@ class TestConfigureForwarder:
             session.flush = AsyncMock()
             return session
 
-        from modulo.api.dependencies import get_db_session
+        from modulo.api.dependencies import get_db_session, get_plan_context
         from modulo.auth.dependencies import get_current_user
 
         app.dependency_overrides[get_current_user] = _override_viewer
         app.dependency_overrides[get_db_session] = _override_db
+
+        class _AllFeatures2:
+            def feature_enabled(self, name: str) -> bool:
+                return True
+
+            def list_enabled_features(self) -> list:
+                return []
+
+            def tier(self) -> str:
+                return "enterprise"
+
+            def has_license_key(self) -> bool:
+                return True
+
+        async def _override_plan_context2() -> _AllFeatures2:
+            return _AllFeatures2()
+
+        app.dependency_overrides[get_plan_context] = _override_plan_context2
 
         from fastapi.testclient import TestClient
 

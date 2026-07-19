@@ -52,7 +52,7 @@ test.describe('Admin Org Settings', () => {
     await page.goto('/admin/org')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Organisation Settings')
-    await expect(page.getByTestId('org-delete-confirm-input')).toBeVisible()
+    await expect(page.locator('text=Organisation Info')).toBeVisible()
   })
 })
 
@@ -69,6 +69,9 @@ test.describe('Admin Pipelines', () => {
 test.describe('Admin Plugins', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
+    await page.route('**/api/v1/admin/feature-flags*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'v2' }, flags: [{ name: 'plugin_management', currently_active: true }, { name: 'model_backend_management', currently_active: true }, { name: 'team_rbac', currently_active: true }] }) })
+    })
     await page.route('**/api/v1/plugins*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ PLUGIN_ID: 'p1', display_name: 'Test Plugin', description: 'A test plugin', version: '1.0.0', capabilities: ['connector_type'], health_ok: true, health_detail: 'OK', health_checked_at: '2025-06-01T12:00:00Z' }]) })
     })

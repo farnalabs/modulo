@@ -1,71 +1,45 @@
-﻿<template>
+<template>
   <div class="page-wide">
-    <header>
-      <h1 data-testid="feedback-inbox-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.FeedbackInboxView.feedback_inbox') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.FeedbackInboxView.review_and_resolve_pending_feedback_from_pipeline_evaluation') }}</p>
-    </header>
+    <PageHeader :title="$t('views.FeedbackInboxView.feedback_inbox')" :subtitle="$t('views.FeedbackInboxView.review_and_resolve_pending_feedback_from_pipeline_evaluation')" data-testid="feedback-inbox-title" />
 
-    <div class="flex flex-wrap items-center gap-4">
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.status') }}</label>
-        <select
-          v-model="statusFilter"
-          data-testid="feedback-inbox-status-select"
-          aria-label="Status"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadFeedback"
-        >
-          <option value="">{{ $t('views.FeedbackInboxView.all') }}</option>
-          <option value="pending">{{ $t('views.FeedbackInboxView.pending') }}</option>
-          <option value="routing">{{ $t('views.FeedbackInboxView.routing') }}</option>
-          <option value="correcting">{{ $t('views.FeedbackInboxView.correcting') }}</option>
-          <option value="resolved">{{ $t('views.FeedbackInboxView.resolved') }}</option>
-          <option value="escalated">{{ $t('views.FeedbackInboxView.escalated') }}</option>
-        </select>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.pipeline') }}</label>
-        <select
-          v-model="pipelineFilter"
-          data-testid="feedback-inbox-pipeline-select"
-          aria-label="Pipeline"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadFeedback"
-        >
-          <option value="">{{ $t('views.FeedbackInboxView.all_pipelines') }}</option>
-          <option
-            v-for="p in pipelines"
-            :key="p.id"
-            :value="p.id"
-          >
-            {{ p.name }}
-          </option>
-        </select>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.from') }}</label>
-        <input
-          v-model="dateFrom"
-          type="date"
-          data-testid="feedback-inbox-date-from"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadFeedback"
-        />
-      </div>
-
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.to') }}</label>
-        <input
-          v-model="dateTo"
-          type="date"
-          data-testid="feedback-inbox-date-to"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadFeedback"
-        />
-      </div>
-    </div>
+    <FilterBar
+      :filters="[{ key: 'status', label: $t('views.FeedbackInboxView.all'), options: [
+        { value: 'pending', label: $t('views.FeedbackInboxView.pending') },
+        { value: 'routing', label: $t('views.FeedbackInboxView.routing') },
+        { value: 'correcting', label: $t('views.FeedbackInboxView.correcting') },
+        { value: 'resolved', label: $t('views.FeedbackInboxView.resolved') },
+        { value: 'escalated', label: $t('views.FeedbackInboxView.escalated') },
+      ]}]"
+      :filter-values="{ status: statusFilter }"
+      @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; loadFeedback() } }"
+    >
+      <template #after>
+        <div class="flex items-center gap-2">
+          <Select v-model="pipelineFilter" @update:model-value="loadFeedback">
+            <SelectTrigger data-testid="feedback-inbox-pipeline-select" aria-label="Pipeline" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <SelectValue :placeholder="$t('views.FeedbackInboxView.all_pipelines')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+            </SelectContent>
+          </Select>
+          <input aria-label="date"
+            v-model="dateFrom"
+            type="date"
+            data-testid="feedback-inbox-date-from"
+            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @change="loadFeedback"
+          />
+          <input aria-label="date"
+            v-model="dateTo"
+            type="date"
+            data-testid="feedback-inbox-date-to"
+            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @change="loadFeedback"
+          />
+        </div>
+      </template>
+    </FilterBar>
 
     <ErrorAlert v-if="pipelinesError" :message="pipelinesError" :on-retry="loadPipelines" />
 
@@ -237,31 +211,44 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import { Button } from '@/components/ui/button'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import { formatDateShortWithTime } from '../lib/formatDate'
 
-type FeedbackRecordItem = components['schemas']['FeedbackRecordItem']
-type FeedbackRecordDetail = components['schemas']['FeedbackRecordDetail']
-type PipelineItem = components['schemas']['PipelineItem']
+interface FeedbackRecordItem {
+  id: string
+  created_at: string
+  pipeline_name?: string | null
+  rejection_reason?: string | null
+  feedback_handler_type: string
+  feedback_status: string
+}
 
-const { t, locale } = useI18n()
+interface FeedbackRecordDetail extends FeedbackRecordItem {
+  annotation?: string | null
+  rejected_output?: unknown
+  correction_proposal?: unknown
+}
 
-const records = ref<FeedbackRecordItem[]>([])
-const pipelines = ref<PipelineItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const pipelinesError = ref<string | null>(null)
+type PipelineItem = components['schemas']['PipelineResponse']
+
+const { t } = useI18n()
 
 const statusFilter = ref('')
 const pipelineFilter = ref('')
@@ -286,6 +273,7 @@ function statusBadgeClass(status: string): string {
     routing: 'badge badge-status-warning',
     correcting: 'badge badge-context-purple',
     resolved: 'badge badge-status-success',
+    dismissed: 'badge badge-context-slate',
     escalated: 'badge badge-status-destructive',
   }
   return classMap[status] ?? 'badge badge-context-slate'
@@ -294,7 +282,7 @@ function statusBadgeClass(status: string): string {
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return '-'
-  return d.toLocaleDateString(locale.value, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return formatDateShortWithTime(d)
 }
 
 function handlerTypeLabel(type: string): string {
@@ -311,44 +299,33 @@ function formatJson(value: unknown): string {
   }
 }
 
-async function loadPipelines() {
-  pipelinesError.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/pipelines')
-    if (err) {
-      pipelinesError.value = `${t('views.FeedbackInboxView.failed_to_load_pipelines')} ${formatApiError(err)}`
-    } else if (data) {
-      pipelines.value = data.items
-    }
-  } catch (e: unknown) {
-    pipelinesError.value = `${t('views.FeedbackInboxView.failed_to_load_pipelines')} ${formatApiError(e)}`
-  }
-}
-
-async function loadFeedback() {
-  loading.value = true
-  error.value = null
-  try {
+const { loading, error, data: feedbackResp, load: loadFeedback } = useDataFetch(
+  async () => {
     const params: Record<string, string | number> = {}
     if (statusFilter.value) params.status = statusFilter.value
     if (pipelineFilter.value) params.pipeline_id = pipelineFilter.value
     if (dateFrom.value) params.date_from = dateFrom.value
     if (dateTo.value) params.date_to = dateTo.value
-
-    const { data, error: err } = await api.GET('/api/v1/feedback/inbox', {
+    return api.GET('/api/v1/feedback/inbox', {
       params: { query: params as any },
     })
-    if (err) {
-      error.value = `${t('views.FeedbackInboxView.failed_to_load_feedback')} ${formatApiError(err)}`
-    } else if (data) {
-      records.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `${t('views.FeedbackInboxView.failed_to_load_feedback')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
+  },
+  { immediate: false },
+)
+
+const records = computed<FeedbackRecordItem[]>(() => {
+  const response = feedbackResp.value as { items?: FeedbackRecordItem[] } | null
+  return response?.items ?? []
+})
+
+const { error: pipelinesError, data: pipelinesResp, load: loadPipelines } = useDataFetch(
+  () => api.GET('/api/v1/pipelines'),
+)
+
+const pipelines = computed<PipelineItem[]>(() => {
+  const response = pipelinesResp.value as { items?: PipelineItem[] } | null
+  return response?.items ?? []
+})
 
 async function loadDetail(recordId: string) {
   detailLoading.value[recordId] = true
@@ -360,8 +337,9 @@ async function loadDetail(recordId: string) {
     if (err) {
       detailError.value[recordId] = `${t('views.FeedbackInboxView.failed_to_load_detail')} ${formatApiError(err)}`
     } else if (data) {
-      detailMap.value[recordId] = data
-      annotations.value[recordId] = data.annotation || ''
+      const detail = data as unknown as FeedbackRecordDetail
+      detailMap.value[recordId] = detail
+      annotations.value[recordId] = detail.annotation || ''
     }
   } catch (e: unknown) {
     detailError.value[recordId] = `${t('views.FeedbackInboxView.failed_to_load_detail')} ${formatApiError(e)}`
@@ -392,7 +370,7 @@ async function saveAnnotation(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.save_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.annotation_saved') }
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
@@ -415,7 +393,7 @@ async function resolveRecord(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.resolve_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.marked_as_resolved') }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.feedback_status = 'resolved'
@@ -440,7 +418,7 @@ async function triggerCorrection(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.trigger_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.correction_run_triggered') }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.feedback_status = 'correcting'
@@ -465,10 +443,10 @@ async function dismissRecord(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.dismiss_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.dismissed') }
       const rec = records.value.find(r => r.id === recordId)
-      if (rec) rec.feedback_status = 'resolved'
+      if (rec) rec.feedback_status = 'dismissed'
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }
@@ -485,6 +463,7 @@ onBeforeUnmount(() => {
   }
 })
 
+import { onMounted } from 'vue'
 onMounted(async () => {
   await Promise.all([loadFeedback(), loadPipelines()])
 })

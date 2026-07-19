@@ -1,5 +1,6 @@
 """YouTrackConnector — async YouTrack REST API connector."""
 
+import asyncio
 from typing import Any, cast
 
 import httpx
@@ -62,6 +63,8 @@ class YouTrackConnector(ConnectorBase):
                 ok=False,
                 detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}",
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 

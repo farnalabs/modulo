@@ -2,12 +2,12 @@
 
 from collections.abc import Generator
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, is_sensitive_env_key
 from modulo.auth.dependencies import get_current_user
@@ -35,12 +35,43 @@ def _purge_store() -> Generator[None, None, None]:
     yield
 
 
+class _MockAsyncSession:
+    """Minimal mock session that supports async with begin() and await execute()."""
+
+    def __init__(self) -> None:
+        self.begin = MagicMock(return_value=self._begin_cm())
+        self.execute = AsyncMock()
+        self.scalars = MagicMock()
+        self.first = MagicMock()
+
+    class _BeginContextManager:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    def _begin_cm(self):
+        return self._BeginContextManager()
+
+
+def _make_session() -> _MockAsyncSession:
+    session = _MockAsyncSession()
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.first.return_value = MagicMock()
+    session.execute.return_value = mock_result
+    return session
+
+
 @pytest.fixture()
 def admin_client() -> Generator[TestClient, None, None]:
-    mock_session = MagicMock()
+    mock_session = _make_session()
 
     async def override_session():
         yield mock_session
+
+    async def override_plan_context():
+        return MagicMock()
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
@@ -48,16 +79,20 @@ def admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin", organisation_id=_ORG_ID, account_id="u1", org_role="admin"
     )
+    app.dependency_overrides[get_plan_context] = override_plan_context
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
 @pytest.fixture()
 def viewer_client() -> Generator[TestClient, None, None]:
-    mock_session = MagicMock()
+    mock_session = _make_session()
 
     async def override_session():
         yield mock_session
+
+    async def override_plan_context():
+        return MagicMock()
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
@@ -65,6 +100,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="viewer", organisation_id=_ORG_ID, account_id="u2", org_role="viewer"
     )
+    app.dependency_overrides[get_plan_context] = override_plan_context
     yield TestClient(app)
     app.dependency_overrides.clear()
 

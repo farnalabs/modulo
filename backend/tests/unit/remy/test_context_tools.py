@@ -1,4 +1,4 @@
-"""Unit tests for Remy context tools — get_documentation, get_integration_status, get_org_config, get_available_features."""
+"""Unit tests for Remy context tools — get_documentation, get_integration_status, get_org_config, get_available_features."""  # noqa: E501
 
 import json
 from unittest.mock import MagicMock
@@ -189,7 +189,7 @@ class TestGetAvailableFeatures:
         assert "no" in table
 
     def test_feature_count_and_tier(self) -> None:
-        flags = [MagicMock(name="f1", tier="core", currently_active=True)]
+        [MagicMock(name="f1", tier="core", currently_active=True)]
         result = {
             "results": "| Feature | ... |",
             "tier": "community",

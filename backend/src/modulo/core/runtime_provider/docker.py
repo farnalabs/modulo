@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Docker RuntimeProvider — ephemeral containers via aiodocker."""
 
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -36,6 +35,9 @@ class DockerRuntimeProvider(RuntimeProvider):
     4. ``None`` (local socket — default)
     """
 
+    provider_id = "local_docker"
+    provider_aliases = frozenset({"docker"})
+
     def __init__(
         self,
         docker_host: str | None = None,
@@ -43,11 +45,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         create_timeout: int = 120,
         start_timeout: int = 30,
     ) -> None:
-        self._docker_host = (
-            docker_host
-            or os.environ.get("MODULO_DOCKER_HOST")
-            or os.environ.get("DOCKER_HOST")
-        )
+        self._docker_host = docker_host or os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
         self._default_image = default_image
         self._create_timeout = create_timeout
         self._start_timeout = start_timeout
@@ -79,9 +77,12 @@ class DockerRuntimeProvider(RuntimeProvider):
         client = await self._get_client()
         image = spec.image_ref.strip() if spec.image_ref else self._default_image
         ref = uuid.uuid4().hex[:_UUID_TRUNC_LEN]
-        memory_mb = spec.resource_limits.get("memory_mb", _DEFAULT_MEMORY_MB)
-        if not isinstance(memory_mb, int) or memory_mb < 4:
+        raw_memory = spec.resource_limits.get("memory_mb", _DEFAULT_MEMORY_MB)
+        try:
+            memory_mb = int(raw_memory)
+        except (ValueError, TypeError):
             memory_mb = _DEFAULT_MEMORY_MB
+        memory_mb = max(4, min(memory_mb, 131072))
         container_name = f"{_WORKSPACE_PREFIX}{ref}"
 
         env = []
@@ -123,7 +124,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,  # noqa: ASYNC109
+        timeout: int | None = None,
     ) -> ExecResult:
         """Run a command inside the workspace container."""
         container_id = self._get_container_id(provider_ref)
@@ -151,9 +152,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         start = time.monotonic()
         try:
             if timeout is not None:
-                stdout_bytes, stderr_bytes, exit_code = await asyncio.wait_for(
-                    _run_exec(), timeout=timeout
-                )
+                stdout_bytes, stderr_bytes, exit_code = await asyncio.wait_for(_run_exec(), timeout=timeout)
             else:
                 stdout_bytes, stderr_bytes, exit_code = await _run_exec()
             duration = int((time.monotonic() - start) * 1000)
@@ -236,7 +235,9 @@ class DockerRuntimeProvider(RuntimeProvider):
         return container_id
 
     async def close(self) -> None:
-        """Close the underlying Docker client connection."""
+        """Close the underlying Docker client connection and clean up workspaces."""
+        for provider_ref in list(self._workspaces.keys()):
+            await self.destroy_workspace(provider_ref)
         if self._client is not None:
             await self._client.close()
             self._client = None

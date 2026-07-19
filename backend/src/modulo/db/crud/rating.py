@@ -155,7 +155,9 @@ async def get_rating_aggregate(
     Average is computed as thumbs_up_ratio * 5, yielding a 1-5 weighted score.
     """
     try:
-        count_stmt = select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
+        count_stmt = (
+            select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
+        )
         total_count = (await session.execute(count_stmt)).scalar_one()
 
         if total_count == 0:
@@ -202,7 +204,9 @@ async def list_ratings_for_primitive(
     """List ratings for a primitive, newest first."""
     offset = (page - 1) * page_size
     try:
-        count_stmt = select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
+        count_stmt = (
+            select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
+        )
         total = (await session.execute(count_stmt)).scalar_one()
         stmt = (
             select(PrimitiveRating)

@@ -1,15 +1,14 @@
 """BDD step definitions: Organisation deletion workflow."""
 
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/organisation/org_deletion.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -67,9 +66,7 @@ def post_deletion_request(client, request):
                 "token": _DELETION_TOKEN,
                 "token_expires_at": _TOKEN_EXPIRES,
                 "export": {
-                    "organisation": [
-                        {"id": str(_ORG_ID), "name": "Test Org", "slug": "test-org", "status": "active"}
-                    ],
+                    "organisation": [{"id": str(_ORG_ID), "name": "Test Org", "slug": "test-org", "status": "active"}],
                     "users": [{"id": str(_USER_ID), "email": "admin@test.com"}],
                     "pipelines": [],
                     "runs": [],

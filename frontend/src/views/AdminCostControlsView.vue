@@ -1,21 +1,15 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Overview', to: '/admin/costs' },
     { label: 'Spend Limits', to: '/admin/costs/limits' },
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
   <div data-theme="agent" class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.cost_controls') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminCostBreakdownView.cost_controls')" :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')" />
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
 
       <LoadingSpinner v-if="loading" />
-
-      <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
-
       <template v-else>
         <Card>
           <CardHeader>
@@ -67,41 +61,39 @@
             <div v-if="teams.length === 0" class="py-4 text-center text-sm text-muted-foreground">
               {{ $t('views.AdminCostControlsView.no_teams_found') }}
             </div>
-            <table v-else class="w-full text-sm">
-              <thead>
-                <tr>
-                  <th class="table-header">{{ $t('views.AdminCostBreakdownView.team') }}</th>
-                  <th class="table-header table-cell-numeric">{{ $t('views.AdminCostControlsView.budget') }} ({{ settings.currency }})</th>
-                  <th class="table-header table-cell-numeric">{{ $t('views.AdminCostBreakdownView.total_spend') }}</th>
-                  <th class="table-header" />
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="team in teams" :key="team.id" class="border-b last:border-b-0">
-                  <td class="table-cell font-medium">{{ team.name }}</td>
-                  <td class="table-cell">
-                    <Input
-                      :model-value="team.editingBudget ?? undefined" @update:model-value="(v: any) => team.editingBudget = v === '' ? null : Number(v)"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      :placeholder="$t('views.AdminCostControlsView.budget_placeholder')"
-                      class="max-w-40"
-                      :data-testid="'cc-team-budget-' + team.id"
-                    />
-                    <p v-if="team.saveError" class="mt-1 text-xs text-destructive">{{ team.saveError }}</p>
-                  </td>
-                  <td class="table-cell-numeric text-muted-foreground">
-                    {{ currencySymbol }}{{ teamCostMap[team.id]?.toFixed(2) ?? '0.00' }}
-                  </td>
-                  <td class="table-cell-numeric">
-                    <Button size="sm" :disabled="team.saving" :data-testid="'cc-team-save-' + team.id" @click="saveTeamBudget(team)">
-                      {{ team.saving ? $t('views.AdminCostControlsView.saving') : $t('views.AdminCostControlsView.save') }}
-                    </Button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+            <DataTable
+              v-else
+              :columns="[
+                { key: 'name', label: $t('views.AdminCostBreakdownView.team') },
+                { key: 'budget', label: $t('views.AdminCostControlsView.budget') + ' (' + settings.currency + ')', numeric: true },
+                { key: 'spend', label: $t('views.AdminCostBreakdownView.total_spend'), numeric: true },
+                { key: 'actions', label: '' },
+              ]"
+              :rows="tableRows"
+            >
+              <template #cell-budget="{ row }">
+                <Input aria-label="Form control"
+                  :model-value="(row as any).editingBudget ?? undefined" @update:model-value="(v: any) => (row as any).editingBudget = v === '' ? null : Number(v)"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  :placeholder="$t('views.AdminCostControlsView.budget_placeholder')"
+                  class="max-w-40"
+                  :data-testid="'cc-team-budget-' + (row as any).id"
+                />
+                <p v-if="(row as any).saveError" class="mt-1 text-xs text-destructive">{{ (row as any).saveError }}</p>
+              </template>
+              <template #cell-spend="{ row }">
+                <span class="text-muted-foreground">{{ currencySymbol }}{{ teamCostMap[(row as any).id]?.toFixed(2) ?? '0.00' }}</span>
+              </template>
+              <template #cell-actions="{ row }">
+                <div class="text-right">
+                  <Button size="sm" :disabled="(row as any).saving" :data-testid="'cc-team-save-' + (row as any).id" @click="saveTeamBudget(row as any)">
+                    {{ (row as any).saving ? $t('views.AdminCostControlsView.saving') : $t('views.AdminCostControlsView.save') }}
+                  </Button>
+                </div>
+              </template>
+            </DataTable>
           </CardContent>
         </Card>
 
@@ -112,29 +104,29 @@
           </CardHeader>
           <CardContent>
             <div class="space-y-3">
-              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-50">
-                <input type="checkbox" :checked="settings.alertThresholds.includes(50)" @change="toggleThreshold(50)" class="h-4 w-4 rounded border-muted-foreground" />
+              <label for="admincostcontrolsview-field-7" class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-50">
+                <input id="admincostcontrolsview-field-7" type="checkbox" :checked="settings.alertThresholds.includes(50)" @change="toggleThreshold(50)" class="h-4 w-4 rounded border-muted-foreground" />
                 <div>
                   <p class="text-sm font-medium">{{ $t('views.AdminCostControlsView.caution_50') }}</p>
                   <p class="text-xs text-muted-foreground">{{ $t('views.AdminCostControlsView.notify_when_half_budget_consumed') }}</p>
                 </div>
               </label>
-              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-75">
-                <input type="checkbox" :checked="settings.alertThresholds.includes(75)" @change="toggleThreshold(75)" class="h-4 w-4 rounded border-muted-foreground" />
+              <label for="admincostcontrolsview-field-6" class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-75">
+                <input id="admincostcontrolsview-field-6" type="checkbox" :checked="settings.alertThresholds.includes(75)" @change="toggleThreshold(75)" class="h-4 w-4 rounded border-muted-foreground" />
                 <div>
                   <p class="text-sm font-medium">{{ $t('views.AdminCostControlsView.warning_75') }}</p>
                   <p class="text-xs text-muted-foreground">{{ $t('views.AdminCostControlsView.notify_when_three_quarters_consumed') }}</p>
                 </div>
               </label>
-              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-90">
-                <input type="checkbox" :checked="settings.alertThresholds.includes(90)" @change="toggleThreshold(90)" class="h-4 w-4 rounded border-muted-foreground" />
+              <label for="admincostcontrolsview-field-5" class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-90">
+                <input id="admincostcontrolsview-field-5" type="checkbox" :checked="settings.alertThresholds.includes(90)" @change="toggleThreshold(90)" class="h-4 w-4 rounded border-muted-foreground" />
                 <div>
                   <p class="text-sm font-medium">{{ $t('views.AdminCostControlsView.critical_90') }}</p>
                   <p class="text-xs text-muted-foreground">{{ $t('views.AdminCostControlsView.notify_when_budget_nearly_exhausted') }}</p>
                 </div>
               </label>
-              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-100">
-                <input type="checkbox" :checked="settings.alertThresholds.includes(100)" @change="toggleThreshold(100)" class="h-4 w-4 rounded border-muted-foreground" />
+              <label for="admincostcontrolsview-field-4" class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-100">
+                <input id="admincostcontrolsview-field-4" type="checkbox" :checked="settings.alertThresholds.includes(100)" @change="toggleThreshold(100)" class="h-4 w-4 rounded border-muted-foreground" />
                 <div>
                   <p class="text-sm font-medium">{{ $t('views.AdminCostControlsView.exceeded_100') }}</p>
                   <p class="text-xs text-muted-foreground">{{ $t('views.AdminCostControlsView.notify_when_budget_exceeded') }}</p>
@@ -158,8 +150,8 @@
                   {{ $t('views.AdminCostControlsView.when_enabled_all_agent_runs_paused') }}
                 </p>
               </div>
-              <label class="relative inline-flex cursor-pointer items-center" data-testid="cc-circuit-breaker">
-                <input type="checkbox" class="peer sr-only" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
+              <label for="admincostcontrolsview-field-3" class="relative inline-flex cursor-pointer items-center" data-testid="cc-circuit-breaker">
+                <input id="admincostcontrolsview-field-3" type="checkbox" class="peer sr-only" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
                 <div class="peer h-6 w-11 rounded-full bg-muted-foreground/30 after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-muted after:bg-background after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full" />
               </label>
             </div>
@@ -175,41 +167,39 @@
           <CardContent>
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
-                <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
-                <select
-                  :value="settings.currency"
-                  @change="onCurrencyChange"
-                  class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                  data-testid="cc-currency"
-                  aria-label="Currency"
-                >
-                  <option value="USD">USD ($)</option>
-                  <option value="EUR">EUR (€)</option>
-                  <option value="GBP">GBP (£)</option>
-                </select>
+                <label for="admincostcontrolsview-field-2" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
+                <Select :model-value="settings.currency" @update:model-value="onCurrencyChange">
+                  <SelectTrigger data-testid="cc-currency" aria-label="Currency" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                    <SelectValue placeholder="USD ($)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USD">USD ($)</SelectItem>
+                    <SelectItem value="EUR">EUR (€)</SelectItem>
+                    <SelectItem value="GBP">GBP (£)</SelectItem>
+                  </SelectContent>
+                </Select>
                 <p v-if="currencySaveError" class="mt-1 text-xs text-destructive">{{ currencySaveError }}</p>
               </div>
               <div>
-                <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
-                <select
-                  :value="settings.billingPeriod"
-                  @change="onBillingPeriodChange"
-                  class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                  data-testid="cc-billing-period"
-                  aria-label="Billing period"
-                >
-                  <option value="monthly">Monthly</option>
-                  <option value="quarterly">Quarterly</option>
-                  <option value="annual">Annual</option>
-                </select>
+                <label for="admincostcontrolsview-field-1" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
+                <Select :model-value="settings.billingPeriod" @update:model-value="onBillingPeriodChange">
+                  <SelectTrigger data-testid="cc-billing-period" aria-label="Billing period" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                    <SelectValue placeholder="Monthly" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="annual">Annual</SelectItem>
+                  </SelectContent>
+                </Select>
                 <p v-if="periodSaveError" class="mt-1 text-xs text-destructive">{{ periodSaveError }}</p>
               </div>
             </div>
             <div class="mt-6">
-              <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.monthly_budget', { currency: settings.currency }) }}</label>
+              <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.monthly_budget', { currency: settings.currency }) }}</span>
               <div class="flex items-end gap-3">
                 <div class="flex-1">
-                  <Input
+                  <Input aria-label="Form control"
                     :model-value="settings.budget"
                     @update:model-value="(v: any) => settings.budget = v === '' ? 0 : Number(v)"
                     type="number"
@@ -234,16 +224,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import { ref, computed, watch } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
-import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Button } from '../components/ui/button'
+import { DataTable } from '../components/ui/data-table'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import PageTabs from "../components/PageTabs.vue"
 
 const planStore = usePlanStore()
@@ -287,15 +280,47 @@ interface TeamBudgetRow {
   saveError: string | null
 }
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { data: costsData, loading: costsLoading, error: costsError, load: loadCosts } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/costs'),
+  { initialValue: { org_total_usd: 0, teams: [] } }
+)
 
-const costsLoading = ref(true)
-const costsError = ref<string | null>(null)
 const totalSpend = ref(0)
 const teamCostMap = ref<Record<string, number>>({})
 
+watch(() => costsData.value, (data) => {
+  if (data) {
+    const resp = data as CostReportData
+    totalSpend.value = resp.org_total_usd ?? 0
+    const map: Record<string, number> = {}
+    for (const tc of resp.teams ?? []) {
+      map[tc.team_id] = tc.cost_usd
+    }
+    teamCostMap.value = map
+  }
+})
+
+const { data: limitsData, loading: limitsLoading, load: loadLimits } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/costs/limits'),
+  { immediate: false }
+)
+
 const teams = ref<TeamBudgetRow[]>([])
+
+const tableRows = computed(() => teams.value)
+
+watch(() => limitsData.value, (data) => {
+  if (data) {
+    const resp = data as SpendLimitResponse
+    teams.value = (resp.team_limits ?? []).map((t: any) => ({
+      id: t.team_id as string,
+      name: t.team_name as string,
+      editingBudget: t.daily_spend_limit,
+      saving: false,
+      saveError: null,
+    }))
+  }
+})
 
 const settings = ref<ControlsSettings>({
   budget: 0,
@@ -304,6 +329,14 @@ const settings = ref<ControlsSettings>({
   alertThresholds: [50, 75, 90],
   circuitBreakerEnabled: false,
 })
+
+const settingsLoading = ref(false)
+
+async function loadAll() {
+  await Promise.all([loadCosts(), loadLimits(), loadSettings()])
+}
+
+const loading = computed(() => costsLoading.value || limitsLoading.value || settingsLoading.value)
 
 const savingBudget = ref(false)
 const budgetSaveError = ref<string | null>(null)
@@ -344,67 +377,19 @@ const progressBarClass = computed(() => {
   return 'bg-primary'
 })
 
-async function loadAll() {
-  loading.value = true
-  loadError.value = null
-  await Promise.all([loadCosts(), loadLimits(), loadSettings()])
-  loading.value = false
-}
-
-async function loadCosts() {
-  costsLoading.value = true
-  costsError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs')
-    if (err) {
-      costsError.value = `Failed to load costs: ${formatApiError(err)}`
-    } else if (data) {
-      const resp = data as CostReportData
-      totalSpend.value = resp.org_total_usd ?? 0
-      const map: Record<string, number> = {}
-      for (const tc of resp.teams ?? []) {
-        map[tc.team_id] = tc.cost_usd
-      }
-      teamCostMap.value = map
-    }
-  } catch (e: unknown) {
-    costsError.value = `Failed to load costs: ${formatApiError(e)}`
-  } finally {
-    costsLoading.value = false
-  }
-}
-
-async function loadLimits() {
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/limits')
-    if (err) {
-      return
-    } else if (data) {
-      const resp = data as SpendLimitResponse
-      teams.value = (resp.team_limits ?? []).map((t) => ({
-        id: t.team_id as string,
-        name: t.team_name as string,
-        editingBudget: t.daily_spend_limit,
-        saving: false,
-        saveError: null,
-      }))
-    }
-  } catch (e) {
-    console.warn('Failed to load team budgets', e)
-  }
-}
-
 async function loadSettings() {
+  settingsLoading.value = true
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/controls')
     if (err) {
-      // endpoint may not exist yet — use defaults
       return
     } else if (data) {
       settings.value = { ...settings.value, ...data }
     }
   } catch (e) {
     console.warn('Failed to load cost control settings', e)
+  } finally {
+    settingsLoading.value = false
   }
 }
 
@@ -478,10 +463,9 @@ async function toggleCircuitBreaker() {
   }
 }
 
-async function onCurrencyChange(e: Event) {
-  const target = e.target as HTMLSelectElement
+async function onCurrencyChange(value: unknown) {
   const prev = settings.value.currency
-  settings.value.currency = target.value as 'USD' | 'EUR' | 'GBP'
+  settings.value.currency = String(value) as 'USD' | 'EUR' | 'GBP'
   currencySaveError.value = null
   try {
     await (api as any).PUT('/api/v1/admin/costs/controls', { body: { currency: settings.value.currency } })
@@ -491,10 +475,9 @@ async function onCurrencyChange(e: Event) {
   }
 }
 
-async function onBillingPeriodChange(e: Event) {
-  const target = e.target as HTMLSelectElement
+async function onBillingPeriodChange(value: unknown) {
   const prev = settings.value.billingPeriod
-  settings.value.billingPeriod = target.value as 'monthly' | 'quarterly' | 'annual'
+  settings.value.billingPeriod = String(value) as 'monthly' | 'quarterly' | 'annual'
   periodSaveError.value = null
   try {
     await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billingPeriod: settings.value.billingPeriod } })
@@ -504,9 +487,6 @@ async function onBillingPeriodChange(e: Event) {
   }
 }
 
-onMounted(() => {
-  planStore.fetchPlan()
-  loadAll()
-})
+planStore.fetchPlan()
+loadAll()
 </script>
-

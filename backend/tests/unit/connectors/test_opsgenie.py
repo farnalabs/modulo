@@ -153,7 +153,7 @@ async def test_query_alert_via_cursor(connector: OpsgenieConnector) -> None:
             json={"data": {"id": "abc-123", "message": "Disk full"}},
         )
     )
-    result = await connector.query(ConnectorQuery(resource="alert", cursor="abc-123"))
+    result = await connector.query(ConnectorQuery(resource="alert", filters={"id": "abc-123"}))
     assert len(result.records) == 1
 
 

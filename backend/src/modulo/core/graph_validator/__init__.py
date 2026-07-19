@@ -32,18 +32,26 @@ from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.parameter_schema import ParameterSchema
+from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import SchemaVersion
 
-_SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback"})
-_JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType({
-    "string": str,
-    "number": (int, float),
-    "integer": int,
-    "boolean": bool,
-    "object": dict,
-    "array": list,
-})
+_SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback", "loop"})
+_JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType(
+    {
+        "string": str,
+        "number": (int, float),
+        "integer": int,
+        "boolean": bool,
+        "object": dict,
+        "array": list,
+    }
+)
+
+
+def _string_or_default(value: object, default: str = "?") -> str:
+    return default if value is None else str(value)
 
 
 class GraphValidator:
@@ -97,6 +105,7 @@ class GraphValidator:
 
         await self._check_node_categories(graph_json, session, result)
         await self._check_composite_nodes(graph_json, session, result)
+        await self._check_parameter_references(graph_json, session, result)
 
         return result
 
@@ -160,6 +169,9 @@ class GraphValidator:
         # Composite node validation.
         await self._check_composite_nodes(snapshot.graph_json, session, result)
 
+        # Parameter schema / set validation.
+        await self._check_parameter_references(snapshot.graph_json, session, result)
+
         return self._strip_warnings(result)
 
     def _strip_warnings(self, result: ValidationResult) -> ValidationResult:
@@ -195,7 +207,8 @@ class GraphValidator:
             node_ids.add(str(nid))
 
         for edge in edges:
-            src, tgt = str(edge.get("source", "?")), str(edge.get("target", "?"))
+            src = _string_or_default(edge.get("source"))
+            tgt = _string_or_default(edge.get("target"))
             if src not in node_ids:
                 result.error("TOPOLOGY_UNKNOWN_SOURCE", f"Edge source '{src}' is not a node")
             if tgt not in node_ids:
@@ -207,7 +220,13 @@ class GraphValidator:
         # Validate conditional edge JMESPath expressions.
         self._check_condition_expressions(edges, result)
 
-        # Determine forwarding edges (exclude kickback + reject from topology flow).
+        # Validate loop-edge constraints.
+        self._check_loop_edges(edges, node_ids, result)
+
+        # Validate LLM routing node configuration.
+        self._check_llm_routing(nodes, edges, node_ids, result)
+
+        # Determine forwarding edges (exclude kickback + reject + loop from topology flow).
         flow_edges = [e for e in edges if e.get("type") not in _SKIPPED_EDGE_TYPES]
 
         # Entry node: no incoming forwarding edges
@@ -295,7 +314,10 @@ class GraphValidator:
     ) -> None:
         if edge.get("type") != "conditional":
             return
-        src: str = str(edge.get("source", edge.get("source_node_id", "?")))
+        source = edge.get("source")
+        if source is None:
+            source = edge.get("source_node_id")
+        src = _string_or_default(source)
         expr: object = edge.get("condition_expression")
         if not isinstance(expr, str) or not expr.strip():
             result.error(
@@ -320,12 +342,15 @@ class GraphValidator:
     ) -> None:
         """Validate eval_condition on a HITL gate config, if present."""
         hitl_config = edge.get("hitl_gate_config")
-        if not hitl_config:
+        if not isinstance(hitl_config, dict):
             return
         eval_cond = hitl_config.get("eval_condition")
-        if not eval_cond:
+        if not isinstance(eval_cond, dict):
             return
-        src: str = str(edge.get("source", edge.get("source_node_id", "?")))
+        source = edge.get("source")
+        if source is None:
+            source = edge.get("source_node_id")
+        src = _string_or_default(source)
         eval_name: str | None = eval_cond.get("eval_name")
         if not eval_name or not eval_name.strip():
             result.error(
@@ -335,7 +360,7 @@ class GraphValidator:
             )
             return
         threshold = eval_cond.get("threshold")
-        if threshold is None or not isinstance(threshold, (int, float)):
+        if threshold is None or isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
             result.error(
                 "HITL_EVAL_CONDITION_INVALID_THRESHOLD",
                 f"Edge from '{src}': eval_condition.threshold must be a number",
@@ -358,6 +383,137 @@ class GraphValidator:
                 node_id=src,
             )
 
+    @staticmethod
+    def _check_loop_edges(
+        edges: list[dict[str, Any]],
+        node_ids: set[str],
+        result: ValidationResult,
+    ) -> None:
+        """Validate loop-edge constraints.
+
+        Checks:
+        1. Every loop edge must have a ``default_target`` that references
+           an existing node ID.
+        2. If ``max_iterations`` is set, it must be a positive integer.
+        3. If ``condition_expression`` is set, it must compile as valid
+           JMESPath.
+        """
+        for edge in edges:
+            if edge.get("type") != "loop":
+                continue
+            source = _string_or_default(edge.get("source"))
+            target = _string_or_default(edge.get("target"))
+
+            # 1. default_target must exist.
+            default_raw = edge.get("default_target")
+            if default_raw is None:
+                result.error(
+                    "LOOP_MISSING_DEFAULT_TARGET",
+                    f"Loop edge from '{source}' to '{target}' has no default_target",
+                    node_id=source,
+                )
+            else:
+                default_target = str(default_raw)
+                if default_target not in node_ids:
+                    result.error(
+                        "LOOP_DEFAULT_TARGET_NOT_FOUND",
+                        f"Loop edge from '{source}' default_target '{default_target}' is not a node",
+                        node_id=source,
+                    )
+
+            # 2. max_iterations must be a positive integer if set.
+            max_it = edge.get("max_iterations")
+            if max_it is not None and (not isinstance(max_it, int) or isinstance(max_it, bool) or max_it < 0):
+                result.error(
+                    "LOOP_INVALID_MAX_ITERATIONS",
+                    f"Loop edge from '{source}' max_iterations must be a non-negative integer (got {max_it!r})",
+                    node_id=source,
+                )
+
+            # 3. condition_expression must be valid JMESPath if set.
+            expr: object = edge.get("condition_expression")
+            if isinstance(expr, str) and expr.strip():
+                try:
+                    jmespath.compile(expr.strip())
+                except jmespath.exceptions.JMESPathError as exc:
+                    result.error(
+                        "LOOP_INVALID_EXPRESSION",
+                        f"Loop edge from '{source}': invalid JMESPath expression: {exc}",
+                        node_id=source,
+                    )
+
+    @staticmethod
+    def _check_llm_routing(
+        nodes: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+        node_ids: set[str],
+        result: ValidationResult,
+    ) -> None:
+        """Validate LLM routing node configuration.
+
+        For each node with ``routing_mode: "llm"``:
+        1. Must have a non-empty ``routing_prompt``.
+        2. Outgoing non-reject edges must have ``routing_label`` values,
+           and those values must be unique.
+        3. ``default_target`` field must exist on the node def and
+           reference a valid node ID.
+        """
+        for node in nodes:
+            if node.get("routing_mode") != "llm":
+                continue
+            nid = _string_or_default(node.get("id"))
+
+            # 1. routing_prompt must be non-empty.
+            routing_prompt: object = node.get("routing_prompt")
+            if not isinstance(routing_prompt, str) or not routing_prompt.strip():
+                result.error(
+                    "LLM_ROUTING_MISSING_PROMPT",
+                    f"LLM routing node '{nid}' requires a non-empty routing_prompt",
+                    node_id=nid,
+                )
+
+            # 2. Outgoing non-reject edges must have unique routing_labels.
+            labels: list[str] = []
+            for edge in edges:
+                if str(edge.get("source", edge.get("source_node_id", ""))) != nid:
+                    continue
+                if edge.get("type", edge.get("edge_type", "")) == "reject":
+                    continue
+                label: object = edge.get("routing_label")
+                if not label or not str(label).strip():
+                    result.error(
+                        "LLM_ROUTING_MISSING_LABEL",
+                        f"Edge from LLM routing node '{nid}' is missing a routing_label",
+                        node_id=nid,
+                    )
+                    continue
+                label_str = str(label)
+                if label_str in labels:
+                    result.error(
+                        "LLM_ROUTING_DUPLICATE_LABEL",
+                        f"Edge from LLM routing node '{nid}' has duplicate routing_label '{label_str}'",
+                        node_id=nid,
+                    )
+                labels.append(label_str)
+
+            # 3. default_target must exist and reference a valid node.
+            #    Also used as the fallback target by _make_llm_router.
+            default_raw = node.get("default_target")
+            if default_raw is None:
+                result.error(
+                    "LLM_ROUTING_MISSING_DEFAULT",
+                    f"LLM routing node '{nid}' requires a default_target",
+                    node_id=nid,
+                )
+            else:
+                default_target = str(default_raw)
+                if default_target not in node_ids:
+                    result.error(
+                        "LLM_ROUTING_DEFAULT_NOT_FOUND",
+                        f"LLM routing node '{nid}' default_target '{default_target}' is not a node",
+                        node_id=nid,
+                    )
+
     # ------------------------------------------------------------------
     # Schema compatibility
     # ------------------------------------------------------------------
@@ -369,7 +525,7 @@ class GraphValidator:
         """Build node_id -> direction -> schema_id from schema pin list."""
         pins: dict[str, dict[str, str]] = {}
         for pin in schema_pins:
-            nid = str(pin.get("node_id", "?"))
+            nid = _string_or_default(pin.get("node_id"))
             direction = pin.get("direction", "?")
             schema_id = pin.get("schema_id")
             if schema_id is None:
@@ -566,9 +722,7 @@ class GraphValidator:
             val = input_payload[field_name]
             type_map_entry = _JSON_TYPE_MAP.get(expected_type, object) if expected_type else object
             is_bool = isinstance(val, bool)
-            matches = isinstance(val, type_map_entry) and not (
-                is_bool and expected_type in ("integer", "number")
-            )
+            matches = isinstance(val, type_map_entry) and not (is_bool and expected_type in ("integer", "number"))
             if expected_type and not matches:
                 actual_type = type(val).__name__
                 result.error(
@@ -719,7 +873,7 @@ class GraphValidator:
 
         rows = (await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars().all()
 
-        profile_caps: set[str] = set(profile.capabilities or [])
+        profile_caps: set[str] = set(profile.capabilities_json or [])
 
         for agent in rows:
             required: list[str] = agent.required_environment_capabilities or []
@@ -755,6 +909,138 @@ class GraphValidator:
     # Composite nodes
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Parameter schema / set references
+    # ------------------------------------------------------------------
+
+    async def _check_parameter_references(
+        self,
+        graph_json: dict[str, Any],
+        session: AsyncSession,
+        result: ValidationResult,
+    ) -> None:
+        """Validate parameter schema and set references on agent nodes.
+
+        For each agent node that references a parameter_schema_id (embedded
+        from the Agent model at snapshot creation):
+        1. Verify the ParameterSchema exists.
+        2. If a ParameterSet is referenced (parameter_set_id), verify it
+           exists and its schema_version matches the current schema version.
+        3. If schema version has drifted since the set was created, warn.
+        """
+        nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
+        schema_ids: set[uuid.UUID] = set()
+        set_ids: set[uuid.UUID] = set()
+
+        for node in nodes:
+            raw_schema_id = node.get("parameter_schema_id")
+            if raw_schema_id is not None:
+                parsed = try_parse_uuid(raw_schema_id)
+                if parsed is not None:
+                    schema_ids.add(parsed)
+            raw_set_id = node.get("parameter_set_id")
+            if raw_set_id is not None:
+                parsed = try_parse_uuid(raw_set_id)
+                if parsed is not None:
+                    set_ids.add(parsed)
+
+        if not schema_ids and not set_ids:
+            return
+
+        # Fetch all referenced schemas.
+        schemas: dict[uuid.UUID, ParameterSchema] = {}
+        if schema_ids:
+            schema_rows = (
+                (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(schema_ids))))
+                .scalars()
+                .all()
+            )
+            schemas = {s.id: s for s in schema_rows}
+
+        # Fetch all referenced sets.
+        sets: dict[uuid.UUID, ParameterSet] = {}
+        if set_ids:
+            set_rows = (await session.execute(select(ParameterSet).where(ParameterSet.id.in_(set_ids)))).scalars().all()
+            sets = {s.id: s for s in set_rows}
+
+        for node in nodes:
+            node_id = _string_or_default(node.get("id"))
+            raw_schema_id = node.get("parameter_schema_id")
+            schema_id: uuid.UUID | None = None
+            if raw_schema_id is not None:
+                schema_id = try_parse_uuid(raw_schema_id)
+                if schema_id is None:
+                    result.error(
+                        "PARAMETER_SCHEMA_INVALID_ID",
+                        f"Node '{node_id}': parameter_schema_id is not a valid UUID",
+                        node_id=node_id,
+                    )
+                    continue
+                schema = schemas.get(schema_id)
+                if schema is None:
+                    result.error(
+                        "PARAMETER_SCHEMA_NOT_FOUND",
+                        f"Node '{node_id}': ParameterSchema '{schema_id}' not found",
+                        node_id=node_id,
+                    )
+                    continue
+
+            raw_set_id = node.get("parameter_set_id")
+            if raw_set_id is not None:
+                set_id = try_parse_uuid(raw_set_id)
+                if set_id is None:
+                    result.error(
+                        "PARAMETER_SET_INVALID_ID",
+                        f"Node '{node_id}': parameter_set_id is not a valid UUID",
+                        node_id=node_id,
+                    )
+                    continue
+                ps = sets.get(set_id)
+                if ps is None:
+                    result.error(
+                        "PARAMETER_SET_NOT_FOUND",
+                        f"Node '{node_id}': ParameterSet '{set_id}' not found or belongs to a different org",
+                        node_id=node_id,
+                    )
+                    continue
+                # Check schema_version matches.
+                if raw_schema_id is not None:
+                    schema_id = try_parse_uuid(raw_schema_id)
+                    if schema_id is not None and schema_id != ps.parameter_schema_id:
+                        result.error(
+                            "PARAMETER_SET_SCHEMA_MISMATCH",
+                            f"Node '{node_id}': ParameterSet '{set_id}' belongs to schema "
+                            f"'{ps.parameter_schema_id}', not '{schema_id}'",
+                            node_id=node_id,
+                        )
+                # Check for schema drift: has the schema been updated since the set was created?
+                if schema_id is not None:
+                    schema = schemas.get(schema_id)
+                    if schema is not None and schema.version > ps.schema_version:
+                        result.warning(
+                            "PARAMETER_SCHEMA_DRIFT",
+                            f"Node '{node_id}': ParameterSchema '{schema_id}' has been updated to "
+                            f"version {schema.version} but ParameterSet '{set_id}' was created against "
+                            f"version {ps.schema_version}. Consider updating the set.",
+                            node_id=node_id,
+                        )
+                    # Composite schema drift (RFC §6.5): when schema defines params that the set doesn't have.
+                    if schema is not None:
+                        schema_param_names: set[str] = set()
+                        for param in schema.parameters or []:
+                            if isinstance(param, dict) and "name" in param:
+                                schema_param_names.add(param["name"])
+                        set_param_names: set[str] = set(ps.values.keys()) if isinstance(ps.values, dict) else set()
+                        missing_from_set = schema_param_names - set_param_names
+                        if missing_from_set:
+                            result.warning(
+                                "PARAMETER_SCHEMA_DRIFT_COMPOSITE",
+                                f"Node '{node_id}': ParameterSchema '{schema_id}' defines parameters "
+                                f"{missing_from_set} that are not present in ParameterSet '{set_id}'. "
+                                f"Default values will be used.",
+                                node_id=node_id,
+                            )
+
     async def _check_composite_nodes(
         self,
         graph_json: dict[str, Any],
@@ -782,7 +1068,7 @@ class GraphValidator:
         node_ref_map: dict[str, uuid.UUID] = {}
         for node in composite_nodes:
             raw = node.get("composite_ref")
-            nid = str(node.get("id", "?"))
+            nid = _string_or_default(node.get("id"))
             if raw is not None:
                 parsed = try_parse_uuid(raw)
                 if parsed is not None:
@@ -806,7 +1092,7 @@ class GraphValidator:
         found: dict[uuid.UUID, CompositeTemplate] = {r.id: r for r in rows}
 
         for node in composite_nodes:
-            node_id = str(node.get("id", "?"))
+            node_id = _string_or_default(node.get("id"))
             raw = node.get("composite_ref")
             if raw is None:
                 continue
@@ -855,7 +1141,12 @@ class GraphValidator:
         5. failure_behaviour must be valid.
         """
         max_retries = output_validation.get("max_validation_retries", 0)
-        if not isinstance(max_retries, (int, float)) or max_retries < 0 or max_retries > 5:
+        if (
+            isinstance(max_retries, bool)
+            or not isinstance(max_retries, (int, float))
+            or max_retries < 0
+            or max_retries > 5
+        ):
             result.error(
                 "COMPOSITE_VALIDATION_RETRIES_RANGE",
                 f"Node '{node_id}': max_validation_retries must be an integer between 0 and 5 (got {max_retries!r})",
@@ -866,6 +1157,8 @@ class GraphValidator:
         valid_behaviours = {"retry", "block", "warn"}
 
         eval_definitions: list[dict[str, Any]] = output_validation.get("eval_definitions", [])
+        if not isinstance(eval_definitions, list):
+            return
         for i, eval_def in enumerate(eval_definitions):
             eval_id = eval_def.get("id", f"#{i}")
             eval_name = eval_def.get("name", eval_id)

@@ -1,9 +1,6 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-narrow">
-    <header>
-      <h1 data-testid="rate-limits-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsRateLimitsView.rate_limits') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage') }}</p>
-    </header>
+    <PageHeader :title="$t('views.SettingsRateLimitsView.rate_limits')" data-test-id="rate-limits-title" :subtitle="$t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage')" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -50,38 +47,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed } from 'vue'
 import { api } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
-import type { components } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
-type RateLimitRule = components['schemas']['RateLimitRuleResponse']
-
-const loading = ref(true)
-const loadError = ref<string | null>(null)
-const mode = ref('in_memory')
-const rules = ref<RateLimitRule[]>([])
-
-async function loadRules() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/admin/rate-limits')
-    if (err) {
-      loadError.value = `Failed to load rate limits: ${formatApiError(err)}`
-    } else if (data) {
-      mode.value = data.mode
-      rules.value = data.rules ?? []
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load rate limits: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(loadRules)
+const { loading, error: loadError, data, load: loadRules } = useDataFetch(
+  () => api.GET('/api/v1/admin/rate-limits'),
+)
+const mode = computed(() => data.value?.mode ?? 'in_memory')
+const rules = computed(() => data.value?.rules ?? [])
 </script>
-

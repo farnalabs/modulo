@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Alert evaluation engine — sliding-window rule matching with cooldown."""
 
+from __future__ import annotations
 
 import json
 import logging
@@ -60,6 +59,12 @@ class AlertEngine:
                 "AlertEngine: No Redis client — cooldown state is in-memory only (not shared across processes)",
             )
 
+    def _evict_expired_cooldowns(self) -> None:
+        now = time.time()
+        expired = [k for k, v in self._cooldowns.items() if (now - v) >= _COOLDOWN_TTL]
+        for k in expired:
+            self._cooldowns.pop(k, None)
+
     async def evaluate(
         self,
         org_id: uuid.UUID,
@@ -77,6 +82,7 @@ class AlertEngine:
         period, it is skipped.  Returns a list of ``TriggeredAlert`` that
         the caller should dispatch.
         """
+        self._evict_expired_cooldowns()
         result = await session.execute(
             select(ErrorNotificationRule).where(
                 ErrorNotificationRule.organisation_id == org_id,

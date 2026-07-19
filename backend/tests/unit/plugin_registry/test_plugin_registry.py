@@ -155,7 +155,11 @@ def test_get_plugin():
         version="1.0.0",
     )
     registry.register_connector_type("t1", lambda c, cr: _StubPluginConnector(), manifest)
-    assert registry.get_plugin("test-plugin") is manifest
+    retrieved = registry.get_plugin("test-plugin")
+    assert retrieved is not None
+    assert retrieved.PLUGIN_ID == manifest.PLUGIN_ID
+    assert retrieved.display_name == manifest.display_name
+    assert retrieved.capabilities == {"connector_type"}
     assert registry.get_plugin("nonexistent") is None
 
 
@@ -300,8 +304,7 @@ def _make_mock_entry_point(
     else:
         loader.load = lambda: load_result
 
-    ep = types.SimpleNamespace(name=ep_name, dist=dist, load=loader.load)
-    return ep
+    return types.SimpleNamespace(name=ep_name, dist=dist, load=loader.load)
 
 
 class _DiscoveryStubConnector(ConnectorBase):
@@ -464,22 +467,16 @@ def test_backend_providers_property():
 # ---------------------------------------------------------------------------
 
 
-def test_list_plugins_empty():
-    assert PluginRegistry().list_plugins() == {}
-
-
-def test_get_plugin_manifest_for_unknown_id():
-    assert PluginRegistry().get_plugin("nope") is None
-
-
-def test_has_connector_type_on_empty_registry():
-    assert not PluginRegistry().has_connector_type("anything")
-
-
-def test_has_model_backend_on_empty_registry():
-    assert not PluginRegistry().has_model_backend("anything")
-
-
-def test_health_check_all_empty():
-    results = PluginRegistry().health_check()
-    assert results == {}
+@pytest.mark.parametrize(
+    "method,args,expected",
+    [
+        ("list_plugins", [], {}),
+        ("get_plugin", ["nope"], None),
+        ("has_connector_type", ["anything"], False),
+        ("has_model_backend", ["anything"], False),
+        ("health_check", [], {}),
+    ],
+)
+def test_empty_registry(method, args, expected):
+    result = getattr(PluginRegistry(), method)(*args)
+    assert result == expected

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """SecretsBackend ABC and factory — pluggable secret storage.
 
 Usage:
@@ -9,6 +7,7 @@ Usage:
     await backend.delete_secret("my-key")
 """
 
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -25,11 +24,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT: float = 30.0
 
 
-async def run_sync(callable: Callable[..., Any], *args: Any, timeout: float = DEFAULT_TIMEOUT, **kwargs: Any) -> Any:
+async def run_sync(
+    callable: Callable[..., Any],
+    *args: Any,
+    timeout_seconds: float = DEFAULT_TIMEOUT,
+    **kwargs: Any,
+) -> Any:
     """Run a synchronous callable in a thread pool with a timeout."""
     return await asyncio.wait_for(
         asyncio.to_thread(callable, *args, **kwargs),
-        timeout=timeout,
+        timeout=timeout_seconds,
     )
 
 
@@ -64,6 +68,36 @@ def validate_key(key: str) -> str:
     return stripped
 
 
+def _check_external_secrets_licensed() -> bool:
+    """Return True if the current plan permits external secrets backends.
+
+    Uses FeatureFlagRegistry to check the ``external_secrets`` flag rather
+    than an ad-hoc license check, so gating stays consistent with the
+    centralized flag definition and tier catalog.
+    """
+    from modulo.core.feature_flags import FeatureFlagRegistry
+    from modulo.core.license import get_license, parse_and_verify
+
+    tier: str = "community"
+    has_license: bool = False
+
+    lic = get_license()
+    if lic is not None:
+        tier = lic.tier
+        has_license = True
+    else:
+        raw_key = os.environ.get("MODULO_LICENSE_KEY", "")
+        if raw_key:
+            validation = parse_and_verify(raw_key)
+            if validation.valid and validation.license_data is not None:
+                tier = validation.license_data.tier
+                has_license = True
+
+    registry = FeatureFlagRegistry(current_tier=tier, has_license_key=has_license)
+    flag = registry.get_flag("external_secrets")
+    return flag is not None and flag.currently_active
+
+
 def create_secrets_backend(
     *,
     fernet_key: str | None = None,
@@ -75,6 +109,9 @@ def create_secrets_backend(
 
     Reads *backend_name* (default ``MODULO_SECRETS_BACKEND`` env var, fallback
     ``"fernet"``) and constructs the matching implementation.
+
+    External secrets backends (``vault``, ``aws``) require a valid license key.
+    Without one, the factory falls back to ``"fernet"`` and logs a warning.
 
     Args:
         fernet_key: Fernet encryption key (required only by FernetSecretsBackend).
@@ -101,11 +138,22 @@ def create_secrets_backend(
             if fernet_key is None:
                 raise ValueError("fernet_key is required when backend_name is 'fernet'")
             return FernetSecretsBackend(fernet_key=fernet_key, session=session, old_key=old_fernet_key)
-        case "vault":
-            from modulo.core.secrets_backend.vault import VaultSecretsBackend
+        case "vault" | "aws":
+            if not _check_external_secrets_licensed():
+                logger.warning(
+                    "External secrets backend %r requires a valid license key. Falling back to 'fernet' backend.",
+                    name,
+                )
+                from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 
-            return VaultSecretsBackend()
-        case "aws":
+                if fernet_key is None:
+                    raise ValueError("fernet_key is required when backend_name is 'fernet'")
+                return FernetSecretsBackend(fernet_key=fernet_key, session=session, old_key=old_fernet_key)
+
+            if name == "vault":
+                from modulo.core.secrets_backend.vault import VaultSecretsBackend
+
+                return VaultSecretsBackend()
             from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
 
             return AWSSecretsManagerBackend()

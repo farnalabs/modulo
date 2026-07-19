@@ -23,7 +23,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { defineOptions } from 'vue'
 import manifest from '@/manifest.yaml'
 
 defineOptions({ name: 'AppBreadcrumb' })
@@ -43,13 +42,25 @@ interface ManifestEntry {
 const route = useRoute()
 const router = useRouter()
 
-const rawRoutes = (manifest as { routes?: Record<string, Omit<ManifestEntry, 'path'>> })?.routes ?? {}
-const manifestByName = new Map<string, ManifestEntry>()
-for (const [path, entry] of Object.entries(rawRoutes)) {
-  if (entry.name) {
-    manifestByName.set(entry.name, { ...entry, path })
+function buildManifestMaps() {
+  const byName = new Map<string, ManifestEntry>()
+  const byPath = new Map<string, ManifestEntry>()
+  try {
+    const rawRoutes = (manifest as { routes?: Record<string, Omit<ManifestEntry, 'path'>> })?.routes ?? {}
+    for (const [path, entry] of Object.entries(rawRoutes)) {
+      if (entry.name) {
+        const manifestEntry = { ...entry, path }
+        byName.set(entry.name, manifestEntry)
+        byPath.set(path, manifestEntry)
+      }
+    }
+  } catch {
+    // A missing or malformed build manifest leaves the breadcrumb map empty.
   }
+  return { byName, byPath }
 }
+
+const { byName: manifestByName, byPath: manifestByPath } = buildManifestMaps()
 
 const segments = computed<BreadcrumbSegment[]>(() => {
   const meta = route.meta as Record<string, unknown> | undefined
@@ -71,7 +82,7 @@ const segments = computed<BreadcrumbSegment[]>(() => {
         label: manifestEntry.breadcrumb || currentName,
       })
       if (manifestEntry.parent) {
-        const parentEntry = rawRoutes[manifestEntry.parent]
+        const parentEntry = manifestByPath.get(manifestEntry.parent)
         currentName = parentEntry?.name ?? undefined
       } else {
         currentName = undefined

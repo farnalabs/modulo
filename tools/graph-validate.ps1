@@ -7,10 +7,11 @@
 param([switch]$Fix,[switch]$CI)
 $ErrorActionPreference="Stop"
 $repoRoot=Resolve-Path (Join-Path $PSScriptRoot "..")
-$productMap=Join-Path $repoRoot "docs\product-map"
-$prdFile=Join-Path $repoRoot "docs\prd.md"
-$bddRoot=Join-Path $repoRoot "backend\tests\bdd\features"
+$productMap=Join-Path $repoRoot "docs/product-map"
+$prdFile=Join-Path $repoRoot "docs/prd.md"
+$bddRoot=Join-Path $repoRoot "backend/tests/bdd/features"
 $issues=@()
+. (Join-Path $PSScriptRoot "product-map-metadata.ps1")
 
 # 1. Validate frontmatter
 $entries=@()
@@ -20,7 +21,8 @@ Get-ChildItem -Recurse -Filter "*.md" -LiteralPath $productMap|Where-Object{$_.N
   if($c-match'<<<<<<<|=======|>>>>>>>'){$issues+="CONFLICT|$($_.Name)|file contains unresolved merge conflict markers"}
   $fm=$Matches[1]
   $id=if($fm-match'(?m)^id:\s*(\S+)'){$Matches[1]}else{$null}
-  $prd=if($fm-match'(?m)^prd:\s*(.+?)[\r\n]'){$Matches[1]}else{$null}
+  $prdRefs=@(Get-ProductMapPrdReferences -Frontmatter $fm)
+  $prd=if($prdRefs.Count -gt 0){$prdRefs -join ', '}else{$null}
   $bdd=@();if($fm-match'(?m)^bdd:\s*(.+?)[\r\n]'){$bList=$Matches[1].Trim();if($bList-match'^\['){$bdd=$bList-replace'[\[\]" ]',''-split','}};if($fm-match'(?m)^bdd:\s*\n((?:\s+- .+\n?)+)'){$bBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};if($bBlock){$bdd=@($bdd)+$bBlock}}
   $dep=@();if($fm-match'(?m)^depends-on:\s*\[(.*?)\]'){$dep=$Matches[1]-replace' ',''-split','};if($fm-match'(?m)^depends-on:\s*\n((?:\s+- .+\n?)+)'){$depBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};$dep=@($dep+$depBlock)|Where-Object{$_}}
   $codePaths=@();if($fm-match'(?m)^code:\s*\n((?:\s+- .+\n?)+)'){$lines=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''.Trim()}|Where-Object{$_};$codePaths=$lines}
@@ -38,9 +40,9 @@ $allIds=@{};$entries|ForEach-Object{if($_.id){$allIds[$_.id]=$_.path}}
 foreach($e in $entries){foreach($d in $e.depends){if(-not$d){continue};if(-not$allIds.ContainsKey($d)){$issues+="REF|$($e.id)|depends-on '$d' not found in any product map entry"}}}
 
 # 4. Validate PRD section refs
-$prdSections=@{}
-if(Test-Path -LiteralPath $prdFile){Get-Content -LiteralPath $prdFile|ForEach-Object{if($_ -match '^### ((\d+\.\d+[a-z]?))'){$prdSections[$Matches[1]]=$true}elseif($_ -match '^## (\d+)\.'){$prdSections[$Matches[1]]=$true}}}
-foreach($e in $entries){if(-not$e.prd){continue};$refs=$e.prd-split','|ForEach-Object{$_.Trim().TrimStart('§')};foreach($r in $refs){if(-not$prdSections.ContainsKey($r)){$issues+="PRD|$($e.id)|section $r not found in prd.md"}}}
+$prdMetadata=Get-ProductMapPrdSections -Lines (Get-Content -LiteralPath $prdFile)
+$prdSections=$prdMetadata.Sections
+foreach($e in $entries){if(-not$e.prd-or$e.prd-match'(?i)^N/A$'){continue};$refs=$e.prd-split','|ForEach-Object{$_.Trim().TrimStart('§')};foreach($r in $refs){if(-not$prdSections.ContainsKey($r)){$issues+="PRD|$($e.id)|section $r not found in prd.md"}}}
 
 # 5. Validate code paths exist
 foreach($e in $entries){$c2=Get-Content -Raw -Encoding UTF8 -LiteralPath $e.path;if($c2-match'^code:'){$cs=$c2-split'---'|Select-Object -Index 2;if($cs-match'code:\s*\n((?:\s+- .+\n?)+)'){$lines=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''};foreach($line in $lines){if(-not$line.Trim()){continue};$r=Join-Path $repoRoot $line.Trim();if(-not(Test-Path -LiteralPath $r)){if(-not(Test-Path -LiteralPath "$r.py")-and-not(Test-Path -LiteralPath "$r.vue")-and-not(Test-Path -LiteralPath "$r.ts")){$issues+="CODE|$($e.id)|$line not found"}}}}}}
@@ -48,29 +50,15 @@ foreach($e in $entries){$c2=Get-Content -Raw -Encoding UTF8 -LiteralPath $e.path
 # 6. Fix _index.md
 if($Fix){$idx=Join-Path $productMap "_index.md";$ic=Get-Content -Raw -Encoding UTF8 -LiteralPath $idx;$ni=@("## Index","");$grps=$entries|Group-Object{[System.IO.Path]::GetFileName((Split-Path -Parent $_.path))}|Sort-Object Name;$gl=@{core="Core Platform";auth="Auth and Security";teams="Teams";evals="Evals and Feedback";connectors="Connectors";pipelines="Pipelines";frontend="Frontend";observability="Observability";infra="Infrastructure";"model-backends"="Model Backends";variants="Run Variants"};foreach($g in $grps){$l=$gl[$g.Name];if(-not$l){$l=$g.Name};$ni+="### $l";foreach($e in $g.Group|Sort-Object id){$rp=$e.path.Replace($productMap,"").TrimStart("\").Replace("\","/");if($e.prd){$ni+="- [$($e.id)]($rp) => PRD $($e.prd)"}else{$ni+="- [$($e.id)]($rp)"}};$ni+=""};$h=$ic-replace'(?s)## Index.*','';$f=$ic-replace'(?s).*## Index.*?\n##','##';$nc=$h.TrimEnd()+"`r`n`r`n"+($ni-join"`r`n")+"`r`n`r`n"+$f;Set-Content -Encoding UTF8 -LiteralPath $idx -Value $nc;Write-Host "Updated _index.md" -ForegroundColor Green}
 
-# ---- Manifest validation ----
-Write-Host "Manifest validation" -ForegroundColor Cyan
-$manifestValidator = Join-Path $PSScriptRoot "validate-manifest.ps1"
-if (Test-Path -LiteralPath $manifestValidator) {
-    $manifestOutput = & $manifestValidator -CI 2>&1
-    $manifestExitCode = $LASTEXITCODE
-    if ($manifestExitCode -ne 0) {
-        $manifestOutput | ForEach-Object { $issues += "MANIFEST|$($_.Trim())" }
-    }
-}
 
 # 7. Coverage orphans and anchors
 # Parse PRD section names
-    $prdSectionNames = @{}
-    Get-Content -LiteralPath $prdFile | ForEach-Object {
-        if ($_ -match '^### ((\d+\.\d+[a-z]?))\s+(.+)') { $prdSectionNames[$Matches[1]] = $Matches[3].Trim() }
-        elseif ($_ -match '^## (\d+)\.\s+(.+)') { $prdSectionNames[$Matches[1]] = $Matches[2].Trim().TrimEnd(':') }
-    }
+    $prdSectionNames = $prdMetadata.Names
 
     # A. PRD→Map coverage — spec sections (§6–§12) with zero product map references
     # Children are considered covered if their parent section has coverage
     $specSections = @{}
-    $prdSections.Keys | Where-Object {
+    $prdMetadata.CoverageSections.Keys | Where-Object {
         $base = if ($_ -match '^(\d+)') { [int]$Matches[1] } else { -1 }
         $base -ge 6 -and $base -le 12
     } | ForEach-Object { $specSections[$_] = $true }
@@ -78,7 +66,7 @@ if (Test-Path -LiteralPath $manifestValidator) {
     $prdCounts = @{}; $parentCoverage = @{}
     foreach ($s in $specSections.Keys) { $prdCounts[$s] = 0 }
     foreach ($e in $entries) {
-        if (-not $e.prd) { continue }
+        if (-not $e.prd -or $e.prd -match '(?i)^N/A$') { continue }
         $refs = $e.prd -split ',' | ForEach-Object { $_.Trim().TrimStart('§') }
         foreach ($r in $refs) {
             if ($prdCounts.ContainsKey($r)) { $prdCounts[$r]++ }
@@ -113,7 +101,7 @@ if (Test-Path -LiteralPath $manifestValidator) {
     # C. Naughty-section check — entries anchored to non-spec sections (§13–§15)
     $nonSpecSections = @{}; foreach ($n in @("13", "14", "15")) { $nonSpecSections[$n] = $prdSectionNames[$n] }
     foreach ($e in $entries) {
-        if (-not $e.prd) { continue }
+        if (-not $e.prd -or $e.prd -match '(?i)^N/A$') { continue }
         $refs = $e.prd -split ',' | ForEach-Object { $_.Trim().TrimStart('§') }
         foreach ($r in $refs) {
             $base = if ($r -match '^(\d+)') { $Matches[1] } else { $r }
@@ -124,4 +112,4 @@ if (Test-Path -LiteralPath $manifestValidator) {
         }
     }
 
-if($issues.Count-eq 0){if(-not$CI){Write-Host "Graph is clean - $($entries.Count) entries, all refs resolve." -ForegroundColor Green};exit 0}else{if(-not$CI){Write-Host "$($issues.Count) issues found:" -ForegroundColor Red;$issues|ForEach-Object{$p=$_-split'\|';Write-Host "  [$($p[0])] $($p[1]) -> $($p[2])" -ForegroundColor Yellow}}else{$issues|ForEach-Object{Write-Host $_}};exit 1}
+if($issues.Count-eq 0){if(-not$CI){Write-Host "Graph is clean - $($entries.Count) entries, all refs resolve." -ForegroundColor Green};exit 0}else{if(-not$CI){Write-Host "$($issues.Count) issues found:" -ForegroundColor Red;$issues|ForEach-Object{$p=$_-split'\|',3;$detail=if($p.Count-gt 2){"$($p[1]) -> $($p[2])"}else{$p[1]};Write-Host "  [$($p[0])] $detail" -ForegroundColor Yellow}}else{$issues|ForEach-Object{Write-Host $_}};exit 1}

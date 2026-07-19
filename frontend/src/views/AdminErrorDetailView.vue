@@ -1,6 +1,6 @@
-﻿<template>
+<template>
   <BackLink to="/admin/errors" label="Back to Error Dashboard" />
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
+  <div class="page-wide">
     <header class="flex items-center justify-between">
       <div class="flex items-center gap-3">
         <button
@@ -9,12 +9,7 @@
         >
           &larr; Back
         </button>
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminErrorDetailView.error_group_detail') }}</h1>
-          <p v-if="group" class="mt-0.5 text-sm text-muted-foreground font-mono">
-            {{ shortId(group.fingerprint) }}
-          </p>
-        </div>
+        <PageHeader :title="$t('views.AdminErrorDetailView.error_group_detail')" :subtitle="group ? shortId(group.fingerprint) : undefined" />
       </div>
     </header>
 
@@ -75,19 +70,18 @@
           >
             Archive
           </button>
-          <div class="ml-auto flex items-center gap-2">
-            <span class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</span>
-            <select
-              v-model="assigneeId"
-              aria-label="Assign to"
-              class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              @change="updateAssignee"
-            >
-              <option value="">Unassigned</option>
-              <option v-for="user in users" :key="user.id" :value="user.id">
-                {{ user.display_name || user.email }}
-              </option>
-            </select>
+            <div class="ml-auto flex items-center gap-2">
+            <label for="assignee-select" class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</label>
+            <Select v-model="assigneeId" aria-label="Assign to" @update:model-value="updateAssignee">
+              <SelectTrigger id="assignee-select" aria-label="Assign to" class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                <SelectValue placeholder="Unassigned" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="user in users" :key="user.id" :value="user.id">
+                  {{ user.display_name || user.email }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </div>
@@ -211,23 +205,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, type ErrorGroupDetail, type ErrorEventDetail } from '../lib/api/errors'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { shortId } from '../utils/format'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const route = useRoute()
 const router = useRouter()
 const errorId = route.params.id as string
-
-const group = ref<ErrorGroupDetail | null>(null)
-const sampleEvent = ref<ErrorEventDetail | null>(null)
-const loading = ref(true)
-const error = ref<string | null>(null)
 
 const showStacktrace = ref(false)
 const showContext = ref(false)
@@ -240,6 +233,21 @@ const eventsTotal = ref(0)
 const eventsLoading = ref(false)
 const eventsOffset = ref(0)
 const eventsLimit = 20
+
+const { data: groupData, loading, error, load: loadDetail } = useDataFetch(
+  () => fetchErrorGroup(errorId).then(
+    d => ({ data: d }),
+    e => ({ error: { detail: `Failed to load error group: ${formatApiError(e)}` } }),
+  ),
+  { initialValue: null as ErrorGroupDetail | null }
+)
+
+const group = computed(() => groupData.value ?? null)
+const sampleEvent = computed(() => groupData.value?.sample_event ?? null)
+
+watch(() => groupData.value, (g) => {
+  if (g) assigneeId.value = g.assigned_to || ''
+})
 
 function goBack() {
   router.push('/admin/errors')
@@ -268,21 +276,6 @@ function formatDate(dateStr: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-async function loadDetail() {
-  loading.value = true
-  error.value = null
-  try {
-    const data = await fetchErrorGroup(errorId)
-    group.value = data
-    sampleEvent.value = data.sample_event
-    assigneeId.value = data.assigned_to || ''
-  } catch (e: unknown) {
-    error.value = `Failed to load error group: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
 }
 
 async function updateStatus(status: string) {
@@ -327,11 +320,6 @@ async function loadUsers() {
   }
 }
 
-onMounted(() => {
-  loadDetail()
-  loadEvents(0)
-  loadUsers()
-})
+loadEvents(0)
+loadUsers()
 </script>
-
-

@@ -4,6 +4,7 @@ import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from cryptography.fernet import Fernet
 
 from modulo.core.notifier import DispatchResult, Notifier
@@ -17,6 +18,11 @@ _FERNET_KEY = Fernet.generate_key().decode()
 _ORG = uuid.uuid4()
 _RUN = uuid.uuid4()
 _TEAM = uuid.uuid4()
+
+
+@pytest.fixture
+def notifier() -> Notifier:
+    return Notifier(MagicMock(), _FERNET_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +83,9 @@ async def test_enqueue_dispatch_falls_back_to_inline_when_celery_unavailable() -
         patch("modulo.core.notifier.celery_tasks.Notifier") as mock_notifier_cls,
     ):
         mock_get_app.side_effect = ImportError("Celery not available")
+        mock_engine = MagicMock()
+        mock_engine.dispose = AsyncMock()
+        _mock_get_engine.return_value = mock_engine
         mock_notifier = MagicMock()
         mock_notifier.dispatch_event = AsyncMock(
             return_value=[
@@ -89,6 +98,7 @@ async def test_enqueue_dispatch_falls_back_to_inline_when_celery_unavailable() -
             ]
         )
         mock_notifier_cls.return_value = mock_notifier
+        mock_notifier.close = AsyncMock()
 
         results = await enqueue_dispatch(
             _ORG,
@@ -97,7 +107,7 @@ async def test_enqueue_dispatch_falls_back_to_inline_when_celery_unavailable() -
         )
 
     assert len(results) == 1
-    assert results[0].status == "delivered"
+    assert results[0]["status"] == "delivered"
     mock_notifier.dispatch_event.assert_called_once()
 
 
@@ -106,19 +116,16 @@ async def test_enqueue_dispatch_falls_back_to_inline_when_celery_unavailable() -
 # ---------------------------------------------------------------------------
 
 
-def test_get_celery_app_returns_celery_app() -> None:
+def test_get_celery_app_returns_celery_app(monkeypatch: pytest.MonkeyPatch) -> None:
     """get_celery_app returns a Celery app instance."""
     from celery import Celery as CeleryCls
 
-    mock_celery = MagicMock(spec=CeleryCls)
     import modulo.core.notifier.celery_tasks as ct
 
-    ct._APP = mock_celery
-    try:
-        app = get_celery_app()
-        assert app is mock_celery
-    finally:
-        ct._APP = None
+    mock_celery = MagicMock(spec=CeleryCls)
+    monkeypatch.setattr(ct, "_APP", mock_celery)
+    app = get_celery_app()
+    assert app is mock_celery
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +137,7 @@ def test_dispatch_notification_task_autoretry_config() -> None:
     """Task has the correct autoretry configuration."""
     assert DispatchNotificationTask.max_retries == 3
     assert DispatchNotificationTask.default_retry_delay == 5
-    assert DispatchNotificationTask.autoretry_for == (Exception,)
+    assert DispatchNotificationTask.autoretry_for == (ConnectionError, TimeoutError, OSError)
     assert DispatchNotificationTask.name == "modulo.notifier.dispatch"
 
 
@@ -165,7 +172,7 @@ def test_dispatch_notification_task_run(mock_dispatch: AsyncMock) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_notifier_celery_mode_enqueues_instead_of_inline() -> None:
+async def test_notifier_celery_mode_enqueues_instead_of_inline(notifier: Notifier) -> None:
     """When use_celery=True, dispatch_event enqueues to Celery."""
     n = Notifier(MagicMock(), _FERNET_KEY, use_celery=True)
 
@@ -187,21 +194,17 @@ async def test_notifier_celery_mode_enqueues_instead_of_inline() -> None:
     )
 
 
-async def test_notifier_default_mode_still_inline() -> None:
+async def test_notifier_default_mode_still_inline(notifier: Notifier) -> None:
     """When use_celery=False (default), dispatch_event runs inline as before."""
-    n = Notifier(MagicMock(), _FERNET_KEY)
-
-    with patch.object(n, "_get_subscribed_endpoints", AsyncMock(return_value=[])) as mock_get:
-        results = await n.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)})
+    with patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])) as mock_get:
+        results = await notifier.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)})
 
     assert results == []
     mock_get.assert_called_once()
 
 
-async def test_dispatch_via_celery_calls_enqueue_dispatch() -> None:
+async def test_dispatch_via_celery_calls_enqueue_dispatch(notifier: Notifier) -> None:
     """_dispatch_via_celery delegates to enqueue_dispatch and wraps results."""
-    n = Notifier(MagicMock(), _FERNET_KEY)
-
     with patch(
         "modulo.core.notifier.celery_tasks.enqueue_dispatch",
         new_callable=AsyncMock,
@@ -216,7 +219,7 @@ async def test_dispatch_via_celery_calls_enqueue_dispatch() -> None:
             }
         ]
 
-        results = await n._dispatch_via_celery(
+        results = await notifier._dispatch_via_celery(
             _ORG,
             "hitl_awaiting",
             {"run_id": str(_RUN)},
@@ -226,17 +229,15 @@ async def test_dispatch_via_celery_calls_enqueue_dispatch() -> None:
     assert results[0].status == "enqueued"
 
 
-async def test_dispatch_via_celery_falls_back_on_exception() -> None:
+async def test_dispatch_via_celery_falls_back_on_exception(notifier: Notifier) -> None:
     """When enqueue_dispatch raises, _dispatch_via_celery falls back to inline."""
-    n = Notifier(MagicMock(), _FERNET_KEY)
-
     with (
         patch("modulo.core.notifier.celery_tasks.enqueue_dispatch", new_callable=AsyncMock) as mock_enqueue,
-        patch.object(n, "_get_subscribed_endpoints", AsyncMock(return_value=[])) as mock_get,
+        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])) as mock_get,
     ):
         mock_enqueue.side_effect = RuntimeError("Broker unreachable")
 
-        results = await n._dispatch_via_celery(
+        results = await notifier._dispatch_via_celery(
             _ORG,
             "hitl_awaiting",
             {"run_id": str(_RUN)},

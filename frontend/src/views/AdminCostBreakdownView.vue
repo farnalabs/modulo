@@ -1,14 +1,11 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Overview', to: '/admin/costs' },
     { label: 'Spend Limits', to: '/admin/costs/limits' },
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
   <div data-theme="agent" class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.cost_breakdown') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminCostBreakdownView.cost_breakdown')" :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')" />
 
     <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
 
@@ -54,24 +51,22 @@
               {{ $t('views.AdminCostBreakdownView.no_team_cost_data_available') }}
             </div>
             <div v-else class="overflow-x-auto">
-              <table class="w-full text-sm">
-                <thead>
-                  <tr class="table-header border-b text-left text-muted-foreground">
-                    <th class="table-header">{{ $t('views.AdminCostBreakdownView.team') }}</th>
-                    <th class="table-header table-cell-numeric">{{ $t('views.AdminCostBreakdownView.total_spend') }}</th>
-                    <th class="table-header table-cell-numeric">{{ $t('views.AdminCostBreakdownView.runs') }}</th>
-                    <th class="table-header table-cell-numeric">{{ $t('views.AdminCostBreakdownView.avg_per_run') }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="team in items" :key="team.entity_id" class="border-b last:border-b-0" :data-testid="'cost-team-row-' + team.entity_id">
-                    <td class="table-cell font-medium">{{ team.entity_name }}</td>
-                    <td class="table-cell-numeric">${{ team.total_spend_usd.toFixed(2) }}</td>
-                    <td class="table-cell-numeric">{{ team.total_runs }}</td>
-                    <td class="table-cell-numeric">${{ team.total_runs > 0 ? (team.total_spend_usd / team.total_runs).toFixed(2) : '0.00' }}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <DataTable
+                :columns="[
+                  { key: 'entity_name', label: $t('views.AdminCostBreakdownView.team') },
+                  { key: 'total_spend_usd', label: $t('views.AdminCostBreakdownView.total_spend'), numeric: true },
+                  { key: 'total_runs', label: $t('views.AdminCostBreakdownView.runs'), numeric: true },
+                  { key: 'avg_per_run', label: $t('views.AdminCostBreakdownView.avg_per_run'), numeric: true },
+                ]"
+                :rows="tableRows"
+              >
+                <template #cell-total_spend_usd="{ value }">
+                  ${{ (value as number).toFixed(2) }}
+                </template>
+                <template #cell-avg_per_run="{ row }">
+                  ${{ (row as any).total_runs > 0 ? ((row as any).total_spend_usd / (row as any).total_runs).toFixed(2) : '0.00' }}
+                </template>
+              </DataTable>
             </div>
           </CardContent>
         </Card>
@@ -118,15 +113,18 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button'
+import { DataTable } from '../components/ui/data-table'
 import PageTabs from "../components/PageTabs.vue"
 
 const planStore = usePlanStore()
@@ -154,9 +152,19 @@ interface AnomalyResponse {
   dismissed: boolean
 }
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
-const items = ref<CostReportRow[]>([])
+const { loading, error: loadError, data, load: loadData } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/costs', {
+    params: { query: { group_by: 'team', period: 'month' } },
+  }),
+  { immediate: false },
+)
+
+const items = computed(() => (data.value as CostReportResponse)?.items ?? [])
+
+const tableRows = computed(() => items.value.map(item => ({
+  ...item,
+  avg_per_run: item.total_runs > 0 ? item.total_spend_usd / item.total_runs : 0,
+})))
 
 const anomaliesLoading = ref(true)
 const anomaliesError = ref<string | null>(null)
@@ -168,25 +176,6 @@ const avgCostPerRun = computed(() => totalRuns.value > 0 ? totalSpend.value / to
 
 const activeAnomalies = computed(() => anomalies.value.filter((a) => !a.dismissed))
 const dismissedAnomalies = computed(() => anomalies.value.filter((a) => a.dismissed))
-
-async function loadData() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs', {
-      params: { query: { group_by: 'team', period: 'month' } },
-    })
-    if (err) {
-      loadError.value = `Failed to load cost report: ${formatApiError(err)}`
-    } else if (data) {
-      items.value = (data as CostReportResponse).items ?? []
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load cost report: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
 
 async function loadAnomalies() {
   anomaliesLoading.value = true
@@ -212,8 +201,8 @@ async function dismissAnomaly(id: string) {
   try {
     await (api as any).POST(`/api/v1/admin/costs/anomalies/dismiss/${id}`)
     await loadAnomalies()
-  } catch {
-    anomaliesError.value = 'Failed to dismiss anomaly'
+  } catch (e) {
+    anomaliesError.value = `Failed to dismiss anomaly: ${formatApiError(e)}`
   } finally {
     dismissLoading.value[id] = false
   }
@@ -225,4 +214,3 @@ onMounted(() => {
   loadAnomalies()
 })
 </script>
-

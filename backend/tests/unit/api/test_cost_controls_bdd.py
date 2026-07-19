@@ -442,7 +442,7 @@ class TestAdminGetSpendLimits:
 
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.db.crud.team.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)

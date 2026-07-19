@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="relative" data-testid="feature-gate">
     <slot v-if="enabled" />
 
@@ -48,7 +48,7 @@
           :href="pricingUrl"
           target="_blank"
           rel="noopener noreferrer"
-          class="btn-glow border-primary/30 hover:border-primary/60"
+           class="border-primary/30 hover:border-primary/60"
         >
           {{ $t('components.FeatureGate.view_plans') }}
         </Button>
@@ -73,7 +73,7 @@ const props = withDefaults(defineProps<{
   showDisabled?: boolean;
   pricingUrl?: string;
 }>(), {
-  pricingUrl: "https://modulo.run/pricing",
+  pricingUrl: "/settings/license",
 });
 
 const planStore = usePlanStore();

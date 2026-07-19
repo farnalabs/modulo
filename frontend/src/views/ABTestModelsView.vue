@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Evals', to: '/evals/editor' },
     { label: 'Proposals', to: '/evals/proposals' },
@@ -9,54 +9,48 @@
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
-      <header>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.ABTestModelsView.ab_test_models') }}</h1>
-        <p class="mt-1 text-muted-foreground">
-          Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage
-        </p>
-      </header>
+      <PageHeader :title="$t('views.ABTestModelsView.ab_test_models')" subtitle="Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage" />
 
       <div class="flex flex-wrap items-center gap-4">
         <label class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.pipeline') }}</span>
-          <select
-            v-model="selectedPipelineId"
-            data-testid="ab-test-models-pipeline-select"
-            aria-label="Pipeline"
-            class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="" disabled>{{ $t('views.ABTestModelsView.select_a_pipeline') }}</option>
-            <option v-for="p in pipelines" :key="p.id" :value="p.id">
-              {{ p.name }}
-            </option>
-          </select>
+          <Select v-model="selectedPipelineId">
+            <SelectTrigger class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Pipeline" data-testid="ab-test-models-pipeline-select">
+              <SelectValue :placeholder="$t('views.ABTestModelsView.select_a_pipeline')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">
+                {{ p.name }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </label>
 
         <label class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.existing_group') }}</span>
-          <select
-            v-model="selectedGroupId"
-            data-testid="ab-test-models-group-select"
-            aria-label="Existing group"
-            class="min-w-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="">{{ $t('views.ABTestModelsView.new_group') }}</option>
-            <option v-for="g in filteredGroups" :key="g.id" :value="g.id">
-              {{ g.name }}
-            </option>
-          </select>
+          <Select v-model="selectedGroupId">
+            <SelectTrigger class="min-w-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Existing group" data-testid="ab-test-models-group-select">
+              <SelectValue :placeholder="$t('views.ABTestModelsView.new_group')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{{ $t('views.ABTestModelsView.new_group') }}</SelectItem>
+              <SelectItem v-for="g in filteredGroups" :key="g.id" :value="g.id">
+                {{ g.name }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </label>
       </div>
 
       <template v-if="selectedPipelineId">
         <section class="space-y-4 rounded-lg border bg-card p-6">
           <h2 class="text-base font-semibold tracking-tight">
-            {{ $t(selectedGroupId ? 'views.ABTestModelsView.edit_variant_group' : 'views.ABTestModelsView.new_variant_group') }}
+            {{ $t(selectedGroupId && selectedGroupId !== '__all__' ? 'views.ABTestModelsView.edit_variant_group' : 'views.ABTestModelsView.new_variant_group') }}
           </h2>
           <div class="grid gap-4 sm:grid-cols-2">
             <div>
-              <label class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.group_name') }}</label>
-              <input
+              <label for="abtestmodelsview-field-5" class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.group_name') }}</label>
+              <input id="abtestmodelsview-field-5"
                 v-model="groupName"
                 data-testid="ab-test-models-group-name"
                 type="text"
@@ -65,8 +59,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.description') }}</label>
-              <input
+              <label for="abtestmodelsview-field-4" class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.description') }}</label>
+              <input id="abtestmodelsview-field-4"
                 v-model="groupDescription"
                 data-testid="ab-test-models-group-description"
                 type="text"
@@ -76,7 +70,7 @@
             </div>
           </div>
 
-          <div v-if="!selectedGroupId && availableSnapshotId" class="text-xs text-muted-foreground">
+          <div v-if="(selectedGroupId === '__all__') && availableSnapshotId" class="text-xs text-muted-foreground">
             {{ $t('views.ABTestModelsView.using_snapshot') }} <code class="rounded bg-muted px-1.5 py-0.5 font-mono">v{{ snapshotVersion || shortId(availableSnapshotId) }}</code>
             <span v-if="availableSnapshotTag" class="ml-1">({{ availableSnapshotTag }})</span>
           </div>
@@ -117,8 +111,8 @@
               </div>
               <div class="grid gap-3 sm:grid-cols-3">
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.name_label') }}</label>
-                  <input
+                  <label for="abtestmodelsview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.name_label') }}</label>
+                  <input id="abtestmodelsview-field-3"
                     v-model="v.name"
                     :data-testid="`ab-test-models-variant-name-${i}`"
                     type="text"
@@ -127,28 +121,27 @@
                   />
                 </div>
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
-                  <select
-                    v-model="v.modelBackendId"
-                    :data-testid="`ab-test-models-model-backend-${i}`"
-                    aria-label="Model backend"
-                    class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <option value="" disabled>{{ $t('views.ABTestModelsView.select_model') }}</option>
-                    <option
-                      v-for="mb in modelBackends"
-                      :key="mb.id"
-                      :value="mb.id"
-                    >
-                      {{ mb.display_name }} ({{ mb.provider }})
-                    </option>
-                  </select>
+                  <label for="abtestmodelsview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
+                  <Select v-model="v.modelBackendId">
+                    <SelectTrigger id="abtestmodelsview-field-4" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Model backend" :data-testid="`ab-test-models-model-backend-${i}`">
+                      <SelectValue :placeholder="$t('views.ABTestModelsView.select_model')" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="mb in modelBackends"
+                        :key="mb.id"
+                        :value="mb.id"
+                      >
+                        {{ mb.display_name }} ({{ mb.provider }})
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">
+                  <label for="abtestmodelsview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">
                     Weight: <span class="font-mono tabular-nums">{{ v.weight }}%</span>
                   </label>
-                    <input
+                    <input id="abtestmodelsview-field-1"
                         v-model.number="v.weight"
                         :data-testid="`ab-test-models-weight-${i}`"
                         type="range"
@@ -185,7 +178,7 @@
         </section>
 
         <section v-if="runEntries.size > 0" class="space-y-4">
-          <h2 class="text-xl font-semibold tracking-tight">{{ $t('views.ABTestModelsView.results_title') }}</h2>
+          <h2 class="text-base font-semibold">{{ $t('views.ABTestModelsView.results_title') }}</h2>
 
           <div class="table-wrapper">
             <table class="w-full text-left text-sm">
@@ -226,7 +219,7 @@
                       {{ s.passRate.toFixed(0) }}%
                       <span class="font-normal opacity-70">({{ s.passedCount }}/{{ s.totalEvals }})</span>
                     </span>
-                    <span v-else class="text-xs text-muted-foreground">—</span>
+                    <span v-else class="text-xs text-muted-foreground">�</span>
                   </td>
                 </tr>
                 <tr class="border-b hover:bg-muted/30">
@@ -237,7 +230,7 @@
                     class="table-cell table-cell-numeric font-mono text-xs"
                   >
                     <span v-if="s.totalCost !== null">${{ Number(s.totalCost).toFixed(6) }}</span>
-                    <span v-else class="text-muted-foreground">—</span>
+                    <span v-else class="text-muted-foreground">�</span>
                   </td>
                 </tr>
                 <tr class="hover:bg-muted/30">
@@ -248,7 +241,7 @@
                     class="table-cell table-cell-numeric font-mono text-xs"
                   >
                     <span v-if="s.tokenTotal !== null">{{ s.tokenTotal.toLocaleString() }}</span>
-                    <span v-else class="text-muted-foreground">—</span>
+                    <span v-else class="text-muted-foreground">�</span>
                   </td>
                 </tr>
               </tbody>
@@ -273,42 +266,52 @@
           </div>
         </section>
 
-        <div
-          v-else-if="!selectedPipelineId"
-          class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
-        >
-          {{ $t('views.ABTestModelsView.select_pipeline_hint') }}
-        </div>
       </template>
 
-      <div
+      <EmptyState
         v-else-if="!loading && pipelines.length === 0"
-        class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
-      >
-        {{ $t('views.ABTestModelsView.no_pipelines_found') }}
-      </div>
+        title="No Pipelines Found"
+        description="Create a pipeline first, then return here to set up A/B testing between model backends."
+      />
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
+import EmptyState from '../components/shared/EmptyState.vue'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
-type PipelineItem = components['schemas']['PipelineItem']
+type PipelineItem = components['schemas']['PipelineResponse']
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type ModelBackend = components['schemas']['ModelBackendResponse']
 type RunResponse = components['schemas']['RunResponse']
 type RunIOResponse = components['schemas']['RunIOResponse']
-type RunEvalItem = components['schemas']['RunEvalItem']
-type RunEvalListResponse = components['schemas']['RunEvalListResponse']
+interface RunEvalItem {
+  eval_id: string
+  node_id: string
+  passed: boolean
+  score: number | null
+  detail?: string | null
+}
+
+interface RunEvalListResponse { items?: RunEvalItem[] }
 
 interface VariantForm {
   id: string
@@ -332,11 +335,10 @@ const pipelines = ref<PipelineItem[]>([])
 const variantGroups = ref<VariantGroup[]>([])
 const modelBackends = ref<ModelBackend[]>([])
 const selectedPipelineId = ref<string>('')
-const selectedGroupId = ref<string>('')
+const selectedGroupId = ref<string>('__all__')
 const groupName = ref('')
 const groupDescription = ref('')
 const variants = ref<VariantForm[]>([])
-const loading = ref(true)
 const error = ref<string | null>(null)
 const isUnmounted = ref(false)
 const running = ref(false)
@@ -344,6 +346,44 @@ const savedGroupId = ref<string | null>(null)
 const promotingName = ref<string | null>(null)
 
 const runEntries = ref<Map<string, RunEntry>>(new Map())
+const { loading: pipelinesLoading, data: pipelinesData } = useDataFetch(
+  () => api.GET('/api/v1/pipelines'),
+  { immediate: true }
+)
+const { loading: groupsLoading, data: groupsData, load: loadGroups } = useDataFetch(
+  () => api.GET('/api/v1/variant-groups'),
+  { immediate: true }
+)
+const { loading: backendsLoading, data: backendsData } = useDataFetch(
+  () => api.GET('/api/v1/model-backends'),
+  { immediate: true }
+)
+
+const loading = computed(() => pipelinesLoading.value || groupsLoading.value || backendsLoading.value)
+
+watch(() => pipelinesData.value, (data) => {
+  if (data) {
+    const listResp = data as unknown as { items: PipelineItem[]; total: number; page: number; page_size: number }
+    pipelines.value = listResp.items ?? []
+    if (listResp.items.length > 0 && !selectedPipelineId.value) {
+      selectedPipelineId.value = listResp.items[0].id
+    }
+  }
+})
+
+watch(() => groupsData.value, (data) => {
+  if (data) {
+    variantGroups.value = (Array.isArray(data) ? data : (data as any)?.items ?? []) as unknown as VariantGroup[]
+  }
+})
+
+watch(() => backendsData.value, (data) => {
+  if (data) {
+    const resp = data as unknown as { items: ModelBackend[]; total: number; page: number; page_size: number }
+    modelBackends.value = resp.items ?? []
+  }
+})
+
 const terminalStatuses = new Set(['complete', 'failed', 'cancelled', 'eval_failed'])
 
 const filteredGroups = computed(() =>
@@ -476,7 +516,7 @@ async function saveGroup() {
   }))
 
   try {
-    if (selectedGroupId.value) {
+    if (selectedGroupId.value && selectedGroupId.value !== '__all__') {
       const { data, error: err } = await api.PUT('/api/v1/variant-groups/{group_id}', {
         params: { path: { group_id: selectedGroupId.value } },
         body: {
@@ -484,6 +524,9 @@ async function saveGroup() {
           name: groupName.value.trim(),
           description: groupDescription.value || null,
           variants: variantDefs as unknown as components['schemas']['VariantDef'][],
+          selection_strategy: 'weighted',
+          max_concurrent_runs: 10,
+          degraded_evals: false,
         },
       })
       if (err) {
@@ -500,6 +543,9 @@ async function saveGroup() {
           name: groupName.value.trim(),
           description: groupDescription.value || null,
           variants: variantDefs as unknown as components['schemas']['VariantDef'][],
+          selection_strategy: 'weighted',
+          max_concurrent_runs: 10,
+          degraded_evals: false,
         },
       })
       if (err) {
@@ -510,7 +556,7 @@ async function saveGroup() {
         const group = data as unknown as VariantGroup
         savedGroupId.value = group.id
         selectedGroupId.value = group.id
-        await fetchVariantGroups()
+        await loadGroups()
       }
     }
   } catch (e: unknown) {
@@ -590,8 +636,8 @@ async function pollRunStatus(runId: string, variantName: string) {
           runEntries.value.set(variantName, {
             ...existing,
             runStatus: status,
-            totalCostUsd: runResp.total_cost_usd,
-            tokenConsumption: runResp.token_consumption,
+            totalCostUsd: runResp.total_cost_usd == null ? null : Number(runResp.total_cost_usd),
+            tokenConsumption: runResp.token_consumption ?? null,
           })
         }
 
@@ -624,7 +670,7 @@ async function fetchRunIO(runId: string, variantName: string) {
       if (existing) {
         runEntries.value.set(variantName, {
           ...existing,
-          nodeOutputs: ioResp.outputs_json,
+          nodeOutputs: ioResp.outputs_json ?? null,
         })
       }
     }
@@ -683,6 +729,9 @@ async function promoteWinner(variantName: string) {
         name: `${groupName.value.trim()} (default: ${variantName})`,
         description: groupDescription.value || null,
         variants: [variantDef] as unknown as components['schemas']['VariantDef'][],
+        selection_strategy: 'weighted',
+        max_concurrent_runs: 10,
+        degraded_evals: false,
       },
     })
 
@@ -700,15 +749,6 @@ onBeforeUnmount(() => {
   isUnmounted.value = true
 })
 
-onMounted(async () => {
-  await Promise.all([
-    fetchPipelines(),
-    fetchVariantGroups(),
-    fetchModelBackends(),
-  ])
-  loading.value = false
-})
-
 watch(selectedPipelineId, async (id) => {
   if (id) {
     selectedGroupId.value = ''
@@ -722,7 +762,7 @@ watch(selectedPipelineId, async (id) => {
 })
 
 watch(selectedGroupId, async (id) => {
-  if (id) {
+  if (id && id !== '__all__') {
     const group = variantGroups.value.find(g => g.id === id)
     if (group) {
       groupName.value = group.name
@@ -747,41 +787,6 @@ watch(selectedGroupId, async (id) => {
   }
 })
 
-async function fetchPipelines() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/pipelines')
-    if (err) return
-    const listResp = data as unknown as { items: PipelineItem[]; total: number; page: number; page_size: number }
-    pipelines.value = listResp.items ?? []
-    if (listResp.items.length > 0 && !selectedPipelineId.value) {
-      selectedPipelineId.value = listResp.items[0].id
-    }
-  } catch (e) {
-    console.warn('Failed to fetch pipelines', e)
-  }
-}
-
-async function fetchVariantGroups() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/variant-groups')
-    if (err) return
-    variantGroups.value = (Array.isArray(data) ? data : (data as any)?.items ?? []) as unknown as VariantGroup[]
-  } catch (e) {
-    console.warn('Failed to fetch variant groups', e)
-  }
-}
-
-async function fetchModelBackends() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/model-backends')
-    if (err) return
-    const resp = data as unknown as { items: ModelBackend[]; total: number; page: number; page_size: number }
-    modelBackends.value = resp.items ?? []
-  } catch (e) {
-    console.warn('Failed to fetch model backends', e)
-  }
-}
-
 async function fetchSnapshotForPipeline(pipelineId: string) {
   try {
     const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
@@ -804,4 +809,3 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 </script>
-

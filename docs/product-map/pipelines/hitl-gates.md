@@ -18,6 +18,7 @@ code:
   - backend/src/modulo/core/pipeline_engine/executor.py
   - backend/src/modulo/core/eval_engine/__init__.py
   - backend/src/modulo/api/routes/pipelines.py
+  - backend/src/modulo/api/routes/hitl.py
   - backend/src/modulo/db/models/hitl_claim.py
   - backend/src/modulo/core/graph_validator/__init__.py
   - frontend/src/views/PipelineEditorView.vue

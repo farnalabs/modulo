@@ -1,5 +1,6 @@
 """CRUD for SSO provider configuration."""
 
+import asyncio
 import json
 import logging
 import uuid
@@ -7,25 +8,28 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.auth.secret_storage import encrypt_stored_secret
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.crud.base import apply_updates
 from modulo.db.models.sso_provider import SsoProvider
 
 logger = logging.getLogger(__name__)
 
-_UPDATABLE_SSO_FIELDS = frozenset({
-    "client_id",
-    "client_secret",
-    "discovery_url",
-    "metadata_url",
-    "metadata_xml",
-    "entity_id",
-    "scopes",
-    "enabled",
-    "name",
-    "auto_provision",
-    "default_role",
-})
+_UPDATABLE_SSO_FIELDS = frozenset(
+    {
+        "client_id",
+        "client_secret",
+        "discovery_url",
+        "metadata_url",
+        "metadata_xml",
+        "entity_id",
+        "scopes",
+        "enabled",
+        "name",
+        "auto_provision",
+        "default_role",
+    }
+)
 
 
 async def list_providers(session: AsyncSession) -> list[SsoProvider]:
@@ -53,6 +57,7 @@ async def create_provider(
     enabled: bool = True,
     auto_provision: bool = True,
     default_role: str = "runner",
+    fernet_key: str,
     org_id: uuid.UUID,
     actor_user_id: uuid.UUID | None = None,
 ) -> SsoProvider:
@@ -61,13 +66,14 @@ async def create_provider(
     )
     existing = result.scalar_one_or_none()
     if existing:
-        raise ValueError(f"An SSO provider with name '{name}' already exists in this organisation")
+        msg = f"An SSO provider with name '{name}' already exists in this organisation"
+        raise ValueError(msg)
 
     provider = SsoProvider(
         provider_type=provider_type,
         name=name,
         client_id=client_id,
-        client_secret=client_secret,
+        client_secret=encrypt_stored_secret(client_secret, fernet_key) if client_secret is not None else None,
         discovery_url=discovery_url,
         metadata_url=metadata_url,
         metadata_xml=metadata_xml,
@@ -91,6 +97,8 @@ async def create_provider(
             resource_id=provider.id,
             payload_json={"provider_name": name},
         )
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Failed to record audit event for SSO provider %s", name)
 
@@ -102,6 +110,7 @@ async def update_provider(
     provider_id: uuid.UUID,
     *,
     actor_user_id: uuid.UUID | None = None,
+    fernet_key: str,
     **updates: str | bool | list[str] | None,
 ) -> SsoProvider | None:
     provider = await get_provider(session, provider_id)
@@ -111,16 +120,31 @@ async def update_provider(
     if "scopes" in updates and updates["scopes"] is not None and not isinstance(updates["scopes"], str):
         updates["scopes"] = json.dumps(updates["scopes"])
 
+    encrypted_client_secret: bytes | None = None
+    if "client_secret" in updates and updates["client_secret"] is not None:
+        client_secret = updates["client_secret"]
+        if not isinstance(client_secret, str):
+            raise TypeError("client_secret must be text")
+        encrypted_client_secret = encrypt_stored_secret(client_secret, fernet_key)
+        del updates["client_secret"]
+
     if "name" in updates and updates["name"] is not None:
         result = await session.execute(
-            select(SsoProvider).where(
+            select(SsoProvider)
+            .where(
                 SsoProvider.name == updates["name"],
                 SsoProvider.organisation_id == provider.organisation_id,
                 SsoProvider.id != provider_id,
-            ).with_for_update().limit(1)
+            )
+            .with_for_update()
+            .limit(1)
         )
         if result.scalar_one_or_none() is not None:
-            raise ValueError(f"An SSO provider with name '{updates['name']}' already exists in this organisation")
+            msg = f"An SSO provider with name '{updates['name']}' already exists in this organisation"
+            raise ValueError(msg)
+
+    if encrypted_client_secret is not None:
+        provider.client_secret = encrypted_client_secret
 
     filtered = {k: v for k, v in updates.items() if k in _UPDATABLE_SSO_FIELDS}
     apply_updates(provider, filtered)
@@ -137,6 +161,8 @@ async def update_provider(
             resource_id=provider.id,
             payload_json={"provider_name": provider.name},
         )
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Failed to record audit event for SSO provider %s", provider.name)
 
@@ -170,6 +196,8 @@ async def delete_provider(
             resource_id=provider_id_val,
             payload_json={"provider_name": provider_name},
         )
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Failed to record audit event for SSO provider %s", provider_name)
 
@@ -198,6 +226,8 @@ async def toggle_provider(
             resource_id=provider.id,
             payload_json={"provider_name": provider.name},
         )
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Failed to record audit event for SSO provider %s", provider.name)
 

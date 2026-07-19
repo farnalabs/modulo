@@ -1,12 +1,12 @@
-from __future__ import annotations
-
 """API routes for error forwarder configuration — list, configure, test."""
 
+from __future__ import annotations
 
 import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -22,8 +22,8 @@ from modulo.api.models.error_forwarder_config import (
     ForwarderTestResult,
     TestConnectionRequest,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.error_tracking.forwarders import BaseForwarder, get_forwarder
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
@@ -46,7 +46,7 @@ _FORWARDER_DISPLAY_NAMES: dict[str, str] = {
 _FORWARDER_TYPES = list(_FORWARDER_DISPLAY_NAMES)
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -54,7 +54,7 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
         )
 
 
-def _is_configured(forwarder_type: str, config_json: dict | None) -> bool:
+def _is_configured(forwarder_type: str, config_json: dict[str, Any] | None) -> bool:
     if not config_json:
         return False
     required_keys: dict[str, list[str]] = {
@@ -66,13 +66,15 @@ def _is_configured(forwarder_type: str, config_json: dict | None) -> bool:
         "loki": ["push_url"],
     }
     keys = required_keys.get(forwarder_type, [])
+    if not keys:
+        return False
     return all(config_json.get(k) for k in keys)
 
 
 @router.get("", response_model=ForwarderListResponse, dependencies=[require_feature("error_forwarders")])
 async def list_forwarders(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ForwarderListResponse:
     org_id = principal.organisation_id
     if org_id is None:
@@ -83,40 +85,40 @@ async def list_forwarders(
             await set_rls_org(session, org_id)
 
             result = await session.execute(
-                select(ErrorForwarderConfig).where(
-                    ErrorForwarderConfig.organisation_id == org_id
-                )
+                select(ErrorForwarderConfig).where(ErrorForwarderConfig.organisation_id == org_id)
             )
             existing = {r.forwarder_type: r for r in result.scalars().all()}
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.list_forwarders_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.list_forwarders_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     items: list[ForwarderListItem] = []
     for ftype in _FORWARDER_TYPES:
         cfg = existing.get(ftype)
-        items.append(ForwarderListItem(
-            forwarder_type=ftype,
-            display_name=_FORWARDER_DISPLAY_NAMES[ftype],
-            enabled=cfg.enabled if cfg else False,
-            configured=_is_configured(ftype, cfg.config_json if cfg else None),
-            last_test_at=cfg.last_test_at if cfg else None,
-            last_test_ok=cfg.last_test_ok if cfg else None,
-        ))
+        items.append(
+            ForwarderListItem(
+                forwarder_type=ftype,
+                display_name=_FORWARDER_DISPLAY_NAMES[ftype],
+                enabled=cfg.enabled if cfg else False,
+                configured=_is_configured(ftype, cfg.config_json if cfg else None),
+                last_test_at=cfg.last_test_at if cfg else None,
+                last_test_ok=cfg.last_test_ok if cfg else None,
+            )
+        )
 
     return ForwarderListResponse(forwarders=items)
 
@@ -130,7 +132,7 @@ async def configure_forwarder(
     forwarder_type: str,
     req: ForwarderConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ForwarderConfigResponse:
     org_id = principal.organisation_id
     if org_id is None:
@@ -171,23 +173,23 @@ async def configure_forwarder(
 
             cfg.updated_at = datetime.now(UTC)
             await session.flush()
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.configure_forwarder_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.configure_forwarder_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     return ForwarderConfigResponse.from_orm_model(cfg)
 
@@ -201,7 +203,7 @@ async def test_forwarder(
     forwarder_type: str,
     req: TestConnectionRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ForwarderTestResult:
     org_id = principal.organisation_id
     if org_id is None:
@@ -233,23 +235,23 @@ async def test_forwarder(
                 db_cfg = result.scalar_one_or_none()
                 if db_cfg and db_cfg.config_json:
                     config = {**db_cfg.config_json, **config}
-        except ProgrammingError:
+        except ProgrammingError as exc:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Error tracking is not available. Run database migrations to enable it.",
-            )
-        except SQLAlchemyError:
+            ) from exc
+        except SQLAlchemyError as exc:
             _log.warning("error_tracking.test_forwarder_db_error")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Error tracking is temporarily unavailable. Please try again.",
-            )
-        except Exception:
+            ) from exc
+        except Exception as exc:
             _log.exception("error_tracking.test_forwarder_config_read_error")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An unexpected error occurred while processing your request.",
-            )
+            ) from exc
 
     test_group = ErrorGroup(
         organisation_id=org_id,
@@ -289,23 +291,23 @@ async def test_forwarder(
                 db_cfg.last_test_at = datetime.now(UTC)
                 db_cfg.last_test_ok = ok
                 await session.flush()
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.test_forwarder_save_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.test_forwarder_save_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     name = _FORWARDER_DISPLAY_NAMES.get(forwarder_type, forwarder_type)
     if ok:

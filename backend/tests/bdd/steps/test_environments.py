@@ -1,5 +1,6 @@
 """Step definitions for Environment Profile features — CRUD, sandbox test, cross-org isolation."""
 
+import contextlib
 import json
 import uuid
 from typing import Any
@@ -13,10 +14,8 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.runtime_provider import RuntimeProvider, WorkspaceSpec
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/environments/environment_profiles.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -75,9 +74,7 @@ def _fake_lease(**overrides: Any) -> MagicMock:
 def _stub_provider() -> RuntimeProvider:
     p = MagicMock(spec=RuntimeProvider)
     p.create_workspace = AsyncMock(return_value="ws-ref-001")
-    p.exec_command = AsyncMock(
-        return_value=MagicMock(exit_code=0, stdout="hello\n", stderr="", duration_ms=42)
-    )
+    p.exec_command = AsyncMock(return_value=MagicMock(exit_code=0, stdout="hello\n", stderr="", duration_ms=42))
     p.destroy_workspace = AsyncMock()
     p.get_workspace_status = AsyncMock(return_value="running")
     return p
@@ -88,8 +85,12 @@ def _stub_provider() -> RuntimeProvider:
 # ============================================================================
 
 
-@given(parsers.parse('a valid environment profile payload with name "{name}", image "{image}", '
-       'capabilities {caps}, egress "{egress}", and timeout {timeout:d}'))
+@given(
+    parsers.parse(
+        'a valid environment profile payload with name "{name}", image "{image}", '
+        'capabilities {caps}, egress "{egress}", and timeout {timeout:d}'
+    )
+)
 def valid_profile_payload(name: str, image: str, caps: str, egress: str, timeout: int, ctx):
     ctx["payload"] = {
         "name": name,
@@ -133,7 +134,11 @@ def org_has_n_profiles(org: str, count: int, ctx):
 def org_has_profile(org: str, profile_id: str, ctx):
     ctx["profile_id"] = profile_id
     ctx["org"] = org
-    pid = uuid.UUID(profile_id.replace("profile-", "00000000-0000-0000-0000-00000000000")[:36].ljust(36, "0")) if "-" in profile_id else uuid.uuid4()  # noqa: E501
+    pid = (
+        uuid.UUID(profile_id.replace("profile-", "00000000-0000-0000-0000-00000000000")[:36].ljust(36, "0"))
+        if "-" in profile_id
+        else uuid.uuid4()
+    )
     ctx["profile"] = _fake_profile(id=pid)
 
 
@@ -144,7 +149,7 @@ def org_has_no_profile(org: str, profile_id: str, ctx):
     ctx["profile_should_be_none"] = True
 
 
-@given("a RuntimeProviderHub with \"local\" and \"e2b\" providers registered")
+@given('a RuntimeProviderHub with "local" and "e2b" providers registered')
 def hub_with_providers(ctx):
     hub = RuntimeProviderHub()
     local = MagicMock(spec=RuntimeProvider)
@@ -158,24 +163,24 @@ def hub_with_providers(ctx):
     ctx["e2b_provider"] = e2b
 
 
-@given("an environment profile with capabilities [\"docker\"] and no provider_hint")
+@given('an environment profile with capabilities ["docker"] and no provider_hint')
 def profile_docker_no_hint(ctx):
     ctx["resolve_profile"] = _fake_profile(capabilities=["docker"], name="docker-only")
 
 
-@given(parsers.parse("an environment profile with provider_hint \"{hint}\""))
+@given(parsers.parse('an environment profile with provider_hint "{hint}"'))
 def profile_with_hint(hint: str, ctx):
     p = _fake_profile(capabilities=["docker"], name="hinted-profile")
     p.provider_hint = hint
     ctx["resolve_profile"] = p
 
 
-@given(parsers.parse("a run with id \"{run_id}\""))
+@given(parsers.parse('a run with id "{run_id}"'))
 def run_with_id(run_id: str, ctx):
     ctx["run_id"] = run_id
 
 
-@given(parsers.parse("a WorkspaceLease for run \"{run_id}\" referencing environment profile \"{profile_id}\""))
+@given(parsers.parse('a WorkspaceLease for run "{run_id}" referencing environment profile "{profile_id}"'))
 def lease_for_run(run_id: str, profile_id: str, ctx):
     lease = _fake_lease(
         run_id=uuid.uuid4(),
@@ -189,10 +194,11 @@ def lease_for_run(run_id: str, profile_id: str, ctx):
 @given("a LocalRuntimeProvider")
 def local_provider(ctx):
     from modulo.core.runtime_provider.local import LocalRuntimeProvider
+
     ctx["provider"] = LocalRuntimeProvider(max_concurrency=2)
 
 
-@given("an EnvironmentProfile with image_ref \"python:3.12-slim\" and capabilities [\"docker\"]")
+@given('an EnvironmentProfile with image_ref "python:3.12-slim" and capabilities ["docker"]')
 def profile_for_spec(ctx):
     ctx["spec_profile"] = _fake_profile(
         image_ref="python:3.12-slim",
@@ -203,6 +209,7 @@ def profile_for_spec(ctx):
 @given("a LocalRuntimeProvider with an active workspace")
 def provider_with_active_workspace(ctx):
     from modulo.core.runtime_provider.local import LocalRuntimeProvider
+
     provider = LocalRuntimeProvider(max_concurrency=2)
     spec = WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),
@@ -217,10 +224,11 @@ def provider_with_active_workspace(ctx):
 @given("a ShellConnector using that provider")
 def shell_connector_with_provider(ctx):
     from modulo.connectors.shell import ShellConnector
+
     ctx["connector"] = ShellConnector(runtime_provider=ctx["provider"], allowed_commands=["echo"])
 
 
-@given("an EnvironmentProfile with capabilities [\"docker\", \"python3.12\"]")
+@given('an EnvironmentProfile with capabilities ["docker", "python3.12"]')
 def profile_for_validation(ctx):
     ctx["validation_profile"] = _fake_profile(
         capabilities=["docker", "python3.12"],
@@ -228,8 +236,7 @@ def profile_for_validation(ctx):
     )
 
 
-@given("a pipeline snapshot with an agent that requires capabilities "
-       "[\"docker\", \"python3.12\", \"egress:github.com\"]")
+@given('a pipeline snapshot with an agent that requires capabilities ["docker", "python3.12", "egress:github.com"]')
 def snapshot_validation(ctx):
     ctx["graph_json"] = {
         "nodes": [
@@ -245,7 +252,7 @@ def snapshot_validation(ctx):
     ctx["validation_profile_caps"] = ["docker", "python3.12"]
 
 
-@given("an EnvironmentProfile with capabilities [\"docker\", \"python3.12\", \"egress:github.com\"]")
+@given('an EnvironmentProfile with capabilities ["docker", "python3.12", "egress:github.com"]')
 def profile_full_caps(ctx):
     ctx["validation_profile"] = _fake_profile(
         capabilities=["docker", "python3.12", "egress:github.com"],
@@ -253,7 +260,7 @@ def profile_full_caps(ctx):
     )
 
 
-@given("a pipeline snapshot with an agent that requires capabilities [\"docker\", \"python3.12\"]")
+@given('a pipeline snapshot with an agent that requires capabilities ["docker", "python3.12"]')
 def snapshot_subset(ctx):
     ctx["graph_json"] = {
         "nodes": [
@@ -318,7 +325,7 @@ def get_url(url: str, ctx, client):
         ctx["response"] = client.get(url)
 
 
-@when(parsers.parse("I PATCH {url} with name \"{name}\""))
+@when(parsers.parse('I PATCH {url} with name "{name}"'))
 def patch_profile(url: str, name: str, ctx, client):
     profile = ctx.get("profile")
     profile_should_be_none = ctx.get("profile_should_be_none", False)
@@ -394,6 +401,7 @@ def workspace_created(ctx):
     lease.status = "active"
     lease.provider_ref = "ws-provider-ref"
     from datetime import UTC, datetime, timedelta
+
     lease.started_at = datetime.now(UTC)
     lease.expires_at = datetime.now(UTC) + timedelta(hours=1)
     ctx["lease"] = lease
@@ -430,6 +438,7 @@ async def destroy_workspace(ctx):
 @when(parsers.parse('I execute the command "{command}" via the ShellConnector'))
 async def execute_shell_command(command: str, ctx):
     from modulo.connectors.base import ConnectorPayload
+
     result = await ctx["connector"].write(
         ConnectorPayload(
             resource="command",
@@ -454,15 +463,14 @@ async def validate_snapshot(ctx):
             if agent_required:
                 missing = [c for c in agent_required if c not in profile_caps]
                 if missing:
-                    errors.append(
-                        ("ENV_MISSING_CAPABILITIES", f"requires capabilities {missing}")
-                    )
+                    errors.append(("ENV_MISSING_CAPABILITIES", f"requires capabilities {missing}"))
     ctx["validation_errors"] = errors
 
 
 @when(parsers.parse('I authenticate as a user in org "{org}"'))
 def authenticate_as_org(org: str, ctx, request):
     from modulo.api.main import app
+
     if org != "acme":
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="otheruser",
@@ -484,9 +492,7 @@ def authenticate_as_org(org: str, ctx, request):
 def check_response_status(status: int, ctx):
     resp = ctx.get("response")
     assert resp is not None, "No response stored in context"
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
-    )
+    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
 
 
 @then(parsers.parse('the response contains a profile with name "{name}"'))
@@ -502,17 +508,13 @@ def response_contains_profile_name(name: str, ctx):
 def response_contains_profile_id(profile_id: str, ctx):
     data = ctx["response"].json()
     if isinstance(data, dict):
-        assert profile_id in str(data.get("id", "")), (
-            f"Expected id containing {profile_id}, got {data.get('id')}"
-        )
+        assert profile_id in str(data.get("id", "")), f"Expected id containing {profile_id}, got {data.get('id')}"
 
 
 @then(parsers.parse('the profile has image_ref "{expected}"'))
 def profile_has_image(expected: str, ctx):
     data = ctx["response"].json()
-    assert data.get("image_ref") == expected, (
-        f"Expected image_ref {expected!r}, got {data.get('image_ref')!r}"
-    )
+    assert data.get("image_ref") == expected, f"Expected image_ref {expected!r}, got {data.get('image_ref')!r}"
 
 
 @then(parsers.parse("the profile has capabilities {expected}"))
@@ -555,9 +557,7 @@ def error_indicates_required(field: str, ctx):
 @then(parsers.parse("the error indicates timeout is out of range"))
 def error_timeout_range(ctx):
     data = ctx["response"].json()
-    assert data.get("status_code") == 422 or data.get("status_code") is None, (
-        f"Expected 422, got {data}"
-    )
+    assert data.get("status_code") == 422 or data.get("status_code") is None, f"Expected 422, got {data}"
     detail = str(data.get("detail", ""))
     assert any(word in detail.lower() for word in ["timeout", "less than", "greater than", "out of range"]), (
         f"Expected timeout range error, got {detail}"
@@ -595,9 +595,7 @@ def response_is_sse(ctx):
     resp = ctx["response"]
     assert resp.status_code == 200
     content_type = resp.headers.get("content-type", "")
-    assert "text/event-stream" in content_type, (
-        f"Expected text/event-stream, got {content_type}"
-    )
+    assert "text/event-stream" in content_type, f"Expected text/event-stream, got {content_type}"
 
 
 @then(parsers.parse('the stream contains a "{event}" event'))
@@ -609,9 +607,7 @@ def stream_contains_event(event: str, ctx):
 
 @then(parsers.parse('the resolved provider is "{expected}"'))
 def resolved_provider_is(expected: str, ctx):
-    assert ctx.get("resolved_name") == expected, (
-        f"Expected resolved {expected!r}, got {ctx.get('resolved_name')!r}"
-    )
+    assert ctx.get("resolved_name") == expected, f"Expected resolved {expected!r}, got {ctx.get('resolved_name')!r}"
 
 
 @then(parsers.parse('the WorkspaceLease status transitions from "{old_status}" to "{new_status}"'))
@@ -649,17 +645,13 @@ async def workspace_status_is(status: str, ctx):
 @then(parsers.parse("the command exits with code {code:d}"))
 def command_exit_code(code: int, ctx):
     result = ctx["cmd_result"]
-    assert result["exit_code"] == code, (
-        f"Expected exit code {code}, got {result['exit_code']}"
-    )
+    assert result["exit_code"] == code, f"Expected exit code {code}, got {result['exit_code']}"
 
 
 @then(parsers.parse('the stdout contains "{text}"'))
 def command_stdout_contains(text: str, ctx):
     result = ctx["cmd_result"]
-    assert text in result["stdout"], (
-        f"Expected stdout to contain {text!r}, got {result['stdout']!r}"
-    )
+    assert text in result["stdout"], f"Expected stdout to contain {text!r}, got {result['stdout']!r}"
 
 
 @then(parsers.parse('a validation error is raised with code "{code}"'))

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 from modulo.api.models.error import ErrorEventInput, ErrorGroupResult, ErrorIngestRequest, ErrorIngestResponse
@@ -17,84 +18,91 @@ from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
+def _make_session() -> AsyncMock:
+    session = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session.execute.return_value = result
+    return session
+
+
 # =========================================================================
-# Fingerprint
+# Fingerprint — parametrized
 # =========================================================================
 
 
 class TestFingerprint:
-    def test_same_input_same_hash(self) -> None:
-        svc = ErrorIngestionService()
-        fp1 = svc.fingerprint(message="test error", stacktrace=None, source="backend")
-        fp2 = svc.fingerprint(message="test error", stacktrace=None, source="backend")
-        assert fp1 == fp2
-        assert len(fp1) == 64
+    """Parametrized: fingerprint determinism, uniqueness, normalization."""
 
-    def test_different_message_different_hash(self) -> None:
-        svc = ErrorIngestionService()
-        fp1 = svc.fingerprint(message="error one", stacktrace=None, source="backend")
-        fp2 = svc.fingerprint(message="error two", stacktrace=None, source="backend")
-        assert fp1 != fp2
+    svc = ErrorIngestionService()
 
-    def test_different_source_different_hash(self) -> None:
-        svc = ErrorIngestionService()
-        fp1 = svc.fingerprint(message="test", stacktrace=None, source="backend")
-        fp2 = svc.fingerprint(message="test", stacktrace=None, source="frontend")
-        assert fp1 != fp2
-
-    def test_stacktrace_affects_hash(self) -> None:
-        svc = ErrorIngestionService()
-        fp1 = svc.fingerprint(message="test", stacktrace="line 1\nline 2", source="backend")
-        fp2 = svc.fingerprint(message="test", stacktrace=None, source="backend")
-        assert fp1 != fp2
+    @pytest.mark.parametrize(
+        ("msg1", "stack1", "src1", "msg2", "stack2", "src2", "should_match"),
+        [
+            pytest.param("test error", None, "backend", "test error", None, "backend", True, id="same_input_same_hash"),
+            pytest.param(
+                "error one", None, "backend", "error two", None, "backend", False, id="different_message_different_hash"
+            ),
+            pytest.param(
+                "test", None, "backend", "test", None, "frontend", False, id="different_source_different_hash"
+            ),
+            pytest.param(
+                "test", "line 1\nline 2", "backend", "test", None, "backend", False, id="stacktrace_affects_hash"
+            ),
+            pytest.param(
+                "error",
+                "traceback line 1\ntraceback line 2",
+                "backend",
+                "error",
+                "traceback line 1\ntraceback line 2",
+                "backend",
+                True,
+                id="deterministic_with_stacktrace",
+            ),
+        ],
+    )
+    def test_fingerprint(
+        self,
+        msg1: str,
+        stack1: str | None,
+        src1: str,
+        msg2: str,
+        stack2: str | None,
+        src2: str,
+        should_match: bool,
+    ) -> None:
+        fp1 = self.svc.fingerprint(message=msg1, stacktrace=stack1, source=src1)
+        fp2 = self.svc.fingerprint(message=msg2, stacktrace=stack2, source=src2)
+        if should_match:
+            assert fp1 == fp2
+        else:
+            assert fp1 != fp2
 
     def test_fingerprint_hex_length(self) -> None:
-        svc = ErrorIngestionService()
-        fp = svc.fingerprint(message="x", source="celery")
+        fp = self.svc.fingerprint(message="x", source="celery")
         assert len(fp) == 64
-
-    def test_fingerprint_deterministic_with_stacktrace(self) -> None:
-        svc = ErrorIngestionService()
-        st = """Traceback (most recent call last):
-  File "/app/main.py", line 42, in handler
-    result = process(data)
-  File "/app/processor.py", line 15, in process
-    raise ValueError("invalid")"""
-        fp1 = svc.fingerprint(message="error", stacktrace=st, source="backend")
-        fp2 = svc.fingerprint(message="error", stacktrace=st, source="backend")
-        assert fp1 == fp2
 
 
 class TestFingerprintNormalization:
-    def test_top_5_frames_only(self) -> None:
-        svc = ErrorIngestionService()
-        long_st = "\n".join(f"line {i}" for i in range(20))
-        fp_long = svc.fingerprint(message="x", stacktrace=long_st, source="x")
-        short_st = "\n".join(f"line {i}" for i in range(5))
-        fp_short = svc.fingerprint(message="x", stacktrace=short_st, source="x")
-        assert fp_long == fp_short
+    svc = ErrorIngestionService()
 
-    def test_file_paths_stripped(self) -> None:
-        svc = ErrorIngestionService()
-        st1 = """  File "/app/deploy/path/main.py", line 42, in handler
-    result = do_work()"""
-        st2 = """  File "/different/path/main.py", line 99, in handler
-    result = do_work()"""
-        fp1 = svc.fingerprint(message="x", stacktrace=st1, source="x")
-        fp2 = svc.fingerprint(message="x", stacktrace=st2, source="x")
-        assert fp1 == fp2
-
-    def test_none_stacktrace(self) -> None:
-        svc = ErrorIngestionService()
-        fp = svc.fingerprint(message="test", stacktrace=None, source="backend")
-        assert isinstance(fp, str)
-        assert len(fp) == 64
-
-    def test_empty_stacktrace(self) -> None:
-        svc = ErrorIngestionService()
-        fp = svc.fingerprint(message="test", stacktrace="", source="backend")
-        assert isinstance(fp, str)
-        assert len(fp) == 64
+    @pytest.mark.parametrize(
+        ("desc", "stacktrace", "expected_len"),
+        [
+            pytest.param("top_5_frames_only", "\n".join(f"line {i}" for i in range(20)), 64, id="top_5_frames_only"),
+            pytest.param(
+                "file_paths_stripped",
+                '  File "/app/deploy/path/main.py", line 42, in handler\n    result = do_work()',
+                64,
+                id="file_paths_stripped",
+            ),
+            pytest.param("none_stacktrace", None, 64, id="none_stacktrace"),
+            pytest.param("empty_stacktrace", "", 64, id="empty_stacktrace"),
+        ],
+    )
+    def test_normalization(self, desc: str, stacktrace: str | None, expected_len: int) -> None:
+        fp = self.svc.fingerprint(message="x", stacktrace=stacktrace, source="x")
+        assert len(fp) == expected_len
 
 
 # =========================================================================
@@ -102,36 +110,10 @@ class TestFingerprintNormalization:
 # =========================================================================
 
 
-class _IngestMocks:
-    """Context manager that patches CRUD functions at the service's import site."""
-
-    def __init__(self, event_mock, group_mock=None):
-        self.event_mock = event_mock
-        self.group_mock = group_mock
-        self.patches = []
-
-    async def __aenter__(self):
-        grp = MagicMock()
-        grp.id = uuid.uuid4()
-
-        self.patches = [
-            patch("modulo.core.error_tracking.create_error_event", AsyncMock(return_value=self.event_mock)),
-            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=self.group_mock)),
-            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock(return_value=grp)),
-        ]
-        for p in self.patches:
-            p.start()
-        return self
-
-    async def __aexit__(self, *args):
-        for p in self.patches:
-            p.stop()
-
-
 class TestIngest:
     async def test_creates_event_and_group(self) -> None:
         svc = ErrorIngestionService()
-        session = AsyncMock()
+        session = _make_session()
         event_mock = MagicMock()
         event_mock.id = uuid.uuid4()
 
@@ -156,7 +138,7 @@ class TestIngest:
 
     async def test_ingest_existing_group_returns_is_new_false(self) -> None:
         svc = ErrorIngestionService()
-        session = AsyncMock()
+        session = _make_session()
         event_mock = MagicMock()
         event_mock.id = uuid.uuid4()
         existing_group = MagicMock()
@@ -182,7 +164,7 @@ class TestIngest:
 class TestIngestBatch:
     async def test_batch_creates_multiple_events(self) -> None:
         svc = ErrorIngestionService()
-        session = AsyncMock()
+        session = _make_session()
         event_mock = MagicMock()
         event_mock.id = uuid.uuid4()
         grp = MagicMock()
@@ -250,78 +232,95 @@ class TestSessionKeyStore:
 
 
 # =========================================================================
-# Schema validation
+# Schema validation — parametrized
 # =========================================================================
 
 
 class TestErrorEventInputValidation:
-    def test_valid_input(self) -> None:
-        e = ErrorEventInput(level="error", message="Something broke", source="backend")
-        assert e.level == "error"
-        assert e.message == "Something broke"
-        assert e.source == "backend"
-
-    def test_empty_message(self) -> None:
-        with pytest.raises(ValidationError, match="message must not be empty"):
-            ErrorEventInput(level="error", message="", source="backend")
-
-    def test_invalid_level(self) -> None:
-        with pytest.raises(ValidationError, match="Invalid level"):
-            ErrorEventInput(level="debug", message="test", source="backend")
-
-    def test_invalid_source(self) -> None:
-        with pytest.raises(ValidationError, match="Invalid source"):
-            ErrorEventInput(level="error", message="test", source="mobile")
-
-    def test_too_many_breadcrumbs(self) -> None:
-        with pytest.raises(ValidationError, match="breadcrumbs must not exceed"):
-            ErrorEventInput(
-                level="error",
-                message="test",
-                source="backend",
-                breadcrumbs=[{"msg": str(i)} for i in range(51)],
-            )
-
-    def test_breadcrumbs_at_limit(self) -> None:
-        e = ErrorEventInput(
-            level="error",
-            message="test",
-            source="backend",
-            breadcrumbs=[{"msg": str(i)} for i in range(50)],
-        )
-        assert len(e.breadcrumbs) == 50
-
-    def test_message_stripped(self) -> None:
-        e = ErrorEventInput(level="error", message="  hello  ", source="backend")
-        assert e.message == "hello"
-
-    def test_optional_fields_none(self) -> None:
-        e = ErrorEventInput(level="critical", message="test", source="celery")
-        assert e.stacktrace is None
-        assert e.context_json is None
-        assert e.environment is None
-        assert e.version is None
-        assert e.breadcrumbs is None
+    @pytest.mark.parametrize(
+        ("kwargs", "should_pass", "match"),
+        [
+            pytest.param(
+                {"level": "error", "message": "Something broke", "source": "backend"}, True, None, id="valid_input"
+            ),
+            pytest.param(
+                {"level": "error", "message": "", "source": "backend"},
+                False,
+                "message must not be empty",
+                id="empty_message",
+            ),
+            pytest.param(
+                {"level": "debug", "message": "test", "source": "backend"}, False, "Invalid level", id="invalid_level"
+            ),
+            pytest.param(
+                {"level": "error", "message": "test", "source": "mobile"}, False, "Invalid source", id="invalid_source"
+            ),
+            pytest.param(
+                {
+                    "level": "error",
+                    "message": "test",
+                    "source": "backend",
+                    "breadcrumbs": [{"msg": str(i)} for i in range(51)],
+                },
+                False,
+                "breadcrumbs must not exceed",
+                id="too_many_breadcrumbs",
+            ),
+            pytest.param(
+                {
+                    "level": "error",
+                    "message": "test",
+                    "source": "backend",
+                    "breadcrumbs": [{"msg": str(i)} for i in range(50)],
+                },
+                True,
+                None,
+                id="breadcrumbs_at_limit",
+            ),
+            pytest.param(
+                {"level": "error", "message": "  hello  ", "source": "backend"}, True, None, id="message_stripped"
+            ),
+            pytest.param(
+                {"level": "critical", "message": "test", "source": "celery"}, True, None, id="optional_fields_none"
+            ),
+        ],
+    )
+    def test_validation(self, kwargs: dict, should_pass: bool, match: str | None) -> None:
+        if should_pass:
+            e = ErrorEventInput(**kwargs)
+            assert e.level == kwargs["level"]
+            if kwargs.get("message") == "  hello  ":
+                assert e.message == "hello"
+        else:
+            with pytest.raises(ValidationError, match=match):
+                ErrorEventInput(**kwargs)
 
 
 class TestErrorIngestRequestValidation:
-    def test_empty_events_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            ErrorIngestRequest(events=[])
-
-    def test_single_event_valid(self) -> None:
-        r = ErrorIngestRequest(events=[{"level": "error", "message": "test", "source": "backend"}])
-        assert len(r.events) == 1
-
-    def test_max_20_events(self) -> None:
-        events = [{"level": "error", "message": f"err{i}", "source": "backend"} for i in range(20)]
-        r = ErrorIngestRequest(events=events)
-        assert len(r.events) == 20
-
-    def test_too_many_events_rejected(self) -> None:
-        events = [{"level": "error", "message": f"err{i}", "source": "backend"} for i in range(21)]
-        with pytest.raises(ValidationError):
-            ErrorIngestRequest(events=events)
+    @pytest.mark.parametrize(
+        ("events", "should_pass"),
+        [
+            pytest.param([], False, id="empty_rejected"),
+            pytest.param([{"level": "error", "message": "test", "source": "backend"}], True, id="single_valid"),
+            pytest.param(
+                [{"level": "error", "message": f"err{i}", "source": "backend"} for i in range(20)],
+                True,
+                id="max_20_valid",
+            ),
+            pytest.param(
+                [{"level": "error", "message": f"err{i}", "source": "backend"} for i in range(21)],
+                False,
+                id="too_many_rejected",
+            ),
+        ],
+    )
+    def test_validation(self, events: list[dict], should_pass: bool) -> None:
+        if should_pass:
+            r = ErrorIngestRequest(events=events)
+            assert len(r.events) == len(events)
+        else:
+            with pytest.raises(ValidationError):
+                ErrorIngestRequest(events=events)
 
 
 class TestErrorGroupResult:

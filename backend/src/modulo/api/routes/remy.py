@@ -42,7 +42,9 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
+from modulo.api.mcp_tool_registry import build_tool_registry, get_mcp_tool_definitions
 from modulo.api.ui_tools import (
     _UI_TOOLS,
     DESTRUCTIVE_PATTERNS,
@@ -51,8 +53,8 @@ from modulo.api.ui_tools import (
     UI_TOOL_NAMES,
     WRITE_TOOLS,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.feature_flags import get_registry
 from modulo.core.remy.config_service import RemyConfig, RemyConfigService
 from modulo.core.remy.skill_loader import SkillLoader
@@ -60,52 +62,43 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.remy_message import ChatMessage
 from modulo.db.models.remy_session import ChatSession
 from modulo.db.rls import set_rls_org
-from modulo.model_backends.ai21 import Ai21Backend
-from modulo.model_backends.anthropic import AnthropicBackend
 from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.deepseek import DeepSeekBackend
-from modulo.model_backends.fireworks import FireworksBackend
-from modulo.model_backends.gemini import GeminiBackend
-from modulo.model_backends.grok import GrokBackend
-from modulo.model_backends.groq import GroqBackend
-from modulo.model_backends.openai import OpenAIBackend
-from modulo.model_backends.opencode import OpenCodeBackend
-from modulo.model_backends.openrouter import OpenRouterBackend
-from modulo.model_backends.perplexity import PerplexityBackend
-from modulo.model_backends.qwen import QwenBackend
-from modulo.model_backends.togetherai import TogetherAIBackend
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
+_log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/remy", tags=["remy"])
 
 # ── Provider → backend class mapping ──────────────────────────────────────
-_SIMPLE_BACKENDS: dict[str, type[ModelBackendBase]] = {
-    "ai21": Ai21Backend,
-    "anthropic": AnthropicBackend,
-    "deepseek": DeepSeekBackend,
-    "fireworks": FireworksBackend,
-    "gemini": GeminiBackend,
-    "grok": GrokBackend,
-    "groq": GroqBackend,
-    "openai": OpenAIBackend,
-    "opencode": OpenCodeBackend,
-    "openrouter": OpenRouterBackend,
-    "perplexity": PerplexityBackend,
-    "qwen": QwenBackend,
-    "togetherai": TogetherAIBackend,
-}
+SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "ai21",
+        "anthropic",
+        "deepseek",
+        "fireworks",
+        "gemini",
+        "grok",
+        "groq",
+        "openai",
+        "opencode",
+        "openrouter",
+        "perplexity",
+        "qwen",
+        "togetherai",
+    }
+)
 
 # ── In-memory event registry (single-worker only) ────────────────────────
 # For multi-worker deployments, replace with Redis pub/sub.
 
 _pending_permissions: dict[str, tuple[asyncio.Event, str]] = {}
-_permission_decisions: dict[str, dict] = {}
+_permission_decisions: dict[str, dict[str, Any]] = {}
 _pending_ui_results: dict[str, asyncio.Event] = {}
-_ui_command_results: dict[str, list[dict]] = {}
+_ui_command_results: dict[str, list[dict[str, Any]]] = {}
 _resume_events: dict[str, asyncio.Event] = {}
-_session_approvals: dict[str, dict[str, dict]] = {}
+_session_approvals: dict[str, dict[str, dict[str, Any]]] = {}
 _SESSION_APPROVAL_TTL = timedelta(minutes=30)
 
 # ── Redis registry (lazy-init, multi-worker capable) ─────────────────────
@@ -125,6 +118,7 @@ def _get_registry() -> Any | None:
             logger.warning("remy.redis_unavailable — falling back to in-memory registries")
             _redis_registry = _SENTINEL  # don't retry
     return _redis_registry if _redis_registry is not _SENTINEL else None
+
 
 # ── Action rate limiter ──────────────────────────────────────────────────
 
@@ -152,7 +146,9 @@ _rate_limiters: dict[str, ActionRateLimiter] = {}
 
 class CreateSessionRequest(BaseModel):
     provider: str | None = Field(None, description="LLM provider (e.g. openai, anthropic). Auto-detected if omitted.")
-    model: str | None = Field(None, description="Model ID (e.g. gpt-4o, claude-sonnet-4-20250514). Auto-detected if omitted.")
+    model: str | None = Field(
+        None, description="Model ID (e.g. gpt-4o, claude-sonnet-4-20250514). Auto-detected if omitted."
+    )
     context_window_tokens: int = Field(..., ge=1024, le=1_000_000)
     name: str | None = None
 
@@ -175,10 +171,14 @@ class StreamRequest(BaseModel):
     provider: str = Field(..., description="LLM provider")
     model: str = Field(..., description="Model ID")
     context_window_tokens: int | None = Field(
-        None, ge=1024, le=1_000_000,
+        None,
+        ge=1024,
+        le=1_000_000,
         description="Override context window (defaults to session value)",
     )
-    api_key: str | None = Field(None, description="Optional API key override. Auto-resolved from model backends if omitted.")
+    api_key: str | None = Field(
+        None, description="Optional API key override. Auto-resolved from model backends if omitted."
+    )
     mcp_api_key: str | None = Field(None, description="MCP API key for tool execution.")
     page_context: str | None = Field(None, description="Current page context for Remy's context-awareness.")
     system_prompt: str | None = Field(None, description="System prompt override.")
@@ -193,7 +193,7 @@ class UiCommandResultItem(BaseModel):
     id: str
     name: str
     success: bool
-    result: dict | None = None
+    result: dict[str, Any] | None = None
     error: str | None = None
 
 
@@ -255,7 +255,8 @@ def _message_to_langchain(m: ChatMessage) -> BaseMessage:
         case "tool_result":
             tool_call_id = ""
             if m.tool_results_json:
-                tool_call_id = m.tool_results_json.get("tool_call_id", "")
+                raw_tool_call_id = m.tool_results_json.get("tool_call_id", "")
+                tool_call_id = raw_tool_call_id if isinstance(raw_tool_call_id, str) else ""
             return ToolMessage(content=m.content or "", tool_call_id=tool_call_id)
         case "summary":
             return SystemMessage(content=m.content or "")
@@ -265,13 +266,69 @@ def _message_to_langchain(m: ChatMessage) -> BaseMessage:
 
 
 def _build_backend(provider: str, model: str, api_key: str, **kwargs: Any) -> ModelBackendBase:
-    cls = _SIMPLE_BACKENDS.get(provider)
-    if cls is None:
+    if provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported provider: {provider!r}. Supported: {', '.join(sorted(_SIMPLE_BACKENDS))}",
+            detail=f"Unsupported provider: {provider!r}. Supported: {', '.join(sorted(SUPPORTED_PROVIDERS))}",
         )
-    return cls(api_key=api_key, model_id=model, **kwargs)
+
+    if provider == "ai21":
+        from modulo.model_backends.ai21 import Ai21Backend
+
+        return Ai21Backend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "anthropic":
+        from modulo.model_backends.anthropic import AnthropicBackend
+
+        return AnthropicBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "deepseek":
+        from modulo.model_backends.deepseek import DeepSeekBackend
+
+        return DeepSeekBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "fireworks":
+        from modulo.model_backends.fireworks import FireworksBackend
+
+        return FireworksBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "gemini":
+        from modulo.model_backends.gemini import GeminiBackend
+
+        return GeminiBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "grok":
+        from modulo.model_backends.grok import GrokBackend
+
+        return GrokBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "groq":
+        from modulo.model_backends.groq import GroqBackend
+
+        return GroqBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "openai":
+        from modulo.model_backends.openai import OpenAIBackend
+
+        return OpenAIBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "opencode":
+        from modulo.model_backends.opencode import OpenCodeBackend
+
+        return OpenCodeBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "openrouter":
+        from modulo.model_backends.openrouter import OpenRouterBackend
+
+        return OpenRouterBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "perplexity":
+        from modulo.model_backends.perplexity import PerplexityBackend
+
+        return PerplexityBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "qwen":
+        from modulo.model_backends.qwen import QwenBackend
+
+        return QwenBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "togetherai":
+        from modulo.model_backends.togetherai import TogetherAIBackend
+
+        return TogetherAIBackend(api_key=api_key, model_id=model, **kwargs)
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Unsupported provider: {provider!r}",
+    )
 
 
 async def _resolve_api_key(
@@ -285,6 +342,7 @@ async def _resolve_api_key(
             ModelBackend.organisation_id == org_id,
             ModelBackend.provider == provider,
             ModelBackend.status == "active",
+            ModelBackend.credentials_ciphertext != b"",
         )
     )
     backend = result.scalar_one_or_none()
@@ -293,8 +351,6 @@ async def _resolve_api_key(
     try:
         fernet = Fernet(fernet_key.encode())
         return fernet.decrypt(backend.credentials_ciphertext).decode()
-    except HTTPException:
-        raise
     except Exception:
         logger.exception("Failed to decrypt credentials for provider %r", provider)
         return None
@@ -320,22 +376,25 @@ async def _call_mcp_tool(
                     await asyncio.sleep(min(retry_after, 30))
                     continue
                 resp.raise_for_status()
-                return resp.json()
+                result = resp.json()
+                if not isinstance(result, dict):
+                    raise ValueError("MCP tool returned a non-object response")
+                return result
         except httpx.TimeoutException:
             logger.warning("MCP tool %r timed out (attempt %d/3)", tool_name, attempt + 1)
             last_exc = None
-            await asyncio.sleep(2 ** attempt)
+            await asyncio.sleep(2**attempt)
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (502, 503, 504):
                 logger.warning("MCP tool %r returned %d (attempt %d/3)", tool_name, e.response.status_code, attempt + 1)
                 last_exc = e
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
                 continue
             raise
         except httpx.RequestError as e:
             logger.warning("MCP tool %r request failed (attempt %d/3): %s", tool_name, attempt + 1, e)
             last_exc = e
-            await asyncio.sleep(2 ** attempt)
+            await asyncio.sleep(2**attempt)
     raise HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=f"MCP tool call '{tool_name}' failed after 3 attempts.",
@@ -357,9 +416,7 @@ def _reconstruct_tool_calls(buffers: dict[int, dict[str, Any]]) -> list[dict[str
 
 async def _reconstruct_messages(session: AsyncSession, session_id: uuid.UUID) -> list[BaseMessage]:
     result = await session.execute(
-        select(ChatMessage)
-        .where(ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.created_at.asc())
+        select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
     )
     db_messages = result.scalars().all()
     return [_message_to_langchain(m) for m in db_messages]
@@ -389,7 +446,7 @@ async def _is_ui_driving_enabled(
 
 async def _validate_session_ownership(
     session_id: uuid.UUID,
-    principal: AuthenticatedPrincipal,
+    principal: TenantPrincipal,
     db: AsyncSession,
 ) -> ChatSession:
     chat_session = await db.get(ChatSession, session_id)
@@ -419,25 +476,26 @@ def _check_nogo(config: RemyConfig, tool_name: str, args: dict[str, Any], page_c
 def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any], page_context: str = "") -> str:
     """Returns 'always_allowed', 'requires_approval', 'nogo_requires_approval', or 'disabled'."""
     # 0. No-go zone check (highest priority)
-    if _check_nogo(config, tool_name, args, page_context):
-        if config.permission_mode == "full_auto":
-            return "disabled"
+    if _check_nogo(config, tool_name, args, page_context) and config.permission_mode == "full_auto":
+        return "disabled"
         return "nogo_requires_approval"
 
     # 0b. Allowlist enforcement (second priority — restricts which elements/pages are auto-allowed)
     if config.allowed_selectors and tool_name in ("click", "fill", "select", "extract"):
         selector = args.get("selector", "") or args.get("data-testid", "")
-        if not any(allowed in selector for allowed in config.allowed_selectors):
-            if config.permission_mode == "full_auto":
-                return "disabled"
-            return "requires_approval"
+        if (
+            not any(allowed in selector for allowed in config.allowed_selectors)
+            and config.permission_mode == "full_auto"
+        ):
+            return "disabled"
 
     if config.allowed_page_patterns and tool_name == "navigate":
         path = args.get("path", "")
-        if not any(pattern in path for pattern in config.allowed_page_patterns):
-            if config.permission_mode == "full_auto":
-                return "disabled"
-            return "requires_approval"
+        if (
+            not any(pattern in path for pattern in config.allowed_page_patterns)
+            and config.permission_mode == "full_auto"
+        ):
+            return "disabled"
 
     # 1. Per-tool user override
     overrides = config.tool_permissions or {}
@@ -451,7 +509,7 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
     elif mode == "full_auto":
         base = "always_allowed"
         raw_confidence = args.get("confidence", 1.0)
-        confidence = raw_confidence if isinstance(raw_confidence, (int, float)) else 1.0
+        confidence = raw_confidence if isinstance(raw_confidence, int | float) else 1.0
         if confidence < config.auto_execute_threshold:
             return "requires_approval"
     else:
@@ -469,7 +527,8 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
 async def _is_approved_for_session(session_id: str, tool_name: str, page_path: str) -> bool:
     registry = _get_registry()
     if registry is not None:
-        return await registry.is_session_approved(session_id, tool_name, page_path)
+        approved = await registry.is_session_approved(session_id, tool_name, page_path)
+        return bool(approved)
     session_approvals = _session_approvals.get(session_id)
     if not session_approvals:
         return False
@@ -513,169 +572,38 @@ def clear_all_session_approvals() -> None:
     _session_approvals.clear()
 
 
-# MCP tool definitions for the LLM's tools parameter.
-# These mirror the @mcp.tool decorators in mcp_server.py.
-# When the LLM calls one of these, the backend proxies the call to the MCP server.
-_MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_documentation",
-            "description": "Search product documentation, FAQ, and how-to guides for relevant sections. Supports free-text keyword search.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Free-text search query"},
-                    "section": {"type": "string", "description": "Optional section filter"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_integration_status",
-            "description": "Get current health status of all connectors, model backends, and triggers.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_org_config",
-            "description": "Get org-level configuration. Optionally filter to a specific section (remy, plan, rate_limits). Never exposes secrets.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "section": {"type": "string", "description": "Optional section filter: remy, plan, rate_limits"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_available_features",
-            "description": "List product features enabled on the current plan tier.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "browse_library",
-            "description": "Browse the library of primitives (schemas, agents, workflows, pipeline templates, test fixtures). Supports filtering by type, text search, and pagination.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "primitive_type": {"type": "string", "description": "Filter by type: schema, agent, workflow, pipeline_template, test_fixture"},
-                    "search": {"type": "string", "description": "Text search query"},
-                    "cursor": {"type": "string", "description": "Pagination cursor"},
-                    "limit": {"type": "integer", "description": "Results per page (default 20)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_model_backend",
-            "description": "Register a new LLM provider API key. Common providers: openai, anthropic, gemini, deepseek, groq, opencode. The API key is encrypted at rest.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Unique name for this backend"},
-                    "display_name": {"type": "string", "description": "Human-readable display name"},
-                    "provider": {"type": "string", "description": "Provider ID (openai, anthropic, gemini, deepseek, groq, opencode, etc.)"},
-                    "model_id": {"type": "string", "description": "Model ID (e.g. gpt-4o, claude-sonnet-4-20250514, deepseek-v4-flash)"},
-                    "api_key": {"type": "string", "description": "API key for the provider"},
-                },
-                "required": ["name", "display_name", "provider", "model_id", "api_key"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_pending_hitl",
-            "description": "List all pending human-in-the-loop gates across all pipeline runs.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "page": {"type": "integer", "description": "Page number (default 1)"},
-                    "page_size": {"type": "integer", "description": "Items per page (default 20)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_trigger_events",
-            "description": "Get recent trigger events for a given trigger or pipeline.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "trigger_id": {"type": "string", "description": "Filter by trigger ID"},
-                    "pipeline_id": {"type": "string", "description": "Filter by pipeline ID"},
-                    "limit": {"type": "integer", "description": "Max events to return (default 20)"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_pipelines_tool",
-            "description": "List pipelines in the organisation. Returns summaries.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "page": {"type": "integer", "description": "Page number (default 1)"},
-                    "page_size": {"type": "integer", "description": "Items per page (default 20)"},
-                },
-            },
-        },
-    },
-]
-
-
 def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, Any]]:
     """Combine UI tool and MCP tool definitions for the LLM's tools parameter."""
     tools: list[dict[str, Any]] = []
     if include_ui_tools:
         for name, schema in _UI_TOOLS.items():
-            tools.append({
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": schema["description"],
-                    "parameters": {
-                        "type": "object",
-                        "properties": schema["parameters"],
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": schema["description"],
+                        "parameters": {
+                            "type": "object",
+                            "properties": schema["parameters"],
+                        },
                     },
-                },
-            })
-    tools.extend(_MCP_TOOL_DEFINITIONS)
+                }
+            )
+    tools.extend(get_mcp_tool_definitions())
     return tools
 
 
 # ── Session endpoints ────────────────────────────────────────────────────
 
 
+@handle_db_errors("remy.list_sessions")
 @router.get("/sessions", status_code=status.HTTP_200_OK)
 async def list_sessions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -720,13 +648,20 @@ async def list_sessions(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.list_sessions.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
+@handle_db_errors("remy.create_session")
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
 async def create_session(
     req: CreateSessionRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -736,17 +671,19 @@ async def create_session(
                     ChatSession.user_id == principal.account_id
                 )
             )
-            next_session_number = max_sn.scalar() + 1
+            next_session_number = (max_sn.scalar() or 0) + 1
 
             provider = req.provider
             model = req.model
 
             if provider is None or model is None:
                 mb_result = await session.execute(
-                    select(ModelBackend).where(
+                    select(ModelBackend)
+                    .where(
                         ModelBackend.organisation_id == principal.organisation_id,
-                        ModelBackend.credentials_ciphertext.is_not(None),
-                    ).limit(1)
+                        ModelBackend.credentials_ciphertext != b"",
+                    )
+                    .limit(1)
                 )
                 mb = mb_result.scalar_one_or_none()
                 if mb:
@@ -757,11 +694,11 @@ async def create_session(
                     provider = provider or config.default_provider
                     model = model or config.default_model
 
-            _DEFAULT_MODELS: dict[str, str] = {
+            _default_models: dict[str, str] = {
                 "opencode": "deepseek-v4-flash",
             }
-            if provider in _DEFAULT_MODELS:
-                model = _DEFAULT_MODELS[provider]
+            if provider in _default_models:
+                model = _default_models[provider]
 
             chat_session = ChatSession(
                 organisation_id=principal.organisation_id,
@@ -787,13 +724,20 @@ async def create_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.create_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
+@handle_db_errors("remy.get_session")
 @router.get("/sessions/{session_id}", status_code=status.HTTP_200_OK)
 async def get_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -818,14 +762,21 @@ async def get_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.get_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
+@handle_db_errors("remy.rename_session")
 @router.patch("/sessions/{session_id}", status_code=status.HTTP_200_OK)
 async def rename_session(
     session_id: uuid.UUID,
     req: RenameSessionRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -849,13 +800,20 @@ async def rename_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.rename_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
+@handle_db_errors("remy.delete_session")
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_200_OK)
 async def delete_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -896,18 +854,25 @@ async def delete_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.delete_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
 # ── Message endpoints ────────────────────────────────────────────────────
 
 
+@handle_db_errors("remy.list_messages")
 @router.get("/sessions/{session_id}/messages", status_code=status.HTTP_200_OK)
 async def list_messages(
     session_id: uuid.UUID,
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -947,14 +912,21 @@ async def list_messages(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.list_messages.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
+@handle_db_errors("remy.append_message")
 @router.post("/sessions/{session_id}/messages", status_code=status.HTTP_201_CREATED)
 async def append_message(
     session_id: uuid.UUID,
     req: AppendMessageRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -999,13 +971,14 @@ async def append_message(
 # ── Streaming endpoint ───────────────────────────────────────────────────
 
 
+@handle_db_errors("remy.stream_chat")
 @router.post("/sessions/{session_id}/stream")
 async def stream_chat(
     session_id: uuid.UUID,
     req: StreamRequest,
     request: Request,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     # Validate the session exists and belongs to user
@@ -1044,7 +1017,10 @@ async def stream_chat(
                     async with db_session.begin():
                         await set_rls_org(db_session, principal.organisation_id)
                         resolved = await _resolve_api_key(
-                            req.provider, principal.organisation_id, db_session, settings.fernet_key,
+                            req.provider,
+                            principal.organisation_id,
+                            db_session,
+                            settings.fernet_key,
                         )
                     if resolved is None:
                         msg = (
@@ -1061,9 +1037,13 @@ async def stream_chat(
                 except HTTPException as exc:
                     yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
                     return
+                except Exception as exc:
+                    logger.exception("remy.backend_construction_failed")
+                    yield f"event: error\ndata: {json.dumps({'detail': f'Failed to initialize backend: {exc}'})}\n\n"
+                    return
 
                 # 3. Construct system prompt from config + skills
-                supports_tools = getattr(backend, 'supports_tools', False)
+                supports_tools = getattr(backend, "supports_tools", False)
                 async with db_session.begin():
                     await set_rls_org(db_session, principal.organisation_id)
                     skill_loader = SkillLoader(db_session)
@@ -1119,7 +1099,8 @@ async def stream_chat(
                     tool_call_buffers: dict[int, dict[str, Any]] = {}
 
                     tools_param = None
-                    if getattr(backend, 'supports_tools', False):
+                    if getattr(backend, "supports_tools", False):
+                        await build_tool_registry()
                         tools_param = _get_all_tool_definitions(
                             include_ui_tools=await _is_ui_driving_enabled(principal.organisation_id, db_session),
                         )
@@ -1127,27 +1108,28 @@ async def stream_chat(
                     async for chunk in backend.stream(langchain_messages, tools=tools_param):
                         if await request.is_disconnected():
                             return
-                        if isinstance(chunk, AIMessageChunk):
-                            if chunk.content:
-                                full_content += chunk.content
-                                yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
+                        if isinstance(chunk, AIMessageChunk) and isinstance(chunk.content, str) and chunk.content:
+                            full_content += chunk.content
+                            yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
                             if chunk.tool_call_chunks:
-                                for tc in chunk.tool_call_chunks:
-                                    idx = tc.get("index", 0)
+                                for chunk_call in chunk.tool_call_chunks:
+                                    idx = chunk_call.get("index")
+                                    if idx is None:
+                                        idx = 0
                                     buf = tool_call_buffers.get(idx)
                                     if buf is None:
                                         tool_call_buffers[idx] = {
-                                            "id": tc.get("id", "") or "",
-                                            "name": tc.get("name", "") or "",
-                                            "args": tc.get("args", "") or "",
+                                            "id": chunk_call.get("id", "") or "",
+                                            "name": chunk_call.get("name", "") or "",
+                                            "args": chunk_call.get("args", "") or "",
                                         }
                                     else:
-                                        if tc.get("id"):
-                                            buf["id"] = tc["id"]
-                                        if tc.get("name"):
-                                            buf["name"] = tc["name"]
-                                        if tc.get("args"):
-                                            buf["args"] += tc["args"]
+                                        if chunk_call.get("id"):
+                                            buf["id"] = chunk_call["id"] or ""
+                                        if chunk_call.get("name"):
+                                            buf["name"] = chunk_call["name"] or ""
+                                        if chunk_call.get("args"):
+                                            buf["args"] += chunk_call["args"] or ""
 
                     if await request.is_disconnected():
                         return
@@ -1184,10 +1166,15 @@ async def stream_chat(
                                     auto_name = name_seed + ("..." if len(req.content) > 40 else "")
                                 elif msg_count >= 10:
                                     # After 10 messages: use first user message prefix
-                                    first_msg_q = select(ChatMessage.content).where(
-                                        ChatMessage.session_id == session_id,
-                                        ChatMessage.role == "user",
-                                    ).order_by(ChatMessage.created_at.asc()).limit(1)
+                                    first_msg_q = (
+                                        select(ChatMessage.content)
+                                        .where(
+                                            ChatMessage.session_id == session_id,
+                                            ChatMessage.role == "user",
+                                        )
+                                        .order_by(ChatMessage.created_at.asc())
+                                        .limit(1)
+                                    )
                                     first_msg = (await db_session.execute(first_msg_q)).scalar() or ""
                                     name_seed = first_msg[:30].strip()
                                     auto_name = f"{name_seed}... ({msg_count} msgs)" if first_msg else None
@@ -1211,14 +1198,18 @@ async def stream_chat(
                     tool_results: list[dict[str, Any]] = []
 
                     # Execute MCP tools
-                    if mcp_tool_calls:
-                        if not req.mcp_api_key:
-                            yield (
-                                "event: error\ndata: "
-                                + json.dumps({"detail": "Tool execution requires an MCP API key"})
-                                + "\n\n"
+                    if mcp_tool_calls and not req.mcp_api_key:
+                        for tc in mcp_tool_calls:
+                            tool_results.append(
+                                {
+                                    "tool_call_id": tc["id"],
+                                    "tool_name": tc["name"],
+                                    "success": False,
+                                    "error": "Tool execution requires an MCP API key",
+                                }
                             )
-                            return
+                            yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                    elif req.mcp_api_key is not None:
                         for tc in mcp_tool_calls:
                             try:
                                 result = await _call_mcp_tool(
@@ -1227,20 +1218,28 @@ async def stream_chat(
                                     mcp_api_key=req.mcp_api_key,
                                     base_url=mcp_base_url,
                                 )
-                                tool_results.append({
-                                    "tool_call_id": tc["id"], "tool_name": tc["name"],
-                                    "success": True, "result": result,
-                                })
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": tc["id"],
+                                        "tool_name": tc["name"],
+                                        "success": True,
+                                        "result": result,
+                                    }
+                                )
                                 yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
                             except HTTPException:
                                 raise
                             except Exception as exc:
                                 logger.exception("MCP tool call failed: %r", tc["name"])
                                 err_msg = f"{type(exc).__name__}: {exc}"[:200]
-                                tool_results.append({
-                                    "tool_call_id": tc["id"], "tool_name": tc["name"],
-                                    "success": False, "error": err_msg,
-                                })
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": tc["id"],
+                                        "tool_name": tc["name"],
+                                        "success": False,
+                                        "error": err_msg,
+                                    }
+                                )
                                 yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                     # Handle get_manifest calls server-side
@@ -1249,6 +1248,7 @@ async def stream_chat(
 
                     for tc in manifest_calls:
                         from modulo.core.manifest import get_manifest
+
                         manifest = get_manifest()
                         path = tc["args"].get("path")
                         if path:
@@ -1269,23 +1269,27 @@ async def stream_chat(
                                 "elements": manifest.get("elements", {}),
                                 "sidebar_groups": manifest.get("sidebar_groups", {}),
                             }
-                        tool_results.append({
-                            "tool_call_id": tc["id"],
-                            "tool_name": "get_manifest",
-                            "success": True,
-                            "result": result,
-                        })
+                        tool_results.append(
+                            {
+                                "tool_call_id": tc["id"],
+                                "tool_name": "get_manifest",
+                                "success": True,
+                                "result": result,
+                            }
+                        )
                         yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                     # Handle UI tools
                     if ui_tool_calls and not await _is_ui_driving_enabled(principal.organisation_id, db_session):
                         for tc in ui_tool_calls:
-                            tool_results.append({
-                                "tool_call_id": tc["id"],
-                                "tool_name": tc["name"],
-                                "success": False,
-                                "error": "UI driving is disabled by your organisation.",
-                            })
+                            tool_results.append(
+                                {
+                                    "tool_call_id": tc["id"],
+                                    "tool_name": tc["name"],
+                                    "success": False,
+                                    "error": "UI driving is disabled by your organisation.",
+                                }
+                            )
                             yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
                     elif ui_tool_calls:
                         async with db_session.begin():
@@ -1321,7 +1325,9 @@ async def stream_chat(
                             elif perm in ("requires_approval", "nogo_requires_approval"):
                                 page_path = req.page_context or ""
                                 if not await _is_approved_for_session(
-                                    session_id_str, tc["name"], page_path,
+                                    session_id_str,
+                                    tc["name"],
+                                    page_path,
                                 ):
                                     if perm == "nogo_requires_approval":
                                         tc["_nogo"] = True
@@ -1331,17 +1337,21 @@ async def stream_chat(
 
                         if pending_permission_calls:
                             req_id = str(uuid.uuid4())
-                            yield f"event: permission_request\ndata: {json.dumps({
-                                'request_id': req_id,
-                                'tools': [
+                            yield f"event: permission_request\ndata: {
+                                json.dumps(
                                     {
-                                        'name': tc['name'],
-                                        'args': tc['args'],
-                                        **({'nogo': True} if tc.get('_nogo') else {}),
+                                        'request_id': req_id,
+                                        'tools': [
+                                            {
+                                                'name': tc['name'],
+                                                'args': tc['args'],
+                                                **({'nogo': True} if tc.get('_nogo') else {}),
+                                            }
+                                            for tc in pending_permission_calls
+                                        ],
                                     }
-                                    for tc in pending_permission_calls
-                                ],
-                            })}\n\n"
+                                )
+                            }\n\n"
 
                             # Register permission request — Redis pub/sub for cross-worker,
                             # in-memory Event for local fast-path
@@ -1350,7 +1360,8 @@ async def stream_chat(
                             _pending_permissions[req_id] = (event, session_id_str)
                             if registry is not None:
                                 await registry.set_permission_request(
-                                    req_id, session_id_str,
+                                    req_id,
+                                    session_id_str,
                                     [{"name": tc["name"], "args": tc["args"]} for tc in pending_permission_calls],
                                 )
                             try:
@@ -1365,7 +1376,9 @@ async def stream_chat(
                                     if decision["action"] == "approve_for_session":
                                         for tc in pending_permission_calls:
                                             await _set_session_approval(
-                                                session_id_str, tc["name"], req.page_context or "",
+                                                session_id_str,
+                                                tc["name"],
+                                                req.page_context or "",
                                             )
                             except TimeoutError:
                                 pass
@@ -1389,9 +1402,13 @@ async def stream_chat(
                                 )
                                 break
 
-                            yield f"event: ui_command_batch\ndata: {json.dumps({
-                                'commands': approved_calls,
-                            })}\n\n"
+                            yield f"event: ui_command_batch\ndata: {
+                                json.dumps(
+                                    {
+                                        'commands': approved_calls,
+                                    }
+                                )
+                            }\n\n"
 
                             registry = _get_registry()
                             event = asyncio.Event()
@@ -1418,33 +1435,41 @@ async def stream_chat(
                                     extra={"approved": len(approved_calls), "results": len(results)},
                                 )
                             for ac, r in zip(approved_calls, results, strict=False):
-                                tool_results.append({
-                                    "tool_call_id": ac["id"],
-                                    "tool_name": r.get("name", ""),
-                                    "success": r.get("success", False),
-                                    "result": r.get("result"),
-                                    "error": r.get("error"),
-                                })
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": ac["id"],
+                                        "tool_name": r.get("name", ""),
+                                        "success": r.get("success", False),
+                                        "result": r.get("result"),
+                                        "error": r.get("error"),
+                                    }
+                                )
                                 yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                             if results and all(r.get("error") == "cancelled_by_user" for r in results):
                                 skipped = len(results)
                                 s = "s" if skipped != 1 else ""
                                 summary = f"Action cancelled by user. {skipped} action{s} skipped."
-                                yield f"event: abort_summary\ndata: {json.dumps({
-                                    'completed': 0, 'skipped': skipped, 'summary': summary,
-                                })}\n\n"
+                                yield f"event: abort_summary\ndata: {
+                                    json.dumps(
+                                        {
+                                            'completed': 0,
+                                            'skipped': skipped,
+                                            'summary': summary,
+                                        }
+                                    )
+                                }\n\n"
                                 break
 
                     # Add to conversation for next LLM turn
-                    langchain_messages.append(
-                        AIMessage(content=full_content, tool_calls=tool_calls)
-                    )
+                    langchain_messages.append(AIMessage(content=full_content, tool_calls=tool_calls))
                     for tr in tool_results:
-                        langchain_messages.append(ToolMessage(
-                            content=json.dumps(tr.get("result", tr.get("error", ""))),
-                            tool_call_id=tr["tool_call_id"],
-                        ))
+                        langchain_messages.append(
+                            ToolMessage(
+                                content=json.dumps(tr.get("result", tr.get("error", ""))),
+                                tool_call_id=tr["tool_call_id"],
+                            )
+                        )
 
                     # Save to DB
                     async with db_session.begin():
@@ -1491,11 +1516,7 @@ async def stream_chat(
             )
         except SQLAlchemyError:
             logger.exception("remy.database_error")
-            yield (
-                "event: error\ndata: "
-                + json.dumps({"detail": "Database error. Please try again later."})
-                + "\n\n"
-            )
+            yield ("event: error\ndata: " + json.dumps({"detail": "Database error. Please try again later."}) + "\n\n")
         except Exception:
             logger.exception("Remy streaming error")
             yield f"event: error\ndata: {json.dumps({'detail': 'An unexpected error occurred. Please try again.'})}\n\n"
@@ -1514,12 +1535,13 @@ async def stream_chat(
 # ── UI Command endpoints ─────────────────────────────────────────────────
 
 
+@handle_db_errors("remy.submit_permission_response")
 @router.post("/sessions/{session_id}/permission-response")
 async def submit_permission_response(
     session_id: uuid.UUID,
     req: PermissionResponse,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     if not await _is_ui_driving_enabled(principal.organisation_id, session):
         raise HTTPException(
@@ -1540,6 +1562,12 @@ async def submit_permission_response(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.submit_permission_response.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
     registry = _get_registry()
@@ -1565,12 +1593,13 @@ async def submit_permission_response(
     return {"status": "ok"}
 
 
+@handle_db_errors("remy.submit_ui_command_results")
 @router.post("/sessions/{session_id}/ui-command-results")
 async def submit_ui_command_results(
     session_id: uuid.UUID,
     req: UiCommandResultsBatch,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     if not await _is_ui_driving_enabled(principal.organisation_id, session):
         raise HTTPException(
@@ -1592,6 +1621,14 @@ async def submit_ui_command_results(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("remy.submit_ui_command_results.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     sid = str(session_id)
     registry = _get_registry()
@@ -1608,11 +1645,12 @@ async def submit_ui_command_results(
     return {"status": "ok"}
 
 
+@handle_db_errors("remy.reset_session_permissions")
 @router.post("/sessions/{session_id}/reset-permissions")
 async def reset_session_permissions(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -1628,6 +1666,14 @@ async def reset_session_permissions(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("remy.reset_session_permissions.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
     session_id_str = str(session_id)
@@ -1636,11 +1682,12 @@ async def reset_session_permissions(
     return {"status": "ok"}
 
 
+@handle_db_errors("remy.resume_session")
 @router.post("/sessions/{session_id}/resume")
 async def resume_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -1656,6 +1703,12 @@ async def resume_session(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.resume_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
     sid = str(session_id)
@@ -1669,11 +1722,12 @@ async def resume_session(
     return {"status": "ok"}
 
 
+@handle_db_errors("remy.stop_session")
 @router.post("/sessions/{session_id}/stop")
 async def stop_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -1689,6 +1743,12 @@ async def stop_session(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.stop_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
     sid = str(session_id)
@@ -1712,11 +1772,12 @@ async def stop_session(
     return {"status": "stopped"}
 
 
+@handle_db_errors("remy.get_audit_trail")
 @router.get("/sessions/{session_id}/audit-trail", status_code=status.HTTP_200_OK)
 async def get_audit_trail(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     if not principal.is_system_admin:
         raise HTTPException(
@@ -1739,15 +1800,20 @@ async def get_audit_trail(
         trail = []
         for m in messages:
             tr = m.tool_results_json or {}
-            snapshot = tr.get("result", {}).get("snapshotBefore", {}) if isinstance(tr.get("result"), dict) else {}
-            trail.append({
-                "timestamp": m.created_at.isoformat() if m.created_at else None,
-                "action": tr.get("tool_name", ""),
-                "args": tr.get("result", {}).get("args", {}) if isinstance(tr.get("result"), dict) else {},
-                "url": snapshot.get("url", ""),
-                "success": tr.get("success", False),
-                "error": tr.get("error"),
-            })
+            result_data = tr.get("result")
+            result_dict = result_data if isinstance(result_data, dict) else {}
+            snapshot_data = result_dict.get("snapshotBefore")
+            snapshot = snapshot_data if isinstance(snapshot_data, dict) else {}
+            trail.append(
+                {
+                    "timestamp": m.created_at.isoformat() if m.created_at else None,
+                    "action": tr.get("tool_name", ""),
+                    "args": result_dict.get("args", {}),
+                    "url": snapshot.get("url", ""),
+                    "success": tr.get("success", False),
+                    "error": tr.get("error"),
+                }
+            )
 
         return {"items": trail}
     except ProgrammingError:
@@ -1761,13 +1827,20 @@ async def get_audit_trail(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.get_audit_trail.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
+@handle_db_errors("remy.undo_last_action")
 @router.post("/sessions/{session_id}/undo")
 async def undo_last_action(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -1795,7 +1868,7 @@ async def undo_last_action(
         if isinstance(inner_result, dict):
             tool_args = inner_result.get("args", {})
 
-        inverse: dict | None = None
+        inverse: dict[str, Any] | None = None
         match tool_name:
             case "navigate":
                 inverse = {"name": "go_back", "args": {}}
@@ -1826,4 +1899,10 @@ async def undo_last_action(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.undo_last_action.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None

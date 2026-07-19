@@ -1,10 +1,9 @@
-from __future__ import annotations
-
 """Schema migration — detect changes between schema versions and transform data."""
 
+from __future__ import annotations
 
+import asyncio
 import logging
-import threading
 from collections import deque
 from collections.abc import Callable
 from copy import deepcopy
@@ -184,21 +183,19 @@ class MigrationRegistry:
 
     def __init__(self) -> None:
         self._migrations: dict[tuple[str, str], SchemaMigration] = {}
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
-    def register(
+    async def register(
         self,
         source_version: str,
         target_version: str,
         func: Callable[[dict[str, Any]], dict[str, Any]],
         description: str = "",
     ) -> SchemaMigration:
-        key = (source_version, target_version)
-        with self._lock:
+        async with self._lock:
+            key = (source_version, target_version)
             if key in self._migrations:
-                raise ValueError(
-                    f"Migration from {source_version} to {target_version} already registered"
-                )
+                raise ValueError(f"Migration from {source_version} to {target_version} already registered")
             m = SchemaMigration(
                 source_version=source_version,
                 target_version=target_version,
@@ -206,21 +203,16 @@ class MigrationRegistry:
                 description=description,
             )
             self._migrations[key] = m
-        return m
+            return m
 
-    def get_migration(
-        self, source_version: str, target_version: str
-    ) -> SchemaMigration | None:
-        with self._lock:
-            return self._migrations.get((source_version, target_version))
+    def get_migration(self, source_version: str, target_version: str) -> SchemaMigration | None:
+        return self._migrations.get((source_version, target_version))
 
-    def get_migration_chain(
-        self, source_version: str, target_version: str
-    ) -> list[SchemaMigration]:
+    async def get_migration_chain(self, source_version: str, target_version: str) -> list[SchemaMigration]:
         if source_version == target_version:
             return []
 
-        with self._lock:
+        async with self._lock:
             adj: dict[str, list[SchemaMigration]] = {}
             for mf in self._migrations.values():
                 adj.setdefault(mf.source_version, []).append(mf)
@@ -240,21 +232,17 @@ class MigrationRegistry:
                 if mf.target_version not in visited:
                     queue.append((mf.target_version, [*path, mf]))
 
-        raise MissingMigrationError(
-            f"No migration path from {source_version} to {target_version}"
-        )
+        raise MissingMigrationError(f"No migration path from {source_version} to {target_version}")
 
-    def validate_chain(
-        self, source_version: str, target_version: str
-    ) -> list[str]:
+    async def validate_chain(self, source_version: str, target_version: str) -> list[str]:
         """Return list of gap descriptions, empty if chain is complete."""
         try:
-            self.get_migration_chain(source_version, target_version)
+            await self.get_migration_chain(source_version, target_version)
             return []
         except MissingMigrationError:
             pass
 
-        with self._lock:
+        async with self._lock:
             migrations_copy = dict(self._migrations)
 
         reachable: set[str] = set()
@@ -264,7 +252,7 @@ class MigrationRegistry:
             if cur in reachable:
                 continue
             reachable.add(cur)
-            for (src, tgt) in migrations_copy:
+            for src, tgt in migrations_copy:
                 if src == cur:
                     q.append(tgt)
 
@@ -298,24 +286,22 @@ class MigrationRegistry:
             f"Missing migration from {last} towards {target_version}",
         ]
 
-    def apply(
+    async def apply(
         self,
         data: dict[str, Any],
         source_version: str,
         target_version: str,
     ) -> dict[str, Any]:
         """Apply the full migration chain, transforming data in order."""
-        chain = self.get_migration_chain(source_version, target_version)
+        chain = await self.get_migration_chain(source_version, target_version)
         result = deepcopy(data)
         for mf in chain:
             result = mf.func(result)
         return result
 
-    def describe_chain(
-        self, source_version: str, target_version: str
-    ) -> list[dict[str, str]]:
+    async def describe_chain(self, source_version: str, target_version: str) -> list[dict[str, str]]:
         """Return descriptions of each step in a migration chain without running it."""
-        chain = self.get_migration_chain(source_version, target_version)
+        chain = await self.get_migration_chain(source_version, target_version)
         return [
             {
                 "source_version": m.source_version,
@@ -325,7 +311,7 @@ class MigrationRegistry:
             for m in chain
         ]
 
-    def dry_run(
+    async def dry_run(
         self,
         data: dict[str, Any],
         source_version: str,
@@ -341,7 +327,7 @@ class MigrationRegistry:
 
         The original data is never modified.
         """
-        chain = self.get_migration_chain(source_version, target_version)
+        chain = await self.get_migration_chain(source_version, target_version)
         steps: list[dict[str, Any]] = []
         current = deepcopy(data)
         for mf in chain:
@@ -353,27 +339,26 @@ class MigrationRegistry:
             for key in set(current) & set(before):
                 if current[key] != before[key]:
                     changed[key] = {"old": before[key], "new": current[key]}
-            steps.append({
-                "source_version": mf.source_version,
-                "target_version": mf.target_version,
-                "description": mf.description or mf.func.__name__,
-                "added_fields": added,
-                "removed_fields": removed,
-                "changed_fields": changed,
-            })
+            steps.append(
+                {
+                    "source_version": mf.source_version,
+                    "target_version": mf.target_version,
+                    "description": mf.description or mf.func.__name__,
+                    "added_fields": added,
+                    "removed_fields": removed,
+                    "changed_fields": changed,
+                }
+            )
         return steps
 
     def clear(self) -> None:
-        with self._lock:
-            self._migrations.clear()
+        self._migrations.clear()
 
     def list_migrations(self) -> list[SchemaMigration]:
-        with self._lock:
-            return list(self._migrations.values())
+        return list(self._migrations.values())
 
     def __len__(self) -> int:
-        with self._lock:
-            return len(self._migrations)
+        return len(self._migrations)
 
 
 # ---------------------------------------------------------------------------
@@ -381,15 +366,15 @@ class MigrationRegistry:
 # ---------------------------------------------------------------------------
 
 
-def rename_field(
-    old_name: str, new_name: str
-) -> Callable[[dict[str, Any]], dict[str, Any]]:
+def rename_field(old_name: str, new_name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Create a migration function that renames a field."""
+
     def _rename(data: dict[str, Any]) -> dict[str, Any]:
         result = deepcopy(data)
         if old_name in result:
             result[new_name] = result.pop(old_name)
         return result
+
     _rename.__name__ = f"rename_{old_name}_to_{new_name}"
     return _rename
 
@@ -399,11 +384,13 @@ def convert_field(
     converter: Callable[[Any], Any],
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Create a migration function that converts a field's value type."""
+
     def _convert(data: dict[str, Any]) -> dict[str, Any]:
         result = deepcopy(data)
         if field_name in result:
             result[field_name] = converter(result[field_name])
         return result
+
     _convert.__name__ = f"convert_{field_name}"
     return _convert
 
@@ -413,11 +400,13 @@ def set_default(
     default: Any,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Create a migration function that adds a field with a default value."""
+
     def _set_default(data: dict[str, Any]) -> dict[str, Any]:
         result = deepcopy(data)
         if field_name not in result:
             result[field_name] = deepcopy(default)
         return result
+
     _set_default.__name__ = f"default_{field_name}"
     return _set_default
 
@@ -427,10 +416,12 @@ def add_field(
     value_fn: Callable[[dict[str, Any]], Any],
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Create a migration function that adds a computed field."""
+
     def _add_field(data: dict[str, Any]) -> dict[str, Any]:
         result = deepcopy(data)
         result[field_name] = value_fn(result)
         return result
+
     _add_field.__name__ = f"add_{field_name}"
     return _add_field
 
@@ -439,9 +430,11 @@ def remove_field(
     field_name: str,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Create a migration function that removes a field."""
+
     def _remove(data: dict[str, Any]) -> dict[str, Any]:
         result = deepcopy(data)
         result.pop(field_name, None)
         return result
+
     _remove.__name__ = f"remove_{field_name}"
     return _remove

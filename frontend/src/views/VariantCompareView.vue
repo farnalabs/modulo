@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
       { label: 'Evals', to: '/evals/editor' },
       { label: 'Proposals', to: '/evals/proposals' },
@@ -10,38 +10,32 @@
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
-      <header>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.variantCompare.title') }}</h1>
-        <p class="mt-1 text-muted-foreground">
-          {{ $t('views.variantCompare.subtitle') }}
-        </p>
-      </header>
+      <PageHeader :title="$t('views.variantCompare.title')" :subtitle="$t('views.variantCompare.subtitle')" />
 
       <div class="flex flex-wrap items-center gap-4">
-        <select
-          v-model="selectedGroupId"
-          data-testid="variant-compare-group-select"
-          aria-label="Compare group"
-          class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <option value="" disabled>{{ $t('views.variantCompare.selectGroup') }}</option>
-          <option v-for="g in groups" :key="g.id" :value="g.id">
-            {{ g.name }}
-          </option>
-        </select>
+        <Select v-model="selectedGroupId">
+          <SelectTrigger data-testid="variant-compare-group-select" aria-label="Compare group" class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <SelectValue :placeholder="$t('views.variantCompare.selectGroup')" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="g in groups" :key="g.id" :value="g.id">
+              {{ g.name }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
 
-        <button
+        <Button
           :disabled="!selectedGroupId || runningVariants.size > 0"
+          variant="default"
           data-testid="variant-compare-run-variants"
-          class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           @click="runVariants"
         >
           <span v-if="runningVariants.size > 0" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
           {{ runningVariants.size > 0 ? $t('views.variantCompare.running') : $t('views.variantCompare.runVariants') }}
-        </button>
+        </Button>
 
         <span v-if="selectedGroup" class="text-xs text-muted-foreground">
-          {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count }) }} ·
+          {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count }) }} �
           {{ selectedGroup.selection_strategy }}
         </span>
       </div>
@@ -101,7 +95,7 @@
                       <span
                         v-else
                         class="text-xs text-muted-foreground"
-                      >—</span>
+                      >�</span>
                     </div>
                     <div v-if="getNodeEvalResults(node, v.name).length > 0" class="flex flex-wrap gap-1">
                       <span
@@ -110,7 +104,7 @@
                         class="inline-flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground"
                         :title="er.detail ?? undefined"
                       >
-                        {{ er.score !== null ? er.score.toFixed(2) : '—' }}
+                        {{ er.score !== null ? er.score.toFixed(2) : '-' }}
                       </span>
                     </div>
                   </div>
@@ -144,7 +138,7 @@
                       >
                         {{ s.passRate.toFixed(0) }}%
                       </span>
-                      <span v-else class="text-muted-foreground">—</span>
+                      <span v-else class="text-muted-foreground">�</span>
                       <span class="text-muted-foreground">{{ $t('views.variantCompare.pass') }}</span>
                     </div>
                     <div v-if="s.totalCost !== null" class="text-muted-foreground">
@@ -167,52 +161,52 @@
         </div>
 
         <div v-if="nodeNames.length > 0 && diffVariantsAvailable.length >= 2" class="space-y-4">
-          <h2 class="text-xl font-semibold tracking-tight">{{ $t('views.variantCompare.outputDiffViewer') }}</h2>
+          <h2 class="text-base font-semibold">{{ $t('views.variantCompare.outputDiffViewer') }}</h2>
           <div class="flex flex-wrap gap-4">
             <label class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.node') }}:</span>
-              <select
-                v-model="diffNode"
-                data-testid="variant-compare-diff-node"
-                aria-label="Diff node"
-                class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option v-for="n in nodeNames" :key="n" :value="n">{{ n }}</option>
-              </select>
+              <Select v-model="diffNode">
+                <SelectTrigger data-testid="variant-compare-diff-node" aria-label="Diff node" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectValue placeholder="Select node" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="n in nodeNames" :key="n" :value="n">{{ n }}</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
             <label class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantA') }}:</span>
-              <select
-                v-model="diffVarA"
-                data-testid="variant-compare-diff-variant-a"
-                aria-label="Variant A"
-                class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</option>
-              </select>
+              <Select v-model="diffVarA">
+                <SelectTrigger data-testid="variant-compare-diff-variant-a" aria-label="Variant A" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectValue placeholder="Select variant" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
             <label class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantB') }}:</span>
-              <select
-                v-model="diffVarB"
-                data-testid="variant-compare-diff-variant-b"
-                aria-label="Variant B"
-                class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</option>
-              </select>
+              <Select v-model="diffVarB">
+                <SelectTrigger data-testid="variant-compare-diff-variant-b" aria-label="Variant B" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectValue placeholder="Select variant" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
           </div>
           <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div class="overflow-auto rounded-lg border bg-card">
               <div class="border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
-                {{ diffVarA || '—' }}
+                {{ diffVarA || '-' }}
               </div>
               <pre class="overflow-x-auto p-3 text-xs leading-relaxed"><code>{{ diffContentA }}</code></pre>
             </div>
             <div class="overflow-auto rounded-lg border bg-card">
               <div class="border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
-                {{ diffVarB || '—' }}
+                {{ diffVarB || '-' }}
               </div>
               <pre class="overflow-x-auto p-3 text-xs leading-relaxed"><code>{{ diffContentB }}</code></pre>
             </div>
@@ -220,33 +214,56 @@
         </div>
       </template>
 
-      <div
+      <EmptyState
         v-else-if="!loading && groups.length === 0"
+        title="Variant Groups"
+        description="No variant groups found. Create a variant group from the AB Test Models page to compare model outputs side by side."
+      />
+
+      <div
+        v-else
         class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
       >
-        {{ $t('views.variantCompare.noGroups') }}
+        Select a variant group from the dropdown above to compare model outputs.
       </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { formatApiError } from '../lib/api/formatError'
+import { Button } from '@/components/ui/button'
+import EmptyState from '../components/shared/EmptyState.vue'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const { t } = useI18n()
 
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type RunResponse = components['schemas']['RunResponse']
 type RunIOResponse = components['schemas']['RunIOResponse']
-type RunEvalItem = components['schemas']['RunEvalItem']
-type RunEvalListResponse = components['schemas']['RunEvalListResponse']
+interface RunEvalItem {
+  eval_id: string
+  node_id: string
+  passed: boolean
+  score: number | null
+  detail?: string | null
+}
+
+interface RunEvalListResponse { items?: RunEvalItem[] }
+interface VariantDefinition {
+  [key: string]: unknown
+  name: string
+  weight: number
+}
 
 interface RunEntry {
   runId: string
@@ -258,11 +275,18 @@ interface RunEntry {
   evalResults: RunEvalItem[]
 }
 
-const groups = ref<VariantGroup[]>([])
+const { loading, error, data: groupsResp } = useDataFetch(
+  () => api.GET('/api/v1/variant-groups'),
+  { initialValue: [] as VariantGroup[] },
+)
+
+const groups = computed(() => {
+  const raw = groupsResp.value
+  return (Array.isArray(raw) ? raw : (raw as any)?.items ?? []) as VariantGroup[]
+})
+
 const selectedGroupId = ref<string | null>(null)
 const selectedGroup = ref<VariantGroup | null>(null)
-const loading = ref(true)
-const error = ref<string | null>(null)
 const isUnmounted = ref(false)
 
 const runEntries = ref<Map<string, RunEntry>>(new Map())
@@ -274,7 +298,12 @@ const diffVarB = ref<string | null>(null)
 
 const terminalStatuses = new Set(['complete', 'failed', 'cancelled', 'eval_failed'])
 
-const variants = computed(() => selectedGroup.value?.variants ?? [])
+const variants = computed<VariantDefinition[]>(() =>
+  (selectedGroup.value?.variants ?? []).filter(
+    (variant): variant is VariantDefinition =>
+      typeof variant.name === 'string' && typeof variant.weight === 'number',
+  ),
+)
 
 const nodeNames = computed(() => {
   const names = new Set<string>()
@@ -383,10 +412,6 @@ const diffContentB = computed(() => {
   return output ? JSON.stringify(output, null, 2) : ''
 })
 
-onMounted(() => {
-  fetchGroups()
-})
-
 watch(selectedGroupId, async (id) => {
   if (id) {
     await fetchGroupDetail(id)
@@ -409,26 +434,11 @@ onBeforeUnmount(() => {
   isUnmounted.value = true
 })
 
-async function fetchGroups() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/variant-groups')
-    if (err) {
-      error.value = `${t('views.variantCompare.failedToLoadGroups')} ${formatApiError(err)}`
-      return
-    }
-    const list = (data ?? []) as unknown as VariantGroup[]
-    groups.value = list
-    if (list.length > 0 && !selectedGroupId.value) {
-      selectedGroupId.value = list[0].id
-    }
-  } catch (e: unknown) {
-    error.value = `${t('views.variantCompare.failedToLoadGroups')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
+watch(groups, (list) => {
+  if (list.length > 0 && !selectedGroupId.value) {
+    selectedGroupId.value = list[0].id
   }
-}
+}, { immediate: true })
 
 async function fetchGroupDetail(id: string) {
   error.value = null
@@ -508,17 +518,15 @@ async function pollRunStatus(runId: string, variantName: string) {
           runEntries.value.set(variantName, {
             ...existing,
             runStatus: status,
-            totalCostUsd: runResp.total_cost_usd,
-            tokenConsumption: runResp.token_consumption,
+            totalCostUsd: runResp.total_cost_usd == null ? null : Number(runResp.total_cost_usd),
+            tokenConsumption: runResp.token_consumption ?? null,
           })
         }
 
         if (terminalStatuses.has(status)) {
           if (status === 'complete') {
-            await Promise.all([
-              fetchRunIO(runId, variantName),
-              fetchRunEvals(runId, variantName),
-            ])
+            await fetchRunIO(runId, variantName)
+            await fetchRunEvals(runId, variantName)
           } else {
             error.value = `${t('views.variantCompare.runFailedStatus')} ${status}`
           }
@@ -526,7 +534,7 @@ async function pollRunStatus(runId: string, variantName: string) {
         }
       }
     } catch (e) {
-      console.warn('Failed to run variant', e)
+      error.value = `${t('views.variantCompare.runFailed')} ${formatApiError(e)}`
     }
   }
 
@@ -544,7 +552,7 @@ async function fetchRunIO(runId: string, variantName: string) {
       if (existing) {
         runEntries.value.set(variantName, {
           ...existing,
-          nodeOutputs: ioResp.outputs_json,
+          nodeOutputs: ioResp.outputs_json ?? null,
         })
       }
 
@@ -556,7 +564,7 @@ async function fetchRunIO(runId: string, variantName: string) {
       }
     }
   } catch (e) {
-    console.warn('Failed to fetch run IO', e)
+    error.value = `${t('views.variantCompare.failedToLoadGroup')} ${formatApiError(e)}`
   }
 }
 
@@ -576,7 +584,7 @@ async function fetchRunEvals(runId: string, variantName: string) {
       }
     }
   } catch (e) {
-    console.warn('Failed to fetch run evals', e)
+    error.value = `${t('views.variantCompare.failedToLoadGroup')} ${formatApiError(e)}`
   }
 }
 

@@ -1,15 +1,14 @@
 """Step definitions for community registry features — browse, publish, pull, verify, publishers."""
 
+import contextlib
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/library/community_registry.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _SLUG = "modulo/prd-input-schema"
 
@@ -77,6 +76,7 @@ def _user_in_org_downloads(ctx: dict[str, Any], org: str, slug: str) -> None:
 @given(parsers.parse('the registry has a publisher "{author}" with key "{key}"'))
 def _registry_has_publisher(author: str, key: str) -> None:
     from modulo.core.registry import register_publisher
+
     register_publisher(fingerprint_hex=key, author=author, name=author.capitalize())
 
 
@@ -118,6 +118,7 @@ def _publish_signed_v2_primitive(client, slug: str, ctx: dict[str, Any]) -> None
     public = private.public_key()
 
     from cryptography.hazmat.primitives import serialization
+
     public_key_pem = public.public_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -134,6 +135,7 @@ def _publish_signed_v2_primitive(client, slug: str, ctx: dict[str, Any]) -> None
     }
 
     import json
+
     payload_bytes = json.dumps(
         {
             "author": payload_fields["author"],
@@ -149,6 +151,7 @@ def _publish_signed_v2_primitive(client, slug: str, ctx: dict[str, Any]) -> None
 
     sig = private.sign(payload_bytes)
     import base64
+
     signature_b64 = base64.b64encode(sig).decode()
 
     request_body = {
@@ -236,10 +239,11 @@ def _each_entry_matches_search(ctx: dict[str, Any], term: str) -> None:
     items = ctx["response"].json()["items"]
     term_lower = term.lower()
     for item in items:
-        entry = item["entry"] if "entry" in item else item
-        match = term_lower in (entry.get("name", "") or "").lower() or term_lower in (
-            entry.get("description", "") or ""
-        ).lower()
+        entry = item.get("entry", item)
+        match = (
+            term_lower in (entry.get("name", "") or "").lower()
+            or term_lower in (entry.get("description", "") or "").lower()
+        )
         assert match, f"No match for '{term_lower}' in {entry.get('name')} / {entry.get('description')}"
 
 

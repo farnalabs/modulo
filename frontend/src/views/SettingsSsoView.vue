@@ -1,15 +1,12 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="sso" required-tier="team" show-disabled>
 
     <div class="page-narrow">
       <header class="flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsSsoView.title') }}</h1>
-          <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsSsoView.description') }}</p>
-        </div>
+        <PageHeader :title="$t('views.SettingsSsoView.title')" :subtitle="$t('views.SettingsSsoView.description')" />
         <Button
           variant="default"
-          class="btn-glow border-primary/30 hover:border-primary/60"
+           class="border-primary/30 hover:border-primary/60"
           data-testid="settings-sso-add-provider"
           @click="openAddForm"
         >
@@ -19,7 +16,7 @@
 
       <LoadingSpinner v-if="loading" />
 
-      <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" :retryable="errorRetryable" />
+      <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" />
 
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
@@ -87,18 +84,8 @@
                     <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                   </svg>
                 </button>
-                <button
-                  class="rounded p-1 text-destructive hover:bg-destructive/10"
-                  data-testid="settings-sso-delete"
-                  :aria-label="$t('views.SettingsSsoView.delete_provider')"
-                  :title="$t('views.SettingsSsoView.delete_provider')"
-                  @click="confirmDelete(provider)"
-                >
-                  <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                  </svg>
-                </button>
-                <label
+                <TableActions :actions="ssoActions(provider)" />
+                <span tabindex="0"
                   class="relative inline-flex cursor-pointer items-center"
                   data-testid="settings-sso-toggle"
                   :aria-label="$t('views.SettingsSsoView.toggle_provider')"
@@ -106,6 +93,8 @@
                   :aria-checked="provider.enabled"
                   :class="{ 'opacity-50 pointer-events-none': togglingId === provider.id }"
                   @click.prevent.stop="toggleProvider(provider)"
+                  @keydown.enter.prevent.stop="toggleProvider(provider)"
+                  @keydown.space.prevent.stop="toggleProvider(provider)"
                 >
                   <div
                     class="h-6 w-11 rounded-full transition-colors"
@@ -117,7 +106,7 @@
                       style="margin-top: 2px;"
                     />
                   </div>
-                </label>
+                </span>
               </div>
             </div>
 
@@ -178,11 +167,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, onBeforeUnmount } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { Button } from '@/components/ui/button'
+import TableActions from '../components/shared/TableActions.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -224,10 +216,13 @@ function emptyForm(): SsoFormState {
   }
 }
 
-const providers = ref<SsoProviderResponse[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const errorRetryable = ref(true)
+const { loading, error, data: providers, load: loadProviders } = useDataFetch<SsoProviderResponse[]>(
+  async () => {
+    const resp = await api.GET('/api/v1/admin/sso/providers')
+    return { data: (Array.isArray(resp.data) ? resp.data : (resp.data as any)?.items ?? []) }
+  },
+  { initialValue: [] as SsoProviderResponse[] }
+)
 
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<SsoFormState>(emptyForm())
@@ -248,27 +243,6 @@ let ssoTestTimeout: ReturnType<typeof setTimeout> | null = null
 
 function onFormUpdate(updated: SsoFormState) {
   Object.assign(formData, updated)
-}
-
-async function loadProviders() {
-  loading.value = true
-  error.value = null
-  errorRetryable.value = true
-  try {
-    const resp = await api.GET('/api/v1/admin/sso/providers')
-    if (resp.error) {
-      error.value = `Failed to load providers: ${formatError(resp.error)}`
-      if (resp.response?.status && resp.response.status >= 400 && resp.response.status < 500) {
-        errorRetryable.value = false
-      }
-    } else if (resp.data) {
-      providers.value = (Array.isArray(resp.data) ? resp.data : (resp.data as any)?.items ?? [])
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load providers: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
 }
 
 function openAddForm() {
@@ -323,6 +297,7 @@ function buildCreateBody(): SsoProviderCreate {
     name: formData.name.trim(),
     auto_provision: formData.auto_provision,
     default_role: formData.default_role,
+    enabled: true,
   }
 
   if (formData.provider_type === 'oidc') {
@@ -485,6 +460,16 @@ async function testConnection(providerId: string) {
 onBeforeUnmount(() => {
   if (ssoTestTimeout) clearTimeout(ssoTestTimeout)
 })
-onMounted(loadProviders)
-</script>
+function ssoActions(provider: SsoProviderResponse) {
+  return [
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(provider),
+      danger: true,
+    },
+  ]
+}
 
+
+</script>

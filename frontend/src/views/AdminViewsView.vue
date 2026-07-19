@@ -1,10 +1,7 @@
-﻿<template>
+<template>
   <div class="page-narrow">
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('components.ViewToggle.saved_views') }}</h1>
-        <p class="mt-1 text-muted-foreground">{{ $t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data') }}</p>
-      </div>
+      <PageHeader :title="$t('components.ViewToggle.saved_views')" :subtitle="$t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data')" />
       <Button
         variant="default"
         class="border-primary/30 hover:border-primary/60"
@@ -17,15 +14,17 @@
 
     <LoadingSpinner v-if="loading" />
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadViews" />
+    <div v-else-if="error" data-testid="admin-views-error">
+      <ErrorAlert :message="error" :on-retry="loadViews" />
+    </div>
 
     <template v-else>
       <div v-if="showForm" class="card p-6">
-        <h2 class="mb-4 text-base font-semibold">{{ editingId ? 'Edit View' : 'New View' }}</h2>
+        <h2 class="mb-4 text-base font-semibold" data-testid="admin-views-form-title">{{ editingId ? 'Edit View' : 'New View' }}</h2>
         <form class="space-y-4" @submit.prevent="handleSave">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="adminviewsview-field-6" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="adminviewsview-field-6"
               v-model="form.name"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               :placeholder="$t('views.AdminViewsView.my_view')"
@@ -34,22 +33,22 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
-            <select
-              v-model="form.view_type"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              data-testid="admin-views-type-select"
-              aria-label="View type"
-            >
-              <option value="table">Table</option>
-              <option value="grid">Grid</option>
-              <option value="kanban">Kanban</option>
-              <option value="timeline">Timeline</option>
-            </select>
+            <label for="adminviewsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
+            <Select v-model="form.view_type">
+              <SelectTrigger data-testid="admin-views-type-select" aria-label="View type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+                <SelectValue placeholder="table" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="table">Table</SelectItem>
+                <SelectItem value="grid">Grid</SelectItem>
+                <SelectItem value="kanban">Kanban</SelectItem>
+                <SelectItem value="timeline">Timeline</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.filters_json') }}</label>
-            <textarea
+            <label for="adminviewsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.filters_json') }}</label>
+            <textarea id="adminviewsview-field-4"
               v-model="form.filters"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
               rows="4"
@@ -58,8 +57,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Columns</label>
-            <input
+            <label for="adminviewsview-field-3" class="mb-1 block text-sm font-medium">Columns</label>
+            <input id="adminviewsview-field-3"
               v-model="form.columns"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               :placeholder="$t('views.AdminViewsView.name_status_createdat')"
@@ -68,8 +67,8 @@
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.sort_by') }}</label>
-              <input
+              <label for="adminviewsview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.sort_by') }}</label>
+              <input id="adminviewsview-field-2"
                 v-model="form.sort_by"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 placeholder="created_at"
@@ -77,16 +76,16 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
-            <select
-              v-model="form.sort_order"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              data-testid="admin-views-sort-order-select"
-              aria-label="Sort order"
-              >
-                <option value="desc">Descending</option>
-                <option value="asc">Ascending</option>
-              </select>
+              <label for="adminviewsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
+            <Select v-model="form.sort_order">
+              <SelectTrigger data-testid="admin-views-sort-order-select" aria-label="Sort order" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+                <SelectValue placeholder="desc" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="desc">Descending</SelectItem>
+                <SelectItem value="asc">Ascending</SelectItem>
+              </SelectContent>
+            </Select>
             </div>
           </div>
           <div v-if="saveError" class="text-sm text-destructive">{{ saveError }}</div>
@@ -176,41 +175,7 @@
               <td class="px-4 py-3 text-muted-foreground">{{ v.created_by || '—' }}</td>
               <td class="px-4 py-3 text-muted-foreground">{{ formatDate(v.created_at) }}</td>
               <td class="px-4 py-3 text-right">
-                <div class="flex items-center justify-end gap-1">
-                  <button
-                    class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    data-testid="admin-views-duplicate"
-                    :aria-label="$t('views.AdminViewsView.duplicate_view')"
-                    title="Duplicate"
-                    @click="duplicateView(v)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                    </svg>
-                  </button>
-                  <button
-                    class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    data-testid="admin-views-edit"
-                    :aria-label="$t('views.AdminViewsView.edit_view')"
-                    :title="$t('views.AdminViewsView.edit_view_1')"
-                    @click="openEditForm(v)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                    </svg>
-                  </button>
-                  <button
-                    class="rounded p-1 text-destructive hover:bg-destructive/10"
-                    data-testid="admin-views-delete"
-                    :aria-label="$t('views.AdminViewsView.delete_view')"
-                    :title="$t('views.AdminViewsView.delete_view_1')"
-                    @click="confirmDelete(v)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    </svg>
-                  </button>
-                </div>
+                <TableActions :actions="viewActions(v)" />
               </td>
             </tr>
           </tbody>
@@ -244,8 +209,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import { ref, computed } from 'vue'
 import { getAccessToken } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import {
@@ -254,7 +221,10 @@ import {
   TooltipContent,
 } from '../components/ui/tooltip'
 import { formatApiError } from '../lib/api/formatError'
+import { formatDateShort } from '../lib/formatDate'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import TableActions from '../components/shared/TableActions.vue'
 
 interface SavedView {
   id: string
@@ -268,9 +238,24 @@ interface SavedView {
   created_at: string
 }
 
-const views = ref<SavedView[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { data: viewsData, loading, error, load: loadViews } = useDataFetch(
+  async () => {
+    try {
+      const res = await fetch('/api/v1/views', { headers: getHeaders() })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null)
+        return { error: { detail: errData?.detail ?? `Failed to load views (${res.status})` } }
+      }
+      const data = await res.json()
+      return { data: (data.items ?? data) as SavedView[] }
+    } catch (e: unknown) {
+      return { error: { detail: formatApiError(e) } }
+    }
+  },
+  { initialValue: [] as SavedView[] },
+)
+
+const views = computed(() => viewsData.value ?? [])
 
 const showForm = ref(false)
 const editingId = ref<string | null>(null)
@@ -297,24 +282,6 @@ function getHeaders(): Record<string, string> {
   return headers
 }
 
-async function loadViews() {
-  loading.value = true
-  error.value = null
-  try {
-    const res = await fetch('/api/v1/views', { headers: getHeaders() })
-    if (!res.ok) {
-      const errData = await res.json().catch(() => null)
-      throw new Error(errData?.detail ?? `Failed to load views (${res.status})`)
-    }
-    const data = await res.json()
-    views.value = data.items ?? data
-  } catch (e: unknown) {
-    error.value = formatApiError(e)
-  } finally {
-    loading.value = false
-  }
-}
-
 function filtersSummary(filters: SavedView['filters']): string {
   if (!filters) return '—'
   const str = typeof filters === 'string' ? filters : JSON.stringify(filters)
@@ -324,9 +291,7 @@ function filtersSummary(filters: SavedView['filters']): string {
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '—'
   try {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric', month: 'short', day: 'numeric',
-    })
+    return formatDateShort(new Date(dateStr))
   } catch {
     return dateStr
   }
@@ -428,8 +393,8 @@ async function deleteView() {
       const errData = await res.json().catch(() => null)
       throw new Error(errData?.detail ?? `Delete failed (${res.status})`)
     }
-    views.value = views.value.filter(v => v.id !== deleteConfirmId.value)
     deleteConfirmId.value = null
+    await loadViews()
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
   } finally {
@@ -462,7 +427,26 @@ async function duplicateView(v: SavedView) {
   }
 }
 
-onMounted(loadViews)
+function viewActions(v: SavedView) {
+  return [
+    {
+      key: 'duplicate',
+      label: 'Duplicate',
+      onClick: () => duplicateView(v),
+    },
+    {
+      key: 'edit',
+      label: 'Edit',
+      onClick: () => openEditForm(v),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(v),
+      danger: true,
+    },
+  ]
+}
+
+/* onMounted handled by useDataFetch */
 </script>
-
-

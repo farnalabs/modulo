@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.remy.config_service import RemyConfig
 from modulo.db.models.remy_context_source import RemyContextSource
 
-_VALID_SOURCE_MODES = {"always_on", "tool", "opt_in", "disabled"}
+_VALID_SOURCE_MODES = {"always_on", "tool", "off"}
 
 _BUILTIN_DEFAULTS: dict[str, str] = {
     "page_context": "always_on",
@@ -93,9 +93,7 @@ class RemyContextSourceService:
         return [
             ContextSourceResponseItem(
                 key=key,
-                name=_BUILTIN_SOURCE_METADATA.get(key, {}).get(
-                    "name", key.replace("_", " ").title()
-                ),
+                name=_BUILTIN_SOURCE_METADATA.get(key, {}).get("name", key.replace("_", " ").title()),
                 description=_BUILTIN_SOURCE_METADATA.get(key, {}).get("description", ""),
                 source_mode=mode,
                 is_overridden=key in user_overrides,
@@ -121,39 +119,45 @@ class RemyContextSourceService:
         if source_mode not in _VALID_SOURCE_MODES:
             raise ValueError(f"Invalid source_mode '{source_mode}'. Must be one of {sorted(_VALID_SOURCE_MODES)}")
         if user_id is None:
-            stmt = select(RemyContextSource).where(
-                RemyContextSource.organisation_id == org_id,
-                RemyContextSource.source_key == source_key,
-                RemyContextSource.user_id.is_(None),
-            ).with_for_update()
+            stmt = (
+                select(RemyContextSource)
+                .where(
+                    RemyContextSource.organisation_id == org_id,
+                    RemyContextSource.source_key == source_key,
+                    RemyContextSource.user_id.is_(None),
+                )
+                .with_for_update()
+            )
         else:
-            stmt = select(RemyContextSource).where(
-                RemyContextSource.organisation_id == org_id,
-                RemyContextSource.source_key == source_key,
-                RemyContextSource.user_id == user_id,
-            ).with_for_update()
+            stmt = (
+                select(RemyContextSource)
+                .where(
+                    RemyContextSource.organisation_id == org_id,
+                    RemyContextSource.source_key == source_key,
+                    RemyContextSource.user_id == user_id,
+                )
+                .with_for_update()
+            )
         result = await self._session.execute(stmt)
         existing = result.scalar_one_or_none()
         if existing:
             existing.source_mode = source_mode
         else:
-            self._session.add(RemyContextSource(
-                id=uuid.uuid4(),
-                organisation_id=org_id,
-                user_id=user_id,
-                source_key=source_key,
-                source_mode=source_mode,
-            ))
+            self._session.add(
+                RemyContextSource(
+                    id=uuid.uuid4(),
+                    organisation_id=org_id,
+                    user_id=user_id,
+                    source_key=source_key,
+                    source_mode=source_mode,
+                )
+            )
         await self._session.flush()
 
-    async def set_user_override(
-        self, org_id: uuid.UUID, user_id: uuid.UUID, source_key: str, source_mode: str
-    ) -> None:
+    async def set_user_override(self, org_id: uuid.UUID, user_id: uuid.UUID, source_key: str, source_mode: str) -> None:
         await self._upsert_context_source(org_id, source_key, source_mode, user_id=user_id)
 
-    async def set_org_default(
-        self, org_id: uuid.UUID, source_key: str, source_mode: str
-    ) -> None:
+    async def set_org_default(self, org_id: uuid.UUID, source_key: str, source_mode: str) -> None:
         await self._upsert_context_source(org_id, source_key, source_mode, user_id=None)
 
     async def reset_user_overrides(self, org_id: uuid.UUID, user_id: uuid.UUID) -> None:

@@ -29,7 +29,13 @@ code:
   - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
   - backend/src/modulo/db/migrations/versions/0025_team_visibility_rls.py
   - backend/src/modulo/db/migrations/versions/0014_team_cost_attribution.py
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/api/test_ownership_picker_bdd.py
+  - backend/tests/unit/core/library_service/test_workflow_import_export_resilience.py
+  - backend/tests/unit/core/library_service/test_contribute.py
+  - backend/tests/unit/api/test_contributions.py
+  - backend/tests/unit/db/test_schema.py
+  - backend/tests/unit/db/test_migration_0025.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---

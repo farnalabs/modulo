@@ -94,7 +94,10 @@ class GiteaConnector(ConnectorBase):
             user_info = r.json()
             username = user_info.get("login", "")
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"Gitea API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False,
+                detail=f"Gitea API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Gitea API timeout")
         except httpx.ConnectError:

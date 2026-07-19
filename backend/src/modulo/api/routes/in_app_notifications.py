@@ -1,23 +1,24 @@
-from __future__ import annotations
-
 """In-app notification CRUD routes.
 
 Endpoints for the in-app notification system — dashboard panel, full notification
 page, dismiss flow, and user preferences.
 """
 
+from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.events.event_bus import get_event_bus
 from modulo.db.crud.notifications import (
     count_notifications_for_user,
@@ -47,6 +48,7 @@ class NotificationResponse(BaseModel):
     dismiss_strategy: str = "user_only"
     dismissible_at_scope: bool = False
     created_at: str
+    expires_at: str | None = None
     scope_label: str = ""
 
 
@@ -95,14 +97,16 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
         dismiss_strategy=n.dismiss_strategy,
         dismissible_at_scope=n.dismissible_at_scope,
         created_at=n.created_at.isoformat() if n.created_at else "",
+        expires_at=n.expires_at.isoformat() if n.expires_at else None,
         scope_label=SCOPE_LABELS.get(n.scope, n.scope),
     )
 
 
+@handle_db_errors("in_app_notifications.get_dashboard")
 @router.get("/dashboard", response_model=DashboardNotificationResponse)
 async def get_dashboard(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> DashboardNotificationResponse:
     try:
         async with session.begin():
@@ -124,6 +128,11 @@ async def get_dashboard(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -135,11 +144,12 @@ async def get_dashboard(
     )
 
 
+@handle_db_errors("in_app_notifications.get_unread")
 @router.get("/unread-count", response_model=dict)
 async def get_unread(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict:
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -154,6 +164,11 @@ async def get_unread(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -162,16 +177,17 @@ async def get_unread(
     return {"count": count}
 
 
+@handle_db_errors("in_app_notifications.list_notifications")
 @router.get("", response_model=PaginatedNotificationsResponse)
 async def list_notifications(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     level: str | None = Query(None),
     scope: str | None = Query(None),
     category: str | None = Query(None),
-    status: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
 ) -> PaginatedNotificationsResponse:
     try:
         async with session.begin():
@@ -185,7 +201,7 @@ async def list_notifications(
                 level=level,
                 scope=scope,
                 category=category,
-                status_filter=status,
+                status_filter=status_filter,
                 limit=page_size,
                 offset=offset,
             )
@@ -196,12 +212,17 @@ async def list_notifications(
                 level=level,
                 scope=scope,
                 category=category,
-                status_filter=status,
+                status_filter=status_filter,
             )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
         raise HTTPException(
@@ -216,11 +237,12 @@ async def list_notifications(
     )
 
 
+@handle_db_errors("in_app_notifications.get_notification_detail")
 @router.get("/{notification_id}", response_model=NotificationResponse)
 async def get_notification_detail(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NotificationResponse:
     try:
         async with session.begin():
@@ -238,6 +260,11 @@ async def get_notification_detail(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -246,12 +273,13 @@ async def get_notification_detail(
     return _notification_to_response(n)
 
 
+@handle_db_errors("in_app_notifications.review_later_endpoint")
 @router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)
 async def review_later_endpoint(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict:
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -270,6 +298,11 @@ async def review_later_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -282,22 +315,23 @@ async def review_later_endpoint(
             org_id=str(principal.organisation_id),
             resource_type="notification",
             resource_id=str(notification_id),
-            action="dismissed",
+            action="review_later",
             version=1,
         )
     except Exception:
         _log.warning("review_later_endpoint.publish_failed", exc_info=True)
 
-    return {"status": "dismissed_for_self"}
+    return {"status": "review_later"}
 
 
+@handle_db_errors("in_app_notifications.dismiss_endpoint")
 @router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
 async def dismiss_endpoint(
     notification_id: uuid.UUID,
     req: DismissRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict:
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -317,6 +351,11 @@ async def dismiss_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
         raise HTTPException(
@@ -340,10 +379,11 @@ async def dismiss_endpoint(
     return {"status": f"dismissed_{scope_label}"}
 
 
+@handle_db_errors("in_app_notifications.get_preferences")
 @router.get("/preferences", response_model=NotificationPreferencesResponse)
 async def get_preferences(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NotificationPreferencesResponse:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -351,11 +391,12 @@ async def get_preferences(
     )
 
 
+@handle_db_errors("in_app_notifications.update_preferences")
 @router.put("/preferences", response_model=NotificationPreferencesResponse)
 async def update_preferences(
     req: NotificationPreferencesUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NotificationPreferencesResponse:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,

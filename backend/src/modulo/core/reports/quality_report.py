@@ -1,13 +1,11 @@
-from __future__ import annotations
-
-import asyncio
-
 """Weekly quality report for Slack — run volume, eval pass rate, cost summary, week-over-week deltas.
 
 All functions assume an active transaction with RLS org context set by the caller.
 """
 
+from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -18,6 +16,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.reports.scheduler import _deliver_to_urls
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
 
@@ -251,7 +250,7 @@ def _trend_symbol(delta_pct: float | None) -> str:
 
 
 def _format_summary_block(summary: dict[str, Any]) -> dict[str, Any]:
-    rate_str = _fmt_pct(summary['avg_eval_pass_rate'])
+    rate_str = _fmt_pct(summary["avg_eval_pass_rate"])
     return {
         "type": "section",
         "fields": [
@@ -263,7 +262,7 @@ def _format_summary_block(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def _format_trend_section(wow: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
-    rate_str = _fmt_pct(summary['avg_eval_pass_rate'])
+    rate_str = _fmt_pct(summary["avg_eval_pass_rate"])
     prev_rate = wow["previous_week_avg_pass_rate"]
     prev_rate_str = _fmt_pct(prev_rate)
 
@@ -298,8 +297,8 @@ def _fmt_delta(delta_pct: float | None) -> str:
 def _format_eval_breakdown(eval_bd: dict[str, Any]) -> dict[str, Any]:
     cw = eval_bd["current_week"]
     pw = eval_bd["previous_week"]
-    cw_rate = _fmt_pct(cw['pass_rate'])
-    pw_rate = _fmt_pct(pw['pass_rate'])
+    cw_rate = _fmt_pct(cw["pass_rate"])
+    pw_rate = _fmt_pct(pw["pass_rate"])
     return {
         "type": "section",
         "text": {
@@ -316,7 +315,7 @@ def _format_eval_breakdown(eval_bd: dict[str, Any]) -> dict[str, Any]:
 def _format_trend_block(trend: list[dict[str, Any]]) -> dict[str, Any]:
     lines = ["*Daily Trend (last 7 days)*"]
     for entry in trend:
-        rate_str = _fmt_pct(entry['eval_pass_rate'])
+        rate_str = _fmt_pct(entry["eval_pass_rate"])
         lines.append(
             f"\u2022 {entry['date']}: {entry['run_count']} runs, {rate_str} pass, ${entry['token_spend_usd']:.2f}"
         )
@@ -376,8 +375,6 @@ async def deliver_quality_report(
 
     Returns a list of delivery results with keys: url, status, status_code, error.
     """
-    from modulo.core.reports.scheduler import _deliver_to_urls
-
     slack_blocks_str = report_data if isinstance(report_data, str) else format_slack_message(report_data)
     payload = {"blocks": json.loads(slack_blocks_str)}
     return await _deliver_to_urls(

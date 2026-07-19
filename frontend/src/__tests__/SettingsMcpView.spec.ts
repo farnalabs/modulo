@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick } from 'vue'
+import { nextTick as vueNextTick } from 'vue'
+
+async function nextTick() {
+  await vueNextTick()
+  await flushPromises()
+}
 
 const mockMcpConfig = {
   mcp_url: 'https://mcp.modulo.run',
@@ -219,7 +224,7 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await nextTick()
 
-    expect(wrapper.text()).toContain('Coming soon')
+    expect(wrapper.text()).toContain('Configuration Snippets')
   })
 
   it('copy button copies server URL to clipboard', async () => {
@@ -249,6 +254,6 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.text()).toContain('Registered OAuth Clients')
-    expect(wrapper.text()).toContain('Coming soon')
+    expect(wrapper.text()).toContain('coming in v0.4')
   })
 })

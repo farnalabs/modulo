@@ -72,7 +72,7 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 
 ### AI-Assisted Schema Generation — `POST /api/v1/schemas/generate`
 
-- [x] Accept `description` (required) and `examples` (optional) 
+- [x] Accept `description` (required) and `examples` (optional)
 - [x] List available model backends → return 400 if none configured
 - [x] Instantiate `SchemaGenerationService` with first available backend
 - [x] Handle generation failure → return 502 with "Schema generation failed"

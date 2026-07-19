@@ -1,7 +1,9 @@
 import logging
 import os
 from logging.config import fileConfig
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
+import sqlalchemy as sa
 from alembic import context
 from alembic.config import Config
 from sqlalchemy import Connection, create_engine
@@ -11,22 +13,29 @@ from modulo.db.models import Base
 
 _log = logging.getLogger(__name__)
 
+_DRIVER_MAP: dict[str, str] = {
+    "postgresql+asyncpg": "postgresql+psycopg",
+    "sqlite+aiosqlite": "sqlite",
+    "mysql+aiomysql": "mysql+pymysql",
+    "mysql+asyncmy": "mysql+pymysql",
+    "postgresql": "postgresql+psycopg",
+    "postgres": "postgresql+psycopg",
+    "mysql": "mysql+pymysql",
+}
+
 
 def _to_sync_url(url: str) -> str:
-    if url.startswith("postgresql+asyncpg://"):
-        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
-    elif url.startswith("sqlite+aiosqlite://"):
-        url = url.replace("sqlite+aiosqlite://", "sqlite://", 1)
-    elif url.startswith("mysql+asyncmy://"):
-        url = url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
-    elif url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
-    elif url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+psycopg://", 1)
-    elif url.startswith("mysql://"):
-        url = url.replace("mysql://", "mysql+pymysql://", 1)
-    url = url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
-    return url.replace("?ssl=disable", "").replace("&ssl=disable", "")
+    parsed = urlparse(url)
+    if parsed.scheme in _DRIVER_MAP:
+        parsed = parsed._replace(scheme=_DRIVER_MAP[parsed.scheme])
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    if qs.get("sslmode") == ["disable"]:
+        del qs["sslmode"]
+    if qs.get("ssl") == ["disable"]:
+        del qs["ssl"]
+    new_query = urlencode(qs, doseq=True) if qs else ""
+    return urlunparse(parsed._replace(query=new_query))
+
 
 target_metadata = Base.metadata
 
@@ -40,8 +49,10 @@ if config is not None:
     if config.config_file_name is not None:
         fileConfig(config.config_file_name)
 
-    # Allow DATABASE_URL env var to override the alembic.ini connection string.
-    _db_url = os.environ.get("DATABASE_URL")
+    # Allow DATABASE_ADMIN_URL env var to override the alembic.ini connection string.
+    # Migrations connect with the owner role (not modulo_app runtime role) to
+    # run DDL without RLS interference. Falls back to DATABASE_URL for compat.
+    _db_url = os.environ.get("DATABASE_ADMIN_URL") or os.environ.get("DATABASE_URL")
     if _db_url:
         config.set_main_option("sqlalchemy.url", _to_sync_url(_db_url))
 
@@ -77,6 +88,17 @@ def do_run_migrations(connection: Connection) -> None:
     backend = _detect_backend(str(connection.engine.url))
     _log.info("Running migrations for %s backend", backend)
 
+    # Alembic creates alembic_version with VARCHAR(32) by default, but
+    # post-squash branch migration IDs exceed 32 chars (e.g.
+    # 0006_post_squash_pipeline_archived_at is 44 chars).  Widen the column
+    # before any migration runs so the version UPDATE never truncates.
+    if backend == "postgresql":
+        from sqlalchemy import inspect as sa_inspect
+
+        if sa_inspect(connection).has_table("alembic_version"):
+            connection.execute(sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
+            _log.info("Widened alembic_version.version_num to VARCHAR(255)")
+
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -98,7 +120,7 @@ def run_migrations_online() -> None:
 
     engine = create_engine(sync_url, poolclass=NullPool)
     try:
-        with engine.connect() as connection:
+        with engine.begin() as connection:
             do_run_migrations(connection)
     finally:
         engine.dispose()

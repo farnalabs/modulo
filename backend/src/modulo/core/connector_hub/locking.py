@@ -65,9 +65,9 @@ class AdvisoryLockService:
                 timeout=_LOCK_ACQUIRE_TIMEOUT,
             )
         except TimeoutError:
-            raise ConnectorLockError(resource_id, f"Timed out acquiring lock on resource {resource_id}")
+            raise ConnectorLockError(resource_id, f"Timed out acquiring lock on resource {resource_id}") from None
         except SQLAlchemyError:
-            raise ConnectorLockError(resource_id, f"Database error acquiring lock on resource {resource_id}")
+            raise ConnectorLockError(resource_id, f"Database error acquiring lock on resource {resource_id}") from None
         if not result.scalar_one():
             raise ConnectorLockError(resource_id)
         current_task = asyncio.current_task()
@@ -76,7 +76,11 @@ class AdvisoryLockService:
         logger.info("Acquired lock on resource %s", resource_id)
 
     async def try_acquire(
-        self, session: AsyncSession, resource_id: uuid.UUID, lock_timeout: float = _LOCK_TIMEOUT, interval: float = _POLL_INTERVAL
+        self,
+        session: AsyncSession,
+        resource_id: uuid.UUID,
+        lock_timeout: float = _LOCK_TIMEOUT,
+        interval: float = _POLL_INTERVAL,
     ) -> bool:
         """Acquire a lock with a polling loop and timeout.
 
@@ -110,7 +114,7 @@ class AdvisoryLockService:
                         attempt,
                     )
                     return False
-                jitter = random.random() * _POLL_JITTER_MAX
+                jitter = random.random() * _POLL_JITTER_MAX  # noqa: S311 — jitter, not crypto
                 await asyncio.sleep(interval + jitter)
 
     async def release(self, session: AsyncSession, resource_id: uuid.UUID) -> None:
@@ -122,6 +126,11 @@ class AdvisoryLockService:
         Always attempts ``pg_advisory_unlock`` regardless of ownership to
         prevent PG-side lock leaks.
         """
+        if self._resource_id is not None and resource_id != self._resource_id:
+            raise ConnectorLockError(
+                resource_id,
+                f"Cannot release lock on resource {resource_id} — currently holding lock on {self._resource_id}",
+            )
         if self._owner_task_id is not None:
             current_task = asyncio.current_task()
             current = id(current_task) if current_task is not None else None
@@ -142,12 +151,14 @@ class AdvisoryLockService:
             )
             released = result.scalar_one()
             if not released:
-                logger.warning("Lock on resource %s was not held by this session — possible double-release", resource_id)
+                logger.warning(
+                    "Lock on resource %s was not held by this session — possible double-release", resource_id
+                )
             else:
                 logger.info("Released lock on resource %s", resource_id)
         except (TimeoutError, SQLAlchemyError) as exc:
             logger.error("Failed to release lock on resource %s: %s", resource_id, exc, exc_info=True)
-            raise ConnectorLockError(resource_id, f"Failed to release lock: {exc}")
+            raise ConnectorLockError(resource_id, f"Failed to release lock: {exc}") from None
         finally:
             self._owner_task_id = None
             self._resource_id = None
@@ -158,7 +169,8 @@ class AdvisoryLockService:
     async def __aexit__(self, *_: object) -> None:
         if self._owner_task_id is not None and self._resource_id is not None:
             logger.warning(
-                "AdvisoryLockService exiting context with held lock on resource %s (owner task %s) — will NOT auto-release; release in session scope",
+                "AdvisoryLockService exiting context with held lock on resource %s "
+                "(owner task %s) — will NOT auto-release; release in session scope",
                 self._resource_id,
                 self._owner_task_id,
             )
@@ -175,5 +187,5 @@ def _uuid_to_lock_keys(resource_id: uuid.UUID) -> tuple[int, int]:
         raise TypeError(f"Expected uuid.UUID, got {type(resource_id).__name__}")
     digest = hashlib.md5(str(resource_id).encode("ascii"), usedforsecurity=False).digest()
     key1 = int.from_bytes(digest[:_INT4_BYTES], "big", signed=True)
-    key2 = int.from_bytes(digest[_INT4_BYTES:_INT4_BYTES * 2], "big", signed=True)
+    key2 = int.from_bytes(digest[_INT4_BYTES : _INT4_BYTES * 2], "big", signed=True)
     return (key1, key2)

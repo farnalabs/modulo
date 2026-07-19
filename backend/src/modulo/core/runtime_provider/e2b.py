@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """E2B RuntimeProvider — sandboxed execution environments via E2B."""
 
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -33,6 +32,8 @@ class E2BRuntimeProvider(RuntimeProvider):
     To store per-organisation keys securely, use ``FernetSecretsBackend`` at
     the service layer and pass the resolved key to the constructor.
     """
+
+    provider_id = "e2b"
 
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key or os.environ.get("MODULO_E2B_API_KEY")
@@ -84,6 +85,7 @@ class E2BRuntimeProvider(RuntimeProvider):
             try:
                 await self._clone_repo(sandbox, repo_url, spec.labels or {})
             except asyncio.CancelledError:
+                await sandbox.kill()
                 raise
             except Exception:
                 await sandbox.kill()
@@ -98,7 +100,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,  # noqa: ASYNC109
+        timeout: int | None = None,
     ) -> ExecResult:
         """Execute a shell command inside the sandbox.
 
@@ -179,10 +181,13 @@ class E2BRuntimeProvider(RuntimeProvider):
         if repo_ref:
             cmds.append(f"cd /home/user/repo && git checkout {shlex.quote(repo_ref)}")
         combined = " && ".join(cmds)
-        result = await sandbox.commands.run(combined, timeout=_REPO_CLONE_TIMEOUT)
+        try:
+            result = await sandbox.commands.run(combined, timeout=_REPO_CLONE_TIMEOUT)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Repo clone failed for {repo_url}: {exc}") from exc
         exit_code = getattr(result, "exit_code", 1)
         if exit_code != 0:
             stderr = getattr(result, "stderr", "") or ""
-            raise RuntimeError(
-                f"Repo clone failed (exit {exit_code}) for {repo_url}: {stderr}"
-            )
+            raise RuntimeError(f"Repo clone failed (exit {exit_code}) for {repo_url}: {stderr}")

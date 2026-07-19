@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """modulo export-org / import-org: Self-hosted to SaaS migration CLI.
 
 Usage:
@@ -7,6 +5,7 @@ Usage:
   modulo import-org --input <file.json> --org-id <uuid> --conflict <skip|overwrite|rename>
 """
 
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -209,6 +208,8 @@ async def _do_export(org_id: uuid.UUID, output: Path) -> dict[str, Any]:
                 rows = await _export_entity(session, model_cls, org_id)
                 bundle[table_name] = rows
                 tqdm.write(f"  {table_name:22s}  {len(rows):>6d} rows")
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         msg = f"Database connection failed during export: {exc}"
         raise SystemExit(msg) from exc
@@ -346,6 +347,8 @@ async def _do_import(
                                     id_map[old_id_str] = str(obj.id)
                                 counts["created"] += 1
 
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as exc:
                         rid = row.get("id", "?")
                         _log.exception("Error importing %s row %s", table_name, rid)
@@ -353,6 +356,8 @@ async def _do_import(
                         counts["errors"] += 1
 
             await session.commit()
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         msg = f"Database connection failed during import: {exc}"
         raise SystemExit(msg) from exc

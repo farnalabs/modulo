@@ -1,8 +1,10 @@
-﻿import { formatApiError } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
+import { usePlanStore } from '../stores/planStore'
 import manifest from '@/manifest.yaml'
+import LoginView from '../views/LoginView.vue'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -30,13 +32,16 @@ interface ManifestEntry {
 
 const manifestRoutes = (manifest as { routes?: Record<string, ManifestEntry> })?.routes ?? {}
 const manifestByName = new Map<string, ManifestEntry & { path: string }>()
+const manifestPathToName = new Map<string, string>()
 for (const [path, entry] of Object.entries(manifestRoutes)) {
   if (entry?.name) {
     manifestByName.set(entry.name, { ...entry, path })
+    manifestPathToName.set(path, entry.name)
   }
 }
 
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
+function decodeJwtPayload(token: string | null): Record<string, unknown> | null {
+  if (!token) return null
   try {
     return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
   } catch (e) {
@@ -46,7 +51,6 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 }
 
 const DashboardView = () => import('../views/DashboardView.vue')
-const LoginView = () => import('../views/LoginView.vue')
 const LibraryView = () => import('../views/LibraryView.vue')
 const LibraryPipelineWizard = () => import('../views/LibraryPipelineWizard.vue')
 const SettingsObservabilityView = () => import('../views/SettingsObservabilityView.vue')
@@ -63,6 +67,7 @@ const EvalEditorView = () => import('../views/EvalEditorView.vue')
 const EvalProposalsQueueView = () => import('../views/EvalProposalsQueueView.vue')
 const VariantCompareView = () => import('../views/VariantCompareView.vue')
 const ABTestModelsView = () => import('../views/ABTestModelsView.vue')
+const RunsListView = () => import('../views/RunsListView.vue')
 const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
@@ -92,6 +97,7 @@ const SettingsMcpView = () => import('../views/SettingsMcpView.vue')
 const SettingsTriggersView = () => import('../views/SettingsTriggersView.vue')
 const SettingsHitlReviewView = () => import('../views/SettingsHitlReviewView.vue')
 const AdminNotificationDeliveryLogView = () => import('../views/AdminNotificationDeliveryLogView.vue')
+const AdminHousekeepingView = () => import('../views/AdminHousekeepingView.vue')
 const AdminEnvironmentProfilesView = () => import('../views/AdminEnvironmentProfilesView.vue')
 const AdminSystemOrgsView = () => import('../views/AdminSystemOrgsView.vue')
 const AdminSystemConfigView = () => import('../views/AdminSystemConfigView.vue')
@@ -103,6 +109,14 @@ const SettingsEmailView = () => import('../views/SettingsEmailView.vue')
 const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwardersView.vue')
 const SettingsMonitorConfigView = () => import('../views/SettingsMonitorConfigView.vue')
 const PipelineListView = () => import('../views/PipelineListView.vue')
+const LifecycleMapEditorView = () => import('../views/lifecycle-map/LifecycleMapEditorView.vue')
+const ModelBackendSetupView = () => import('../views/setup/ModelBackendSetupView.vue')
+const LifecycleMapList = () => import('../views/lifecycle-map/LifecycleMapList.vue')
+const LifecycleMapView = () => import('../views/lifecycle-map/LifecycleMapView.vue')
+const DevMetricsView = () => import('../views/DevMetricsView.vue')
+const EnvironmentProfileList = () => import('../views/environment-profiles/EnvironmentProfileList.vue')
+const EnvironmentProfileForm = () => import('../views/environment-profiles/EnvironmentProfileForm.vue')
+const ParameterSchemasView = () => import('../views/ParameterSchemasView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -250,14 +264,23 @@ const router = createRouter({
       component: ABTestModelsView,
     },
     {
-      path: '/runs/:id',
-      name: 'run-detail',
-      component: RunDetailView,
+      path: '/runs',
+      name: 'runs-list',
+      component: RunsListView,
     },
     {
       path: '/runs/diff',
       name: 'runs-diff',
       component: AgentOutputDiffView,
+    },
+    {
+      path: '/runs/:id',
+      name: 'run-detail',
+      component: RunDetailView,
+    },
+    {
+      path: '/admin',
+      redirect: '/admin/remy',
     },
     {
       path: '/admin/my-profile',
@@ -325,6 +348,11 @@ const router = createRouter({
       component: AdminRunRetentionView,
     },
     {
+      path: '/admin/parameter-schemas',
+      name: 'admin-parameter-schemas',
+      component: ParameterSchemasView,
+    },
+    {
       path: '/admin/plugins',
       name: 'admin-plugins',
       component: AdminPluginsView,
@@ -343,6 +371,12 @@ const router = createRouter({
       path: '/admin/notification-delivery',
       name: 'admin-notification-delivery',
       component: AdminNotificationDeliveryLogView,
+    },
+    {
+      path: '/admin/housekeeping',
+      name: 'admin-housekeeping',
+      component: AdminHousekeepingView,
+      meta: { requiresSystemAdmin: false, breadcrumb: 'Housekeeping', testid: 'admin-housekeeping' },
     },
     {
       path: '/admin/environments',
@@ -408,13 +442,75 @@ const router = createRouter({
       meta: { breadcrumb: 'Composite Editor', parent: 'library' },
     },
     {
+      path: '/lifecycle-maps/:id/editor',
+      name: 'lifecycle-map-editor',
+      component: LifecycleMapEditorView,
+      meta: { breadcrumb: 'Lifecycle Map Editor', parent: 'lifecycle-maps' },
+    },
+    {
+      path: '/setup/model-backend/:id',
+      name: 'ModelBackendSetup',
+      component: ModelBackendSetupView,
+      meta: { breadcrumb: 'Complete Setup' },
+    },
+    {
+      path: '/lifecycle-maps',
+      name: 'lifecycle-maps',
+      component: LifecycleMapList,
+    },
+    {
+      path: '/lifecycle-maps/:id',
+      name: 'lifecycle-map-detail',
+      component: LifecycleMapView,
+    },
+    {
+      path: '/lifecycle-maps/new',
+      name: 'lifecycle-map-new',
+      redirect: '/lifecycle-maps',
+    },
+    {
+      path: '/dev/metrics',
+      name: 'dev-metrics',
+      component: DevMetricsView,
+      meta: {
+        title: 'Web Vitals',
+        testid: 'dev-metrics',
+        requiresSystemAdmin: true,
+      },
+    },
+    {
+      path: '/environment-profiles',
+      name: 'environment-profiles',
+      component: EnvironmentProfileList,
+    },
+    {
+      path: '/environment-profiles/new',
+      name: 'environment-profiles-new',
+      component: EnvironmentProfileForm,
+      meta: { breadcrumb: 'New Profile', parent: 'environment-profiles' },
+    },
+    {
+      path: '/environment-profiles/:id',
+      redirect: (to) => ({ path: `/environment-profiles/${to.params.id}/edit` }),
+    },
+    {
+      path: '/environment-profiles/:id/edit',
+      name: 'environment-profiles-edit',
+      component: EnvironmentProfileForm,
+      meta: { breadcrumb: 'Edit Profile', parent: 'environment-profiles' },
+      props: true,
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'not-found',
       redirect: '/',
     },
   ],
-  scrollBehavior(_to, _from, savedPosition) {
+  scrollBehavior(to, _from, savedPosition) {
     if (savedPosition) return savedPosition
+    if (to.hash) {
+      return { el: to.hash, behavior: 'smooth' }
+    }
     return { top: 0 }
   },
 })
@@ -432,7 +528,7 @@ router.beforeEach((to) => {
         to.meta.requiredPermissions = entry.required_permissions ?? undefined
         to.meta.featureFlag = entry.feature_flag ?? undefined
         to.meta.parent = entry.parent
-          ? (manifestByName.get(entry.parent)?.name ?? entry.parent)
+          ? (manifestPathToName.get(entry.parent) ?? entry.parent)
           : undefined
       }
     }
@@ -444,10 +540,22 @@ router.beforeEach((to) => {
     if (to.name !== 'login' && !token) {
       return { name: 'login' }
     }
-    if (to.meta?.requiresSystemAdmin) {
+    if (to.meta?.requiresSystemAdmin || to.meta?.requiredRoles?.length || to.meta?.requiredTier) {
       const payload = decodeJwtPayload(token)
-      if (!payload?.is_system_admin) {
+      if (to.meta?.requiresSystemAdmin && !payload?.is_system_admin) {
         return { name: 'dashboard' }
+      }
+      if (to.meta?.requiredRoles?.length) {
+        const orgRole = payload?.org_role
+        if (typeof orgRole !== 'string' || !to.meta.requiredRoles.includes(orgRole)) {
+          return { name: 'dashboard' }
+        }
+      }
+      if (to.meta?.requiredTier) {
+        const planStore = usePlanStore()
+        if (Object.keys(planStore.features).length > 0 && !planStore.isAtMinimumTier(to.meta.requiredTier)) {
+          return { name: 'dashboard' }
+        }
       }
     }
   } catch (err) {
@@ -457,6 +565,9 @@ router.beforeEach((to) => {
 })
 
 let _chunkRetryCount = 0
+router.afterEach(() => {
+  _chunkRetryCount = 0
+})
 router.onError((err) => {
   console.error('[router] navigation error:', err)
   const msg = formatApiError(err)
@@ -468,8 +579,8 @@ router.onError((err) => {
       return
     }
     window.location.reload()
+    return
   }
 })
 
 export default router
-

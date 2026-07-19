@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import uuid
 from datetime import datetime
 
@@ -23,7 +21,9 @@ class Notification(OrgScoped):
 
     scope: Mapped[str] = mapped_column(String(20), nullable=False)
     target_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True,
+        Uuid(),
+        ForeignKey("accounts.id", ondelete="SET NULL"),
+        nullable=True,
     )
     level: Mapped[str] = mapped_column(String(20), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -31,10 +31,14 @@ class Notification(OrgScoped):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     action_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     dismiss_strategy: Mapped[str] = mapped_column(
-        String(20), nullable=False, server_default="user_only",
+        String(20),
+        nullable=False,
+        server_default="user_only",
     )
     dismissible_at_scope: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false",
+        Boolean,
+        nullable=False,
+        server_default="false",
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -49,12 +53,19 @@ class Dismissal(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     notification_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True,
+        Uuid(),
+        ForeignKey("notifications.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     dismissed_by_user_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False,
+        Uuid(),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        nullable=False,
     )
     dismiss_scope: Mapped[str] = mapped_column(String(20), nullable=False)
     dismissed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False,
+        DateTime(timezone=True),
+        server_default=func.current_timestamp(),
+        nullable=False,
     )

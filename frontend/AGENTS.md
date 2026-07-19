@@ -72,3 +72,61 @@ is edited, re-run `npm install` (not just the script) to ensure the hook fires.
 ### Skills change signal: after adding/editing/deleting a skill, signal the store to rebuild system prompt
 
 - The Remy system prompt is built once per session and caches the skill list. When a user adds or modifies a skill (via `RemySkillManager.vue` or `UserRemySkillsView.vue`), the store needs a `signalSkillsChanged()` mechanism (e.g. incrementing a `skillsVersion` ref) so the next Remy session `/stream` call re-fetches skills and includes the new one. Without this signal, newly added skills don't appear in the conversation until a page refresh. Pattern: maintain a `skillsVersion` counter in `useRemyStore.ts`, increment it on skill change, and read it when building the stream request payload.
+
+### reka-ui TooltipContent + vue-i18n: `$t()` crashes inside Teleported content
+
+- reka-ui's `TooltipContent` uses `Teleport` internally. `$t()` called directly inside a `<TooltipContent>` template throws `TypeError: _ctx.t is not a function` because the teleported content loses access to `app.config.globalProperties`. **Fix:** pre-translate the text in the parent component (or use plain English strings) and reference the variable in the tooltip — never call `$t()` inside `TooltipContent`.
+
+### Null-guard computed properties that access nested properties of async-loaded refs
+
+- When a ref is populated from an API response (`ref.value = data as SomeType`), the response may not match the expected shape in tests (catch-all mock returns `{items:[], total:0}`). Any computed or template code accessing nested properties like `data.value.native.map(...)` must use `(data.value.native ?? []).map(...)` — otherwise a shape mismatch throws `TypeError: Cannot read properties of undefined`. This applies to ALL computed properties, not just the one that first exhibits the failure.
+
+### `locator.evaluate(el => el.click())` to bypass overlays in Playwright
+
+- When a UI overlay (e.g. the Remy panel) covers an element, Playwright's `locator.click()` refuses to click because the element is not actionable. `click({ force: true })` dispatches the event but Vue's `@click` handler may not fire if an overlay captures the event. Use `locator.evaluate((el) => el.click())` to dispatch a native DOM click that always triggers the handler, regardless of overlays.
+
+### HTML entities in Vue directives: never use `&amp;&amp;` — use raw `&&`
+
+- `&amp;&amp;` HTML-encoded entities inside Vue `v-if`/`v-else-if`/`v-show` expressions cause template compilation errors (ReferenceError). Vue directives expect raw JavaScript expressions — HTML entities are never decoded. Always write `v-if="conditionA && conditionB"`, never `v-if="conditionA &amp;&amp; conditionB"`. This applies to ALL directive bindings (`v-for`, `v-bind`, `v-on`, `:class`, etc.).
+
+### i18n key paths must match the locale object structure exactly
+
+- When using `$t('remy.send_message')` in a template, the locale object must have a root-level `remy.send_message` key. If the locale file nests `remy` under `components` (e.g. `components.remy.send_message`), the short path `$t('remy.*')` silently returns the raw key string instead of the translation. Always check the actual structure in `frontend/src/locales/en-US.js` before writing `$t()` calls. For `components/remy/*.vue` components, the correct path is `$t('components.remy.<key>')`.
+
+### Concurrent save guard: use a shared `configSaving` mutex
+
+- When multiple save functions (`saveAccessList`, `saveModelConfig`, `saveToolPerms`, etc.) all PUT to the same API endpoint, they must share a `configSaving` flag to prevent concurrent requests. Without the guard, clicking "Save" in two sections simultaneously fires parallel PUT calls — one section's changes silently overwrite the other's. Pattern: `if (configSaving.value) return; configSaving.value = true; ... configSaving.value = false` at the start and end of every save function that targets the shared endpoint.
+
+### `aria-label` must have `:` (v-bind) prefix for dynamic expressions
+
+- `aria-label="search.placeholder || "` without the `:` prefix is treated as a literal string by Vue, not a JavaScript expression. Always use `:aria-label="..."` when the value is a JS expression (i18n key, computed, ternary). A missing `:` causes the raw expression text to appear in the DOM as the actual aria-label value, breaking accessibility for screen readers. Same pattern applies to all HTML attributes that expect dynamic values (`:placeholder`, `:title`, `:alt`, etc.). Found in `FilterBar.vue`.
+
+### `useDataFetch`: always destructure `error` alongside `loading`
+
+- Every component that calls `useDataFetch` must destructure `error` from the return value and provide an error-state UI in the template, not just a loading spinner. Without `error`, API failures (4xx, 5xx) silently leave the user looking at a broken empty form. Pattern: `const { loading, load, error } = useDataFetch(...)` → `v-else-if="error"` block with a retry button. Found in `SettingsMonitorConfigView.vue`.
+
+## Design System
+
+### Animation & Motion Philosophy
+
+This project follows [Emil Kowalski's animation philosophy](https://emilkowal.ski/ui/agents-with-taste) as codified in the [emilkowalski/skills](https://github.com/emilkowalski/skills) repo:
+
+- **`emil-design-eng`** — Core animation decision framework, easing/duration tables, button press feedback, origin-awareness, stagger, clip-path patterns
+- **`apple-design`** — Fluid interfaces, spring physics, interruptibility, velocity handoff, spatial consistency
+- **`review-animations`** — 10 non-negotiable standards for animation review (used in code review)
+- **`improve-animations`** — Audit-then-plan workflow for animation improvements
+
+Key design tokens live in `src/style.css` as `--ease-out`, `--ease-in-out`, `--duration-micro`, `--duration-fast`, `--duration-normal`, `--duration-slow` and are mapped to Tailwind utilities in `tailwind.config.cjs`.
+
+Rules:
+- Use `var(--ease-out)` for all UI enter/exit transitions (never the built-in `ease` keyword)
+- Buttons must have `:active { transform: scale(0.97) }` press feedback
+- Popovers/dropdowns/tooltips scale from their trigger (origin-aware), never from center
+- Never animate from `scale(0)` — start from `scale(0.95)` + `opacity: 0`
+- UI animations stay under 300ms (exceptions: modals/drawers up to 500ms)
+- Hover effects must be gated behind `@media (hover: hover) and (pointer: fine)`
+- Respect `prefers-reduced-motion` — keep opacity/color, drop transform animations
+- Exit animations are ~20% faster than entrances (asymmetric timing)
+- Stagger list entries 30-80ms apart instead of animating all at once
+- Prefer CSS transitions over keyframes for interruptible UI (toasts, toggles)
+- Avoid `transition: all` — always specify exact properties

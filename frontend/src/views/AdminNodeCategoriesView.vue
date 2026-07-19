@@ -1,12 +1,9 @@
-﻿<template>
-  <FeatureGate feature-name="plugin_management" required-tier="team" show-disabled>
+<template>
+  <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
 
     <div class="page-narrow">
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Node Categories</h1>
-        <p class="mt-1 text-muted-foreground">Manage categories for classifying nodes in pipelines</p>
-      </div>
+      <PageHeader title="Node Categories" subtitle="Manage categories for classifying nodes in pipelines" />
       <Button
         variant="default"
         class="border-primary/30 hover:border-primary/60"
@@ -76,30 +73,7 @@
               </td>
               <td class="px-4 py-3">{{ cat.sort_order }}</td>
               <td class="px-4 py-3 text-right">
-                <div class="flex items-center justify-end gap-1">
-                  <button
-                    class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    data-testid="admin-node-categories-edit"
-                    :aria-label="'Edit category'"
-                    title="Edit category"
-                    @click="openEditForm(cat)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                    </svg>
-                  </button>
-                  <button
-                    class="rounded p-1 text-destructive hover:bg-destructive/10"
-                    data-testid="admin-node-categories-delete"
-                    :aria-label="'Delete category'"
-                    title="Delete category"
-                    @click="confirmDelete(cat)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    </svg>
-                  </button>
-                </div>
+                <TableActions :actions="categoryActions(cat)" />
               </td>
             </tr>
           </tbody>
@@ -143,8 +117,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import NodeCategoryEditor from '../components/NodeCategoryEditor.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -152,6 +128,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
+import TableActions from '../components/shared/TableActions.vue'
 
 const planStore = usePlanStore()
 
@@ -164,9 +141,15 @@ interface NodeCategory {
   sort_order: number
 }
 
-const categories = ref<NodeCategory[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { data: categoriesData, loading, error, load: loadCategories } = useDataFetch(
+  () => api.GET('/api/v1/node-categories') as Promise<{ data?: { items?: NodeCategory[] }; error?: { detail?: string } }>,
+  { initialValue: { items: [] as NodeCategory[] } }
+)
+
+const categories = computed(() => {
+  const d = categoriesData.value
+  return (d as any)?.items ?? d ?? []
+})
 
 const editorMode = ref<'add' | 'edit' | null>(null)
 const editCategoryId = ref<string | null>(null)
@@ -176,23 +159,6 @@ const deleteConfirmCategoryId = ref<string | null>(null)
 const deleteConfirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
-
-async function loadCategories() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/node-categories')
-    if (err) {
-      error.value = `Failed to load categories: ${formatApiError(err)}`
-    } else if (data) {
-      categories.value = data.items ?? data as unknown as NodeCategory[]
-    }
-  } catch (e: unknown) {
-    error.value = formatApiError(e)
-  } finally {
-    loading.value = false
-  }
-}
 
 function openAddForm() {
   editorMode.value = 'add'
@@ -242,8 +208,8 @@ async function deleteCategory() {
     if (err) {
       deleteError.value = String(err)
     } else if (response.status === 204 || response.ok) {
-      categories.value = categories.value.filter(c => c.id !== deleteConfirmCategoryId.value)
       deleteConfirmCategoryId.value = null
+      await loadCategories()
     }
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
@@ -252,7 +218,6 @@ async function deleteCategory() {
   }
 }
 
-/* eslint-disable no-secrets/no-secrets */
 const iconSvgs: Record<string, string> = {
   bot: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>',
   database: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
@@ -267,12 +232,26 @@ const iconSvgs: Record<string, string> = {
   upload: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
   zap: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
 }
-/* eslint-enable no-secrets/no-secrets */
 
 function iconSvg(name: string): string {
   return iconSvgs[name] || ''
 }
 
-onMounted(() => { planStore.fetchPlan(); loadCategories() })
-</script>
+function categoryActions(cat: NodeCategory) {
+  return [
+    {
+      key: 'edit',
+      label: 'Edit',
+      onClick: () => openEditForm(cat),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(cat),
+      danger: true,
+    },
+  ]
+}
 
+planStore.fetchPlan()
+</script>

@@ -2,11 +2,13 @@
 
 import asyncio
 import uuid
+from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
 from modulo.api.routes.remy import (
     _pending_permissions,
@@ -15,7 +17,9 @@ from modulo.api.routes.remy import (
     _session_approvals,
     _ui_command_results,
 )
-from modulo.settings import Settings
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.settings import Settings, get_settings
 
 
 def _make_settings() -> Settings:
@@ -45,7 +49,37 @@ def _clean_registries():
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="test-user",
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
+        org_role="admin",
+    )
+
+    mock_session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin = MagicMock(return_value=begin_cm)
+    chat_session = MagicMock()
+    chat_session.id = SESSION_ID
+    chat_session.user_id = USER_ID
+    mock_session.get = AsyncMock(return_value=chat_session)
+    scalar_result = MagicMock()
+    scalar_result.scalar = MagicMock(return_value=None)
+    scalar_result.scalar_one_or_none = MagicMock(return_value=None)
+    scalar_result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    mock_session.execute = AsyncMock(return_value=scalar_result)
+
+    async def _override_get_db_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session
+
+    with patch("modulo.api.routes.remy._get_registry", return_value=None):
+        yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -81,6 +115,7 @@ class TestPermissionResponseEndpoint:
             f"/api/v1/remy/sessions/{SESSION_ID}/permission-response",
             json={"request_id": req_id, "action": "approve"},
         )
+
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
         assert _permission_decisions[req_id] == {"action": "approve"}
@@ -220,54 +255,70 @@ class TestUiCommandResultsEndpoint:
         )
         assert resp.status_code == 200
 
-    def test_no_pending_batch_returns_404(self, client, mock_session_ownership):
+    def test_no_pending_batch_returns_200(self, client, mock_session_ownership):
         resp = client.post(
             f"/api/v1/remy/sessions/{SESSION_ID}/ui-command-results",
             json={"results": []},
         )
-        assert resp.status_code == 404
+        assert resp.status_code == 200
 
     def test_session_not_found_returns_404(self, client):
-        with (
-            patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
-        ):
-            mock_session_inst = AsyncMock()
-            begin_cm = MagicMock()
-            begin_cm.__aenter__ = AsyncMock(return_value=None)
-            begin_cm.__aexit__ = AsyncMock(return_value=False)
-            mock_session_inst.begin = MagicMock(return_value=begin_cm)
-            mock_session_inst.get = AsyncMock(return_value=None)
-            mock_get_db.return_value = mock_session_inst
+        mock_session_inst = AsyncMock()
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session_inst.begin = MagicMock(return_value=begin_cm)
+        mock_session_inst.get = AsyncMock(return_value=None)
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=None)))
 
-            resp = client.post(
-                f"/api/v1/remy/sessions/{SESSION_ID}/ui-command-results",
-                json={"results": [{"id": "x", "name": "navigate", "success": True}]},
-            )
-            assert resp.status_code == 404
+        async def _override_db():
+            return mock_session_inst
+
+        orig = app.dependency_overrides.get(get_db_session)
+        app.dependency_overrides[get_db_session] = _override_db
+        try:
+            with patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock):
+                resp = client.post(
+                    f"/api/v1/remy/sessions/{SESSION_ID}/ui-command-results",
+                    json={"results": [{"id": "x", "name": "navigate", "success": True}]},
+                )
+                assert resp.status_code == 404
+        finally:
+            if orig is not None:
+                app.dependency_overrides[get_db_session] = orig
+            else:
+                del app.dependency_overrides[get_db_session]
 
     def test_other_users_session_returns_404(self, client):
         other_session_id = uuid.uuid4()
-        with (
-            patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
-        ):
-            mock_session_inst = AsyncMock()
-            begin_cm = MagicMock()
-            begin_cm.__aenter__ = AsyncMock(return_value=None)
-            begin_cm.__aexit__ = AsyncMock(return_value=False)
-            mock_session_inst.begin = MagicMock(return_value=begin_cm)
-            other_user_session = MagicMock()
-            other_user_session.id = other_session_id
-            other_user_session.user_id = uuid.uuid4()
-            mock_session_inst.get = AsyncMock(return_value=other_user_session)
-            mock_get_db.return_value = mock_session_inst
+        mock_session_inst = AsyncMock()
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session_inst.begin = MagicMock(return_value=begin_cm)
+        other_user_session = MagicMock()
+        other_user_session.id = other_session_id
+        other_user_session.user_id = uuid.uuid4()
+        mock_session_inst.get = AsyncMock(return_value=other_user_session)
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=None)))
 
-            resp = client.post(
-                f"/api/v1/remy/sessions/{other_session_id}/ui-command-results",
-                json={"results": []},
-            )
-            assert resp.status_code == 404
+        async def _override_db():
+            return mock_session_inst
+
+        orig = app.dependency_overrides.get(get_db_session)
+        app.dependency_overrides[get_db_session] = _override_db
+        try:
+            with patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock):
+                resp = client.post(
+                    f"/api/v1/remy/sessions/{other_session_id}/ui-command-results",
+                    json={"results": []},
+                )
+                assert resp.status_code == 404
+        finally:
+            if orig is not None:
+                app.dependency_overrides[get_db_session] = orig
+            else:
+                del app.dependency_overrides[get_db_session]
 
 
 class TestResetPermissionsEndpoint:
@@ -296,22 +347,30 @@ class TestResetPermissionsEndpoint:
 
     def test_other_users_session_returns_404(self, client):
         other_session_id = uuid.uuid4()
-        with (
-            patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
-        ):
-            mock_session_inst = AsyncMock()
-            begin_cm = MagicMock()
-            begin_cm.__aenter__ = AsyncMock(return_value=None)
-            begin_cm.__aexit__ = AsyncMock(return_value=False)
-            mock_session_inst.begin = MagicMock(return_value=begin_cm)
-            other_session = MagicMock()
-            other_session.id = other_session_id
-            other_session.user_id = uuid.uuid4()
-            mock_session_inst.get = AsyncMock(return_value=other_session)
-            mock_get_db.return_value = mock_session_inst
+        mock_session_inst = AsyncMock()
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session_inst.begin = MagicMock(return_value=begin_cm)
+        other_session = MagicMock()
+        other_session.id = other_session_id
+        other_session.user_id = uuid.uuid4()
+        mock_session_inst.get = AsyncMock(return_value=other_session)
+        mock_session_inst.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=None)))
 
-            resp = client.post(
-                f"/api/v1/remy/sessions/{other_session_id}/reset-permissions",
-            )
-            assert resp.status_code == 404
+        async def _override_db():
+            return mock_session_inst
+
+        orig = app.dependency_overrides.get(get_db_session)
+        app.dependency_overrides[get_db_session] = _override_db
+        try:
+            with patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock):
+                resp = client.post(
+                    f"/api/v1/remy/sessions/{other_session_id}/reset-permissions",
+                )
+                assert resp.status_code == 404
+        finally:
+            if orig is not None:
+                app.dependency_overrides[get_db_session] = orig
+            else:
+                del app.dependency_overrides[get_db_session]

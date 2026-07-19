@@ -1,6 +1,6 @@
 # ADR 005 — Self-Hosted Deployments Use One Org; Teams Are the Separation Boundary
 
-**Date**: 2026-06-30  
+**Date**: 2026-06-30
 **Status**: Active
 
 ---

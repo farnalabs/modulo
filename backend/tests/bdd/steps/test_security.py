@@ -1,5 +1,6 @@
 """Step definitions for security features: credential store, input sanitization, RLS."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock
@@ -12,18 +13,12 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/security/credential_store.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/security/input_sanitization.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/security/rls_enforcement.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ===========================================================================
 # security/credential_store.feature  —  3 scenarios
@@ -121,8 +116,7 @@ def decrypt_with_key(saved_credential: dict[str, Any], expected: str) -> None:
 def decrypt_on_read(encrypted_credential: dict[str, Any]) -> str:
     """Simulate the decrypt-on-read that happens before a connector call."""
     f = Fernet(encrypted_credential["key"])
-    plaintext = f.decrypt(encrypted_credential["encrypted"]).decode()
-    return plaintext
+    return f.decrypt(encrypted_credential["encrypted"]).decode()
 
 
 @then("the node receives the plaintext credential")
@@ -209,8 +203,7 @@ def step_access_pipelines(org: str, client, alt_org_client, mock_session, curren
     test_client = alt_org_client if org == "other-org" else client
     with patch("modulo.api.routes.pipelines.list_pipelines") as mock_list:
         mock_list.return_value = SimpleNamespace(items=[], total=0, page=1, page_size=20)
-        resp = test_client.get("/api/v1/pipelines")
-        return resp
+        return test_client.get("/api/v1/pipelines")
 
 
 @then("the response status is 200")
@@ -233,8 +226,7 @@ def step_access_cross_org_pipeline(pipeline_id: str, org: str, alt_org_client, m
 
     with patch("modulo.api.routes.pipelines.get_pipeline") as mock_get:
         mock_get.return_value = None
-        resp = alt_org_client.get(f"/api/v1/pipelines/{pipeline_id}")
-        return resp
+        return alt_org_client.get(f"/api/v1/pipelines/{pipeline_id}")
 
 
 @then("the response status is 404")
@@ -250,8 +242,7 @@ def step_status_404(pipeline_response) -> None:
 @when("an unauthenticated request accesses pipelines", target_fixture="pipeline_response")
 def step_unauthenticated_access(unauth_client):
     """GET /api/v1/pipelines without any auth headers."""
-    resp = unauth_client.get("/api/v1/pipelines")
-    return resp
+    return unauth_client.get("/api/v1/pipelines")
 
 
 @then("the response status is 401")
@@ -265,7 +256,7 @@ def step_status_401(pipeline_response) -> None:
 
 
 @when(
-    parsers.parse('a viewer tries to create a pipeline named {name}'),
+    parsers.parse("a viewer tries to create a pipeline named {name}"),
     target_fixture="create_response",
 )
 def step_viewer_create_pipeline(name: str, client):
@@ -278,11 +269,10 @@ def step_viewer_create_pipeline(name: str, client):
             "user_id": str(uuid.uuid4()),
             "org_role": "viewer",
         }
-        resp = client.post(
+        return client.post(
             "/api/v1/pipelines",
             json={"name": name, "description": ""},
         )
-        return resp
 
 
 @then("the viewer pipeline creation is rejected")
@@ -312,9 +302,7 @@ def step_rls_outside_tx(mock_session):
 def step_runtime_error(rls_error) -> None:
     assert rls_error is not None, "Expected RuntimeError but none was raised"
     assert isinstance(rls_error, RuntimeError), f"Expected RuntimeError, got {type(rls_error).__name__}"
-    assert "requires an active transaction" in str(rls_error), (
-        f"Unexpected error message: {rls_error}"
-    )
+    assert "requires an active transaction" in str(rls_error), f"Unexpected error message: {rls_error}"
 
 
 # -- Scenario: set_rls_user_context requires active transaction --------------

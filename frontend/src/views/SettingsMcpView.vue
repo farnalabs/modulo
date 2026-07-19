@@ -1,11 +1,8 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="mcp_server" show-disabled>
 
     <div data-theme="agent" class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">MCP Configuration</h1>
-      <p class="mt-1 text-muted-foreground">Configure Model Context Protocol (MCP) server settings and API keys</p>
-    </header>
+    <PageHeader title="MCP Configuration" subtitle="Configure Model Context Protocol (MCP) server settings and API keys" />
 
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
@@ -116,14 +113,19 @@
         </CardHeader>
         <CardContent class="space-y-4">
           <div class="flex items-center gap-2">
-            <label class="text-sm font-medium whitespace-nowrap">Client:</label>
-            <select v-model="selectedMcpClient" aria-label="Client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-              <option value="opencode">opencode / Claude Code</option>
-              <option value="claude">Claude Desktop</option>
-              <option value="cursor">Cursor</option>
-              <option value="continue">Continue.dev</option>
-              <option value="custom">Custom</option>
-            </select>
+            <label for="settingsmcpview-client" class="text-sm font-medium whitespace-nowrap">Client:</label>
+            <Select v-model="selectedMcpClient">
+              <SelectTrigger id="settingsmcpview-client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Client">
+                <SelectValue placeholder="Select client" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="opencode">opencode / Claude Code</SelectItem>
+                <SelectItem value="claude">Claude Desktop</SelectItem>
+                <SelectItem value="cursor">Cursor</SelectItem>
+                <SelectItem value="continue">Continue.dev</SelectItem>
+                <SelectItem value="custom">Custom</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div class="rounded-lg bg-muted/30 p-4">
             <pre class="text-xs font-mono whitespace-pre-wrap break-all">{{ mcpConfigSnippet }}</pre>
@@ -145,57 +147,47 @@
       </Card>
     </template>
 
-    <!-- Create API Key Dialog -->
-    <Dialog v-model:open="createKeyDialogOpen">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Create MCP API Key</DialogTitle>
-          <DialogDescription>Generate a new API key for MCP client authentication</DialogDescription>
-        </DialogHeader>
-        <div class="space-y-4 py-2">
-          <div>
-            <label class="mb-1 block text-sm font-medium">Key Name</label>
-            <input
-              v-model="createKeyName"
-              type="text"
-              data-testid="settings-mcp-create-key-name"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="e.g. Claude Desktop"
-              @blur="createKeyNameTouched = true"
-            />
-            <p
-              v-if="createKeyNameTouched && !createKeyName.trim()"
-              class="mt-1 text-sm text-destructive"
-            >Key name is required.</p>
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium">Role</label>
-            <select
-              v-model="createKeyRole"
-              data-testid="settings-mcp-create-key-role"
-              aria-label="Role"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="operator">Operator</option>
-              <option value="runner">Runner</option>
-            </select>
-          </div>
-          <div v-if="createKeyError" class="text-sm text-destructive">{{ createKeyError }}</div>
+    <FormDialog
+      v-model:open="createKeyDialogOpen"
+      title="Create MCP API Key"
+      description="Generate a new API key for MCP client authentication"
+      confirmText="Create"
+      :confirmDisabled="!createKeyName.trim()"
+      :loading="creatingKey"
+      @confirm="createKey"
+    >
+      <div class="space-y-4 py-2">
+        <div>
+          <label for="settingsmcpview-field-2" class="mb-1 block text-sm font-medium">Key Name</label>
+          <input id="settingsmcpview-field-2"
+            v-model="createKeyName"
+            type="text"
+            data-testid="settings-mcp-create-key-name"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            placeholder="e.g. Claude Desktop"
+            @blur="createKeyNameTouched = true"
+          />
+          <p
+            v-if="createKeyNameTouched && !createKeyName.trim()"
+            class="mt-1 text-sm text-destructive"
+          >Key name is required.</p>
         </div>
-        <DialogFooter class="gap-2 sm:justify-end">
-          <Button variant="outline" @click="createKeyDialogOpen = false">Cancel</Button>
-          <Button
-            :disabled="!createKeyName.trim() || creatingKey"
-            data-testid="settings-mcp-create-key-submit"
-            @click="createKey"
-          >
-            {{ creatingKey ? 'Creating...' : 'Create' }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <div>
+          <label for="settingsmcpview-role" class="mb-1 block text-sm font-medium">Role</label>
+          <Select v-model="createKeyRole">
+            <SelectTrigger id="settingsmcpview-role" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Role" data-testid="settings-mcp-create-key-role">
+              <SelectValue placeholder="Select role" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="operator">Operator</SelectItem>
+              <SelectItem value="runner">Runner</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div v-if="createKeyError" class="text-sm text-destructive">{{ createKeyError }}</div>
+      </div>
+    </FormDialog>
 
-    <!-- Key Created Dialog (one-time display) -->
     <Dialog v-model:open="keyCreatedDialogOpen" @update:open="onKeyCreatedDialogClose">
       <DialogContent class="sm:max-w-lg">
         <DialogHeader>
@@ -212,7 +204,7 @@
           <div>
             <p class="mb-1 text-sm font-medium">API Key</p>
             <div class="relative">
-              <input
+              <input aria-label="keyMasked ? "
                 :type="keyMasked ? 'password' : 'text'"
                 :value="createdKeyValue"
                 readonly
@@ -239,30 +231,19 @@
       </DialogContent>
     </Dialog>
 
-    <!-- Revoke API Key Confirmation Dialog -->
-    <Dialog v-model:open="revokeKeyDialogOpen">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Revoke API Key</DialogTitle>
-          <DialogDescription>
-            Are you sure you want to revoke the key <strong>{{ revokeKeyTarget?.name }}</strong>?
-            Any clients using this key will lose access immediately.
-          </DialogDescription>
-        </DialogHeader>
-        <div v-if="revokeKeyError" class="text-sm text-destructive">{{ revokeKeyError }}</div>
-        <DialogFooter class="gap-2 sm:justify-end">
-          <Button variant="outline" @click="revokeKeyDialogOpen = false">Cancel</Button>
-          <Button
-            variant="destructive"
-            :disabled="revokingKey"
-            data-testid="settings-mcp-revoke-key-confirm"
-            @click="revokeKey"
-          >
-            {{ revokingKey ? 'Revoking...' : 'Confirm Revoke' }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      v-model:open="revokeKeyDialogOpen"
+      title="Revoke API Key"
+      confirmText="Confirm Revoke"
+      :loading="revokingKey"
+      @confirm="revokeKey"
+    >
+      <p class="text-sm text-muted-foreground">
+        Are you sure you want to revoke the key <strong>{{ revokeKeyTarget?.name }}</strong>?
+        Any clients using this key will lose access immediately.
+      </p>
+      <div v-if="revokeKeyError" class="text-sm text-destructive">{{ revokeKeyError }}</div>
+    </FormDialog>
 
   </div>
   </FeatureGate>
@@ -270,17 +251,28 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { api } from '../lib/api/client'
-import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import FormDialog from '../components/shared/FormDialog.vue'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import { formatDateShort } from '../lib/formatDate'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 const planStore = usePlanStore()
 
@@ -294,15 +286,28 @@ interface ApiKeyItem {
   created_at: string
 }
 
-type McpConfigResponse = components['schemas']['McpConfigResponse']
+interface McpPageData {
+  mcpUrl: string
+  apiKeys: ApiKeyItem[]
+}
+
 type ApiKeyCreatedResponse = components['schemas']['ApiKeyCreatedResponse']
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { loading, error: loadError, data: mcpData, load: loadAll } = useDataFetch<McpPageData>(
+  async () => {
+    const [mcpResp, keysResp] = await Promise.all([
+      (api as any).GET('/api/v1/api-keys/mcp-config').catch(() => null),
+      (api as any).GET('/api/v1/api-keys').catch(() => null),
+    ])
+    if (mcpResp.error) return { error: mcpResp.error }
+    if (keysResp.error) return { error: keysResp.error }
+    return { data: { mcpUrl: mcpResp.data.mcp_url, apiKeys: keysResp.data as ApiKeyItem[] } }
+  },
+  { initialValue: { mcpUrl: '', apiKeys: [] } }
+)
 
-const mcpUrl = ref('')
-
-const apiKeys = ref<ApiKeyItem[]>([])
+const mcpUrl = computed(() => mcpData.value?.mcpUrl ?? '')
+const apiKeys = computed(() => mcpData.value?.apiKeys ?? [])
 const createKeyDialogOpen = ref(false)
 const createKeyName = ref('')
 const createKeyNameTouched = ref(false)
@@ -363,11 +368,7 @@ const mcpConfigSnippet = computed(() => {
 
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
+    return formatDateShort(new Date(iso))
   } catch {
     return iso
   }
@@ -397,36 +398,6 @@ function onKeyCreatedDialogClose(open: boolean) {
   if (!open) {
     clearKeyMaskTimer()
     keyMasked.value = true
-  }
-}
-
-async function loadAll() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const [mcpResp, keysResp] = await Promise.all([
-      (api as any).GET('/api/v1/api-keys/mcp-config'),
-      (api as any).GET('/api/v1/api-keys'),
-    ])
-
-    if (mcpResp.error) {
-      loadError.value = `Failed to load MCP config: ${formatApiError(mcpResp.error)}`
-      return
-    }
-    const mcpData = mcpResp.data as McpConfigResponse
-    mcpUrl.value = mcpData.mcp_url
-
-    if (keysResp.error) {
-      loadError.value = `Failed to load API keys: ${formatApiError(keysResp.error)}`
-      return
-    }
-    apiKeys.value = keysResp.data as ApiKeyItem[]
-  } catch (e: unknown) {
-      loadError.value = e && typeof e === 'object' && 'detail' in e
-        ? `Failed to load data: ${(e as ProblemDetail).detail}`
-        : `Failed to load data: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
   }
 }
 
@@ -516,7 +487,7 @@ async function copyToClipboard(text: string, field: string) {
   }
 }
 
-onMounted(() => { planStore.fetchPlan(); loadAll() })
+onMounted(() => { planStore.fetchPlan() })
 onUnmounted(() => {
   clearKeyMaskTimer()
   if (mcpCopyTimeout) clearTimeout(mcpCopyTimeout)

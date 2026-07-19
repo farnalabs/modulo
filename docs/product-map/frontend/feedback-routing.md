@@ -173,10 +173,7 @@ in `feat-frontend-feedback-inbox-ui`.
   both `feedback_handler` and `reject_target` on the same gate not yet implemented
 - **No eval proposals UI**: Eval proposals queue with draft eval editor
   (PRD 8.20 ¶1495) not yet built
-- [x] **RESOLVED** (2026-07-08): `detect_eval_gap` now fetches pipeline eval definitions from DB — no longer hardcodes `eval_suite=[]`. Verified in `feedback.py` route handler.
-- **`dismissed` is now a valid DB status** (migration 0082). The `dismiss` action
-  sets status to `dismissed`. Both `pending→dismissed` and `escalated→dismissed`
-  transitions are allowed. Product map updated 2026-07-10.
+
 - **`run_post_correction_eval` escalates correctly but isn't wired**: The
   method escalates on eval failure via `_escalate_record` (status → `escalated`),
   but is not yet wired into the run completion lifecycle. The escalation logic
@@ -214,4 +211,9 @@ in `feat-frontend-feedback-inbox-ui`.
 - All i18n keys in FeedbackInboxView.vue verified present in en-US.js.
 - Frontend error handling, loading, and empty states confirmed correct.
 
-**Status:** partial (7 known gaps remain — no pagination controls in UI, no eval proposals UI, no retry button on main list, no maxlength validation, no status staleness handling, `formatDate` hardcoded, no `ai_correction_with_human_review` accept/reject UI). `dismissed` status gap resolved (migration 0082). Eval escalation gap resolved (run_post_correction_eval escalates, but not yet wired into lifecycle).
+**Status:** partial (4 known gaps remain — no pagination controls in UI, no eval proposals UI, no status staleness handling, no `ai_correction_with_human_review` accept/reject UI). `dismissed` status gap resolved (migration 0082). Eval escalation gap resolved (run_post_correction_eval escalates, but not yet wired into lifecycle). `formatDate` hardcoded gap resolved (now uses `locale.value` from `useI18n()`). Maxlength validation gap resolved (added `maxlength="2000"` on annotation textarea). Retry button on main list gap resolved (added `<ErrorAlert :on-retry="loadFeedback">`).
+
+### 2026-07-09 — Second-pass QA (frontend docs)
+
+**Documentation drift fixes:**
+- Corrected stale gap summary: removed `formatDate` hardcoded (fixed per inbox UI QA), maxlength validation (fixed per inbox UI QA), and retry button on main list (fixed per inbox UI QA) from gap count — 7→4 remaining gaps.

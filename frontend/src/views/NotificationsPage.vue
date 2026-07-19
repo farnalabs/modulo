@@ -1,50 +1,35 @@
-﻿<template>
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">Notifications</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.NotificationsPage.view_and_manage_your_notifications') }}</p>
-    </header>
+<template>
+  <div class="page-wide">
+    <PageHeader title="Notifications" :subtitle="$t('views.NotificationsPage.view_and_manage_your_notifications')" />
 
     <!-- Filters -->
-    <div class="card p-4">
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <select v-model="filterLevel" aria-label="Filter by level" class="rounded-md border bg-background px-3 py-2 text-sm">
-          <option value="">{{ $t('views.AdminErrorsView.all_levels') }}</option>
-          <option value="error">Error</option>
-          <option value="warning">Warning</option>
-          <option value="info">Info</option>
-          <option value="debug">Debug</option>
-        </select>
-        <select v-model="filterScope" aria-label="Filter by scope" class="rounded-md border bg-background px-3 py-2 text-sm">
-          <option value="">{{ $t('views.NotificationsPage.all_scopes') }}</option>
-          <option value="user">Personal</option>
-          <option value="org">{{ $t('components.OwnershipPicker.orgwide') }}</option>
-          <option value="admin">Admin</option>
-        </select>
-        <select v-model="filterStatus" aria-label="Filter by status" class="rounded-md border bg-background px-3 py-2 text-sm">
-          <option value="">{{ $t('views.NotificationsPage.all_status') }}</option>
-          <option value="active">Active</option>
-          <option value="dismissed_self">{{ $t('views.NotificationsPage.dismissed_self') }}</option>
-          <option value="dismissed_scope">{{ $t('views.NotificationsPage.dismissed_scope') }}</option>
-        </select>
-        <div class="flex items-end gap-2">
-        <Button
-          type="button"
-          variant="default"
-          @click="applyFilters"
-        >
-          Apply Filters
-        </Button>
-          <button
-            type="button"
-            class="rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors"
-            @click="resetFilters"
-          >
-            Reset
-          </button>
-        </div>
-      </div>
-    </div>
+    <FilterBar
+      :filters="[
+        { key: 'level', label: $t('views.AdminErrorsView.all_levels'), options: [
+          { value: 'error', label: 'Error' },
+          { value: 'warning', label: 'Warning' },
+          { value: 'info', label: 'Info' },
+          { value: 'debug', label: 'Debug' },
+        ]},
+        { key: 'scope', label: $t('views.NotificationsPage.all_scopes'), options: [
+          { value: 'user', label: 'Personal' },
+          { value: 'org', label: $t('components.OwnershipPicker.orgwide') },
+          { value: 'admin', label: 'Admin' },
+        ]},
+        { key: 'status', label: $t('views.NotificationsPage.all_status'), options: [
+          { value: 'active', label: 'Active' },
+          { value: 'dismissed_self', label: $t('views.NotificationsPage.dismissed_self') },
+          { value: 'dismissed_scope', label: $t('views.NotificationsPage.dismissed_scope') },
+        ]},
+      ]"
+      :filter-values="{ level: filterLevel, scope: filterScope, status: filterStatus }"
+      @update:filter="handleFilterUpdate"
+    >
+      <template #after>
+        <Button type="button" variant="default" @click="applyFilters">Apply Filters</Button>
+        <button type="button" class="rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors" @click="resetFilters">Reset</button>
+      </template>
+    </FilterBar>
 
     <!-- States -->
     <LoadingSpinner v-if="loading" />
@@ -92,19 +77,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, watch } from "vue";
 import type { NotificationResponse } from "../lib/api/notifications";
+import { useDataFetch } from "../composables/useDataFetch";
 import { fetchNotifications, reviewLater } from "../lib/api/notifications";
 import NotificationCard from "../components/NotificationCard.vue";
+import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from "../components/shared/LoadingSpinner.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
 import { Button } from "@/components/ui/button";
-import { formatApiError } from "../lib/api/formatError";
 import EmptyState from "../components/shared/EmptyState.vue";
 
-const notifications = ref<NotificationResponse[]>([]);
-const loading = ref(false);
-const error = ref<string | null>(null);
 const total = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
@@ -113,10 +97,14 @@ const filterLevel = ref("");
 const filterScope = ref("");
 const filterStatus = ref("");
 
-async function loadNotifications(p?: number) {
-  loading.value = true;
-  error.value = null;
-  try {
+function handleFilterUpdate(key: string, value: string) {
+  if (key === 'level') filterLevel.value = value
+  else if (key === 'scope') filterScope.value = value
+  else if (key === 'status') filterStatus.value = value
+}
+
+const { loading, error, data, load: loadNotifications } = useDataFetch(
+  async (p?: number) => {
     const result = await Promise.race([
       fetchNotifications({
         page: p ?? page.value,
@@ -127,19 +115,24 @@ async function loadNotifications(p?: number) {
       }),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Notifications request timed out after 30s')), 30000)),
     ]);
-    notifications.value = result.items;
-    total.value = result.total;
-    page.value = result.page;
-  } catch (e: unknown) {
-    error.value = formatApiError(e);
-  } finally {
-    loading.value = false;
+    return { data: result, error: undefined };
+  },
+  { initialValue: { items: [] as NotificationResponse[], total: 0, page: 1, page_size: 20 } },
+)
+
+const notifications = ref<NotificationResponse[]>([])
+
+watch(data, (d) => {
+  if (d) {
+    notifications.value = (d as any).items ?? []
+    total.value = (d as any).total ?? 0
+    page.value = (d as any).page ?? 1
   }
-}
+}, { immediate: true })
 
 function applyFilters() {
   page.value = 1;
-  void loadNotifications(1);
+  void loadNotifications();
 }
 
 function resetFilters() {
@@ -147,15 +140,19 @@ function resetFilters() {
   filterScope.value = "";
   filterStatus.value = "";
   page.value = 1;
-  void loadNotifications(1);
+  void loadNotifications();
 }
 
 function prevPage() {
-  if (page.value > 1) void loadNotifications(page.value - 1);
+  if (page.value > 1) {
+    page.value -= 1
+    void loadNotifications()
+  }
 }
 
 function nextPage() {
-  void loadNotifications(page.value + 1);
+  page.value += 1
+  void loadNotifications()
 }
 
 function onDismissed(id: string) {
@@ -172,7 +169,4 @@ async function onReviewLater(id: string) {
     error.value = e instanceof Error ? e.message : "Failed to dismiss notification";
   }
 }
-
-onMounted(() => void loadNotifications());
 </script>
-

@@ -1,5 +1,6 @@
 """ShortcutConnector — async Shortcut REST API v3 connector."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -68,11 +69,16 @@ class ShortcutConnector(ConnectorBase):
                 ok=False,
                 detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}",
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def _get_by_resource(
-        self, resource: str, item_id: str | None = None, params: dict[str, Any] | None = None
+        self,
+        resource: str,
+        item_id: str | None = None,
+        params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         path = f"/{resource}" if item_id is None else f"/{resource}/{item_id}"
         async with self._client() as client:
@@ -81,9 +87,7 @@ class ShortcutConnector(ConnectorBase):
             body: dict[str, Any] = r.json()
             return body
 
-    async def _get_list(
-        self, resource: str, params: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
+    async def _get_list(self, resource: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         path = f"/{resource}"
         async with self._client() as client:
             r = await client.get(path, params=params)

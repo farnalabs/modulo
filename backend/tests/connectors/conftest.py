@@ -19,6 +19,7 @@ from tests.connectors._conformance import get_registered_fixture, get_registered
 @pytest.fixture
 def fs_connector(tmp_path: Path):
     from modulo.connectors.filesystem import FilesystemConnector
+
     return FilesystemConnector(base_path=str(tmp_path))
 
 

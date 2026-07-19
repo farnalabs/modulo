@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Global build-arg declarations — required for --build-arg from fly deploy to
 # be accepted without warnings.  Re-declared inside each stage that needs them.
 ARG GIT_SHA
@@ -10,50 +11,60 @@ ARG CI_JOB_URL
 # =============================================================================
 # Stage 1: Build frontend SPA
 # =============================================================================
-FROM node:20-alpine AS frontend-builder
-ARG VITE_AUTO_LOGIN_USERNAME
-ARG VITE_AUTO_LOGIN_PASSWORD
-
+FROM node:22-alpine AS frontend-builder
 WORKDIR /build
 
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm install --ignore-scripts --no-audit --no-fund --force
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --ignore-scripts --no-audit --no-fund && \
+    if [ ! -f node_modules/reka-ui/dist/index.d.ts ] && [ -f node_modules/reka-ui/dist/index.d.cts ]; then \
+        cp node_modules/reka-ui/dist/index.d.cts node_modules/reka-ui/dist/index.d.ts; \
+    fi && \
+    if [ ! -f node_modules/@internationalized/date/dist/index.mjs ] && [ -f node_modules/@internationalized/date/dist/index.js ]; then \
+        cp node_modules/@internationalized/date/dist/index.js node_modules/@internationalized/date/dist/index.mjs; \
+    fi
 
 COPY frontend/ ./
-RUN VITE_AUTO_LOGIN_USERNAME=${VITE_AUTO_LOGIN_USERNAME} VITE_AUTO_LOGIN_PASSWORD=${VITE_AUTO_LOGIN_PASSWORD} npm run build
+RUN npm run build
 
 # =============================================================================
 # Stage 2: Backend + nginx for static serving
 # =============================================================================
 FROM python:3.12-slim
+ENV PATH="/app/.venv/bin:$PATH" \
+    UV_LINK_MODE=copy
 
-# Re-declare inside stage so the value is available to ENV instructions.
+# Install nginx + uv
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends nginx
+RUN --mount=type=cache,target=/root/.cache/pip pip install uv
+
+WORKDIR /app
+
+# Backend dependencies + source
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --extra docker --extra redis --no-install-project
+COPY backend/src/ src/
+COPY backend/alembic.ini .
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --extra docker --extra redis
+
+# Volatile release metadata follows dependency installation so a new commit
+# does not invalidate the expensive environment layers.
 ARG GIT_SHA
 ARG GIT_BRANCH
 ARG GIT_COMMIT_TIMESTAMP
 ARG GIT_COMMIT_MESSAGE
 ARG BUILD_TIMESTAMP
 ARG CI_JOB_URL
-
-ENV GIT_SHA=$GIT_SHA
-ENV GIT_BRANCH=$GIT_BRANCH
-ENV GIT_COMMIT_TIMESTAMP=$GIT_COMMIT_TIMESTAMP
-ENV GIT_COMMIT_MESSAGE=$GIT_COMMIT_MESSAGE
-ENV BUILD_TIMESTAMP=$BUILD_TIMESTAMP
-ENV CI_JOB_URL=$CI_JOB_URL
-
-# Install nginx + uv
-RUN apt-get update && apt-get install -y --no-install-recommends nginx && \
-    rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir uv
-
-WORKDIR /app
-
-# Backend dependencies + source
-COPY backend/pyproject.toml backend/uv.lock ./
-COPY backend/src/ src/
-COPY backend/alembic.ini .
-RUN uv sync --frozen --no-dev --no-cache --all-extras
+ENV GIT_SHA=$GIT_SHA \
+    GIT_BRANCH=$GIT_BRANCH \
+    GIT_COMMIT_TIMESTAMP=$GIT_COMMIT_TIMESTAMP \
+    GIT_COMMIT_MESSAGE=$GIT_COMMIT_MESSAGE \
+    BUILD_TIMESTAMP=$BUILD_TIMESTAMP \
+    CI_JOB_URL=$CI_JOB_URL
 
 # Frontend build output
 COPY --from=frontend-builder /build/dist/ /usr/share/nginx/html/
@@ -67,9 +78,8 @@ COPY scripts/ /app/scripts/
 # Entrypoint + bootstrap
 COPY deploy/fly/entrypoint.sh /entrypoint.sh
 COPY deploy/fly/bootstrap_db.py /app/deploy/fly/bootstrap_db.py
-COPY deploy/fly/cleanup_orphan_migrations.py /app/deploy/fly/cleanup_orphan_migrations.py
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 8080
+EXPOSE 8000
 
 CMD ["/entrypoint.sh"]

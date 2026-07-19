@@ -1,6 +1,7 @@
 """Step definitions for multi-backend database support — ADR 002."""
 
 import asyncio
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,10 +22,8 @@ from modulo.db.repositories.postgres import PostgresRepository
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/organisation/multi_backend.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Shared test entities
@@ -102,7 +101,7 @@ def _make_stmt(*, entities: list | None = None) -> MagicMock:
 # ===========================================================================
 
 
-@given(parsers.parse('a GenericRepository connected to {dialect}'))
+@given(parsers.parse("a GenericRepository connected to {dialect}"))
 def generic_repo_for_dialect(dialect: str, ctx) -> None:
     ctx["repo"] = GenericRepository(session_factory=MagicMock())
     ctx["dialect"] = dialect.lower()
@@ -127,8 +126,7 @@ def call_set_org_context(org: str, ctx) -> None:
 def check_session_info(ctx) -> None:
     session = ctx["session"]
     assert session.info.get(_TENANT_KEY) == ctx["org_id"], (
-        f"Expected session.info[{_TENANT_KEY!r}] = {ctx['org_id']!r}, "
-        f"got {session.info.get(_TENANT_KEY)!r}"
+        f"Expected session.info[{_TENANT_KEY!r}] = {ctx['org_id']!r}, got {session.info.get(_TENANT_KEY)!r}"
     )
 
 
@@ -205,7 +203,7 @@ def check_only_other_org_returned(ctx) -> None:
 def database_urls(ctx) -> None:
     ctx["urls"] = {
         "sqlite": "sqlite:///test.db",
-        "mariadb": "mysql+asyncmy://user:pass@localhost/test",
+        "mariadb": "mysql+aiomysql://user:pass@localhost/test",
         "postgres": "postgresql+asyncpg://user:pass@localhost/test",
     }
 
@@ -222,11 +220,10 @@ def configure_migration_backend(ctx) -> None:
     conversions = {}
     for name, url in ctx["urls"].items():
         converted = url
-        if "+async" in converted:
-            if converted.startswith("postgresql+asyncpg://"):
-                converted = converted.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
-            elif converted.startswith("mysql+asyncmy://"):
-                converted = converted.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
+        if converted.startswith("postgresql+asyncpg://"):
+            converted = converted.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+        elif converted.startswith("mysql+aiomysql://"):
+            converted = converted.replace("mysql+aiomysql://", "mysql+pymysql://", 1)
         conversions[name] = converted
     ctx["conversions"] = conversions
 
@@ -245,9 +242,7 @@ def check_sqlite_batch(ctx) -> None:
 @then("the async-to-sync driver conversion succeeds for each backend")
 def check_driver_conversion(ctx) -> None:
     for name, converted in ctx["conversions"].items():
-        assert "+async" not in converted, (
-            f"Async prefix not converted for {name}: {converted}"
-        )
+        assert "+async" not in converted, f"Async prefix not converted for {name}: {converted}"
 
 
 # ===========================================================================
@@ -295,7 +290,7 @@ def check_asyncio_lock(ctx) -> None:
     assert _generic_locks[key].locked()
 
 
-@when(parsers.parse('a lock is acquired for the same key'))
+@when(parsers.parse("a lock is acquired for the same key"))
 def acquire_lock_same_key(ctx) -> None:
     session = AsyncMock(spec=AsyncSession)
     ctx["lock_session"] = session

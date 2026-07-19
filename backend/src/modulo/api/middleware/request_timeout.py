@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import Request
@@ -35,7 +36,7 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
         self._default = timeout_seconds
         self._overrides = overrides or {}
 
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         timeout = self._timeout_for(request.url.path)
         if timeout <= 0:
             return await call_next(request)

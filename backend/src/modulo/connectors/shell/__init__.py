@@ -1,14 +1,24 @@
 """ShellConnector — execute commands and manage files in a workspace via RuntimeProvider.
 
+.. deprecated::
+    ShellConnector is deprecated since ADR 003 (2026-07-16).  The Modulo agent
+    execution environment model (ADR 001) has been superseded by the Agent
+    Dispatch Model.  Modulo no longer runs agents inside sandboxes — it
+    dispatches work to external agent runtimes via the ``sandbox_agent`` node
+    type.  ShellConnector will be removed in a future release.
+
 Pass ``provider_ref`` in query.filters or payload.data to target the correct
 workspace.  The calling layer must ensure an active WorkspaceLease exists before
 invoking this connector (403 otherwise).
 """
 
 import base64
+import logging
 import shlex
+import uuid
+import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from modulo.connectors.base import (
     ConnectorBase,
@@ -19,11 +29,36 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.core.runtime_provider import RuntimeProvider
+
+_log = logging.getLogger(__name__)
+
+
+class ShellRuntimeProvider(Protocol):
+    """Legacy workspace operations consumed by ShellConnector."""
+
+    async def execute_command(
+        self,
+        workspace: Any,
+        command: str,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_seconds: int = 60,
+    ) -> dict[str, Any]: ...
 
 
 class ShellConnector(ConnectorBase):
     """Execute shell commands and manage files inside a workspace lease.
+
+    .. deprecated::
+        ShellConnector is deprecated since ADR 003 (2026-07-16).  The Modulo
+        agent execution environment model (ADR 001) has been superseded by the
+        Agent Dispatch Model (ADR 003).  Modulo no longer runs agents inside
+        sandboxes — it dispatches work to external agent runtimes via the
+        ``sandbox_agent`` node type.  ShellConnector will be removed in a
+        future release.
+
+    Requires an active ``workspace_lease_id`` — 403 if not set.
+    Command allowlist is enforced via ``allowed_commands``.
 
     Supported query resources:
       "file"      — read a file via ``cat``; filters: {path, provider_ref}
@@ -38,59 +73,107 @@ class ShellConnector(ConnectorBase):
 
     def __init__(
         self,
-        runtime_provider: RuntimeProvider | None = None,
+        runtime_provider: ShellRuntimeProvider | None = None,
         allowed_commands: list[str] | None = None,
+        runtime_provider_hub: Any | None = None,
+        environment_profile_id: uuid.UUID | None = None,
+        workspace_lease_id: uuid.UUID | None = None,
     ) -> None:
+        warnings.warn(
+            "ShellConnector is deprecated (ADR 003). Use sandbox_agent node type instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._runtime_provider = runtime_provider
         self._allowed_commands = frozenset(allowed_commands or [])
+        self._runtime_provider_hub = runtime_provider_hub
+        self._environment_profile_id = environment_profile_id
+        self._workspace_lease_id = workspace_lease_id
 
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.SHELL
 
     async def health_check(self) -> HealthResult:
-        if self._runtime_provider is None:
+        if self._runtime_provider is None and self._runtime_provider_hub is None:
             return HealthResult(ok=False, detail="Runtime provider not configured")
         return HealthResult(ok=True, detail="ShellConnector ready")
+
+    def _check_workspace_lease(self) -> None:
+        if self._workspace_lease_id is None and self._runtime_provider is None:
+            raise ConnectorPermissionError(
+                "No active workspace lease and no runtime provider configured.",
+            )
+
+    async def _resolve_profile_from_hub(self) -> Any | None:
+        if self._environment_profile_id is None:
+            return None
+        try:
+            from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+            from modulo.db.crud.environment_profile import get_environment_profile
+            from modulo.settings import get_settings
+
+            _settings = get_settings()
+            _engine = get_or_create_engine(_settings)
+            _factory = get_or_create_session_factory(_engine)
+            async with _factory() as session:
+                return await get_environment_profile(session, self._environment_profile_id)
+        except Exception:
+            _log.exception("Failed to resolve environment profile from hub")
+            return None
 
     def _check_command_allowed(self, command: list[str]) -> None:
         if not self._allowed_commands:
             raise ConnectorPermissionError(
                 "No commands are allowed (deny-all). "
-                "Operator must configure permitted commands in the environment profile."
+                "Operator must configure permitted commands in the environment profile.",
             )
         base = command[0] if command else ""
         if base not in self._allowed_commands:
             raise ConnectorPermissionError(
-                f"Command {base!r} is not in the allowed list: {sorted(self._allowed_commands)}"
+                f"Command {base!r} is not in the allowed list: {sorted(self._allowed_commands)}",
             )
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        if (
+            self._runtime_provider is None
+            and self._runtime_provider_hub is not None
+            and self._environment_profile_id is not None
+        ):
+            profile = await self._resolve_profile_from_hub()
+            if profile is not None:
+                provider = self._runtime_provider_hub.resolve(profile)
+                if provider is not None:
+                    self._runtime_provider = provider
+
         if self._runtime_provider is None:
             raise ValueError("Runtime provider not configured")
+        self._check_workspace_lease()
         provider_ref: str | None = q.filters.get("provider_ref")
-        if not provider_ref:
-            raise ValueError("provider_ref is required in query filters")
 
         match q.resource:
             case "file":
                 path = q.filters["path"]
                 safe_path = shlex.quote(path)
-                result = await self._runtime_provider.exec_command(
-                    provider_ref, ["sh", "-c", f"cat {safe_path}"], timeout=30
+                result = await self._runtime_provider.execute_command(
+                    provider_ref,
+                    f"cat {safe_path}",
+                    timeout_seconds=30,
                 )
-                if result.exit_code != 0:
-                    raise ValueError(f"Failed to read file {path!r}: {result.stderr.strip()}")
-                return ConnectorResult(records=[{"path": path, "content": result.stdout}])
+                if result["exit_code"] != 0:
+                    raise ValueError(f"Failed to read file {path!r}: {(result['stderr'] or '').strip()}")
+                return ConnectorResult(records=[{"path": path, "content": result["stdout"]}])
 
             case "directory":
                 dir_path = q.filters.get("path", ".")
                 safe_path = shlex.quote(dir_path)
-                result = await self._runtime_provider.exec_command(
-                    provider_ref, ["sh", "-c", f"ls -1a {safe_path}"], timeout=30
+                result = await self._runtime_provider.execute_command(
+                    provider_ref,
+                    f"ls -1a {safe_path}",
+                    timeout_seconds=30,
                 )
                 entries: list[dict[str, Any]] = []
-                for line in result.stdout.strip().split("\n"):
+                for line in (result["stdout"] or "").strip().split("\n"):
                     name = line.strip()
                     if name and name not in (".", ".."):
                         resolved = f"{dir_path.rstrip('/')}/{name}"
@@ -101,11 +184,21 @@ class ShellConnector(ConnectorBase):
                 raise ValueError(f"Unsupported shell query resource: {q.resource!r}")
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        if (
+            self._runtime_provider is None
+            and self._runtime_provider_hub is not None
+            and self._environment_profile_id is not None
+        ):
+            profile = await self._resolve_profile_from_hub()
+            if profile is not None:
+                provider = self._runtime_provider_hub.resolve(profile)
+                if provider is not None:
+                    self._runtime_provider = provider
+
         if self._runtime_provider is None:
             raise ValueError("Runtime provider not configured")
+        self._check_workspace_lease()
         provider_ref: str | None = payload.data.get("provider_ref")
-        if not provider_ref:
-            raise ValueError("provider_ref is required in payload data")
 
         match payload.resource:
             case "command":
@@ -118,16 +211,16 @@ class ShellConnector(ConnectorBase):
                 cwd: str | None = payload.data.get("cwd")
 
                 cmd = self._build_exec_cmd(command_str, cwd, env)
-                exec_result = await self._runtime_provider.exec_command(
+                exec_result = await self._runtime_provider.execute_command(
                     provider_ref,
                     cmd,
-                    timeout=timeout,
+                    timeout_seconds=timeout,
                 )
                 return {
-                    "stdout": exec_result.stdout,
-                    "stderr": exec_result.stderr,
-                    "exit_code": exec_result.exit_code,
-                    "duration_ms": exec_result.duration_ms,
+                    "stdout": exec_result["stdout"],
+                    "stderr": exec_result["stderr"],
+                    "exit_code": exec_result["exit_code"],
+                    "duration_ms": exec_result.get("duration_ms", 0),
                     "masked": True,
                 }
 
@@ -139,21 +232,17 @@ class ShellConnector(ConnectorBase):
                 parent = str(Path(path).parent)
                 safe_parent = shlex.quote(parent)
 
-                exec_result = await self._runtime_provider.exec_command(
+                exec_result = await self._runtime_provider.execute_command(
                     provider_ref,
-                    [
-                        "sh",
-                        "-c",
-                        f"mkdir -p {safe_parent} && echo '{encoded}' | base64 -d > {safe_path}",
-                    ],
-                    timeout=30,
+                    f"mkdir -p {safe_parent} && echo '{encoded}' | base64 -d > {safe_path}",
+                    timeout_seconds=30,
                 )
-                if exec_result.exit_code != 0:
-                    raise ValueError(f"Failed to write file {path!r}: {exec_result.stderr.strip()}")
+                if exec_result["exit_code"] != 0:
+                    raise ValueError(f"Failed to write file {path!r}: {(exec_result['stderr'] or '').strip()}")
                 return {
                     "path": path,
                     "bytes_written": len(content),
-                    "exit_code": exec_result.exit_code,
+                    "exit_code": exec_result["exit_code"],
                 }
 
             case _:
@@ -164,16 +253,10 @@ class ShellConnector(ConnectorBase):
         command_str: str,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
-    ) -> list[str]:
-        """Build the exec_command arg list, wrapping with cd/env as needed.
-
-        When cwd or env is set, we invoke ``sh -c`` with each token individually
-        quoted so that shell metacharacters (``;``, ``&&``, ``|``, etc.) in
-        ``command_str`` cannot bypass the allowlist.
-        """
+    ) -> str:
         command_parts = shlex.split(command_str)
         if not cwd and not env:
-            return command_parts
+            return command_str
 
         shell_parts: list[str] = []
         if cwd:
@@ -183,4 +266,4 @@ class ShellConnector(ConnectorBase):
             env_prefix = " ".join(f"{shlex.quote(k)}={shlex.quote(v)}" for k, v in env.items())
             quoted_cmd = f"{env_prefix} {quoted_cmd}"
         shell_parts.append(quoted_cmd)
-        return ["sh", "-c", " && ".join(shell_parts)]
+        return " && ".join(shell_parts)

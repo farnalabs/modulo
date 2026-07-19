@@ -81,7 +81,10 @@ class BitbucketConnector(ConnectorBase):
             username = user_info.get("username", "") or user_info.get("display_name", "")
             return HealthResult(ok=True, detail=username)
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"Bitbucket API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False,
+                detail=f"Bitbucket API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Bitbucket API timeout")
         except httpx.ConnectError:

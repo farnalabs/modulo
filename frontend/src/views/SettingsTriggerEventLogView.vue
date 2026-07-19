@@ -1,61 +1,58 @@
-﻿<template>
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsTriggerEventLogView.trigger_event_log') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.event_history_for_all_triggers_across_the_organisation') }}</p>
-    </header>
+<template>
+  <div class="page-wide">
+    <PageHeader :title="$t('views.SettingsTriggerEventLogView.trigger_event_log')" :subtitle="$t('views.SettingsTriggerEventLogView.event_history_for_all_triggers_across_the_organisation')" />
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
-          <select
-            v-model="filterTriggerType"
-            data-testid="settings-trigger-event-log-trigger-type"
-            aria-label="Trigger type"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
-            <option value="manual">Manual</option>
-            <option value="webhook">Webhook</option>
-            <option value="cron">Cron</option>
-            <option value="polling">Polling</option>
-            <option value="agent_signal">{{ $t('views.SettingsTriggerEventLogView.agent_signal') }}</option>
-          </select>
+          <label for="settingstriggereventlogview-trigger-type" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
+          <Select v-model="filterTriggerType">
+            <SelectTrigger id="settingstriggereventlogview-trigger-type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Trigger type" data-testid="settings-trigger-event-log-trigger-type">
+              <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.all_types')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
+              <SelectItem value="manual">Manual</SelectItem>
+              <SelectItem value="webhook">Webhook</SelectItem>
+              <SelectItem value="cron">Cron</SelectItem>
+              <SelectItem value="polling">Polling</SelectItem>
+              <SelectItem value="agent_signal">{{ $t('views.SettingsTriggerEventLogView.agent_signal') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Result</label>
-          <select
-            v-model="filterResult"
-            data-testid="settings-trigger-event-log-result"
-            aria-label="Result"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.SettingsTriggerEventLogView.all_results') }}</option>
-            <option value="accepted">Accepted</option>
-            <option value="passed">Passed</option>
-            <option value="condition_met">{{ $t('views.SettingsTriggerEventLogView.condition_met') }}</option>
-            <option value="signal_fired">{{ $t('views.SettingsTriggerEventLogView.signal_fired') }}</option>
-            <option value="no_match">{{ $t('views.SettingsTriggerEventLogView.no_match') }}</option>
-            <option value="hmac_failed">{{ $t('views.SettingsTriggerEventLogView.hmac_failed') }}</option>
-            <option value="schema_validation_failed">{{ $t('views.SettingsTriggerEventLogView.schema_validation_failed') }}</option>
-            <option value="deduplicated">Deduplicated</option>
-            <option value="concurrency_limit_reached">{{ $t('views.SettingsTriggerEventLogView.concurrency_limit_reached') }}</option>
-            <option value="flood_rejected">{{ $t('views.SettingsTriggerEventLogView.flood_rejected') }}</option>
-            <option value="timestamp_expired">{{ $t('views.SettingsTriggerEventLogView.timestamp_expired') }}</option>
-            <option value="validation_failed">{{ $t('views.SettingsTriggerEventLogView.validation_failed') }}</option>
-            <option value="rate_limited">{{ $t('views.SettingsTriggerEventLogView.rate_limited') }}</option>
-            <option value="poll_error">{{ $t('views.SettingsTriggerEventLogView.poll_error') }}</option>
-          </select>
+          <label for="settingstriggereventlogview-result" class="mb-1 block text-xs font-medium text-muted-foreground">Result</label>
+          <Select v-model="filterResult">
+            <SelectTrigger id="settingstriggereventlogview-result" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Result" data-testid="settings-trigger-event-log-result">
+              <SelectValue :placeholder="$t('views.SettingsTriggerEventLogView.all_results')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{{ $t('views.SettingsTriggerEventLogView.all_results') }}</SelectItem>
+              <SelectItem value="accepted">Accepted</SelectItem>
+              <SelectItem value="passed">Passed</SelectItem>
+              <SelectItem value="condition_met">{{ $t('views.SettingsTriggerEventLogView.condition_met') }}</SelectItem>
+              <SelectItem value="signal_fired">{{ $t('views.SettingsTriggerEventLogView.signal_fired') }}</SelectItem>
+              <SelectItem value="no_match">{{ $t('views.SettingsTriggerEventLogView.no_match') }}</SelectItem>
+              <SelectItem value="hmac_failed">{{ $t('views.SettingsTriggerEventLogView.hmac_failed') }}</SelectItem>
+              <SelectItem value="schema_validation_failed">{{ $t('views.SettingsTriggerEventLogView.schema_validation_failed') }}</SelectItem>
+              <SelectItem value="deduplicated">Deduplicated</SelectItem>
+              <SelectItem value="concurrency_limit_reached">{{ $t('views.SettingsTriggerEventLogView.concurrency_limit_reached') }}</SelectItem>
+              <SelectItem value="flood_rejected">{{ $t('views.SettingsTriggerEventLogView.flood_rejected') }}</SelectItem>
+              <SelectItem value="timestamp_expired">{{ $t('views.SettingsTriggerEventLogView.timestamp_expired') }}</SelectItem>
+              <SelectItem value="validation_failed">{{ $t('views.SettingsTriggerEventLogView.validation_failed') }}</SelectItem>
+              <SelectItem value="rate_limited">{{ $t('views.SettingsTriggerEventLogView.rate_limited') }}</SelectItem>
+              <SelectItem value="poll_error">{{ $t('views.SettingsTriggerEventLogView.poll_error') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div class="flex items-end gap-2">
-          <button
+          <Button
+            variant="default"
             data-testid="settings-trigger-event-log-apply"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             @click="applyFilters"
           >
             Apply
-          </button>
+          </Button>
           <button
             data-testid="settings-trigger-event-log-reset"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -156,26 +153,47 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
-import type { components } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { shortId } from '../utils/format'
+import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
-type TriggerEventItem = components['schemas']['TriggerEventItem']
-
-const items = ref<TriggerEventItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const total = ref(0)
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)
 const nextCursor = ref<string | null>(null)
 
-const filterTriggerType = ref('')
-const filterResult = ref('')
+const { loading, error, data: responseData, load: loadEvents } = useDataFetch(
+  async () => {
+    const params: Record<string, unknown> = { limit: 50 }
+    if (currentCursor.value) params.cursor = currentCursor.value
+    if (filterTriggerType.value !== '__all__') params.trigger_type = filterTriggerType.value
+    if (filterResult.value !== '__all__') params.validation_result = filterResult.value
+    const res = await api.GET('/api/v1/admin/trigger-events', {
+      params: { query: params as any },
+    })
+    if (res.data) {
+      nextCursor.value = res.data.next_cursor ?? null
+    }
+    return res
+  },
+)
+
+const items = computed(() => (responseData.value as any)?.items ?? [])
+const total = computed(() => (responseData.value as any)?.total ?? 0)
+
+const filterTriggerType = ref('__all__')
+const filterResult = ref('__all__')
 
 function formatTimestamp(ts: string | null): string {
   if (!ts) return '—'
@@ -207,55 +225,31 @@ function resultBadge(result: string): string {
   return 'badge badge-context-slate'
 }
 
-async function loadEvents(cursor?: string | null) {
-  loading.value = true
-  error.value = null
-  try {
-    const params: Record<string, unknown> = { limit: 50 }
-    if (cursor) params.cursor = cursor
-    if (filterTriggerType.value) params.trigger_type = filterTriggerType.value
-    if (filterResult.value) params.validation_result = filterResult.value
-    const { data, error: err } = await api.GET('/api/v1/admin/trigger-events', {
-      params: { query: params as any },
-    })
-    if (err) {
-      error.value = `Failed to load trigger events: ${formatApiError(err)}`
-    } else if (data) {
-      items.value = data.items
-      total.value = data.total
-      nextCursor.value = data.next_cursor
-      currentCursor.value = cursor ?? null
-      if (!cursor) cursorStack.value = []
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load trigger events: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
 function goToPreviousPage() {
   const prev = cursorStack.value.pop()
   if (prev === undefined) return
-  loadEvents(prev)
+  currentCursor.value = prev
+  loadEvents()
 }
 
 function goToNextPage() {
   if (!nextCursor.value) return
   cursorStack.value.push(currentCursor.value)
-  loadEvents(nextCursor.value)
+  currentCursor.value = nextCursor.value
+  loadEvents()
 }
 
 function applyFilters() {
-  loadEvents(null)
+  currentCursor.value = null
+  cursorStack.value = []
+  loadEvents()
 }
 
 function resetFilters() {
-  filterTriggerType.value = ''
-  filterResult.value = ''
-  loadEvents(null)
+  filterTriggerType.value = '__all__'
+  filterResult.value = '__all__'
+  currentCursor.value = null
+  cursorStack.value = []
+  loadEvents()
 }
-
-onMounted(() => loadEvents(null))
 </script>
-

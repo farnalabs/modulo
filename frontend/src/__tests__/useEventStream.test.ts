@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { EventBusEvent } from '../types/events'
 
 vi.mock('@/lib/api/client', () => ({
   getAccessToken: vi.fn(() => 'test-token'),
+  getAuthHeaders: vi.fn(() => ({ Authorization: 'Bearer test-token' })),
 }))
 
 let pushEvent: (eventType: string, data: Record<string, unknown>) => void
@@ -28,10 +29,10 @@ beforeEach(() => {
     cancel: vi.fn().mockResolvedValue(undefined),
   }
 
-  globalThis.fetch = vi.fn().mockResolvedValue({
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue({
     ok: true,
     body: { getReader: () => mockReader },
-  })
+  } as unknown as Response)
 
   pushEvent = (eventType: string, data: Record<string, unknown>) => {
     const sse = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`
@@ -61,8 +62,12 @@ function triggerEvent(data: Record<string, unknown>) {
 }
 
 function tick() {
-  return new Promise<void>((resolve) => setTimeout(resolve, 10))
+  return new Promise<void>((resolve) => queueMicrotask(resolve))
 }
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('eventBus', () => {
   it('subscribe adds handler and connects', async () => {
@@ -86,8 +91,7 @@ describe('eventBus', () => {
     await tick()
     const event = { type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' }
     triggerEvent(event)
-    await tick()
-    expect(handler).toHaveBeenCalledWith(event)
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledWith(event))
   })
 
   it('unsubscribe removes handler', async () => {
@@ -118,14 +122,6 @@ describe('eventBus', () => {
     eventBus.subscribe('run', handler)
     await tick()
     triggerEvent({ type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' })
-    await tick()
-    expect(eventBus.connected).toBe(true)
-  })
-
-  it('connected becomes true on open', async () => {
-    const { eventBus } = await import('../composables/useEventStream')
-    const handler = vi.fn()
-    eventBus.subscribe('run', handler)
     await tick()
     expect(eventBus.connected).toBe(true)
   })

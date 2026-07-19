@@ -41,40 +41,26 @@ def test_verify_password_bad_hash_returns_false() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("password", "user_active", "user_hash", "expected"),
+    [
+        ("any", False, _h("correct"), False),
+        ("any", True, None, False),
+        ("CorrectHorseBattery99!", True, _h("CorrectHorseBattery99!"), True),
+        ("wrong", True, _h("CorrectHorseBattery99!"), False),
+    ],
+)
+def test_authenticate_db_user(password: str, user_active: bool, user_hash: str | None, expected: bool) -> None:
+    class FakeUser:
+        active = user_active
+        password_hash = user_hash
+
+    result = authenticate_db_user(password, FakeUser())
+    assert result is expected
+
+
 def test_authenticate_db_user_none() -> None:
     assert authenticate_db_user("any", None) is False
-
-
-def test_authenticate_db_user_inactive() -> None:
-    class FakeUser:
-        active = False
-        password_hash = _h("correct")
-
-    assert authenticate_db_user("correct", FakeUser()) is False
-
-
-def test_authenticate_db_user_no_hash() -> None:
-    class FakeUser:
-        active = True
-        password_hash = None
-
-    assert authenticate_db_user("any", FakeUser()) is False
-
-
-def test_authenticate_db_user_correct() -> None:
-    class FakeUser:
-        active = True
-        password_hash = _h("CorrectHorseBattery99!")
-
-    assert authenticate_db_user("CorrectHorseBattery99!", FakeUser()) is True
-
-
-def test_authenticate_db_user_wrong() -> None:
-    class FakeUser:
-        active = True
-        password_hash = _h("CorrectHorseBattery99!")
-
-    assert authenticate_db_user("wrong", FakeUser()) is False
 
 
 # ---------------------------------------------------------------------------
@@ -82,35 +68,23 @@ def test_authenticate_db_user_wrong() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_entropy_empty() -> None:
-    assert password_entropy_bits("") == 0.0
-
-
-def test_entropy_lowercase_only() -> None:
-    bits = password_entropy_bits("abcdefgh")
-    assert 35 < bits < 40  # 8 * log2(26) ~= 37.6
-
-
-def test_entropy_mixed_case() -> None:
-    bits = password_entropy_bits("AbCdEfGh")
-    # 8 * log2(52) ~= 45.6
-    assert 44 < bits < 47
-
-
-def test_entropy_all_pools() -> None:
-    bits = password_entropy_bits("Ab1!DefGh")
-    # 9 * log2(94) ~= 59.0
-    assert 58 < bits < 61
-
-
-def test_entropy_single_repeated_lowercase() -> None:
-    bits = password_entropy_bits("aaaaaaaa")
-    assert 35 < bits < 40
-
-
-def test_entropy_unicode_no_effect_on_pool() -> None:
-    bits = password_entropy_bits("♥")
-    assert bits == 0.0
+@pytest.mark.parametrize(
+    ("pw", "lo", "hi"),
+    [
+        ("", 0.0, 0.0),
+        ("abcdefgh", 35, 40),
+        ("AbCdEfGh", 44, 47),
+        ("Ab1!DefGh", 58, 61),
+        ("aaaaaaaa", 35, 40),
+        ("♥", 0.0, 0.0),
+    ],
+)
+def test_entropy(pw: str, lo: float, hi: float) -> None:
+    bits = password_entropy_bits(pw)
+    if lo == 0.0 and hi == 0.0:
+        assert bits == 0.0
+    else:
+        assert lo < bits < hi
 
 
 # ---------------------------------------------------------------------------

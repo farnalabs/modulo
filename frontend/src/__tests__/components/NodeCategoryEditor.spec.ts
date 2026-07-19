@@ -36,11 +36,9 @@ describe('NodeCategoryEditor', () => {
 
     const inputs = wrapper.findAll('input')
     const textareas = wrapper.findAll('textarea')
-    const selects = wrapper.findAll('select')
 
     expect(inputs.length).toBeGreaterThanOrEqual(2)
     expect(textareas.length).toBeGreaterThanOrEqual(1)
-    expect(selects.length).toBeGreaterThanOrEqual(1)
 
     const nameInput = wrapper.find('input[type="text"]')
     expect(nameInput.exists()).toBe(true)
@@ -83,10 +81,7 @@ describe('NodeCategoryEditor', () => {
     const wrapper = mount(NodeCategoryEditor, { props: { category: null } })
     await nextTick()
 
-    const select = wrapper.find('select')
-    expect(select.exists()).toBe(true)
-    const options = select.findAll('option')
-    expect(options.length).toBeGreaterThan(5)
+    expect(wrapper.text()).toContain('None')
   })
 
   it('emits cancelled when cancel is clicked', async () => {

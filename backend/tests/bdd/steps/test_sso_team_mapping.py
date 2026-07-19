@@ -1,6 +1,7 @@
 """Step definitions for SSO Group-to-Team Mapping — admin config, JIT application, role assignment."""
 
 import base64
+import contextlib
 import json
 import uuid
 from typing import Any
@@ -13,10 +14,8 @@ from modulo.api.dependencies import get_plan_context
 from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.settings import Settings, get_settings
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/sso_team_mapping.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -65,14 +64,16 @@ def _oidc_settings(license_key: str = "test-license-key") -> Settings:
         modulo_license_key=license_key,
         modulo_csrf_enabled=False,
         modulo_public_url="http://localhost:8000",
-        modulo_oidc_providers=json.dumps([
-            {
-                "provider_id": "google",
-                "client_id": "google-client-id",
-                "client_secret": "google-client-secret",
-                "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
-            },
-        ]),
+        modulo_oidc_providers=json.dumps(
+            [
+                {
+                    "provider_id": "google",
+                    "client_id": "google-client-id",
+                    "client_secret": "google-client-secret",
+                    "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
+                },
+            ]
+        ),
     )
 
 
@@ -94,18 +95,10 @@ def _saml_settings(license_key: str = "test-license-key") -> Settings:
 def _make_saml_response(email: str, display_name: str, groups: list[str] | None = None) -> str:
     groups_xml = ""
     if groups:
-        values = "".join(
-            f'        <saml:AttributeValue>{g}</saml:AttributeValue>'
-            for g in groups
-        )
-        groups_xml = (
-            '      <saml:Attribute Name="groups">\n'
-            f"{values}\n"
-            '      </saml:Attribute>'
-        )
+        values = "".join(f"        <saml:AttributeValue>{g}</saml:AttributeValue>" for g in groups)
+        groups_xml = f'      <saml:Attribute Name="groups">\n{values}\n      </saml:Attribute>'
     xml = (
-        _SAML_RESPONSE_XML
-        .replace("__EMAIL__", email)
+        _SAML_RESPONSE_XML.replace("__EMAIL__", email)
         .replace("__DISPLAY_NAME__", display_name)
         .replace("__GROUPS_XML__", groups_xml)
     )
@@ -116,14 +109,13 @@ def _make_id_token(email: str, name: str, groups: list[str] | None = None, sub: 
     claims = {"email": email, "name": name, "sub": sub}
     if groups:
         claims["groups"] = groups
-    payload = base64.urlsafe_b64encode(
-        json.dumps(claims).encode()
-    ).rstrip(b"=").decode()
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
     return f"eyJhbGciOiJSUzI1NiJ9.{payload}.signature"
 
 
 def _sign_state(provider_id: str, secret_key: str = _VALID_32) -> str:
     from modulo.auth.sso import sign_state
+
     return sign_state(f"{provider_id}:{uuid.uuid4().hex}", secret_key)
 
 
@@ -213,11 +205,7 @@ def saml_enabled(entity_id: str, ctx: dict[str, Any]) -> None:
 # ── Given: group mapping config ────────────────────────────────────────────
 
 
-@given(
-    parsers.parse(
-        'group mapping is configured for "{idp_group}" to team "{team_id}" with role "{role}"'
-    )
-)
+@given(parsers.parse('group mapping is configured for "{idp_group}" to team "{team_id}" with role "{role}"'))
 def group_mapping_configured(idp_group: str, team_id: str, role: str, ctx: dict[str, Any]) -> None:
     mappings = ctx.get("group_mappings", [])
     mappings.append({"idp_group": idp_group, "team_id": team_id, "team_role": role})
@@ -406,9 +394,7 @@ def group_mappings_persisted(ctx: dict[str, Any]) -> None:
 def response_contains_mapping_entry(count: int, request: Any) -> None:
     resp = request.node._resp
     data = resp.json()
-    assert len(data["mappings"]) == count, (
-        f"Expected {count} mapping entries, got {len(data['mappings'])}"
-    )
+    assert len(data["mappings"]) == count, f"Expected {count} mapping entries, got {len(data['mappings'])}"
 
 
 @then("apply_group_mappings was called")
@@ -427,9 +413,7 @@ def apply_group_mappings_called_with(groups: str, ctx: dict[str, Any]) -> None:
     assert call is not None
     input_groups = [g.strip() for g in groups.split(",") if g.strip()]
     actual_groups = call[0][2]
-    assert actual_groups == input_groups, (
-        f"Expected groups {input_groups}, got {actual_groups}"
-    )
+    assert actual_groups == input_groups, f"Expected groups {input_groups}, got {actual_groups}"
 
 
 @then(
@@ -458,6 +442,4 @@ def apply_group_mappings_no_matches(ctx: dict[str, Any]) -> None:
     idp_groups = call[0][2]
     group_mappings = call[0][3]
     matched = any(m["idp_group"] in idp_groups for m in group_mappings)
-    assert not matched, (
-        f"Expected no matching groups, but found match for {idp_groups} in {group_mappings}"
-    )
+    assert not matched, f"Expected no matching groups, but found match for {idp_groups} in {group_mappings}"

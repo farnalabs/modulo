@@ -26,6 +26,7 @@ async def create_composite_template(
     description: str | None = None,
     input_schema_id: uuid.UUID | None = None,
     output_schema_id: uuid.UUID | None = None,
+    parameter_schema_id: uuid.UUID | None = None,
     version: str = "1.0.0",
 ) -> CompositeTemplate:
     template = CompositeTemplate(
@@ -37,6 +38,7 @@ async def create_composite_template(
         parameter_ports_json=parameter_ports_json,
         input_schema_id=input_schema_id,
         output_schema_id=output_schema_id,
+        parameter_schema_id=parameter_schema_id,
         version=version,
     )
     session.add(template)
@@ -48,9 +50,7 @@ async def get_composite_template(
     session: AsyncSession,
     template_id: uuid.UUID,
 ) -> CompositeTemplate | None:
-    result = await session.execute(
-        select(CompositeTemplate).where(CompositeTemplate.id == template_id)
-    )
+    result = await session.execute(select(CompositeTemplate).where(CompositeTemplate.id == template_id))
     return result.scalar_one_or_none()
 
 
@@ -65,9 +65,7 @@ async def list_composite_templates(
     try:
         total = (
             await session.execute(
-                select(func.count()).select_from(CompositeTemplate).where(
-                    CompositeTemplate.organisation_id == org_id
-                )
+                select(func.count()).select_from(CompositeTemplate).where(CompositeTemplate.organisation_id == org_id)
             )
         ).scalar_one()
     except ProgrammingError:

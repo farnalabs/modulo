@@ -1,10 +1,9 @@
-﻿<template>
+<template>
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
         <BackLink to="/pipelines" label="Back to Pipelines" class="mb-2" />
-        <h1 class="text-xl font-semibold text-foreground">{{ $t('views.CopyPipelineWizard.copy_pipeline') }}</h1>
-        <p class="text-sm text-muted-foreground mt-1">{{ $t('views.CopyPipelineWizard.duplicate_an_existing_pipeline_and_adapt_it_for_a_new_purpos') }}</p>
+        <PageHeader :title="$t('views.CopyPipelineWizard.copy_pipeline')" :subtitle="$t('views.CopyPipelineWizard.duplicate_an_existing_pipeline_and_adapt_it_for_a_new_purpos')" />
       </div>
     </header>
 
@@ -37,16 +36,11 @@
           <h2 class="text-lg font-medium text-foreground mb-1">{{ $t('views.CopyPipelineWizard.select_source_pipeline') }}</h2>
           <p class="text-sm text-muted-foreground mb-4">{{ $t('views.CopyPipelineWizard.choose_the_pipeline_you_want_to_copy_and_adapt') }}</p>
 
-          <div class="relative mb-4">
-            <input
-              v-model="searchQuery"
-              type="text"
-              :placeholder="$t('views.CopyPipelineWizard.search_pipelines_by_name')"
-              class="w-full pl-9 pr-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              data-testid="copy-wizard-search"
-            />
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          </div>
+          <FilterBar class="mb-4"
+            :search="{ placeholder: $t('views.CopyPipelineWizard.search_pipelines_by_name') }"
+            :search-value="searchQuery"
+            @update:search="searchQuery = $event"
+          />
 
           <div class="flex gap-2 mb-4">
             <button
@@ -119,8 +113,8 @@
 
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-foreground mb-1">New Pipeline Name</label>
-              <input
+              <label for="copypipelinewizard-field-6" class="block text-sm font-medium text-foreground mb-1">New Pipeline Name</label>
+              <input id="copypipelinewizard-field-6"
                 v-model="pipelineName"
                 type="text"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -130,7 +124,7 @@
             </div>
 
             <div>
-              <label class="block text-sm font-medium text-foreground mb-1">Target Ownership</label>
+              <span class="block text-sm font-medium text-foreground mb-1">Target Ownership</span>
               <p class="text-xs text-muted-foreground mb-2">Choose who the copied pipeline belongs to.</p>
               <OwnershipPicker v-model="ownership" :label="$t('views.LibraryPipelineWizard.owner')" />
             </div>
@@ -139,8 +133,8 @@
               <h3 class="text-sm font-medium text-foreground mb-3">What to Copy</h3>
 
               <div class="space-y-3">
-                <label class="flex items-start gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
-                  <input
+                <label for="copypipelinewizard-field-5" class="flex items-start gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
+                  <input id="copypipelinewizard-field-5"
                     v-model="copyScope"
                     type="radio"
                     value="all"
@@ -153,8 +147,8 @@
                   </div>
                 </label>
 
-                <label class="flex items-start gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
-                  <input
+                <label for="copypipelinewizard-field-4" class="flex items-start gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
+                  <input id="copypipelinewizard-field-4"
                     v-model="copyScope"
                     type="radio"
                     value="selected"
@@ -172,24 +166,24 @@
             <div class="border-t border-border pt-4 space-y-3">
               <h3 class="text-sm font-medium text-foreground mb-3">Additional Options</h3>
 
-              <label class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
-                <input v-model="keepEvalConfigs" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-keep-evals" />
+              <label for="copypipelinewizard-field-3" class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
+                <input id="copypipelinewizard-field-3" v-model="keepEvalConfigs" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-keep-evals" />
                 <div>
                   <p class="text-sm font-medium text-foreground">Keep eval configurations</p>
                   <p class="text-xs text-muted-foreground">Preserve eval configs, scoring criteria, and threshold settings from the source pipeline.</p>
                 </div>
               </label>
 
-              <label class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
-                <input v-model="keepTriggers" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-keep-triggers" />
+              <label for="copypipelinewizard-field-2" class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
+                <input id="copypipelinewizard-field-2" v-model="keepTriggers" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-keep-triggers" />
                 <div>
                   <p class="text-sm font-medium text-foreground">Keep triggers</p>
                   <p class="text-xs text-muted-foreground">Copy trigger configurations (schedules, webhooks, events) to the new pipeline.</p>
                 </div>
               </label>
 
-              <label class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
-                <input v-model="shareConnectors" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-share-connectors" />
+              <label for="copypipelinewizard-field-1" class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
+                <input id="copypipelinewizard-field-1" v-model="shareConnectors" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-share-connectors" />
                 <div>
                   <p class="text-sm font-medium text-foreground">Share connector bindings</p>
                   <p class="text-xs text-muted-foreground">Keep connector bindings pointing to the same instances. Uncheck to create unbound copies.</p>
@@ -374,15 +368,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import { Button } from '@/components/ui/button'
-import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
 import BackLink from '../components/BackLink.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
+import { api } from '../lib/api/client'
+import { formatDateShort } from '../lib/formatDate'
 
 interface PipelineItem {
   id: string
@@ -409,13 +407,16 @@ interface CloneResponse {
 }
 
 const steps = ['Select Pipeline', 'Configure', 'Review', 'Execute']
-const { get, post } = useApi()
 const router = useRouter()
 
+const { loading, error, data: pipelinesResp, load: fetchPipelines } = useDataFetch<PipelineListResponse>(
+  () => api.GET('/api/v1/pipelines', { params: { query: { page_size: 100 } } }),
+  { initialValue: { items: [] as PipelineItem[], total: 0, page: 1, page_size: 100 } },
+)
+
+const pipelines = computed(() => pipelinesResp.value?.items ?? [])
+
 const step = ref(1)
-const loading = ref(true)
-const error = ref<string | null>(null)
-const pipelines = ref<PipelineItem[]>([])
 const selectedPipeline = ref<PipelineItem | null>(null)
 const searchQuery = ref('')
 const visibilityFilter = ref<'all' | 'org' | 'team'>('all')
@@ -455,27 +456,14 @@ const filteredPipelines = computed(() => {
 function formatDate(dateStr: string): string {
   try {
     const d = new Date(dateStr)
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    return formatDateShort(d)
   } catch {
     return dateStr
   }
 }
 
 function retry() {
-  error.value = null
-  loading.value = true
   fetchPipelines()
-}
-
-async function fetchPipelines() {
-  try {
-    const data = await get<PipelineListResponse>('/api/v1/pipelines?page_size=100')
-    pipelines.value = data.items || []
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load pipelines'
-  } finally {
-    loading.value = false
-  }
 }
 
 async function executeCopy() {
@@ -488,11 +476,11 @@ async function executeCopy() {
     await new Promise(r => setTimeout(r, 300))
     progressStep.value = 'cloning'
 
-    const data = await post<CloneResponse>(
-      `/api/v1/pipelines/${selectedPipeline.value.id}/clone`,
-      { name: displayName.value || undefined },
-    )
-    result.value = data
+    const { data } = await api.POST('/api/v1/pipelines/{pipeline_id}/clone', {
+      params: { path: { pipeline_id: selectedPipeline.value.id } },
+      body: { name: displayName.value || undefined },
+    })
+    result.value = data as unknown as CloneResponse
 
     progressStep.value = 'configuring'
     await new Promise(r => setTimeout(r, 400))
@@ -530,5 +518,4 @@ function reset() {
   fetchPipelines()
 }
 
-onMounted(fetchPipelines)
 </script>

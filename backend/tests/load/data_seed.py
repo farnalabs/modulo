@@ -54,7 +54,7 @@ class SeedClient:
         try:
             body = resp.json()
         except requests.JSONDecodeError:
-            _log.error("Auth endpoint returned non-JSON: %s", resp.text[:200])
+            _log.error("Auth endpoint returned non-JSON (status %s)", resp.status_code)
             raise
         token = body["access_token"]
         self._session.headers.update({"Authorization": f"Bearer {token}"})
@@ -76,7 +76,7 @@ class SeedClient:
         try:
             return resp.json()
         except requests.JSONDecodeError:
-            _log.warning("Non-JSON response %s %s: %s", method, path, resp.text[:200])
+            _log.warning("Non-JSON response %s %s (status %s)", method, path, resp.status_code)
             return None
 
     def get(self, path: str) -> dict[str, Any] | list[Any] | None:
@@ -93,16 +93,29 @@ def seed_pipelines(client: SeedClient, count: int = 5) -> list[dict[str, Any]]:
     """Create *count* test pipelines with varying configurations."""
     pipelines = []
     configs = [
-        {"name": "Load Test - Simple Agent", "description": "Single-agent pipeline for load testing",
-         "max_concurrent_runs": 10},
-        {"name": "Load Test - Sequential Chain", "description": "Multi-agent sequential chain",
-         "max_concurrent_runs": 5},
-        {"name": "Load Test - HITL Gate", "description": "Pipeline with human-in-the-loop gate",
-         "max_concurrent_runs": 3, "default_autonomy_level": "manual_approval"},
-        {"name": "Load Test - High Concurrency", "description": "High-concurrency pipeline",
-         "max_concurrent_runs": 25},
-        {"name": "Load Test - Long Running", "description": "Long timeout pipeline for stress testing",
-         "node_timeout_seconds": 600, "lock_wait_timeout_seconds": 600},
+        {
+            "name": "Load Test - Simple Agent",
+            "description": "Single-agent pipeline for load testing",
+            "max_concurrent_runs": 10,
+        },
+        {
+            "name": "Load Test - Sequential Chain",
+            "description": "Multi-agent sequential chain",
+            "max_concurrent_runs": 5,
+        },
+        {
+            "name": "Load Test - HITL Gate",
+            "description": "Pipeline with human-in-the-loop gate",
+            "max_concurrent_runs": 3,
+            "default_autonomy_level": "manual_approval",
+        },
+        {"name": "Load Test - High Concurrency", "description": "High-concurrency pipeline", "max_concurrent_runs": 25},
+        {
+            "name": "Load Test - Long Running",
+            "description": "Long timeout pipeline for stress testing",
+            "node_timeout_seconds": 600,
+            "lock_wait_timeout_seconds": 600,
+        },
     ]
 
     for i in range(count):

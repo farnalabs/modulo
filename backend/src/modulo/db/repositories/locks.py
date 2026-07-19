@@ -11,6 +11,7 @@ Usage:
 """
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 from abc import ABC, abstractmethod
@@ -132,16 +133,15 @@ class GenericLock(BaseLockService):
             await asyncio.wait_for(lock.acquire(), timeout=actual_timeout)
         except TimeoutError as exc:
             raise LockAcquireError(_TIMEOUT_ERR.format(key=key, timeout=actual_timeout)) from exc
-        except asyncio.CancelledError:
-            lock.release()
-            async with _generic_dict_lock:
-                _generic_owners.pop(key, None)
-                _generic_locks.pop(key, None)
-            raise
 
-        owner = id(asyncio.current_task())
-        async with _generic_dict_lock:
-            _generic_owners[key] = owner
+        try:
+            owner = id(asyncio.current_task())
+            async with _generic_dict_lock:
+                _generic_owners[key] = owner
+        except asyncio.CancelledError:
+            with contextlib.suppress(RuntimeError):
+                lock.release()
+            raise
 
     async def release_lock(self, session: AsyncSession, key: str) -> None:
         owner = id(asyncio.current_task())

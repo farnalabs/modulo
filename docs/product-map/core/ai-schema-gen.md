@@ -4,6 +4,11 @@ prd: 8.16
 delivery-tasks: [task-nv9-ai-schema-gen]
 bdd:
   - backend/tests/bdd/features/connectors/schema_inference.feature
+unit-tests:
+  - backend/tests/unit/core/test_schema_inference.py
+  - backend/tests/unit/core/test_schema_generation.py
+  - backend/tests/unit/api/test_schema_inference_bdd.py
+  - backend/tests/integration/crud/test_schema_inference_integration.py
 code:
   - backend/src/modulo/core/schema_registry/inference.py
   - backend/src/modulo/core/schema_registry/generation.py
@@ -189,4 +194,8 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - `schemas.py`: moved lazy `append_audit_event` import from function body to module level
 - `schemas.py`: added `from None` to 6 exception handlers (`create_secrets_backend` ×2, `ConnectorHub.initialise`, `ConnectorHub.sample`, `ModelBackendHub.initialise`, `ModelBackendHub.get`) — prevents internal exception context leaking in 502/500 responses, matching established `from None` pattern elsewhere in the file
 
-**Test results:** All schema inference/generation/endpoint tests pass (no behaviour change). 
+**Test results:** All schema inference/generation/endpoint tests pass (no behaviour change).
+
+### 2026-07-12 — Round 3 improve-architecture
+
+**Findings:** No B904 violations. No `exc_info=1` patterns. Code is clean — `inference.py`, `generation.py`, and `schemas.py` all use `from None` for exception chaining and `exc_info=True` (or `logger.exception`) for logging. Error handling sections in product map comprehensive. Entry already had 3 prior QA passes (most recent 2026-07-10). No code changes needed.

@@ -40,6 +40,10 @@ async def create_agent(
     token_budget: int | None = None,
     max_input_length: int | None = None,
     library_id: uuid.UUID | None = None,
+    template_id: str | None = None,
+    agent_command: str | None = None,
+    prompt_always_visible: bool = False,
+    required_environment_capabilities: list[str] | None = None,
 ) -> Agent:
     agent = Agent(
         organisation_id=org_id,
@@ -59,6 +63,10 @@ async def create_agent(
         token_budget=token_budget,
         max_input_length=max_input_length,
         library_id=library_id,
+        prompt_always_visible=prompt_always_visible,
+        template_id=template_id,
+        agent_command=agent_command,
+        required_environment_capabilities=required_environment_capabilities or [],
     )
     session.add(agent)
     await session.flush()
@@ -212,11 +220,7 @@ async def rollback_prompt_version(
     if not target_template:
         return None
 
-    prev_version = (
-        agent.prompt_version_history[-1]["version"]
-        if agent.prompt_version_history
-        else "current"
-    )
+    prev_version = agent.prompt_version_history[-1]["version"] if agent.prompt_version_history else "current"
     notes = f"Rolled back from {prev_version} to {target_version}"
 
     history.append(
@@ -254,7 +258,7 @@ async def get_eval_results_with_defs(
             )
         )
     except ProgrammingError:
-        _log.warning("EvalResult table not found — returning empty results")
+        _log.warning("EvalResult table not found — returning empty results", exc_info=True)
         return [], {}
 
     eval_results: list[EvalResult] = list(er_result.scalars().all())
@@ -263,7 +267,7 @@ async def get_eval_results_with_defs(
     try:
         ed_result = await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_def_ids)))
     except ProgrammingError:
-        _log.warning("EvalDefinition table not found — returning empty definitions")
+        _log.warning("EvalDefinition table not found — returning empty definitions", exc_info=True)
         return [], {}
     definitions: dict[str, Any] = {}
     for ed in ed_result.scalars().all():

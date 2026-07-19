@@ -5,7 +5,9 @@ MCP tool definitions. When the LLM calls a UI tool, the SSE stream forwards
 it to the frontend Vue app as an `event: ui_command_batch`.
 """
 
-_UI_TOOLS: dict[str, dict] = {
+from typing import Any
+
+_UI_TOOLS: dict[str, dict[str, Any]] = {
     "navigate": {
         "description": "Navigate to a Modulo page by route path.",
         "parameters": {
@@ -131,17 +133,32 @@ NAV_TOOLS: set[str] = {"navigate", "go_back"}
 WRITE_TOOLS: set[str] = {"click", "fill", "select", "press"}
 
 DESTRUCTIVE_PATTERNS: list[str] = [
-    "delete", "remove", "destroy", "archive", "suspend",
-    "ban", "terminate", "revoke", "disable", "wipe", "clear",
+    "delete",
+    "remove",
+    "destroy",
+    "archive",
+    "suspend",
+    "ban",
+    "terminate",
+    "revoke",
+    "disable",
+    "wipe",
+    "clear",
 ]
 
 NOGO_SELECTOR_PATTERNS: list[str] = [
-    "delete-org", "destroy", "billing-action", "danger-zone",
-    "delete-account", "remove-org", "suspend-org",
+    "delete-org",
+    "destroy",
+    "billing-action",
+    "danger-zone",
+    "delete-account",
+    "remove-org",
+    "suspend-org",
 ]
 
 NOGO_PAGE_PATTERNS: list[str] = [
-    "/admin/billing", "/admin/org/",
+    "/admin/billing",
+    "/admin/org/",
 ]
 
 
@@ -165,16 +182,18 @@ def build_tool_definitions_for_text() -> str:
                 params.append(f"{p_name}: {p_type}")
         params_str = ", ".join(params) if params else "no arguments"
         lines.append(f"- **{name}**({params_str}): {schema['description']}")
-    lines.extend([
-        "",
-        "**Tip:** Before navigating, call get_manifest() to learn page structure and interactable elements.",
-        "",
-        "Example workflow:",
-        "1. get_manifest() — learn the page structure",
-        "2. navigate(path: /admin/pipelines) — go to the Pipelines admin page",
-        "2. wait(ms: 500) — let the page stabilise",
-        "3. extract(selector: [data-testid=pipeline-table]) — read current pipelines",
-        "4. click(selector: [data-testid=create-btn]) — click Create button",
-        "5. go_back() — return to previous page",
-    ])
+    lines.extend(
+        [
+            "",
+            "**Tip:** Before navigating, call get_manifest() to learn page structure and interactable elements.",
+            "",
+            "Example workflow:",
+            "1. get_manifest() — learn the page structure",
+            "2. navigate(path: /admin/pipelines) — go to the Pipelines admin page",
+            "2. wait(ms: 500) — let the page stabilise",
+            "3. extract(selector: [data-testid=pipeline-table]) — read current pipelines",
+            "4. click(selector: [data-testid=create-btn]) — click Create button",
+            "5. go_back() — return to previous page",
+        ]
+    )
     return "\n".join(lines)

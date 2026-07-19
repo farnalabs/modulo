@@ -1,5 +1,6 @@
 """BDD step definitions: Team creation."""
 
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,10 +10,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.conftest import make_settings
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/team_create.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -27,10 +26,8 @@ def patches():
     collectors = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 @given(parsers.parse('I am authenticated as an admin in org "{org}"'))
@@ -120,4 +117,3 @@ def response_contains_team_fields(request) -> None:
 def team_has_zero_members(request) -> None:
     data = request.node._resp.json()
     assert data.get("member_count", 0) == 0
-

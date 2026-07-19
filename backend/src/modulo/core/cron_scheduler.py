@@ -22,6 +22,7 @@ import datetime
 import logging
 import uuid
 from typing import Any
+from zoneinfo import ZoneInfo
 
 try:
     from celery import Celery, Task
@@ -32,7 +33,7 @@ except ImportError:
     if typing.TYPE_CHECKING:
         from celery import Celery, Task
         from celery.beat import ScheduleEntry, Scheduler
-    Celery = Task = ScheduleEntry = Scheduler = object  # type: ignore[misc]
+    Celery = Task = ScheduleEntry = Scheduler = object
 
 from croniter import croniter
 from sqlalchemy import func, select, text, update
@@ -82,28 +83,41 @@ def validate_cron_expression(expression: str, timezone: str = "UTC") -> str | No
     return None
 
 
-def compute_next_fire(cron_expression: str, after: datetime.datetime | None = None) -> datetime.datetime:
-    """Compute the next fire time for a cron expression.
+def compute_next_fire(
+    cron_expression: str,
+    after: datetime.datetime | None = None,
+    *,
+    timezone: str = "UTC",
+) -> datetime.datetime:
+    """Compute the next fire time in *timezone* and return canonical UTC.
 
-    If *after* is None, uses the current UTC time.
+    If *after* is ``None``, the current UTC time is used. Naive values are
+    interpreted as UTC for backwards compatibility. ``croniter`` defines DST
+    handling: nonexistent local times advance to the first valid instant and
+    ambiguous local times use the first occurrence.
     """
     base = after or datetime.datetime.now(datetime.UTC)
-    cron = croniter(cron_expression, base)
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=datetime.UTC)
+    local_base = base.astimezone(ZoneInfo(timezone))
+    cron = croniter(cron_expression, local_base)
     next_dt = cron.get_next(datetime.datetime)
     if not isinstance(next_dt, datetime.datetime):
         msg = f"croniter returned unexpected type: {type(next_dt)}"
         raise TypeError(msg)
-    return next_dt
+    if next_dt.tzinfo is None:
+        next_dt = next_dt.replace(tzinfo=local_base.tzinfo)
+    return next_dt.astimezone(datetime.UTC)
 
 
 # ---------------------------------------------------------------------------
 # Celery task — fire one cron trigger
 # ---------------------------------------------------------------------------
 
-_celery_app_global = None
+_celery_app_global: Any = None
 
 
-def get_celery_app():
+def get_celery_app() -> Any:
     global _celery_app_global
     if _celery_app_global is None:
         from modulo.celery_app import get_celery_app as _get_celery_app
@@ -254,7 +268,11 @@ async def fire_cron_trigger(
 
         # Update last_fired_at and next_fire_at
         now = datetime.datetime.now(datetime.UTC)
-        next_fire = compute_next_fire(cron_expression, after=now)
+        next_fire = compute_next_fire(
+            cron_expression,
+            after=now,
+            timezone=trigger.cron_timezone or "UTC",
+        )
         await session.execute(
             update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now, next_fire_at=next_fire)
         )
@@ -271,6 +289,7 @@ async def fire_cron_trigger(
             "run_id": str(run.id),
             "event_id": str(event.id),
             "next_fire_at": next_fire.isoformat(),
+            "input_payload": input_payload,
         }
 
 

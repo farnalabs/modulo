@@ -1,4 +1,5 @@
-﻿import { formatApiError } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
+import { spotlight } from './useSpotlight'
 
 import router from '@/router'
 
@@ -65,6 +66,7 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
 
     function cleanup() {
       if (timer) clearTimeout(timer)
+      channel?.removeEventListener('message', handleMessage)
       resolved = true
     }
 
@@ -90,7 +92,6 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
     })
 
     timer = setTimeout(() => {
-      channel.removeEventListener('message', handleMessage)
       if (!resolved) {
         resolved = true
         resolve(false)
@@ -147,6 +148,7 @@ const HIGHLIGHT_OUTLINE = '2px solid #3b82f6'
 const HIGHLIGHT_BG = 'rgba(59, 130, 246, 0.1)'
 
 export function abortUiCommands() {
+  releaseAllLocks()
   _paused = false
   if (_resumeResolver) {
     _resumeResolver()
@@ -301,6 +303,16 @@ async function executeSingle(cmd: UiCommand): Promise<UiCommandResult> {
         return { id: cmd.id, name: cmd.name, success: true, result: { url: location.href } }
       case 'press':
         return await pressKey(cmd.args.key as string)
+      case 'spotlight': {
+        const testId = cmd.args?.target as string
+        const msg = cmd.args?.message as string | undefined
+        if (testId) {
+          spotlight.highlight(testId, msg)
+        } else {
+          spotlight.dismiss()
+        }
+        return { id: cmd.id, name: 'spotlight', success: true }
+      }
       default:
         return { id: cmd.id, name: cmd.name, success: false, error: `Unknown command: ${cmd.name}` }
     }
@@ -621,4 +633,3 @@ export function waitForDomStable(timeout = 10000): Promise<void> {
     }, timeout)
   })
 }
-

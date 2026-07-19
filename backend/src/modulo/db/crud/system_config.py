@@ -20,9 +20,7 @@ async def set_config(
     value: Any,
     updated_by: uuid.UUID | None = None,
 ) -> SystemConfig:
-    existing = await session.execute(
-        select(SystemConfig).where(SystemConfig.key == key).with_for_update()
-    )
+    existing = await session.execute(select(SystemConfig).where(SystemConfig.key == key).with_for_update())
     existing_row = existing.scalar_one_or_none()
     if existing_row is not None:
         existing_row.value = value
