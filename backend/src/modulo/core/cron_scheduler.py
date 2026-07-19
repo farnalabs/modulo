@@ -36,10 +36,11 @@ except ImportError:
     Celery = Task = ScheduleEntry = Scheduler = object
 
 from croniter import croniter
-from sqlalchemy import func, select, text, update
+from sqlalchemy import desc, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.run import create_run
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
@@ -448,10 +449,29 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
                 for row in rows:
                     config = row.config_json or {}
                     snapshot_id_str = config.get("snapshot_id")
-                    try:
-                        snapshot_id = uuid.UUID(snapshot_id_str) if snapshot_id_str else uuid.uuid4()
-                    except (ValueError, TypeError):
-                        snapshot_id = uuid.uuid4()
+                    if snapshot_id_str:
+                        try:
+                            snapshot_id = uuid.UUID(snapshot_id_str)
+                        except (ValueError, TypeError):
+                            _log.warning("Cron trigger %s has invalid snapshot_id in config - skipping", row.id)
+                            continue
+                    else:
+                        snap_result = await session.execute(
+                            select(PipelineSnapshot.id)
+                            .where(
+                                PipelineSnapshot.pipeline_id == row.pipeline_id,
+                                PipelineSnapshot.organisation_id == row.organisation_id,
+                            )
+                            .order_by(desc(PipelineSnapshot.created_at))
+                            .limit(1)
+                        )
+                        snap_row = snap_result.scalar_one_or_none()
+                        if snap_row is None:
+                            _log.warning(
+                                "Cron trigger %s has no snapshot_id and no snapshots for pipeline - skipping", row.id
+                            )
+                            continue
+                        snapshot_id = snap_row
 
                     triggers.append(
                         {
