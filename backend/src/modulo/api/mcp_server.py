@@ -2177,19 +2177,21 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
                     errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
                     continue
 
-                try:
-                    async with s.begin_nested():
-                        for eid in ids:
-                            obj = await s.get(model_cls, eid)
+                for eid in ids:
+                    try:
+                        async with s.begin_nested():
+                            from sqlalchemy import select as _sa_select
+                            stmt = _sa_select(model_cls).where(
+                                model_cls.id == eid,
+                                model_cls.organisation_id == org_id,
+                            )
+                            obj = (await s.execute(stmt)).scalar_one_or_none()
                             if obj is not None:
                                 await s.delete(obj)
                                 deleted_count += 1
-                except IntegrityError:
-                    _log.warning("IntegrityError cleaning up %s group", entity_type)
-                    errors.append({"entity_type": entity_type, "error": "Foreign key constraint violation"})
-                except Exception as exc:
-                    _log.exception("Error cleaning up %s group", entity_type)
-                    errors.append({"entity_type": entity_type, "error": str(exc)})
+                    except IntegrityError:
+                        _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
+                        errors.append({"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"})
 
         return {"deleted_count": deleted_count, "errors": errors}
     except MCPAuthorizationError as exc:
