@@ -10,6 +10,6 @@ rules:
           $X.json()
     message: "`.json()` call inside bare `except Exception:` — narrow the exception type (e.g. `except (json.JSONDecodeError, KeyError):` or `except httpx.HTTPError:`)"
     languages: [python]
-    severity: WARNING
+    severity: ERROR
     paths:
       include: ["**/backend/src/**"]

@@ -8,6 +8,6 @@ rules:
       - pattern-regex: '^\s+body\s*:\s*\w+'
     message: "FastAPI can collide with parameters named 'body' — rename to 'req' or another non-reserved name"
     languages: [python]
-    severity: WARNING
+    severity: ERROR
     paths:
       include: ["**/backend/src/**"]

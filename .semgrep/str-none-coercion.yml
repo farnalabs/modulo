@@ -6,6 +6,6 @@ rules:
       - pattern-not: str($X.get($K, ''))
     message: "str(value.get(...)) can produce literal string 'None' — use `value if value is not None else ''` or provide a safe default like `str(x.get(k, ''))`"
     languages: [python]
-    severity: WARNING
+    severity: ERROR
     paths:
       include: ["**/backend/src/**"]

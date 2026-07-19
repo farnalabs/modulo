@@ -11,4 +11,4 @@ rules:
       step with `exit 1` instead. See Non-Negotiable Enforcement Gates in AGENTS.md.
     languages:
       - generic
-    severity: WARNING
+    severity: ERROR

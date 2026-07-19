@@ -14,6 +14,6 @@ rules:
       - pattern-not: all([$X for $Y in [$FIRST, ...]])
     message: "all() on empty iterable returns True — guard with `if not iterable: return False` before the all() call"
     languages: [python]
-    severity: WARNING
+    severity: ERROR
     paths:
       include: ["**/backend/src/**"]

@@ -7,6 +7,6 @@ rules:
           regex: ^(session|db_session|db)$
     message: "session.rollback() destroys ALL uncommitted writes, including from concurrent operations. Use savepoint = await session.begin_nested() for local rollback scopes."
     languages: [python]
-    severity: WARNING
+    severity: ERROR
     paths:
       include: ["**/backend/src/**"]
