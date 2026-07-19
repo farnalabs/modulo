@@ -177,20 +177,19 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "src/modulo/api/mcp_server.py" = ["RET503"]
-"tests/**" = ["S", "B"]
-"src/modulo/auth/sso.py" = ["N817"]
-"tests/unit/auth/test_sso.py" = ["N817"]
+"tests/**" = ["S101", "S105", "S106", "S107", "B008"]
+
 "src/modulo/api/routes/scim.py" = ["N815", "N803"]
 "tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
 "src/modulo/db/repositories/locks.py" = ["ASYNC109"]
 "src/modulo/core/runtime_provider/*.py" = ["ASYNC109"]
-"src/modulo/db/bootstrap_role.py" = ["T20"]
+
 "scripts/*" = ["T20"]
 "scripts/gen_seed_sql.py" = ["S608"]
 "scripts/generate_remy_primer.py" = ["ASYNC240"]
 "deploy/*" = ["T20"]
 "tests/bdd/check-bdd-coverage.py" = ["N999"]
-"pipeline-scripts/**" = ["S", "T201", "E402", "RET"]
+"pipeline-scripts/**" = ["S", "T201", "RET"]
 "tests/unit/runtime_provider/*" = ["E402"]
 "tests/unit/secrets_backend/*" = ["E402"]
 "src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
@@ -218,7 +217,9 @@ disallow_incomplete_defs = false
 
 [[tool.mypy.overrides]]
 module = "modulo.api.mcp_server"
-disable_error_code = ["return-value", "return", "attr-defined", "var-annotated"]
+# "return" errors remain because static analysis can't prove the for retry loop
+# always returns or raises (OperationalError raises on attempt 2).
+disable_error_code = ["return"]
 
 
 [tool.pytest.ini_options]

@@ -8,11 +8,14 @@ and updates the password on each run for consistency.
 """
 
 import asyncio
+import logging
 import os
 import sys
 from urllib.parse import unquote, urlparse
 
 import asyncpg  # type: ignore[import-untyped]  # asyncpg does not publish a py.typed marker
+
+_log = logging.getLogger(__name__)
 
 REQUIRED_VARS = ["DATABASE_ADMIN_URL", "DATABASE_URL"]
 
@@ -35,11 +38,11 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
         quoted_pass = app_pass.replace("'", "''")
         if not row:
             await conn.execute(f"CREATE ROLE \"{app_user}\" WITH LOGIN PASSWORD '{quoted_pass}' INHERIT")
-            print(f"Created role: {app_user}")
+            _log.info("Created role: %s", app_user)
         else:
             # Ensure password is up to date
             await conn.execute(f"ALTER ROLE \"{app_user}\" WITH PASSWORD '{quoted_pass}'")
-            print(f"Updated password for role: {app_user}")
+            _log.info("Updated password for role: %s", app_user)
 
         # Grant DML on existing tables
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{app_user}"')
@@ -50,7 +53,7 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
             f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{app_user}"'
         )
         await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{app_user}"')
-        print(f"Granted DML permissions to: {app_user}")
+        _log.info("Granted DML permissions to: %s", app_user)
 
     finally:
         await conn.close()
@@ -59,21 +62,21 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
 def main() -> None:
     missing = [v for v in REQUIRED_VARS if v not in os.environ]
     if missing:
-        print(f"ERROR: Missing required env vars: {', '.join(missing)}", file=sys.stderr)
+        _log.error("Missing required env vars: %s", ", ".join(missing))
         sys.exit(1)
 
     admin_url = os.environ["DATABASE_ADMIN_URL"]
     app_url = os.environ["DATABASE_URL"]
 
     app_role = _parse_role(app_url)
-    print(f"Bootstrapping role: {app_role}")
-    print(f"Admin URL host: {admin_url.split('@')[1].split(':')[0] if '@' in admin_url else '?'}")
+    _log.info("Bootstrapping role: %s", app_role)
+    _log.info("Admin URL host: %s", admin_url.split("@")[1].split(":")[0] if "@" in admin_url else "?")
 
     try:
         asyncio.run(_bootstrap(admin_url, app_url))
-        print("Role bootstrap complete")
+        _log.info("Role bootstrap complete")
     except Exception as exc:
-        print(f"ERROR: Role bootstrap failed: [{type(exc).__name__}] {exc}", file=sys.stderr)
+        _log.error("Role bootstrap failed: %s", exc)
         sys.exit(1)
 
 

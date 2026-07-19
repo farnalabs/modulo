@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import defusedxml.ElementTree as ET
+import defusedxml.ElementTree as ElementTree
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -278,7 +278,7 @@ class TestSamlMetadataParsing:
             "</samlp:Response>"
         )
 
-        root = ET.fromstring(decoded_saml)
+        root = ElementTree.fromstring(decoded_saml)
         ns = {
             "samlp": "urn:oasis:names:tc:SAML:2.0:protocol",
             "saml": "urn:oasis:names:tc:SAML:2.0:assertion",

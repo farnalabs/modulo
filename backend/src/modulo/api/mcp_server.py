@@ -458,7 +458,7 @@ async def list_pipelines_tool(
         except Exception:
             _log.exception("list_pipelines_tool failed")
             return _tool_error("Failed to list pipelines")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(description="Create a new pipeline in the organisation. Returns the created pipeline details.")
@@ -526,7 +526,7 @@ async def create_pipeline(
         except Exception:
             _log.exception("create_pipeline failed")
             return _tool_error("Failed to create pipeline")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -588,7 +588,7 @@ async def list_runs(
         except Exception:
             _log.exception("list_runs failed")
             return _tool_error("Failed to list runs")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -655,7 +655,7 @@ async def update_pipeline_graph(
         except Exception:
             _log.exception("update_pipeline_graph failed")
             return _tool_error("Failed to update pipeline graph")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -738,7 +738,7 @@ async def bind_connector_to_node(
         except Exception:
             _log.exception("bind_connector_to_node failed")
             return _tool_error("Failed to bind connector to node")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
@@ -809,7 +809,7 @@ async def trigger_pipeline(
         except Exception:
             _log.exception("trigger_pipeline failed")
             return _tool_error("Failed to trigger pipeline")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
@@ -872,7 +872,7 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         except Exception:
             _log.exception("get_run_status failed")
             return _tool_error("Failed to get run status")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -930,7 +930,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         except Exception:
             _log.exception("get_run_output failed")
             return _tool_error("Failed to get node output")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -987,7 +987,7 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
         except Exception:
             _log.exception("get_run_evals failed")
             return _tool_error("Failed to get run evals")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -1042,7 +1042,7 @@ async def list_eval_definitions(
         except Exception:
             _log.exception("list_eval_definitions failed")
             return _tool_error("Failed to list eval definitions")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(description="Cancel a running pipeline run.")
@@ -1086,7 +1086,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
         except Exception:
             _log.exception("cancel_run failed")
             return _tool_error("Failed to cancel run")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(description="List all pending (undecided) HITL gates across all runs.")
@@ -1151,7 +1151,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         except Exception:
             _log.exception("list_pending_hitl failed")
             return _tool_error("Failed to list pending HITL gates")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -1308,7 +1308,7 @@ async def review_hitl(
         except Exception:
             _log.exception("review_hitl operation failed")
             return _tool_error("Failed to process HITL action")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -1444,7 +1444,7 @@ async def search_library(
         except Exception:
             _log.exception("search_library failed")
             return _tool_error("Failed to search library")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -1572,7 +1572,7 @@ async def list_trigger_events(
         except Exception:
             _log.exception("list_trigger_events failed")
             return _tool_error("Failed to list trigger events")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -1630,7 +1630,7 @@ async def list_triggers(
         except Exception:
             _log.exception("list_triggers failed")
             return _tool_error("Failed to list triggers")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -1704,7 +1704,7 @@ async def create_model_backend(
         except Exception:
             _log.exception("create_model_backend failed")
             return _tool_error("Failed to create model backend")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -1767,7 +1767,7 @@ async def create_connector(
         except Exception:
             _log.exception("create_connector failed")
             return _tool_error("Failed to create connector")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(description="Create a new trigger for a pipeline.")
@@ -1827,7 +1827,7 @@ async def create_trigger(
         except Exception:
             _log.exception("create_trigger failed")
             return _tool_error("Failed to create trigger")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(description="Delete a pipeline by ID.")
@@ -1868,7 +1868,7 @@ async def delete_pipeline(
         except Exception:
             _log.exception("delete_pipeline failed")
             return _tool_error("Failed to delete pipeline")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(description="Create a new agent. Returns the created agent details.")
@@ -1939,6 +1939,7 @@ async def create_agent(
         except Exception as e:
             _log.exception("create_agent failed")
             return {"error": "internal_error", "detail": f"Failed to create agent: {e}"}
+        return _tool_error("Unreachable")
 
     # ---------------------------------------------------------------------------
     # Context retrieval tools
@@ -2247,7 +2248,7 @@ async def list_schemas(
         except Exception:
             _log.exception("list_schemas failed")
             return _tool_error("Failed to list schemas")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -2305,7 +2306,7 @@ async def infer_schema(
         except Exception:
             _log.exception("infer_schema failed")
             return _tool_error("Failed to infer schema")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -2380,6 +2381,7 @@ async def validate_payload(
         except Exception:
             _log.exception("validate_payload failed")
             return _tool_error("Failed to validate payload")
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -2425,7 +2427,7 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
         except Exception:
             _log.exception("list_housekeeping failed")
             return _tool_error("Failed to list housekeeping candidates")
-        return None
+        return _tool_error("Unreachable")
 
 
 @mcp.tool(
@@ -2467,9 +2469,9 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
                         async with s.begin_nested():
                             from sqlalchemy import select as _sa_select
 
-                            stmt = _sa_select(model_cls).where(
-                                model_cls.id == eid,
-                                model_cls.organisation_id == org_id,
+                            stmt = _sa_select(model_cls).where(  # type: ignore[var-annotated]
+                                model_cls.id == eid,  # type: ignore[attr-defined]
+                                model_cls.organisation_id == org_id,  # type: ignore[attr-defined]
                             )
                             obj = (await s.execute(stmt)).scalar_one_or_none()
                             if obj is not None:
