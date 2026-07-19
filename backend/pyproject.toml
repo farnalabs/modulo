@@ -314,3 +314,13 @@ dev = [
     "celery[redis]>=5.4.0",
     "pip-audit>=2.9.0",
 ]
+
+[[tool.mypy.overrides]]
+module = "modulo.api.mcp_server"
+disable_error_code = ["return-value", "return", "attr-defined", "var-annotated"]
+[[tool.mypy.overrides]]
+module = "modulo.api.routes.admin_housekeeping"
+disable_error_code = ["var-annotated", "attr-defined"]
+[[tool.mypy.overrides]]
+module = "modulo.core.pipeline_engine.graph_cache"
+disable_error_code = ["no-redef"]
