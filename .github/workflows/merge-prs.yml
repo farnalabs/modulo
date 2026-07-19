@@ -176,32 +176,43 @@ jobs:
         run: |
           echo "" > /tmp/failure_description.txt
 
-      - name: Backend lint
+      - name: Install backend deps
         if: steps.merge.outputs.merged_count != '0'
         working-directory: backend
-        run: |
-          uv sync --frozen
-          uv run --no-sync ruff check .
-          uv run --no-sync mypy src/modulo/
-          uv run --no-sync bandit -r src/modulo/ -ll
+        run: uv sync --frozen
 
-      - name: Capture failures
-        if: failure() && steps.merge.outputs.merged_count != '0'
-        shell: bash
-        run: |
-          echo "Backend lint failed" >> /tmp/failure_description.txt
-
-      - name: Backend unit tests
+      - name: Backend lint + tests (parallel)
         if: steps.merge.outputs.merged_count != '0'
         working-directory: backend
-        run: |
-          uv run --no-sync pytest tests/unit/ -x -q --timeout=120
-
-      - name: Capture test failures
-        if: failure() && steps.merge.outputs.merged_count != '0'
         shell: bash
         run: |
-          echo "Backend unit tests failed" >> /tmp/failure_description.txt
+          # Run lint tools in background, tests in foreground
+          uv run --no-sync ruff check . &
+          RUFF_PID=$!
+          uv run --no-sync mypy src/modulo/ &
+          MYPY_PID=$!
+          uv run --no-sync bandit -r src/modulo/ -ll &
+          BANDIT_PID=$!
+
+          uv run --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+          TEST_EXIT=$?
+
+          # Collect lint results
+          LINT_FAIL=0
+          wait $RUFF_PID || LINT_FAIL=1
+          wait $MYPY_PID || LINT_FAIL=1
+          wait $BANDIT_PID || LINT_FAIL=1
+
+          # Report failures
+          if [ $LINT_FAIL -ne 0 ]; then
+            echo "Backend lint failed" >> /tmp/failure_description.txt
+          fi
+          if [ $TEST_EXIT -ne 0 ]; then
+            echo "Backend unit tests failed" >> /tmp/failure_description.txt
+          fi
+          if [ $LINT_FAIL -ne 0 ] || [ $TEST_EXIT -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Frontend checks
         if: steps.merge.outputs.merged_count != '0'
