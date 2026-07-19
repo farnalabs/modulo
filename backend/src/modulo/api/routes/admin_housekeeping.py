@@ -140,9 +140,9 @@ async def perform_cleanup(
                 for eid in ids:
                     try:
                         async with session.begin_nested():
-                            stmt = select(model_cls).where(
-                                model_cls.id == eid,
-                                model_cls.organisation_id == principal.organisation_id,
+                            stmt = select(model_cls).where(  # type: ignore[var-annotated]
+                                model_cls.id == eid,  # type: ignore[attr-defined]
+                                model_cls.organisation_id == principal.organisation_id,  # type: ignore[attr-defined]
                             )
                             obj = (await session.execute(stmt)).scalar_one_or_none()
                             if obj is not None:
