@@ -33,7 +33,7 @@ Admin page for scanning and cleaning up unused/orphaned resources.
 - [X] Batch size limit enforced (500 max)
 
 ### MCP
-- [ ] list_housekeeping tool returns scan results (operator scope)
+- [x] list_housekeeping tool returns scan results (operator scope)
 - [ ] perform_housekeeping tool deletes selected items (operator scope)
 
 ### UI
