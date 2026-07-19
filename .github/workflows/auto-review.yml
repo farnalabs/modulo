@@ -1,4 +1,4 @@
-name: Auto Review
+﻿name: Auto Review
 
 on:
   pull_request:
@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 env:
-  OPENCODE_VERSION: "0.1.46"
+  OPENCODE_VERSION: "0.0.55"
 
 jobs:
   review:
@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: |
           if ! command -v opencode &>/dev/null; then
-            curl -sL "https://github.com/opencode-ai/opencode/releases/download/v${OPENCODE_VERSION}/opencode_${OPENCODE_VERSION}_linux_amd64.tar.gz" | tar xz -C /usr/local/bin opencode
+            curl -sL "https://github.com/opencode-ai/opencode/releases/download/v${OPENCODE_VERSION}/opencode-v${OPENCODE_VERSION}-linux-amd64.tar.gz" | tar xz -C /usr/local/bin opencode
             chmod +x /usr/local/bin/opencode
           fi
           opencode --version
