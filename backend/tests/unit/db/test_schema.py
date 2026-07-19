@@ -32,6 +32,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "notification_delivery_log",
         "notification_endpoints",
         "notifications",
+        "onboarding_progress",
         "oauth_authorization_codes",
         "oauth_clients",
         "oauth_token_families",
@@ -40,6 +41,9 @@ def test_initial_schema_contains_required_tables() -> None:
         "org_memberships",
         "organisations",
         "pipeline_edges",
+        "pipeline_folders",
+        "parameter_schemas",
+        "parameter_sets",
         "pipeline_snapshots",
         "pipelines",
         "primitive_abuse_reports",
@@ -66,6 +70,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "variant_groups",
         "webhook_dedup_hashes",
         "webhook_payloads",
+        "web_vital_events",
         "workspace_leases",
     }
 

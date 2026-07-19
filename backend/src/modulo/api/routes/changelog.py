@@ -1,7 +1,13 @@
 """API changelog endpoint — lists version history for the Modulo API."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
+
+from modulo.api.db_error_handling import handle_db_errors
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/changelog", tags=["changelog"])
 
@@ -64,12 +70,14 @@ _SEED_ENTRIES: list[ChangelogEntry] = [
 
 
 @router.get("", response_model=list[ChangelogEntry])
+@handle_db_errors("changelog.list_changelog")
 async def list_changelog() -> list[ChangelogEntry]:
     """Return all changelog entries sorted by date descending."""
     return sorted(_SEED_ENTRIES, key=lambda e: e.date, reverse=True)
 
 
 @router.get("/latest", response_model=ChangelogEntry)
+@handle_db_errors("changelog.latest_changelog")
 async def latest_changelog() -> ChangelogEntry:
     """Return the most recent changelog entry."""
     entries = sorted(_SEED_ENTRIES, key=lambda e: e.date, reverse=True)
@@ -79,6 +87,7 @@ async def latest_changelog() -> ChangelogEntry:
 
 
 @router.post("", response_model=ChangelogEntry, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("changelog.create_changelog_entry")
 async def create_changelog_entry(req: CreateChangelogEntryRequest) -> ChangelogEntry:
     """Add a new changelog entry (in-memory for alpha; persists across restarts via DB in v1)."""
     entry = ChangelogEntry(

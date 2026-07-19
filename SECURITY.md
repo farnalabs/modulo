@@ -28,8 +28,6 @@ vulnerability in Modulo, please report it to us immediately.
 ### Contact
 
 - **Email**: `security@modulo.run`
-- **PGP fingerprint**: `A1B2 C3D4 E5F6 7890 1234 5678 9ABC DEF0 1234 5678`
-
 All reports are acknowledged within 48 hours. We will work with you to
 understand the issue, determine its impact, and coordinate a fix.
 

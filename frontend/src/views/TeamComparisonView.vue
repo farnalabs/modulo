@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader :title="$t('views.TeamComparisonView.team_comparison')" :subtitle="$t('views.TeamComparisonView.sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams')" />
 
@@ -162,7 +162,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -176,7 +176,6 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
-import { formatApiError } from '../lib/api/formatError'
 
 interface TeamRunStatus {
   running: number
@@ -249,19 +248,23 @@ function buildPipelineEvals(
 const pipelineEvalCache = ref<Record<string, Record<string, { total_evals: number; passed_evals: number; pass_rate: number }>>>({})
 const pipelineNames = ref<Map<string, string>>(new Map())
 
-async function fetchAndMerge() {
+async function fetchAndMerge(): Promise<{ data?: ViewData; error?: { detail: string } }> {
   expandedTeamId.value = null
 
-  const [{ data: summaryResult, error: summaryErr }, { data: teamsResult, error: teamsErr }] = await Promise.all([
-    api.GET('/api/v1/dashboard/summary'),
-    api.GET('/api/v1/admin/teams', { params: { query: { page_size: 100 } as any } }),
+  const [summaryResultP, teamsResultP] = await Promise.all([
+    api.GET('/api/v1/dashboard/summary').catch(() => ({ data: null, error: 'Failed to load summary' })),
+    api.GET('/api/v1/admin/teams', { params: { query: { page_size: 100 } as any } }).catch(() => ({ data: null, error: 'Failed to load teams' })),
   ])
+  const summaryErr = summaryResultP?.error ?? null
+  const teamsErr = teamsResultP?.error ?? null
+  const summaryResult = summaryResultP?.data ?? null
+  const teamsResult = teamsResultP?.data ?? null
 
   if (summaryErr) {
-    return { summaryErr: t('views.TeamComparisonView.failed_to_load_dashboard') + ' ' + formatError(summaryErr) }
+    return { error: { detail: t('views.TeamComparisonView.failed_to_load_dashboard') + ' ' + formatError(summaryErr) } }
   }
   if (teamsErr) {
-    return { teamsErr: t('views.TeamComparisonView.failed_to_load_teams') + ' ' + formatError(teamsErr) }
+    return { error: { detail: t('views.TeamComparisonView.failed_to_load_teams') + ' ' + formatError(teamsErr) } }
   }
 
   const s = summaryResult as unknown as {
@@ -280,8 +283,8 @@ async function fetchAndMerge() {
     } | null
   }
 
-  const t = teamsResult as unknown as { items: Array<{ id: string; member_count: number }> }
-  const memberCountMap = new Map(t.items.map(item => [item.id, item.member_count]))
+  const teamsPayload = teamsResult as unknown as { items: Array<{ id: string; member_count: number }> }
+  const memberCountMap = new Map(teamsPayload.items.map(item => [item.id, item.member_count]))
 
   const teams: TeamInfo[] = (s.teams ?? []).map(team => ({
     id: team.id,
@@ -296,13 +299,24 @@ async function fetchAndMerge() {
   pipelineEvalCache.value = s.eval_pass_rate?.per_team_pipeline ?? {}
 
   return {
-    summary: { total_runs: s.total_runs, active_pipelines: s.active_pipelines },
-    teams,
-    orgEvalPassRate: s.eval_pass_rate?.overall_pass_rate ?? null,
-  } as ViewData
+    data: {
+      summary: { total_runs: s.total_runs, active_pipelines: s.active_pipelines },
+      teams,
+      orgEvalPassRate: s.eval_pass_rate?.overall_pass_rate ?? null,
+    },
+  }
 }
 
-const { loading, error, data, load: loadData } = useDataFetch(fetchAndMerge)
+const { loading, error, data, load: loadData } = useDataFetch<ViewData>(
+  fetchAndMerge,
+  {
+    initialValue: {
+      summary: { total_runs: 0, active_pipelines: 0 },
+      teams: [],
+      orgEvalPassRate: null,
+    },
+  },
+)
 
 async function toggleExpand(teamId: string) {
   if (expandedTeamId.value === teamId) {

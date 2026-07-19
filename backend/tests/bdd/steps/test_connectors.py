@@ -1,5 +1,6 @@
 """Step definitions for Connector Health and connector-related features."""
 
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,12 +10,10 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.connectors.base import HealthResult
 
 # ---------------------------------------------------------------------------
-# Connector Health feature (active â€” 3 scenarios)
+# Connector Health feature (active — 3 scenarios)
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/connector_health.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -30,7 +29,7 @@ def ctx():
 
 
 # ============================================================================
-# Connector Health â€” healthy
+# Connector Health — healthy
 # ============================================================================
 
 
@@ -66,7 +65,7 @@ def response_ok_true(request):
 
 
 # ============================================================================
-# Connector Health â€” unreachable
+# Connector Health — unreachable
 # ============================================================================
 
 
@@ -92,7 +91,7 @@ def response_detail_describes_error(request):
 
 
 # ============================================================================
-# Connector Health â€” encryption at rest
+# Connector Health — encryption at rest
 # ============================================================================
 
 
@@ -117,7 +116,7 @@ def connector_with_api_key(api_key, ctx):
 
 @when("I inspect the database directly")
 def inspect_database(ctx):
-    """Simulate reading the stored ciphertext â€” not the decrypted value."""
+    """Simulate reading the stored ciphertext — not the decrypted value."""
     ci = ctx.get("connector_instance")
     assert ci is not None
     # The raw database column is bytes; we confirm it's the ciphertext
@@ -136,7 +135,7 @@ def api_key_not_plaintext(ctx):
 
 
 # ============================================================================
-# Helper â€” patch connector health
+# Helper — patch connector health
 # ============================================================================
 
 
@@ -177,7 +176,7 @@ def _make_mock_connector_instance(ctx) -> MagicMock:
 
 
 # ============================================================================
-# Cleanup â€” stop all patchers after each scenario
+# Cleanup — stop all patchers after each scenario
 # ============================================================================
 
 
@@ -186,10 +185,8 @@ def _cleanup_patches(ctx):
     yield
     patcher = ctx.pop("_hub_patcher", None)
     if patcher:
-        try:
+        with contextlib.suppress(RuntimeError):
             patcher.stop()
-        except RuntimeError:
-            pass
 
 
 @given("a connector instance with sample data")
@@ -271,7 +268,7 @@ def _infer_resp(status_code, **kwargs):
     parsers.parse("I POST /api/schemas/infer with the connector instance"),
 )
 def step_infer_schema(request, ctx):
-    """POST /api/v1/schemas/infer â€” simulated response."""
+    """POST /api/v1/schemas/infer — simulated response."""
     if ctx.get("connector_not_found"):
         request.node._resp = _infer_resp(404, detail="Connector instance not found")
         return
@@ -345,12 +342,10 @@ def step_migration_plan_has_fields(ctx):
 
 
 # ============================================================================
-# connectors/github_connector.feature â€” 5 scenarios
+# connectors/github_connector.feature — 5 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/github_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a GitHub connector with valid token")
@@ -615,10 +610,8 @@ def step_github_write_returns_error(status_code, reason, ctx):
 # ============================================================================
 # connectors/jira_connector.feature  â€"  7 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/jira_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a Jira connector with valid credentials")
@@ -800,10 +793,8 @@ def step_jira_write_empty_data(resource, ctx):
 # ============================================================================
 # connectors/linear_connector.feature  â€"  5 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/linear_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a Linear connector with valid API key")
@@ -987,12 +978,10 @@ def step_health_result_is_ok(ctx):
 
 
 # ============================================================================
-# connectors/slack_connector.feature  â€”  14 scenarios
+# connectors/slack_connector.feature  —  14 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/slack_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a Slack connector with valid bot token")
@@ -1312,12 +1301,10 @@ def step_slack_non_json_response(ctx):
 
 
 # ============================================================================
-# connectors/gitlab_issues.feature  â€”  23 scenarios
+# connectors/gitlab_issues.feature  —  23 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/gitlab_issues.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a GitLab connector with valid token")
@@ -1758,12 +1745,10 @@ def step_records_contain_issue_fields(ctx):
 
 
 # ============================================================================
-# connectors/gitea_connector.feature  â€”  6 scenarios
+# connectors/gitea_connector.feature  —  6 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/gitea_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a Gitea connector with valid token")
@@ -1917,12 +1902,10 @@ def step_gitea_create_issue(resource, title, ctx):
 
 
 # ============================================================================
-# connectors/monday.feature  â€”  13 scenarios
+# connectors/monday.feature  —  13 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/monday.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a Monday.com connector with valid API key")
@@ -2337,12 +2320,10 @@ def step_monday_users_metadata(ctx):
 
 
 # ============================================================================
-# connectors/trello.feature  â€”  8+ scenarios
+# connectors/trello.feature  —  8+ scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/trello.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a Trello connector with valid API key and token")
@@ -2662,21 +2643,17 @@ def step_trello_card_fields(ctx):
 # ============================================================================
 
 # ============================================================================
-# connectors/asana.feature  â€”  11 scenarios
+# connectors/asana.feature  —  11 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/asana.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ============================================================================
-# connectors/shortcut.feature  â€”  10 scenarios
+# connectors/shortcut.feature  —  10 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/shortcut.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("an Asana connector with valid Personal Access Token")
@@ -3406,34 +3383,26 @@ def step_shortcut_story_fields(ctx):
 # ============================================================================
 # connectors/youtrack_connector.feature  —  8 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/youtrack_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ============================================================================
 # connectors/notion_connector.feature  —  9 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/notion_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ============================================================================
 # connectors/confluence.feature  —  9 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/confluence.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ============================================================================
 # connectors/google_docs.feature  —  10 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/google_docs.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a YouTrack connector with valid credentials")
@@ -4363,10 +4332,8 @@ def step_google_docs_file_metadata(ctx):
 # ============================================================================
 # connectors/datadog.feature  —  10 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/datadog.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a Datadog connector configured with valid credentials")
@@ -4690,10 +4657,8 @@ def step_datadog_monitor_status_updated(ctx):
 # ============================================================================
 # connectors/connector_decrypt_error.feature  —  2 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/connector_decrypt_error.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a connector instance with no secret in the backend")
@@ -4750,11 +4715,8 @@ async def step_initialise_with_instance(ctx):
         visibility: str = "org"
         allowed_operations: object = None
 
-    if ctx.get("malformed_json"):
-        # Valid Fernet ciphertext but invalid JSON content
-        ciphertext = Fernet(key.encode()).encrypt(b"not-json")
-    else:
-        ciphertext = b""
+    # Valid Fernet ciphertext but invalid JSON content when requested.
+    ciphertext = Fernet(key.encode()).encrypt(b"not-json") if ctx.get("malformed_json") else b""
 
     ci = _FakeCI(
         id=connector_id,

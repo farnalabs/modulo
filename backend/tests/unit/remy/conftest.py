@@ -1,9 +1,22 @@
-"""Shared fixtures for Remy unit tests."""
+"""Shared fixtures for Remy unit tests.
 
+Sets minimal env vars so ``get_settings()`` (called by middleware at
+request time and by session.py at module import time) can construct a
+``Settings`` instance with CSRF disabled.
+"""
+
+import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+os.environ.setdefault("SECRET_KEY", "a" * 32)
+os.environ.setdefault("FERNET_KEY", "a" * 32)
+os.environ.setdefault("REDIS_URL", "")
+os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
+os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 
 
 @pytest.fixture
@@ -23,6 +36,7 @@ def mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.add = MagicMock()
 
     scalar_result = MagicMock()
     scalar_result.scalar = MagicMock(return_value=None)

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="remy-sessions">
     <div class="flex items-center justify-between p-3 border-b">
       <h3
@@ -11,7 +11,7 @@
         size="icon"
         @click="handleNewSession"
         :title="$t('components.remy.RemySessionDrawer.new_session')"
-        :aria-label="$t('remy.new_session')"
+        :aria-label="$t('components.remy.new_session')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -61,7 +61,7 @@
             class="remy-session-delete shrink-0"
             @click.stop="handleDelete(session.id)"
             title="Delete"
-            :aria-label="$t('remy.delete_session')"
+            :aria-label="$t('components.remy.delete_session')"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"

@@ -66,15 +66,20 @@ def _check_expr_for_sensitive_var(expr, path, lineno, violations):
         # Direct variable reference (e.g., logger.info(token))
         if isinstance(sub, ast.Name) and sub.id in sensitive_names:
             violations.append(
-                f"  {path.relative_to(SRC.parent.parent)}:{lineno}  Variable '{sub.id}' logged — may contain sensitive data"
+                f"  {path.relative_to(SRC.parent.parent)}:{lineno}  Variable '{sub.id}' logged — "
+                "may contain sensitive data"
             )
             return
         # f-string interpolation with sensitive content
         if isinstance(sub, ast.JoinedStr):
             for value in sub.values:
-                if isinstance(value, ast.FormattedValue):
-                    if isinstance(value.value, ast.Name) and value.value.id in sensitive_names:
-                        violations.append(
-                            f"  {path.relative_to(SRC.parent.parent)}:{lineno}  f-string interpolates '{value.value.id}' into log — sensitive"
-                        )
-                        return
+                if (
+                    isinstance(value, ast.FormattedValue)
+                    and isinstance(value.value, ast.Name)
+                    and value.value.id in sensitive_names
+                ):
+                    violations.append(
+                        f"  {path.relative_to(SRC.parent.parent)}:{lineno}  f-string interpolates "
+                        f"'{value.value.id}' into log — sensitive"
+                    )
+                    return

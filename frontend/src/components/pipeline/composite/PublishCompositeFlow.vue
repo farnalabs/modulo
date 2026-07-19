@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
 import { useApi } from "../../../composables/useApi";
@@ -16,7 +16,7 @@ const emit = defineEmits<{
   (e: "published"): void;
 }>();
 
-const { patch } = useApi();
+const { patch, post } = useApi();
 const router = useRouter();
 
 const step = ref(1);
@@ -72,7 +72,31 @@ async function nextStep() {
     } finally {
       loading.value = false;
     }
+  } else if (step.value < 4) {
+    step.value += 1;
+  } else {
+    loading.value = true;
+    error.value = null;
+    try {
+      await post(`/api/v1/composite-templates/${props.compositeId}/publish`, {
+        version: version.value.trim(),
+      });
+      success.value = true;
+      emit("published");
+    } catch (e) {
+      error.value = formatApiError(e);
+    } finally {
+      loading.value = false;
+    }
   }
+}
+
+function prevStep() {
+  step.value = Math.max(1, step.value - 1);
+}
+
+function portRef(port: { name: string }) {
+  return `{{parameter.${port.name}}}`;
 }
 
 function goToLibrary() {
@@ -81,7 +105,7 @@ function goToLibrary() {
 </script>
 
 <template>
-  <div
+  <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
     @click.self="emit('close')"
   >
@@ -121,16 +145,16 @@ function goToLibrary() {
           Give your composite template a name and description.
         </p>
         <div>
-          <label class="mb-1 block text-sm font-medium">{{ $t('components.pipeline.composite.PortDefinitionPanel.name') }}</label>
-          <input
+          <label for="publishcompositeflow-field-3" class="mb-1 block text-sm font-medium">{{ $t('components.pipeline.composite.PortDefinitionPanel.name') }}</label>
+          <input id="publishcompositeflow-field-3"
             v-model="name"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             :placeholder="$t('components.pipeline.composite.PublishCompositeFlow.code_review_assistant')"
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Description</label>
-          <textarea
+          <label for="publishcompositeflow-field-2" class="mb-1 block text-sm font-medium">Description</label>
+          <textarea id="publishcompositeflow-field-2"
             v-model="description"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             rows="3"
@@ -189,8 +213,8 @@ function goToLibrary() {
           recommended.
         </p>
         <div>
-          <label class="mb-1 block text-sm font-medium">{{ $t('components.pipeline.composite.PublishCompositeFlow.version') }}</label>
-          <input
+          <label for="publishcompositeflow-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.pipeline.composite.PublishCompositeFlow.version') }}</label>
+          <input id="publishcompositeflow-field-1"
             v-model="version"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
             placeholder="1.0.0"

@@ -5,7 +5,9 @@ MCP tool definitions. When the LLM calls a UI tool, the SSE stream forwards
 it to the frontend Vue app as an `event: ui_command_batch`.
 """
 
-_UI_TOOLS: dict[str, dict] = {
+from typing import Any
+
+_UI_TOOLS: dict[str, dict[str, Any]] = {
     "navigate": {
         "description": "Navigate to a Modulo page by route path.",
         "parameters": {

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Plugin Registry — discovery, registration, and health-checking for third-party plugins.
 
 Plugins extend Modulo with additional connector types and model backend providers
@@ -17,7 +15,10 @@ Usage:
     backend = registry.build_model_backend("my_provider", api_key, model_id)
 """
 
+from __future__ import annotations
 
+import asyncio
+import copy
 import importlib.metadata
 import logging
 import threading
@@ -129,6 +130,8 @@ class PluginRegistry:
             entries: list[tuple[str, importlib.metadata.EntryPoint]] = [
                 (group, ep) for group in _ENTRY_POINT_GROUPS for ep in importlib.metadata.entry_points(group=group)
             ]
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to query entry points during plugin discovery")
             return discovered
@@ -141,7 +144,7 @@ class PluginRegistry:
         if discovered:
             ids = [p.PLUGIN_ID for p in discovered]
             logger.info("Discovered %d plugin(s): %s", len(discovered), ids)
-        return discovered
+        return [copy.deepcopy(m) for m in discovered]
 
     def _load_entry_point(self, ep: importlib.metadata.EntryPoint, group: str) -> PluginManifest | None:
         """Load an entry point and register its builder.
@@ -219,14 +222,17 @@ class PluginRegistry:
             raise TypeError("config must be a dict")
         if not isinstance(creds, dict):
             raise TypeError("creds must be a dict")
-        builder = self._connector_builders.get(type_id)
+        with self._lock:
+            builder = self._connector_builders.get(type_id)
         if builder is None:
             raise PluginNotFoundError(f"No plugin registered connector type {type_id!r}")
         try:
             return builder(config, creds)
-        except Exception:
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
             logger.exception("Connector builder %s for type %s raised an error", builder.__name__, type_id)
-            raise PluginNotFoundError(f"Connector builder for type {type_id!r} failed") from None
+            raise RuntimeError(f"Connector builder for type {type_id!r} failed") from exc
 
     def build_model_backend(
         self, provider: str, model_id: str, api_key: str, **default_params: Any
@@ -241,14 +247,17 @@ class PluginRegistry:
             raise TypeError("model_id must be a string")
         if not isinstance(api_key, str):
             raise TypeError("api_key must be a string")
-        builder = self._backend_builders.get(provider)
+        with self._lock:
+            builder = self._backend_builders.get(provider)
         if builder is None:
             raise PluginNotFoundError(f"No plugin registered model backend provider {provider!r}")
         try:
             return builder(api_key=api_key, model_id=model_id, **default_params)
-        except Exception:
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
             logger.exception("Model backend builder %s for provider %s raised an error", builder.__name__, provider)
-            raise PluginNotFoundError(f"Model backend builder for provider {provider!r} failed") from None
+            raise RuntimeError(f"Model backend builder for provider {provider!r} failed") from exc
 
     def register_connector_type(
         self, type_id: str, builder: Callable[..., ConnectorBase], manifest: PluginManifest
@@ -296,11 +305,12 @@ class PluginRegistry:
     def list_plugins(self) -> dict[str, PluginManifest]:
         """Return all discovered plugin manifests keyed by PLUGIN_ID."""
         with self._lock:
-            return dict(self._plugins)
+            return {pid: copy.deepcopy(m) for pid, m in self._plugins.items()}
 
     def get_plugin(self, plugin_id: str) -> PluginManifest | None:
         with self._lock:
-            return self._plugins.get(plugin_id)
+            m = self._plugins.get(plugin_id)
+            return copy.deepcopy(m) if m is not None else None
 
     def has_connector_type(self, type_id: str) -> bool:
         with self._lock:
@@ -335,25 +345,21 @@ class PluginRegistry:
 
         Returns a dict of ``{plugin_id: PluginHealth}``.
         """
-        if plugin_id is not None:
-            with self._lock:
+        with self._lock:
+            if plugin_id is not None:
                 manifest = self._plugins.get(plugin_id)
                 if manifest is None:
                     return {plugin_id: PluginHealth(ok=False, detail=_HLTH_UNKNOWN_PLUGIN)}
-                cached_error = self._entry_point_errors.get(manifest.PLUGIN_ID)
-            health = self._check_single(manifest, cached_error)
-            with self._lock:
-                self._health[plugin_id] = health
-            return {plugin_id: health}
+                manifests = [manifest]
+                cached_errors = {manifest.PLUGIN_ID: self._entry_point_errors.get(manifest.PLUGIN_ID)}
+            else:
+                manifests = list(self._plugins.values())
+                cached_errors = {m.PLUGIN_ID: self._entry_point_errors.get(m.PLUGIN_ID) for m in manifests}
 
-        manifests: list[PluginManifest] = []
-        with self._lock:
-            manifests = list(self._plugins.values())
         results: dict[str, PluginHealth] = {}
         for manifest in manifests:
-            with self._lock:
-                cached_error = self._entry_point_errors.get(manifest.PLUGIN_ID)
-            results[manifest.PLUGIN_ID] = self._check_single(manifest, cached_error)
+            results[manifest.PLUGIN_ID] = self._check_single(manifest, cached_errors.get(manifest.PLUGIN_ID))
+
         with self._lock:
             self._health.update(results)
         return results
@@ -372,6 +378,8 @@ class PluginRegistry:
             return PluginHealth(ok=True, detail=_HLTH_METADATA_FOUND)
         except importlib.metadata.PackageNotFoundError:
             return PluginHealth(ok=False, detail=_HLTH_PACKAGE_NOT_FOUND)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Unexpected error checking metadata for plugin %s", manifest.PLUGIN_ID)
             return PluginHealth(ok=False, detail="Error checking plugin metadata")

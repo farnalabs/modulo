@@ -12,7 +12,7 @@ code:
   - backend/src/modulo/core/library_service/
   - backend/src/modulo/core/plugin_registry/
   - backend/src/modulo/api/routes/plugins.py
-  - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
+  - backend/src/modulo/db/migrations/versions/0001_v2_identity_org.py
   - docs/plugin-api.md
 depends-on: [feat-core-contribute-primitive]
 bdd:
@@ -156,10 +156,8 @@ Cryptographic signing, verification, and fork tracking for community library pri
 - `@awaiting-implementation` scenarios in `plugin_registry.feature` are not runnable
 
 ### Ratings
-- No BDD tests for rating submission cooldown enforcement
-- No BDD tests for self-rating block
 - No BDD tests for rating-requires-prior-adapt rule
-- No BDD tests for ownership picker during copy-to-adapt
+- No BDD tests for ownership picker (frontend UI) during copy-to-adapt
 
 ### Error handling & security
 - `register_publisher_endpoint` has no admin role check — any authenticated user can register a verified publisher
@@ -170,6 +168,13 @@ Cryptographic signing, verification, and fork tracking for community library pri
 - `PrimitiveRating.__table_args__` had no `UniqueConstraint` — DB allowed duplicate ratings per user per primitive (FIXED — model + app guard added)
 
 ## QA History
+
+### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
+- Fixed 16 B904 violations in `routes/library.py` (except IntegrityError → raise ... from None)
+- Fixed dead code: unreachable second `except IntegrityError` in `create_library_primitive_endpoint` (merged slug detail into first handler)
+- Added `exc_info=True` to 6 `_log.warning` calls in except blocks across `routes/library.py`
+- Fixed indentation bug in `routes/registry.py:321` (invalid-syntax)
+- Frontmatter valid; Known Gaps remain accurate
 
 ### 2026-07-09 — Cross-cutting QA (index 350)
 - Verified all error handling assertions against code

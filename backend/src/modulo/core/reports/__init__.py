@@ -4,7 +4,7 @@ Registers built-in report generators on import. The scheduler module
 is loaded by Celery via ``include``.
 """
 
-from modulo.core.reports import quality_report  # noqa: F401
+from modulo.core.reports import cost_report, quality_report  # noqa: F401
 from modulo.core.reports.scheduler import register_report_type
 
 
@@ -23,4 +23,20 @@ def _register_quality_report() -> None:
     )
 
 
+def _register_cost_report() -> None:
+    from modulo.core.reports.cost_report import (
+        deliver_cost_report,
+        format_cost_report,
+        generate_cost_report,
+    )
+
+    register_report_type(
+        report_type="cost",
+        generator=generate_cost_report,
+        formatter=format_cost_report,
+        deliverer=deliver_cost_report,
+    )
+
+
 _register_quality_report()
+_register_cost_report()

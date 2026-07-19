@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Background job that polls for expired HITL claims and resets them.
 
 Runs as an asyncio task alongside the FastAPI server.  Polls every ``POLL_INTERVAL``
@@ -13,10 +11,12 @@ Runs as an asyncio task alongside the FastAPI server.  Polls every ``POLL_INTERV
 The job is started during the application lifespan and cancelled on shutdown.
 """
 
+from __future__ import annotations
 
 import asyncio
 import contextlib
 import logging
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -168,6 +168,8 @@ class ClaimExpiryJob:
                                     "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
                                 },
                             )
+                    except asyncio.CancelledError:
+                        raise
                     except Exception:
                         _log.exception("Failed to record claim_expired audit event for claim %s", entry["claim_id"])
 
@@ -185,6 +187,8 @@ class ClaimExpiryJob:
                             },
                             run_id=str(entry["run_id"]),
                         )
+                    except asyncio.CancelledError:
+                        raise
                     except Exception:
                         _log.exception(
                             "hitl.expiry_job.notification_failed",

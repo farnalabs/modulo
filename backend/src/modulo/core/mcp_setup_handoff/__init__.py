@@ -82,13 +82,15 @@ async def consume_handoff(
     token_hash = _hash_token(raw_token)
     now = datetime.now(UTC)
     result = await session.execute(
-        select(McpSetupToken).where(
+        select(McpSetupToken)
+        .where(
             McpSetupToken.token_hash == token_hash,
             McpSetupToken.resource_type == resource_type,
             McpSetupToken.organisation_id == org_id,
             McpSetupToken.completed_at.is_(None),
             McpSetupToken.expires_at > now,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     record = result.scalar_one_or_none()
     if record is None:

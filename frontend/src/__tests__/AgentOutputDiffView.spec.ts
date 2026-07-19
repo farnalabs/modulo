@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
 
@@ -94,6 +94,7 @@ describe('AgentOutputDiffView', () => {
     await wrapper.find('[data-testid="diff-run-id-b"]').setValue('run-b')
     await wrapper.find('[data-testid="diff-compare-btn"]').trigger('click')
 
+    await flushPromises()
     await nextTick()
     await new Promise(r => setTimeout(r, 0))
 
@@ -160,6 +161,6 @@ describe('AgentOutputDiffView', () => {
     await new Promise(r => setTimeout(r, 0))
     await nextTick()
 
-    expect(wrapper.text()).toContain('Diff failed')
+    expect(wrapper.text()).toContain('Run not found')
   })
 })

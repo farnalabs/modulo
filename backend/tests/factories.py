@@ -58,6 +58,7 @@ class PipelineSnapshotFactory(factory.alchemy.SQLAlchemyModelFactory):
     schema_pins_json = factory.LazyFunction(list)
     prompt_pins_json = factory.LazyFunction(list)
     model_backend_pins_json = factory.LazyFunction(list)
+    parameter_bindings_json = None
     run_context_defaults = factory.LazyFunction(dict)
 
 

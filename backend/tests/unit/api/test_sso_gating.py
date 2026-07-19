@@ -3,6 +3,7 @@
 import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -116,8 +117,8 @@ class TestAdminSsoGating:
         mock_provider.auto_provision = True
         mock_provider.default_role = "runner"
         mock_provider.group_mappings = []
-        mock_provider.created_at = None
-        mock_provider.updated_at = None
+        mock_provider.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+        mock_provider.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
         with patch("modulo.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=[mock_provider])):
             resp = client_with_sso.get("/api/v1/admin/sso/providers")

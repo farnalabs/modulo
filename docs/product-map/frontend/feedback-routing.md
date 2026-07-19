@@ -173,10 +173,7 @@ in `feat-frontend-feedback-inbox-ui`.
   both `feedback_handler` and `reject_target` on the same gate not yet implemented
 - **No eval proposals UI**: Eval proposals queue with draft eval editor
   (PRD 8.20 ¶1495) not yet built
-- [x] **RESOLVED** (2026-07-08): `detect_eval_gap` now fetches pipeline eval definitions from DB — no longer hardcodes `eval_suite=[]`. Verified in `feedback.py` route handler.
-- **`dismissed` is now a valid DB status** (migration 0082). The `dismiss` action
-  sets status to `dismissed`. Both `pending→dismissed` and `escalated→dismissed`
-  transitions are allowed. Product map updated 2026-07-10.
+
 - **`run_post_correction_eval` escalates correctly but isn't wired**: The
   method escalates on eval failure via `_escalate_record` (status → `escalated`),
   but is not yet wired into the run completion lifecycle. The escalation logic

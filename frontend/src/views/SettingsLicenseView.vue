@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div data-theme="agent" data-loading="false" class="page-narrow">
     <PageHeader title="License" data-test-id="license-title" :subtitle="$t('views.SettingsLicenseView.manage_your_modulo_team_license_key_and_view_plan_details')" />
 
@@ -54,8 +54,8 @@
         </div>
 
         <div class="space-y-3">
-          <label class="block text-sm font-medium text-muted-foreground">{{ $t('views.SettingsLicenseView.new_license_key') }}</label>
-          <textarea
+          <label for="settingslicenseview-field-1" class="block text-sm font-medium text-muted-foreground">{{ $t('views.SettingsLicenseView.new_license_key') }}</label>
+          <textarea id="settingslicenseview-field-1"
             v-model="newLicenseKey"
             rows="4"
             data-testid="license-key-input"

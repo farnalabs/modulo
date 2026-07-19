@@ -5,7 +5,7 @@ description = "Allowlisted files and patterns"
 paths = [
     "tests/",  # test fixtures may contain fake secrets
     "docs/grafana/",  # Grafana dashboard JSON
-    "configs/",  # config files
+    "configs/", ".github/",  # config files
 ]
 
 [[patterns]]

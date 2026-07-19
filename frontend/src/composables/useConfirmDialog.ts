@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, readonly } from 'vue'
 
 interface ConfirmDialogOptions {
   onOpen?: () => void
@@ -18,16 +18,15 @@ export function useConfirmDialog(options?: ConfirmDialogOptions) {
   }
 
   async function confirm(fn: () => Promise<void>) {
+    if (isConfirming.value) return
     isConfirming.value = true
     try {
       await fn()
       close()
-    } catch (e) {
-      throw e
     } finally {
       isConfirming.value = false
     }
   }
 
-  return { isOpen, isConfirming, open, close, confirm }
+  return { isOpen: readonly(isOpen), isConfirming: readonly(isConfirming), open, close, confirm }
 }

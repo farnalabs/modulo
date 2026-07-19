@@ -17,6 +17,7 @@ from modulo.api.models.problem import ProblemDetail
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -34,7 +35,7 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -62,6 +63,7 @@ def _make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.description = kwargs.get("description")
     p.visibility = kwargs.get("visibility", "org")
     p.owner_team_id = kwargs.get("owner_team_id")
+    p.folder_id = kwargs.get("folder_id")
     p.max_concurrent_runs = kwargs.get("max_concurrent_runs", 5)
     p.lock_wait_timeout_seconds = kwargs.get("lock_wait_timeout_seconds", 300)
     p.node_timeout_seconds = kwargs.get("node_timeout_seconds", 300)
@@ -154,33 +156,18 @@ class TestResponseModelCoverage:
         with_rm = [r for r in routes if r["response_model"] is not None]
         missing_rm = [r for r in routes if r["response_model"] is None]
 
-        print(f"\n{'=' * 60}")
-        print("API Response Model Coverage Report")
-        print(f"{'=' * 60}")
-        print(f"Total API routes: {len(routes)}")
-        print(f"With response model: {len(with_rm)}")
-        print(f"Missing response model: {len(missing_rm)}")
-        print()
-
         if missing_rm:
-            print("Routes MISSING response_model:")
-            print("-" * 60)
             for r in sorted(missing_rm, key=lambda x: (x["methods"], x["path"])):
-                print(f"  {r['methods'][0]:7s} {r['path']}")
+                pass
 
-        print()
-        print("Routes WITH response_model:")
-        print("-" * 60)
         for r in sorted(with_rm, key=lambda x: (x["methods"], x["path"])):
             rm = r["response_model"]
             if hasattr(rm, "__name__"):
-                model_name = rm.__name__
+                pass
             elif hasattr(rm, "__origin__"):
-                model_name = str(rm)
+                str(rm)
             else:
-                model_name = str(rm)
-            print(f"  {r['methods'][0]:7s} {r['path']}")
-            print(f"          -> {model_name}")
+                str(rm)
 
     def test_response_model_is_pydantic_model(self) -> None:
         routes = get_api_routes()
@@ -199,11 +186,9 @@ class TestResponseModelCoverage:
             else:
                 non_pydantic.append((r["methods"][0], r["path"], str(rm)))
 
-        print(f"\nPydantic response models: {pydantic_count}")
         if non_pydantic:
-            print(f"Non-Pydantic response models: {len(non_pydantic)}")
             for method, path, rm_str in non_pydantic:
-                print(f"  {method} {path} -> {rm_str}")
+                pass
 
 
 # ---------------------------------------------------------------------------

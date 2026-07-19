@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="remy-skills flex flex-col flex-1 overflow-hidden">
     <div class="flex items-center justify-between p-3 border-b">
       <h3
@@ -12,7 +12,7 @@
         size="icon"
         @click="openCreateForm"
         :title="$t('components.remy.RemySkillManager.new_skill')"
-        :aria-label="$t('remy.new_skill')"
+        :aria-label="$t('components.remy.new_skill')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -48,6 +48,7 @@
       <textarea
         v-model="form.body"
         class="remy-skill-textarea"
+        :aria-label="$t('components.remy.RemySkillManager.skill_body_markdown')"
         :placeholder="$t('components.remy.RemySkillManager.skill_body_markdown')"
         rows="4"
       />
@@ -176,7 +177,7 @@ async function fetchSkills() {
 
 function openCreateForm() {
   editingId.value = null;
-  form.value = { name: "", description: "", triggersText: "", body: "" };
+  form.value = { name: "", description: "", triggersText: "", body: "", active: true };
   showForm.value = true;
 }
 
@@ -189,10 +190,10 @@ function editSkill(skill: UserSkill) {
   editingId.value = skill.id;
   form.value = {
     name: skill.name,
-    description: skill.description,
+    description: skill.description ?? "",
     triggersText: (skill.triggers ?? []).join(", "),
     body: skill.body,
-    active: skill.active,
+    active: skill.active ?? true,
   };
   showForm.value = true;
 }

@@ -43,7 +43,7 @@ const composite = computed(() => {
   return compositeStore.getCompositeById(props.compositeRef) ?? null;
 });
 
-const ports = computed(() => (composite.value?.parameter_ports_json ?? []) as ParameterPort[]);
+const ports = computed(() => (composite.value?.parameter_ports_json ?? []) as unknown as ParameterPort[]);
 
 const localValues = computed(() => props.parameterValues);
 

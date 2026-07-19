@@ -1,5 +1,6 @@
 """GitHub Issues implementation of the TicketTrackerBase ABC."""
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -35,6 +36,8 @@ class GitHubTicketTracker(TicketTrackerBase):
                 resp.raise_for_status()
                 data = resp.json()
                 return HealthResult(ok=True, detail=data.get("full_name", self._repo))
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return HealthResult(ok=False, detail=str(e)[:200])
 
@@ -50,12 +53,12 @@ class GitHubTicketTracker(TicketTrackerBase):
                 search=filters.get("search"),
                 limit=filters.get("limit", 20),
                 offset=filters.get("offset", 0),
-            )
+            ),
         )
         return ConnectorResult(records=[t.__dict__ for t in tickets], total=len(tickets))
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        data = payload.data if hasattr(payload, "data") else payload
+        data = payload.data
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{self._base_url}/repos/{self._repo}/issues",
@@ -67,16 +70,16 @@ class GitHubTicketTracker(TicketTrackerBase):
             result = resp.json()
             return {"ticket_id": str(result["number"]), "url": result["html_url"]}
 
-    async def list_tickets(self, filter: TicketFilter | None = None) -> list[Ticket]:
+    async def list_tickets(self, ticket_filter: TicketFilter | None = None) -> list[Ticket]:
         params: dict[str, Any] = {
-            "per_page": min((filter.limit if filter else 20), 100),
-            "page": ((filter.offset if filter else 0) // 20) + 1,
+            "per_page": min((ticket_filter.limit if ticket_filter else 20), 100),
+            "page": ((ticket_filter.offset if ticket_filter else 0) // 20) + 1,
             "state": "all",
         }
-        if filter and filter.status and filter.status.lower() in ("open", "closed"):
-            params["state"] = filter.status.lower()
-        if filter and filter.labels:
-            params["labels"] = ",".join(filter.labels)
+        if ticket_filter and ticket_filter.status and ticket_filter.status.lower() in ("open", "closed"):
+            params["state"] = ticket_filter.status.lower()
+        if ticket_filter and ticket_filter.labels:
+            params["labels"] = ",".join(ticket_filter.labels)
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{self._base_url}/repos/{self._repo}/issues",
@@ -132,7 +135,7 @@ class GitHubTicketTracker(TicketTrackerBase):
             resp.raise_for_status()
             return self._to_ticket(resp.json())
 
-    def _to_ticket(self, raw: dict) -> Ticket:
+    def _to_ticket(self, raw: dict[str, Any]) -> Ticket:
         return Ticket(
             id=str(raw.get("number", "")),
             title=raw.get("title", ""),

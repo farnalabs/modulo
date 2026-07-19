@@ -4,16 +4,7 @@ export interface Breadcrumb {
   data: Record<string, unknown>
 }
 
-export interface ErrorEventInput {
-  level: 'error' | 'warning' | 'critical'
-  message: string
-  stacktrace?: string
-  context_json?: Record<string, unknown>
-  source?: string
-  environment?: string
-  version?: string
-  breadcrumbs?: Breadcrumb[]
-}
+export type { ErrorEventInput } from '../../monitor/types'
 
 export interface ErrorIngestResponse {
   results: ErrorGroupResult[]

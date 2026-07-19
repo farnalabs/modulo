@@ -26,6 +26,8 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _CONNECTOR_ID = uuid.uuid4()
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
+_CRUD_PATCH_PREFIX = "modulo.api.routes.connectors."
+
 
 def _make_settings() -> Settings:
     return Settings(
@@ -100,17 +102,111 @@ _CREATE_BODY = {
 }
 
 
-def test_list_connectors_returns_200(client: TestClient) -> None:
+def _crud_cases() -> list[dict[str, object]]:
     page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20, next_cursor=None)
-    with (
-        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-    ):
-        resp = client.get("/api/v1/connectors")
-    assert resp.status_code == 200
-    assert resp.json()["total"] == 1
-    assert resp.json()["items"][0]["status"] == "active"
+    connector = _make_connector()
+    updated = _make_connector()
+    updated.name = "Updated"
+    return [
+        {
+            "id": "list",
+            "method": "GET",
+            "url": "/api/v1/connectors",
+            "body": None,
+            "patches": [("list_connector_instances", page_result)],
+            "expected_status": 200,
+            "check": lambda resp: resp.json()["total"] == 1,
+        },
+        {
+            "id": "get",
+            "method": "GET",
+            "url": f"/api/v1/connectors/{_CONNECTOR_ID}",
+            "body": None,
+            "patches": [("get_connector_instance", connector)],
+            "expected_status": 200,
+            "check": lambda resp: "credentials_ciphertext" not in resp.json() and resp.json()["has_credentials"],
+        },
+        {
+            "id": "get_not_found",
+            "method": "GET",
+            "url": f"/api/v1/connectors/{uuid.uuid4()}",
+            "body": None,
+            "patches": [("get_connector_instance", None)],
+            "expected_status": 404,
+        },
+        {
+            "id": "update",
+            "method": "PATCH",
+            "url": f"/api/v1/connectors/{_CONNECTOR_ID}",
+            "body": {"name": "Updated"},
+            "patches": [("get_connector_instance", connector), ("update_connector_instance", updated)],
+            "expected_status": 200,
+            "check": lambda resp: resp.json()["name"] == "Updated",
+        },
+        {
+            "id": "update_not_found",
+            "method": "PATCH",
+            "url": f"/api/v1/connectors/{uuid.uuid4()}",
+            "body": {"name": "x"},
+            "patches": [("get_connector_instance", None), ("update_connector_instance", None)],
+            "expected_status": 404,
+        },
+        {
+            "id": "delete",
+            "method": "DELETE",
+            "url": f"/api/v1/connectors/{_CONNECTOR_ID}",
+            "body": None,
+            "patches": [("delete_connector_instance", True)],
+            "expected_status": 204,
+        },
+        {
+            "id": "delete_not_found",
+            "method": "DELETE",
+            "url": f"/api/v1/connectors/{uuid.uuid4()}",
+            "body": None,
+            "patches": [("delete_connector_instance", False)],
+            "expected_status": 404,
+        },
+    ]
+
+
+@pytest.mark.parametrize("case", _crud_cases(), ids=lambda c: c["id"])
+def test_crud(client: TestClient, case: dict[str, object]) -> None:
+    method = case["method"]
+    url = case["url"]
+    body = case.get("body")
+    expected_status = case["expected_status"]
+    check = case.get("check")
+
+    patchers = []
+    for func_name, ret in case["patches"]:
+        patchers.append(patch(f"{_CRUD_PATCH_PREFIX}{func_name}", return_value=ret))
+    patchers.append(patch(f"{_CRUD_PATCH_PREFIX}set_rls_org"))
+    patchers.append(patch(f"{_CRUD_PATCH_PREFIX}set_rls_user_context"))
+
+    for p in patchers:
+        p.start()
+
+    try:
+        if method == "GET":
+            resp = client.get(url)
+        elif method == "POST":
+            resp = client.post(url, json=body or {})
+        elif method == "PATCH":
+            resp = client.patch(url, json=body or {})
+        elif method == "DELETE":
+            resp = client.delete(url)
+        elif method == "PUT":
+            resp = client.put(url, json=body or {})
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+
+        assert resp.status_code == expected_status, f"Expected {expected_status}, got {resp.status_code}: {resp.text}"
+        if check:
+            assert check(resp)
+    finally:
+        for p in patchers:
+            p.stop()
 
 
 def test_create_connector_does_not_expose_credentials(client: TestClient) -> None:
@@ -148,92 +244,6 @@ def test_create_connector_encrypts_credentials(client: TestClient) -> None:
     decrypted = Fernet(_FERNET_KEY.encode()).decrypt(ciphertext).decode()
     assert decrypted == '{"token": "secret123"}'
     assert b"secret123" not in ciphertext
-
-
-def test_get_connector_returns_200_without_credentials(client: TestClient) -> None:
-    connector = _make_connector()
-    with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-    ):
-        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "credentials_ciphertext" not in body
-    assert body["has_credentials"] is True
-
-
-def test_get_connector_not_found_returns_404(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=None),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-    ):
-        resp = client.get(f"/api/v1/connectors/{uuid.uuid4()}")
-    assert resp.status_code == 404
-
-
-def _make_ci_mock() -> MagicMock:
-    ci = MagicMock()
-    ci.id = _CONNECTOR_ID
-    ci.organisation_id = _ORG_ID
-    ci.name = "Test Connector"
-    ci.connector_type_id = "filesystem"
-    ci.credentials_ciphertext = b"encrypted"
-    ci.config_json = {}
-    ci.allowed_operations = []
-    ci.status = "active"
-    ci.visibility = "org"
-    ci.tier = "native"
-    ci.created_at = _NOW
-    ci.updated_at = _NOW
-    return ci
-
-
-def test_update_connector_returns_200(client: TestClient) -> None:
-    connector = _make_connector()
-    connector.name = "Updated"
-    with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.update_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-    ):
-        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "Updated"})
-    assert resp.status_code == 200
-    assert resp.json()["name"] == "Updated"
-
-
-def test_update_connector_not_found_returns_404(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=None),
-        patch("modulo.api.routes.connectors.update_connector_instance", return_value=None),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-    ):
-        resp = client.patch(f"/api/v1/connectors/{uuid.uuid4()}", json={"name": "x"})
-    assert resp.status_code == 404
-
-
-def test_delete_connector_returns_204(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.connectors.delete_connector_instance", return_value=True),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-    ):
-        resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
-    assert resp.status_code == 204
-
-
-def test_delete_connector_not_found_returns_404(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.connectors.delete_connector_instance", return_value=False),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-    ):
-        resp = client.delete(f"/api/v1/connectors/{uuid.uuid4()}")
-    assert resp.status_code == 404
 
 
 def test_connector_no_credentials_shows_false(client: TestClient) -> None:

@@ -1,11 +1,15 @@
 """Unit tests for the library service layer."""
 
+import base64
+import json
 import uuid
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import ProgrammingError
 
+import modulo.core.library_service as library_service
 from modulo.core.library_service import (
     _COMMUNITY_BY_ID,
     _COMMUNITY_BY_SLUG,
@@ -19,6 +23,7 @@ from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
+    _ensure_dogfood_primitives,
     _fetch_published_community_from_db,
     _filter_community,
     _filter_modulo,
@@ -30,6 +35,54 @@ from modulo.core.library_service import (
     publish_contribution,
 )
 from modulo.db.crud.base import PageResult
+
+_COMMUNITY_PRIMITIVES_BASELINE = tuple(_COMMUNITY_PRIMITIVES)
+_COMMUNITY_BY_ID_BASELINE = dict(_COMMUNITY_BY_ID)
+_COMMUNITY_BY_SLUG_BASELINE = dict(_COMMUNITY_BY_SLUG)
+
+_EXPECTED_MODULO_SLUGS = {
+    "agent": {"prd-ingestion", "requirements-writer", "spec-implementer"},
+    "composite": {
+        "approver",
+        "booleaner",
+        "complexity-estimator",
+        "devils-advocate",
+        "llm-council",
+        "structured-output-enforcer",
+        "triage",
+    },
+    "pipeline_template": {
+        "incident-response-pipeline",
+        "pr-review-pipeline",
+        "release-checklist-pipeline",
+    },
+    "schema": {"prd-input", "requirements-output"},
+    "test_fixture": {"example-test-fixture"},
+    "workflow": {"prd-to-requirements", "simplest-workflow"},
+}
+_EXPECTED_COMMUNITY_SLUGS = {
+    "commit-message-linter",
+    "qa-reviewer",
+    "translate-to-french",
+}
+
+
+def _restore_community_cache() -> None:
+    _COMMUNITY_PRIMITIVES[:] = _COMMUNITY_PRIMITIVES_BASELINE
+    _COMMUNITY_BY_ID.clear()
+    _COMMUNITY_BY_ID.update(_COMMUNITY_BY_ID_BASELINE)
+    _COMMUNITY_BY_SLUG.clear()
+    _COMMUNITY_BY_SLUG.update(_COMMUNITY_BY_SLUG_BASELINE)
+
+
+@pytest.fixture(autouse=True)
+def isolate_community_cache() -> Iterator[None]:
+    _restore_community_cache()
+    try:
+        yield
+    finally:
+        _restore_community_cache()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -82,10 +135,11 @@ def test_filter_modulo_no_filters():
     assert len(results) == len(_MODULO_PRIMITIVES)
 
 
-def test_filter_modulo_by_type():
-    schemas = _filter_modulo(primitive_type="schema", search=None)
-    assert all(p.primitive_type == "schema" for p in schemas)
-    assert len(schemas) == 7
+@pytest.mark.parametrize(("primitive_type", "expected_slugs"), _EXPECTED_MODULO_SLUGS.items())
+def test_filter_modulo_by_type(primitive_type: str, expected_slugs: set[str]):
+    results = _filter_modulo(primitive_type=primitive_type, search=None)
+    assert all(p.primitive_type == primitive_type for p in results)
+    assert {p.slug for p in results} == expected_slugs
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +150,7 @@ def test_filter_modulo_by_type():
 def test_filter_community_no_filters():
     results = _filter_community(primitive_type=None, search=None)
     assert len(results) == len(_COMMUNITY_PRIMITIVES)
-    assert len(results) == 3
+    assert {p.slug for p in results} == _EXPECTED_COMMUNITY_SLUGS
 
 
 def test_filter_community_items_are_source_community_and_unverified():
@@ -122,16 +176,6 @@ def test_community_by_id_index():
         assert _COMMUNITY_BY_ID[p.id] is p
 
 
-def test_filter_modulo_by_type_agent():
-    agents = _filter_modulo(primitive_type="agent", search=None)
-    assert len(agents) == 8
-
-
-def test_filter_modulo_by_type_workflow():
-    workflows = _filter_modulo(primitive_type="workflow", search=None)
-    assert len(workflows) == 3
-
-
 def test_filter_modulo_by_search():
     results = _filter_modulo(primitive_type=None, search="PRD")
     assert len(results) >= 1
@@ -155,8 +199,9 @@ def test_community_primitives_have_correct_visibility():
 
 
 def test_community_primitives_count():
-    # 7 schemas + 8 agents + 3 workflows + 1 fixture + 3 pipeline_templates + 7 composites
-    assert len(_MODULO_PRIMITIVES) == 29
+    actual = {(p.primitive_type, p.slug) for p in _MODULO_PRIMITIVES}
+    expected = {(primitive_type, slug) for primitive_type, slugs in _EXPECTED_MODULO_SLUGS.items() for slug in slugs}
+    assert actual == expected
 
 
 def test_modulo_by_id_index():
@@ -165,141 +210,43 @@ def test_modulo_by_id_index():
 
 
 # ---------------------------------------------------------------------------
-# Dogfood pipeline community primitives
+# Optional external dogfood primitives
 # ---------------------------------------------------------------------------
 
 
-def test_dogfood_schemas_exist():
-    schemas = _filter_modulo(primitive_type="schema", search=None)
-    dogfood = [p for p in schemas if "dogfood" in (p.tags or [])]
-    assert len(dogfood) == 5
-
-    slugs = {p.slug for p in dogfood}
-    assert slugs == {
-        "github-issue-input",
-        "structured-requirements",
-        "code-diff-output",
-        "test-result-output",
-        "pr-output",
+def _encoded_dogfood_fixture() -> str:
+    entry = {
+        "pid": "00000000-0000-0000-0000-00000000d001",
+        "primitive_type": "schema",
+        "name": "External Dogfood Schema",
+        "slug": "external-dogfood-schema",
+        "description": "An externally supplied test primitive.",
+        "content_json": {"fields": [{"name": "value", "type": "string"}]},
+        "tags": ["dogfood"],
     }
+    return base64.b64encode(json.dumps([entry]).encode()).decode()
 
 
-def test_dogfood_agents_exist():
-    agents = _filter_modulo(primitive_type="agent", search=None)
-    dogfood = [p for p in agents if "dogfood" in (p.tags or [])]
-    assert len(dogfood) == 5
+def test_dogfood_primitives_are_absent_when_disabled(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("MODULO_DOGFOOD_ENABLED", raising=False)
+    monkeypatch.setenv("MODULO_DOGFOOD_JSON_B64", _encoded_dogfood_fixture())
+    monkeypatch.setattr(library_service, "_DOGFOOD_PRIMITIVES", None)
 
-    slugs = {p.slug for p in dogfood}
-    assert slugs == {
-        "issue-reader",
-        "code-generator",
-        "code-applier",
-        "test-runner",
-        "pr-creator",
+    assert _ensure_dogfood_primitives() == []
+    assert not any("dogfood" in (p.tags or []) for p in _filter_modulo(primitive_type=None, search=None))
+
+
+def test_dogfood_primitives_load_from_external_bundle(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MODULO_DOGFOOD_ENABLED", "true")
+    monkeypatch.setenv("MODULO_DOGFOOD_JSON_B64", _encoded_dogfood_fixture())
+    monkeypatch.setattr(library_service, "_DOGFOOD_PRIMITIVES", None)
+
+    loaded = _ensure_dogfood_primitives()
+    assert [(p.primitive_type, p.slug) for p in loaded] == [("schema", "external-dogfood-schema")]
+    assert {p.slug for p in _filter_modulo(primitive_type="schema", search=None)} == {
+        *_EXPECTED_MODULO_SLUGS["schema"],
+        "external-dogfood-schema",
     }
-
-
-def test_dogfood_workflow_exists():
-    workflows = _filter_modulo(primitive_type="workflow", search=None)
-    dogfood = [p for p in workflows if "dogfood" in (p.tags or [])]
-    assert len(dogfood) == 1
-
-    wf = dogfood[0]
-    assert wf.slug == "modulo-dogfood-pipeline"
-    assert wf.name == "Modulo Dogfood Pipeline"
-
-
-def test_dogfood_workflow_has_correct_nodes():
-    workflows = _filter_modulo(primitive_type="workflow", search="dogfood")
-    assert len(workflows) == 1
-    nodes = workflows[0].content_json["nodes"]
-    node_ids = {n["id"] for n in nodes}
-    assert node_ids == {"issue-reader", "code-generator", "code-applier", "test-runner", "pr-creator"}
-
-
-def test_dogfood_workflow_has_correct_edges():
-    workflows = _filter_modulo(primitive_type="workflow", search="dogfood")
-    assert len(workflows) == 1
-    edges = workflows[0].content_json["edges"]
-    assert len(edges) == 4
-    assert edges[0]["source"] == "issue-reader"
-    assert edges[0]["target"] == "code-generator"
-    assert edges[1]["source"] == "code-generator"
-    assert edges[1]["target"] == "code-applier"
-    assert edges[2]["source"] == "code-applier"
-    assert edges[2]["target"] == "test-runner"
-    assert edges[3]["source"] == "test-runner"
-    assert edges[3]["target"] == "pr-creator"
-
-
-def test_dogfood_workflow_has_hitl_gate():
-    workflows = _filter_modulo(primitive_type="workflow", search="dogfood")
-    edges = workflows[0].content_json["edges"]
-    hitl_edge = edges[3]
-    assert "hitl_gate_config" in hitl_edge
-    config = hitl_edge["hitl_gate_config"]
-    assert config["human_only"] is False
-    assert config["gate_id"] == "review_before_pr"
-    assert config["overdue_threshold_minutes"] == 60
-
-
-def test_dogfood_workflow_entry_point():
-    workflows = _filter_modulo(primitive_type="workflow", search="dogfood")
-    assert workflows[0].content_json["entry"] == "issue-reader"
-
-
-def test_dogfood_agents_reference_correct_schemas():
-    agents = _filter_modulo(primitive_type="agent", search=None)
-    dogfood_agents = {a.slug: a for a in agents if "dogfood" in (a.tags or [])}
-
-    assert dogfood_agents["issue-reader"].content_json["input_schema"] == "github-issue-input"
-    assert dogfood_agents["issue-reader"].content_json["output_schema"] == "structured-requirements"
-    assert dogfood_agents["code-generator"].content_json["input_schema"] == "structured-requirements"
-    assert dogfood_agents["code-generator"].content_json["output_schema"] == "code-diff-output"
-    assert dogfood_agents["code-applier"].content_json["input_schema"] == "code-diff-output"
-    assert dogfood_agents["code-applier"].content_json["output_schema"] == "code-diff-output"
-    assert dogfood_agents["test-runner"].content_json["input_schema"] == "code-diff-output"
-    assert dogfood_agents["test-runner"].content_json["output_schema"] == "test-result-output"
-    assert dogfood_agents["pr-creator"].content_json["input_schema"] == "test-result-output"
-    assert dogfood_agents["pr-creator"].content_json["output_schema"] == "pr-output"
-
-
-def test_dogfood_agents_have_connector_refs():
-    agents = _filter_modulo(primitive_type="agent", search=None)
-    dogfood_agents = {a.slug: a for a in agents if "dogfood" in (a.tags or [])}
-
-    assert dogfood_agents["issue-reader"].content_json["connector_type_refs"] == [
-        {"connector_type": "github", "capabilities": ["issue_read"]}
-    ]
-    assert dogfood_agents["code-generator"].content_json["connector_type_refs"] == []
-    assert dogfood_agents["code-applier"].content_json["connector_type_refs"] == [
-        {"connector_type": "shell", "capabilities": ["write"]}
-    ]
-    assert dogfood_agents["test-runner"].content_json["connector_type_refs"] == [
-        {"connector_type": "shell", "capabilities": ["read", "write"]}
-    ]
-    assert dogfood_agents["pr-creator"].content_json["connector_type_refs"] == [
-        {"connector_type": "github", "capabilities": ["create_pr"]}
-    ]
-
-
-def test_dogfood_agents_have_environment_capabilities():
-    agents = _filter_modulo(primitive_type="agent", search=None)
-    dogfood_agents = {a.slug: a for a in agents if "dogfood" in (a.tags or [])}
-
-    assert dogfood_agents["issue-reader"].content_json["required_environment_capabilities"] == ["egress:github.com"]
-    assert dogfood_agents["code-generator"].content_json["required_environment_capabilities"] == []
-    assert dogfood_agents["code-applier"].content_json["required_environment_capabilities"] == [
-        "git",
-        "shell",
-        "python>=3.12",
-    ]
-    assert dogfood_agents["test-runner"].content_json["required_environment_capabilities"] == [
-        "git",
-        "shell",
-        "python>=3.12",
-    ]
-    assert dogfood_agents["pr-creator"].content_json["required_environment_capabilities"] == ["egress:github.com"]
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +348,7 @@ async def test_list_primitives_source_community_only():
         result = await list_primitives(session, org_id, source="community")
 
     assert org_prim not in result.items
-    assert len(result.items) == 3
+    assert {p.slug for p in result.items} == _EXPECTED_COMMUNITY_SLUGS
     assert all(p.source == "community" for p in result.items)
     assert all(p.verified is False for p in result.items)
 
@@ -581,9 +528,9 @@ async def test_copy_to_adapt_community_via_mcp_raises():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        pytest.raises(CommunityPrimitiveReadOnlyError),
     ):
-        with pytest.raises(CommunityPrimitiveReadOnlyError):
-            await copy_to_adapt(session, org_id, community_prim.id, via_mcp=True)
+        await copy_to_adapt(session, org_id, community_prim.id, via_mcp=True)
 
 
 async def test_copy_to_adapt_community_via_browser_succeeds():
@@ -626,9 +573,9 @@ async def test_copy_to_adapt_not_found_raises():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        pytest.raises(LookupError, match=str(missing_id)),
     ):
-        with pytest.raises(LookupError, match=str(missing_id)):
-            await copy_to_adapt(session, org_id, missing_id)
+        await copy_to_adapt(session, org_id, missing_id)
 
 
 async def test_copy_to_adapt_bumps_version():
@@ -935,9 +882,9 @@ async def test_publish_contribution_raises_for_published_status():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        pytest.raises(ContributionInvalidTransitionError),
     ):
-        with pytest.raises(ContributionInvalidTransitionError):
-            await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+        await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
 
 
 async def test_publish_contribution_raises_for_none_status():
@@ -952,9 +899,9 @@ async def test_publish_contribution_raises_for_none_status():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        pytest.raises(ContributionInvalidTransitionError),
     ):
-        with pytest.raises(ContributionInvalidTransitionError):
-            await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+        await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
 
 
 async def test_publish_contribution_raises_not_found():
@@ -966,9 +913,9 @@ async def test_publish_contribution_raises_not_found():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        pytest.raises(ContributionNotFoundError),
     ):
-        with pytest.raises(ContributionNotFoundError):
-            await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+        await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
 
 
 async def test_publish_contribution_updates_in_memory_cache():

@@ -83,4 +83,4 @@ async def invoke_and_parse(
             _log.exception("Failed to parse %s schema from LLM response", context)
             raise error_cls(f"Failed to parse {context} schema from LLM response") from exc
 
-    raise error_cls("LLM call failed after all retries")
+    raise error_cls("LLM call failed after all retries (unreachable — safety net)")

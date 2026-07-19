@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Celery task failure handler — captures failed tasks to ErrorIngestionService."""
 
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -16,8 +15,18 @@ from modulo.version import get_version
 
 _log = logging.getLogger(__name__)
 
-_SERVICE = ErrorIngestionService()
+_SERVICE: ErrorIngestionService | None = None
+_SERVICE_LOCK = threading.Lock()
 _SYSTEM_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+
+
+def _get_service() -> ErrorIngestionService:
+    global _SERVICE
+    if _SERVICE is None:
+        with _SERVICE_LOCK:
+            if _SERVICE is None:
+                _SERVICE = ErrorIngestionService()
+    return _SERVICE
 
 
 def celery_task_failure_handler(
@@ -118,6 +127,7 @@ async def _async_ingest(
         "version": get_version(),
     }
 
+    service = _get_service()
     async with factory() as session, session.begin():
         await set_rls_org(session, effective_org_id)
-        await _SERVICE.ingest(session, effective_org_id, event_data)
+        await service.ingest(session, effective_org_id, event_data)

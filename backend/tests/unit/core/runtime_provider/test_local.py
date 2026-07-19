@@ -63,42 +63,47 @@ class TestLocalRuntimeProvider:
         await provider.destroy_workspace(ref)
         assert await provider.get_workspace_status(ref) == "terminated"
 
-    async def test_concurrency_semaphore_blocks(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec) -> None:
+    async def test_concurrency_semaphore_blocks(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        spec: WorkspaceSpec,
+    ) -> None:
         tight_provider = LocalRuntimeProvider(max_concurrency=1)
         ref = await tight_provider.create_workspace(spec)
 
         started_event = asyncio.Event()
         can_finish_event = asyncio.Event()
+        process_count = 0
 
-        async def slow_command() -> None:
-            started_event.set()
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-c",
-                "import time; time.sleep(20)",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            can_finish_event.set()
-            await proc.wait()
+        class BlockingProcess:
+            returncode: int | None = None
 
-        task = asyncio.create_task(slow_command())
+            async def communicate(self) -> tuple[bytes, bytes]:
+                started_event.set()
+                await can_finish_event.wait()
+                self.returncode = 0
+                return b"done", b""
 
+        async def create_process(*args: object, **kwargs: object) -> BlockingProcess:
+            nonlocal process_count
+            process_count += 1
+            return BlockingProcess()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+        first_task = asyncio.create_task(tight_provider.exec_command(ref, ["first"]))
         await started_event.wait()
-
-        asyncio.get_running_loop().time()
         second_task = asyncio.create_task(tight_provider.exec_command(ref, [sys.executable, "-c", "print('second')"]))
 
         await asyncio.sleep(0.05)
         assert not second_task.done(), "Second command should be blocked by semaphore"
+        assert process_count == 1
 
         can_finish_event.set()
-
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        first_result, second_result = await asyncio.gather(first_task, second_task)
+        assert first_result.exit_code == 0
+        assert second_result.exit_code == 0
+        assert process_count == 2
 
         await tight_provider.destroy_workspace(ref)
 

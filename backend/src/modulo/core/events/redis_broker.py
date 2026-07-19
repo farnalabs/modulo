@@ -1,18 +1,14 @@
-from __future__ import annotations
-
 """Redis-backed event broker for pub/sub across multiple workers."""
 
+from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlparse
 
-try:
-    import redis.asyncio as aioredis
-except ImportError:
-    aioredis = None  # type: ignore[assignment]
+import redis.asyncio as aioredis
 
 if TYPE_CHECKING:
     from redis.asyncio.client import PubSub
@@ -62,12 +58,13 @@ class RedisEventBroker:
         return url
 
     def _make_client(self) -> aioredis.Redis:
-        if aioredis is None:
-            raise RuntimeError("redis package is not installed. Install with: pip install modulo[redis]")
-        return aioredis.from_url(  # type: ignore[no-untyped-call]
-            self._redis_url,
-            decode_responses=True,
-            **self._REDIS_TIMEOUTS,
+        return cast(
+            aioredis.Redis,
+            aioredis.from_url(  # type: ignore[no-untyped-call]  # redis-py omits this annotation
+                self._redis_url,
+                decode_responses=True,
+                **self._REDIS_TIMEOUTS,
+            ),
         )
 
     async def connect(self) -> None:
@@ -84,6 +81,8 @@ class RedisEventBroker:
                 pub = self._make_client()
             if need_sub:
                 sub = self._make_client()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("redis_broker.connect_failed", extra={"url": self._redact_url(self._redis_url)})
             if pub is not None:
@@ -120,6 +119,8 @@ class RedisEventBroker:
             return
         try:
             await pub.publish(f"{CHANNEL_PREFIX}{channel}", payload)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("redis_broker.publish_failed", extra={"channel": channel})
             async with self._lock:
@@ -128,6 +129,8 @@ class RedisEventBroker:
             if old is not None:
                 try:
                     await old.close(close_connection_pool=True)
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     _log.warning("redis_broker.pub_close_failed_after_error", exc_info=True)
 
@@ -149,6 +152,8 @@ class RedisEventBroker:
         pubsub = sub.pubsub()
         try:
             await pubsub.subscribe(f"{CHANNEL_PREFIX}{channel}")
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("redis_broker.subscribe_failed", extra={"channel": channel})
             async with self._lock:
@@ -157,6 +162,8 @@ class RedisEventBroker:
             if old is not None:
                 try:
                     await old.close(close_connection_pool=True)
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     _log.warning("redis_broker.sub_close_failed_after_error", exc_info=True)
             raise
@@ -172,11 +179,15 @@ class RedisEventBroker:
         if pub is not None:
             try:
                 await pub.close(close_connection_pool=True)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 _log.warning("redis_broker.pub_close_failed", exc_info=True)
         if sub is not None:
             try:
                 await sub.close(close_connection_pool=True)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 _log.warning("redis_broker.sub_close_failed", exc_info=True)
         # After releasing the lock, another publish()/subscribe() call may have

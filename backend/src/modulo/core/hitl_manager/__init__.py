@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """HITLManager — atomic claim, approve, reject, deliver_manual, and expiry for HITL gates.
 
 Each pipeline run that reaches a HITL gate edge creates one `hitl_claims` row.
@@ -25,14 +23,17 @@ run_id + gate_id + client_id, signed with SECRET_KEY. Opaque tokens from the
 alpha are still accepted for backwards compatibility.
 """
 
+from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import ExpiredSignatureError, JWTError
+from jwt import ExpiredSignatureError
+from jwt import InvalidTokenError as JWTError
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -175,7 +176,7 @@ class HITLManager:
         except IntegrityError:
             existing = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
             if existing is None:
-                raise RuntimeError(f"Concurrent gate creation lost race for run={run_id} gate={gate_id}")
+                raise RuntimeError(f"Concurrent gate creation lost race for run={run_id} gate={gate_id}") from None
             return existing
         return gate
 
@@ -218,15 +219,15 @@ class HITLManager:
             raise AlreadyClaimedError(run_id, gate_id)
         if gate_check.required_team_id is not None:
             # Lock the gate row so the team check is serialised with the UPDATE.
-            gate_check_locked = await session.execute(
+            locked_result = await session.execute(
                 select(HitlClaim).where(HitlClaim.id == gate_check.id).with_for_update()
             )
-            gate_check_locked = gate_check_locked.scalar_one_or_none()
-            if gate_check_locked is None:
+            locked_gate = locked_result.scalar_one_or_none()
+            if locked_gate is None:
                 raise GateNotFoundError(run_id, gate_id)
-            if gate_check_locked.decision is not None:
+            if locked_gate.decision is not None:
                 raise GateAlreadyDecidedError(run_id, gate_id)
-            if gate_check_locked.account_id is not None:
+            if locked_gate.account_id is not None:
                 raise AlreadyClaimedError(run_id, gate_id)
             tm_result = await session.execute(
                 select(TeamMembership).where(
@@ -282,6 +283,32 @@ class HITLManager:
         gate = await session.get(HitlClaim, claimed_id, populate_existing=True)
         if gate is None:
             raise GateVanishedError(run_id, gate_id, "claimed")
+
+        # Re-verify team membership — the check above ran before the atomic
+        # UPDATE, creating a TOCTOU window where the user could have been
+        # removed from the team.  If they're no longer a member, undo the
+        # claim and raise.
+        if gate_check is not None and gate_check.required_team_id is not None:
+            tm_still = await session.execute(
+                select(TeamMembership).where(
+                    TeamMembership.team_id == gate_check.required_team_id,
+                    TeamMembership.account_id == claimant_id,
+                    TeamMembership.organisation_id == org_id,
+                )
+            )
+            if tm_still.scalar_one_or_none() is None:
+                await session.execute(
+                    update(HitlClaim)
+                    .where(HitlClaim.id == claimed_id)
+                    .values(account_id=None, claimed_at=None, claim_token=None, expires_at=None)
+                )
+                raise NotTeamMemberError(
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    team_id=gate_check.required_team_id,
+                    user_id=claimant_id,
+                )
+
         return gate
 
     # ------------------------------------------------------------------
@@ -527,6 +554,7 @@ class HITLManager:
                 "minutes_overdue": int((now - g.claimed_at).total_seconds() / 60),
             }
             for g in gates
+            if g.claimed_at is not None
         ]
 
     async def count_overdue(
@@ -680,6 +708,8 @@ class HITLManager:
             if gate.decision != _DECISION_REJECTED:
                 gate.delivered_at = datetime.now(UTC)
             await session.flush()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to log audit event for claim %s", gate.id)
             raise

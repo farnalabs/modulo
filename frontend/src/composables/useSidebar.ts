@@ -1,7 +1,9 @@
 import { readonly } from 'vue'
 import { useStorage } from '@vueuse/core'
 
-const viewMode = useStorage<'essentials' | 'advanced'>('sidebar-view-mode', 'essentials')
+export type ViewMode = 'simple' | 'advanced'
+
+const viewMode = useStorage<ViewMode>('sidebar-view-mode', 'simple')
 const groupPrefs = useStorage<Record<string, boolean>>('sidebar-group-prefs', {})
 
 function toggleGroup(id: string, defaultCollapsed: boolean) {
@@ -12,7 +14,7 @@ function isGroupCollapsed(id: string, defaultCollapsed: boolean): boolean {
   return groupPrefs.value[id] ?? defaultCollapsed
 }
 
-function setViewMode(mode: 'essentials' | 'advanced') {
+function setViewMode(mode: ViewMode) {
   viewMode.value = mode
 }
 

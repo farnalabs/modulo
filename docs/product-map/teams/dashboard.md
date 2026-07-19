@@ -14,7 +14,7 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_dashboard.py
   - frontend/src/__tests__/DashboardView.spec.ts
-depends-on: []
+depends-on: [feat-teams-org-entity]
 status: partial
 ---
 # Teams Dashboard

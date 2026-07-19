@@ -1,5 +1,6 @@
 """Step definitions for variant_groups.feature — weighted multi-run, comparison, eval coverage."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,10 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/variants/variant_groups.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -23,10 +22,8 @@ def patches():
     collectors: list[Any] = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 @pytest.fixture
@@ -282,14 +279,13 @@ def single_run_triggered(ctx: dict[str, Any]) -> None:
                 new_callable=AsyncMock,
             ),
         ):
-            result = await run_variant_weighted(
+            return await run_variant_weighted(
                 session,
                 org_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
                 group=ctx["variant_group"],
                 input_payload={},
                 account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
             )
-        return result
 
     result = asyncio.run(_run())
     if result:

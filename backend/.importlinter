@@ -10,9 +10,14 @@ source_modules =
 forbidden_modules =
     langgraph
 ignore_imports =
+    modulo.api.main -> modulo.core.pipeline_engine.modulo_saver
     modulo.api.routes.runs -> modulo.core.pipeline_engine.executor
     modulo.api.routes.webhooks -> modulo.core.pipeline_engine.executor
     modulo.api.routes.hitl -> modulo.core.pipeline_engine.executor
+    modulo.api.main -> modulo.core.background_pipeline_worker
+    modulo.api.mcp_server -> modulo.core.background_pipeline_worker
+    modulo.api.routes.health -> modulo.core.background_pipeline_worker
+    modulo.api.routes.runs -> modulo.core.background_pipeline_worker
 
 [importlinter:contract:connectors-do-not-import-api]
 name = Connectors layer is independent of API

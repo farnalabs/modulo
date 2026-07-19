@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <div class="flex items-center justify-between">
       <PageHeader title="Users" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
@@ -52,19 +52,17 @@
               </div>
             </td>
             <td class="table-cell">
-              <select
-                v-model="u.org_role"
-                :data-testid="`admin-users-role-${u.id}`"
-                aria-label="User role"
-                class="text-xs border border-input bg-background rounded-md px-2 py-1"
-                @change="updateRole(u)"
-                @focus="captureRole(u.org_role)"
-              >
-                <option value="admin">Admin</option>
-                <option value="operator">Operator</option>
-                <option value="runner">Runner</option>
-                <option value="viewer">Viewer</option>
-              </select>
+              <Select :model-value="u.org_role" @update:model-value="updateRole(u, $event)">
+                <SelectTrigger class="text-xs border border-input bg-background rounded-md px-2 py-1" aria-label="User role" :data-testid="`admin-users-role-${u.id}`">
+                  <SelectValue placeholder="Select role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="operator">Operator</SelectItem>
+                  <SelectItem value="runner">Runner</SelectItem>
+                  <SelectItem value="viewer">Viewer</SelectItem>
+                </SelectContent>
+              </Select>
             </td>
             <td class="table-cell">
               <span v-if="u.is_active" class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success">
@@ -119,31 +117,39 @@
       @update:open="showCreate = false"
       title="Create User"
       confirmText="Create"
+      :loading="createLoading"
+      :confirmDisabled="createLoading"
       @confirm="createUser"
     >
       <form @submit.prevent="createUser">
         <div>
-          <label class="block text-sm font-medium mb-1">Email</label>
-          <input v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+          <label for="adminusersview-field-4" class="block text-sm font-medium mb-1">Email</label>
+          <input id="adminusersview-field-4" v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
-          <input v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+          <label for="adminusersview-field-3" class="block text-sm font-medium mb-1">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
+          <input id="adminusersview-field-3" v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1">Password</label>
-          <input v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
+          <label for="adminusersview-field-2" class="block text-sm font-medium mb-1">Password</label>
+          <input id="adminusersview-field-2" v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1">Role</label>
-          <select v-model="newUser.org_role" data-testid="admin-users-create-role" aria-label="Role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
-            <option value="runner">Runner</option>
-            <option value="operator">Operator</option>
-            <option value="admin">Admin</option>
-            <option value="viewer">Viewer</option>
-          </select>
+          <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">Role</label>
+          <Select v-model="newUser.org_role">
+            <SelectTrigger class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" aria-label="Role" data-testid="admin-users-create-role">
+              <SelectValue placeholder="Select role" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="runner">Runner</SelectItem>
+              <SelectItem value="operator">Operator</SelectItem>
+              <SelectItem value="admin">Admin</SelectItem>
+              <SelectItem value="viewer">Viewer</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
+        <button type="submit" hidden>{{ $t('common.create') }}</button>
       </form>
     </FormDialog>
 
@@ -193,6 +199,13 @@ import FormDialog from '../components/shared/FormDialog.vue'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog'
 import TableActions from '../components/shared/TableActions.vue'
 import { formatDateShort } from '../lib/formatDate'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 interface UserItem {
   id: string
@@ -226,6 +239,7 @@ const users = computed(() => usersResp.value?.items ?? [])
 const total = computed(() => usersResp.value?.total ?? 0)
 const showCreate = ref(false)
 const createError = ref('')
+const createLoading = ref(false)
 const newUser = ref({ email: '', display_name: '', password: '', org_role: 'runner' })
 const showResetDialog = ref(false)
 const tempPassword = ref('')
@@ -251,16 +265,13 @@ function updateUserInList(data: UserItem) {
   if (idx !== -1) users.value[idx] = data
 }
 
-const selectedRole = ref<string>('')
-function captureRole(role: string) {
-  selectedRole.value = role
-}
-
-async function updateRole(u: UserItem) {
-  const prevRole = selectedRole.value
+async function updateRole(u: UserItem, newRole: unknown) {
+  const prevRole = u.org_role
+  if (prevRole === String(newRole)) return
+  u.org_role = String(newRole)
   actionLoading.value[u.id] = true
   try {
-    const data = await httpPut<UserItem>(`/api/v1/admin/users/${u.id}`, { org_role: u.org_role })
+    const data = await httpPut<UserItem>(`/api/v1/admin/users/${u.id}`, { org_role: newRole })
     updateUserInList(data)
     showFlash('success', `Role changed to ${data.org_role} for ${u.email}`)
   } catch (e) {
@@ -366,6 +377,7 @@ async function createUser() {
     createError.value = 'Password must contain at least one uppercase letter, one lowercase letter, and one digit'
     return
   }
+  createLoading.value = true
   try {
     await post('/api/v1/admin/users', newUser.value)
     showCreate.value = false
@@ -374,6 +386,8 @@ async function createUser() {
     loadUsers()
   } catch (e: any) {
     createError.value = e instanceof Error ? e.message : 'Failed to create user'
+  } finally {
+    createLoading.value = false
   }
 }
 

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -15,8 +16,10 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
+_FERNET_KEY = Fernet.generate_key().decode()
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PROVIDER_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
@@ -27,7 +30,7 @@ def _make_settings() -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key=_VALID_32,
-        fernet_key=_VALID_32,
+        fernet_key=_FERNET_KEY,
         modulo_admin_password="testpass",
         modulo_license_key="test-license-key",
         modulo_oidc_providers=json.dumps(
@@ -45,6 +48,7 @@ def _make_settings() -> Settings:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -155,6 +159,35 @@ class TestListProviders:
     def test_requires_admin(self, operator_client: TestClient) -> None:
         resp = operator_client.get(self.URL)
         assert resp.status_code == 403
+
+    def test_serializes_real_orm_provider_shapes(self) -> None:
+        from modulo.api.routes.admin_sso import SsoProviderResponse
+        from modulo.auth.secret_storage import encrypt_stored_secret
+        from modulo.db.models.sso_provider import SsoProvider
+
+        provider = SsoProvider(
+            id=_PROVIDER_ID,
+            organisation_id=_ORG_ID,
+            provider_type="oidc",
+            name="Production OIDC",
+            client_id="client-id",
+            client_secret=encrypt_stored_secret("secret", _FERNET_KEY),
+            scopes=json.dumps(["openid", "profile"]),
+            enabled=True,
+            auto_provision=True,
+            default_role="runner",
+        )
+        provider.created_at = _NOW
+        provider.updated_at = _NOW
+
+        response = SsoProviderResponse.model_validate(provider)
+        serialized = response.model_dump(mode="json")
+
+        assert response.id == _PROVIDER_ID
+        assert response.scopes == ["openid", "profile"]
+        assert serialized["id"] == str(_PROVIDER_ID)
+        assert serialized["created_at"] == _NOW.isoformat().replace("+00:00", "Z")
+        assert serialized["client_secret"] == "••••••"
 
 
 class TestCreateProvider:
@@ -465,11 +498,13 @@ class TestEnvVarSeeding:
         ):
             await _seed_sso_providers(settings)
 
-            call_args = [call for call in mock_session.add.call_args_list]
+            call_args = list(mock_session.add.call_args_list)
             assert len(call_args) >= 1
             added = call_args[0][0][0]
             assert added.provider_type == "oidc"
             assert added.name == "google"
+            assert isinstance(added.client_secret, bytes)
+            assert Fernet(_FERNET_KEY.encode()).decrypt(added.client_secret).decode() == "google-client-secret"
 
     async def test_skips_if_providers_exist(self) -> None:
         from modulo.api.main import _seed_sso_providers

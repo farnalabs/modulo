@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader :title="$t('views.FeedbackInboxView.feedback_inbox')" :subtitle="$t('views.FeedbackInboxView.review_and_resolve_pending_feedback_from_pipeline_evaluation')" data-testid="feedback-inbox-title" />
 
@@ -15,24 +15,22 @@
     >
       <template #after>
         <div class="flex items-center gap-2">
-          <select
-            v-model="pipelineFilter"
-            data-testid="feedback-inbox-pipeline-select"
-            aria-label="Pipeline"
-            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            @change="loadFeedback"
-          >
-            <option value="">{{ $t('views.FeedbackInboxView.all_pipelines') }}</option>
-            <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
-          <input
+          <Select v-model="pipelineFilter" @update:model-value="loadFeedback">
+            <SelectTrigger data-testid="feedback-inbox-pipeline-select" aria-label="Pipeline" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <SelectValue :placeholder="$t('views.FeedbackInboxView.all_pipelines')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+            </SelectContent>
+          </Select>
+          <input aria-label="date"
             v-model="dateFrom"
             type="date"
             data-testid="feedback-inbox-date-from"
             class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="loadFeedback"
           />
-          <input
+          <input aria-label="date"
             v-model="dateTo"
             type="date"
             data-testid="feedback-inbox-date-to"
@@ -224,18 +222,33 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { Button } from '@/components/ui/button'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import { formatDateShortWithTime } from '../lib/formatDate'
 
-type FeedbackRecordItem = components['schemas']['FeedbackRecordItem']
-type FeedbackRecordDetail = components['schemas']['FeedbackRecordDetail']
-type PipelineItem = components['schemas']['PipelineItem']
+interface FeedbackRecordItem {
+  id: string
+  created_at: string
+  pipeline_name?: string | null
+  rejection_reason?: string | null
+  feedback_handler_type: string
+  feedback_status: string
+}
 
-const { t, locale } = useI18n()
+interface FeedbackRecordDetail extends FeedbackRecordItem {
+  annotation?: string | null
+  rejected_output?: unknown
+  correction_proposal?: unknown
+}
+
+type PipelineItem = components['schemas']['PipelineResponse']
+
+const { t } = useI18n()
 
 const statusFilter = ref('')
 const pipelineFilter = ref('')
@@ -260,6 +273,7 @@ function statusBadgeClass(status: string): string {
     routing: 'badge badge-status-warning',
     correcting: 'badge badge-context-purple',
     resolved: 'badge badge-status-success',
+    dismissed: 'badge badge-context-slate',
     escalated: 'badge badge-status-destructive',
   }
   return classMap[status] ?? 'badge badge-context-slate'
@@ -299,13 +313,19 @@ const { loading, error, data: feedbackResp, load: loadFeedback } = useDataFetch(
   { immediate: false },
 )
 
-const records = computed(() => (feedbackResp.value as any)?.items ?? [])
+const records = computed<FeedbackRecordItem[]>(() => {
+  const response = feedbackResp.value as { items?: FeedbackRecordItem[] } | null
+  return response?.items ?? []
+})
 
-const { loading: pipelinesLoading, error: pipelinesError, data: pipelinesResp, load: loadPipelines } = useDataFetch(
+const { error: pipelinesError, data: pipelinesResp, load: loadPipelines } = useDataFetch(
   () => api.GET('/api/v1/pipelines'),
 )
 
-const pipelines = computed(() => (pipelinesResp.value as any)?.items ?? [])
+const pipelines = computed<PipelineItem[]>(() => {
+  const response = pipelinesResp.value as { items?: PipelineItem[] } | null
+  return response?.items ?? []
+})
 
 async function loadDetail(recordId: string) {
   detailLoading.value[recordId] = true
@@ -317,8 +337,9 @@ async function loadDetail(recordId: string) {
     if (err) {
       detailError.value[recordId] = `${t('views.FeedbackInboxView.failed_to_load_detail')} ${formatApiError(err)}`
     } else if (data) {
-      detailMap.value[recordId] = data
-      annotations.value[recordId] = data.annotation || ''
+      const detail = data as unknown as FeedbackRecordDetail
+      detailMap.value[recordId] = detail
+      annotations.value[recordId] = detail.annotation || ''
     }
   } catch (e: unknown) {
     detailError.value[recordId] = `${t('views.FeedbackInboxView.failed_to_load_detail')} ${formatApiError(e)}`
@@ -349,7 +370,7 @@ async function saveAnnotation(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.save_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.annotation_saved') }
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
@@ -372,7 +393,7 @@ async function resolveRecord(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.resolve_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.marked_as_resolved') }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.feedback_status = 'resolved'
@@ -397,7 +418,7 @@ async function triggerCorrection(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.trigger_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.correction_run_triggered') }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.feedback_status = 'correcting'
@@ -422,10 +443,10 @@ async function dismissRecord(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.dismiss_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.dismissed') }
       const rec = records.value.find(r => r.id === recordId)
-      if (rec) rec.feedback_status = 'resolved'
+      if (rec) rec.feedback_status = 'dismissed'
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }

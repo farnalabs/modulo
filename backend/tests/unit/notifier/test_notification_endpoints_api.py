@@ -32,6 +32,11 @@ def _make_settings() -> Settings:
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock(return_value=bind)
+    session.info = {}
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -71,7 +76,10 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER,
         org_role="operator",
     )
-    yield TestClient(app)
+    test_client = TestClient(app)
+    test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
+    test_client.headers["X-CSRF-Token"] = "test-csrf-token"
+    yield test_client
     app.dependency_overrides.clear()
 
 

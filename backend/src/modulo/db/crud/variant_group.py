@@ -13,6 +13,8 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import count_active_runs_for_pipeline, create_run
+from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.variant_group import VariantGroup
 
 _log = logging.getLogger(__name__)
@@ -67,7 +69,7 @@ async def list_variant_groups(
     try:
         total = (await session.execute(count_q)).scalar_one()
     except ProgrammingError:
-        _log.warning("variant_group table not found — returning empty list")
+        _log.warning("variant_group table not found — returning empty list", exc_info=True)
         return [], 0
     items = list(
         (await session.execute(q.order_by(VariantGroup.created_at.desc()).offset(offset).limit(page_size))).scalars()
@@ -233,8 +235,6 @@ async def get_coverage_gaps(
     Returns a list of gaps: [{variant: …, missing_evals: [str, …]}, …].
     """
     if eval_def_ids is None:
-        from modulo.db.models.eval_definition import EvalDefinition
-
         result = await session.execute(select(EvalDefinition).where(EvalDefinition.pipeline_id == group.pipeline_id))
         eval_defs = list(result.scalars())
         eval_def_ids = [e.id for e in eval_defs]
@@ -275,8 +275,6 @@ async def get_prompt_diffs(
 
     if not snapshot_ids:
         return []
-
-    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
     result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id.in_(snapshot_ids)))
     snapshots = {s.id: s for s in result.scalars()}

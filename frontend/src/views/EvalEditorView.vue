@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
     <PageTabs :tabs="[
@@ -18,31 +18,29 @@
     <template v-else>
       <div class="grid gap-6 lg:grid-cols-2">
         <div>
-          <label class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
-          <select
-            v-model="selectedPipelineId"
-            data-testid="eval-editor-pipeline"
-            aria-label="Pipeline"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            @change="onPipelineChange"
-          >
-            <option value="">{{ $t('views.EvalEditorView.select_a_pipeline') }}</option>
-            <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
+          <label for="evaleditorview-field-8" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
+          <Select v-model="selectedPipelineId" @update:model-value="onPipelineChange">
+            <SelectTrigger data-testid="eval-editor-pipeline" aria-label="Pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <SelectValue :placeholder="$t('views.EvalEditorView.select_a_pipeline')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{{ $t('views.EvalEditorView.select_a_pipeline') }}</SelectItem>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div>
-          <label class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
-          <select
-            v-model="form.node_id"
-            :disabled="!selectedPipelineId || nodesLoading"
-            data-testid="eval-editor-node"
-            aria-label="Node"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            <option value="">{{ $t('views.EvalEditorView.all_pipeline_outputs') }}</option>
-            <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.label || n.node_type || shortId(n.id) }}</option>
-          </select>
+          <label for="evaleditorview-field-7" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
+          <Select v-model="form.node_id" :disabled="!selectedPipelineId || nodesLoading">
+            <SelectTrigger data-testid="eval-editor-node" aria-label="Node" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
+              <SelectValue :placeholder="$t('views.EvalEditorView.all_pipeline_outputs')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{{ $t('views.EvalEditorView.all_pipeline_outputs') }}</SelectItem>
+              <SelectItem v-for="n in nodes" :key="n.id" :value="n.id">{{ n.label || n.node_type || shortId(n.id) }}</SelectItem>
+            </SelectContent>
+          </Select>
           <div v-if="nodesLoading" class="mt-1 text-xs text-muted-foreground">{{ $t('views.EvalEditorView.loading_nodes') }}</div>
           <div v-if="nodesError" class="mt-1 text-xs text-destructive">{{ nodesError }}</div>
         </div>
@@ -55,8 +53,8 @@
 
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.name') }}</label>
-                <input
+                <label for="evaleditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.name') }}</label>
+                <input id="evaleditorview-field-6"
                   v-model="form.name"
                   type="text"
                   data-testid="eval-editor-name"
@@ -66,23 +64,23 @@
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.eval_type') }}</label>
-                <select
-                  v-model="form.eval_type"
-                  data-testid="eval-editor-eval-type"
-                  aria-label="Eval type"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <option value="llm_judge">{{ $t('views.EvalEditorView.llm_judge') }}</option>
-                  <option value="regex">{{ $t('views.EvalEditorView.regex') }}</option>
-                  <option value="json_schema">{{ $t('views.EvalEditorView.json_schema') }}</option>
-                  <option value="custom_function">{{ $t('views.EvalEditorView.custom_function') }}</option>
-                </select>
+                <label for="evaleditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.eval_type') }}</label>
+                <Select v-model="form.eval_type">
+                  <SelectTrigger data-testid="eval-editor-eval-type" aria-label="Eval type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    <SelectValue placeholder="llm_judge" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="llm_judge">{{ $t('views.EvalEditorView.llm_judge') }}</SelectItem>
+                    <SelectItem value="regex">{{ $t('views.EvalEditorView.regex') }}</SelectItem>
+                    <SelectItem value="json_schema">{{ $t('views.EvalEditorView.json_schema') }}</SelectItem>
+                    <SelectItem value="custom_function">{{ $t('views.EvalEditorView.custom_function') }}</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.config_json') }} <span class="text-muted-foreground">(JSON)</span></label>
-                <textarea
+                <label for="evaleditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.config_json') }} <span class="text-muted-foreground">(JSON)</span></label>
+                <textarea id="evaleditorview-field-4"
                   v-model="form.config_json"
                   rows="6"
                   data-testid="eval-editor-config"
@@ -93,13 +91,13 @@
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">
+                <label for="evaleditorview-field-3" class="mb-1 block text-sm font-medium">
                   {{ $t('views.EvalEditorView.pass_threshold') }}
                   <span class="text-muted-foreground">({{ form.pass_threshold.toFixed(2) }})</span>
                 </label>
                 <div class="flex items-center gap-3">
                   <span class="text-xs text-muted-foreground">0.0</span>
-                  <input
+                  <input id="evaleditorview-field-3"
                     v-model.number="form.pass_threshold"
                     type="range"
                     min="0"
@@ -114,10 +112,10 @@
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.failure_behaviour') }}</label>
+                <span class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.failure_behaviour') }}</span>
                 <div class="flex items-center gap-4">
-                  <label class="flex cursor-pointer items-center gap-2 text-sm">
-                    <input
+                  <label for="evaleditorview-field-2" class="flex cursor-pointer items-center gap-2 text-sm">
+                    <input id="evaleditorview-field-2"
                       v-model="form.failure_behaviour"
                       type="radio"
                       value="warn"
@@ -126,8 +124,8 @@
                     />
                     {{ $t('views.EvalEditorView.warn') }}
                   </label>
-                  <label class="flex cursor-pointer items-center gap-2 text-sm">
-                    <input
+                  <label for="evaleditorview-field-1" class="flex cursor-pointer items-center gap-2 text-sm">
+                    <input id="evaleditorview-field-1"
                       v-model="form.failure_behaviour"
                       type="radio"
                       value="block"
@@ -275,6 +273,7 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import PageTabs from "../components/PageTabs.vue"
 import { api } from '../lib/api/client'
 
@@ -309,20 +308,7 @@ interface EvalDefinition {
   created_by: string
 }
 
-interface EvalListResponse {
-  items: EvalDefinition[]
-  total: number
-  page: number
-  page_size: number
-}
-
-interface GraphResponse {
-  nodes: GraphNode[]
-  edges: unknown[]
-  validation_issues: string[]
-}
-
-const selectedPipelineId = ref('')
+const selectedPipelineId = ref('__all__')
 const nodes = ref<GraphNode[]>([])
 const nodesLoading = ref(false)
 
@@ -331,7 +317,7 @@ const evalsError = ref<string | null>(null)
 
 const form = reactive({
   name: '',
-  node_id: '',
+  node_id: '__all__',
   eval_type: 'llm_judge',
   config_json: '{}',
   pass_threshold: 0.8,
@@ -362,7 +348,7 @@ const configParseError = computed(() => {
 
 const canSave = computed(() => {
   return (
-    selectedPipelineId.value &&
+    selectedPipelineId.value && selectedPipelineId.value !== '__all__' &&
     form.name.trim() &&
     form.eval_type &&
     !configParseError.value
@@ -371,7 +357,7 @@ const canSave = computed(() => {
 
 function resetForm() {
   form.name = ''
-  form.node_id = ''
+  form.node_id = '__all__'
   form.eval_type = 'llm_judge'
   form.config_json = '{}'
   form.pass_threshold = 0.8
@@ -392,7 +378,7 @@ const { loading, error: pageError, data: pipelinesResp, load: loadAll } = useDat
 const pipelines = computed(() => (pipelinesResp.value as any) ?? [])
 
 async function loadNodes() {
-  if (!selectedPipelineId.value) {
+  if (!selectedPipelineId.value || selectedPipelineId.value === '__all__') {
     nodes.value = []
     return
   }
@@ -403,16 +389,17 @@ async function loadNodes() {
       params: { path: { pipeline_id: selectedPipelineId.value } },
     })
     nodes.value = (data as any)?.nodes ?? []
-  } catch {
+  } catch (e) {
     nodes.value = []
     nodesError.value = t('views.EvalEditorView.failed_to_load_nodes')
+    console.warn('Failed to load nodes:', e)
   } finally {
     nodesLoading.value = false
   }
 }
 
 async function loadEvals() {
-  if (!selectedPipelineId.value) {
+  if (!selectedPipelineId.value || selectedPipelineId.value === '__all__') {
     evals.value = []
     return
   }
@@ -455,18 +442,15 @@ async function saveEval() {
     return
   }
 
-  const body: Record<string, unknown> = {
+  const body = {
     pipeline_id: selectedPipelineId.value,
+    node_id: form.node_id === '__all__' ? null : form.node_id,
     name: form.name.trim(),
     eval_type: form.eval_type,
     config_json: configParsed,
     failure_behaviour: form.failure_behaviour,
     pass_threshold: form.pass_threshold,
   }
-  if (form.node_id) {
-    body.node_id = form.node_id
-  }
-
   try {
     if (editingEvalId.value) {
       await api.PUT('/api/v1/evals/{eval_id}', {
@@ -491,7 +475,7 @@ async function saveEval() {
 function startEdit(ev: EvalDefinition) {
   editingEvalId.value = ev.id
   form.name = ev.name
-  form.node_id = ev.node_id ?? ''
+  form.node_id = ev.node_id ?? '__all__'
   form.eval_type = ev.eval_type
   form.config_json = JSON.stringify(ev.config_json, null, 2)
   form.pass_threshold = ev.pass_threshold ?? 0.8

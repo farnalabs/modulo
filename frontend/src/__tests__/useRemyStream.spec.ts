@@ -93,7 +93,7 @@ describe('useRemyStream', () => {
   })
 
   it('ui_command_batch event executes commands and POSTs results', async () => {
-    const store = setupStore()
+    setupStore()
     let postedBody: any = null
     global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
       if (url === '/api/v1/remy/sessions/session-1/stream') {

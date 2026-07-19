@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """LocalRuntimeProvider — in-process agent execution with a concurrency cap.
 
 This provider runs commands as subprocesses on the host machine. It is **not
@@ -17,6 +15,7 @@ and your pipelines continue to work unchanged — the RuntimeProvider ABC
 hides the backend.
 """
 
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -43,6 +42,8 @@ class LocalRuntimeProvider(RuntimeProvider):
     across all workspaces — agents waiting on the semaphore are queued.
     """
 
+    provider_id = "local"
+
     def __init__(self, max_concurrency: int = 2) -> None:
         self._max_concurrency = max_concurrency
         self._semaphore = asyncio.Semaphore(max_concurrency)
@@ -67,7 +68,6 @@ class LocalRuntimeProvider(RuntimeProvider):
         """
         workspace_dir = tempfile.mkdtemp(prefix=f"modulo-workspace-{spec.environment_profile_id}-")
         ref = str(uuid.uuid4())
-        self._workspaces[ref] = workspace_dir
 
         try:
             repo_url = (spec.labels or {}).get("repo_url", "")
@@ -78,12 +78,13 @@ class LocalRuntimeProvider(RuntimeProvider):
                     timeout=spec.timeout_seconds,
                 )
         except asyncio.CancelledError:
+            await asyncio.to_thread(shutil.rmtree, workspace_dir, ignore_errors=True)
             raise
         except Exception:
-            self._workspaces.pop(ref, None)
             await asyncio.to_thread(shutil.rmtree, workspace_dir, ignore_errors=True)
             raise
 
+        self._workspaces[ref] = workspace_dir
         return ref
 
     async def exec_command(
@@ -91,7 +92,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,  # noqa: ASYNC109
+        timeout: int | None = None,
     ) -> ExecResult:
         cwd = self._workspaces.get(provider_ref)
         if cwd is None:
@@ -117,7 +118,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         self,
         command: list[str],
         cwd: str,
-        timeout: int | None = None,  # noqa: ASYNC109
+        timeout: int | None = None,
     ) -> ExecResult:
         """Run a command, respecting the concurrency semaphore."""
         effective_timeout = timeout if timeout is not None else _DEFAULT_CMD_TIMEOUT

@@ -6,6 +6,7 @@ concurrent subscribers.
 """
 
 import asyncio
+import contextlib
 import uuid
 from typing import Any
 
@@ -14,10 +15,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.pipeline_engine.event_broker import RunEventBroker
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/operations/websocket_reconnection.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -1,31 +1,12 @@
 rules:
   - id: missing-session-begin
-    patterns:
-      - pattern-inside: |
-          @$ROUTER.$METHOD(...)
-          async def $HANDLER(...):
-            ...
-      - pattern-either:
-          - patterns:
-              - pattern: await $SESSION.execute(...)
-              - metavariable-regex:
-                  metavariable: $SESSION
-                  regex: ^(session|db_session)$
-          - patterns:
-              - pattern: $SESSION.add(...)
-              - metavariable-regex:
-                  metavariable: $SESSION
-                  regex: ^(session|db_session)$
-          - patterns:
-              - pattern: await $SESSION.flush()
-              - metavariable-regex:
-                  metavariable: $SESSION
-                  regex: ^(session|db_session)$
-      - pattern-not-inside: |
-          async with $SESSION.begin():
-            ...
-    message: "Route handler with get_db_session must wrap DB ops in async with session.begin(): (autobegin=False)"
+    # Semgrep OSS does not expose Python AsyncWith blocks as a pattern-inside
+    # scope. Match the complete route and reject handlers that contain an
+    # explicit transaction instead of reporting every operation inside it.
+    pattern-regex: |
+      (?ms)^@[A-Za-z_][\w.]*\.(?:get|post|put|patch|delete)\([^\n]*\)\s*\n(?!(?:(?!^@).)*async with (?:session|db_session)\.begin\(\):)(?:(?!^@).)*(?:await (?:session|db_session)\.execute\(|(?:session|db_session)\.add\(|await (?:session|db_session)\.flush\(\))
+    message: "Route handler performs DB operations without an explicit session.begin() transaction (autobegin=False)"
     languages: [python]
     severity: ERROR
     paths:
-      include: ["**/backend/src/**"]
+      include: ["**/backend/src/**", "**/.semgrep/missing_session_begin.py"]

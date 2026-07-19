@@ -90,6 +90,12 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 - [ ] `copy_to_adapt` in `library_primitive.py` CRUD does NOT propagate `tier` — copied primitives lose their tier classification and get `native` (server_default). This means a `preview` primitive copied via copy-to-adapt becomes `native` in the target org with no indication of changed status.
 - [x] Unit tests (`test_connector_instance_tier.py`, `test_model_backend_tier.py`, `test_library_primitive_tier.py`) and integration tests exercise the `excluded_tiers` parameter of all three list CRUD functions to verify that `in_dev` items are actually excluded from queries
 
+### 2026-07-12 — Round 3 QA (improve-architecture batch 2)
+
+**Fixed (MINOR):** Added `from None` to 3 `except IntegrityError: raise HTTPException(...)` catch blocks in `connectors.py` (list, get, delete endpoints) to fix B904 lint warnings. The `create` and `update` endpoint handlers already had `from None`; these 3 were inconsistent.
+
+**Status:** partial (6 known gaps unchanged).
+
 ## QA History
 
 ### 2026-07-09 — Cross-cutting QA (improve-architecture index 288)

@@ -20,12 +20,13 @@
         >
           Save as composite
         </button>
-        <button
-          class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+        <Button
+          variant="default"
+          size="xs"
           @click="showPortPanel = !showPortPanel"
         >
           {{ showPortPanel ? 'Hide Ports' : 'Ports' }}
-        </button>
+        </Button>
         <button
           class="rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-500"
           @click="showPublishFlow = true"
@@ -80,7 +81,7 @@
     </template>
 
     <!-- Save as composite dialog -->
-    <div
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
       v-if="showSaveAsComposite"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       @click.self="showSaveAsComposite = false"
@@ -89,16 +90,16 @@
         <h3 class="mb-4 text-base font-semibold">Save as Composite</h3>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="compositeeditorview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="compositeeditorview-field-2"
               v-model="saveAsName"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               placeholder="My Composite"
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
+            <label for="compositeeditorview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <textarea id="compositeeditorview-field-1"
               v-model="saveAsDescription"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               rows="3"
@@ -115,9 +116,9 @@
             >
               Cancel
             </button>
-            <button
+            <Button
               :disabled="!saveAsName || saving"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              variant="default"
               @click="handleSaveAs"
             >
               {{ saving ? 'Saving...' : 'Save' }}
@@ -154,6 +155,7 @@ import PublishCompositeFlow from '../../components/pipeline/composite/PublishCom
 import type { ParameterPort } from '../../types/pipeline'
 import { formatApiError } from '../../lib/api/formatError'
 import { api } from '../../lib/api/client'
+import { Button } from '@/components/ui/button'
 
 const route = useRoute()
 const router = useRouter()
@@ -197,16 +199,18 @@ function convertBackendEdge(e: any, i: number): any {
   }
 }
 
-const { loading, error: pageError, load: loadEditor } = useDataFetch(
+const { loading, error: pageError } = useDataFetch(
   async () => {
-    const [{ data: templateData }, { data: editorData }] = await Promise.all([
-      api.GET('/api/v1/composite-templates/{composite_id}', {
-        params: { path: { composite_id: compositeId } },
-      }),
-      api.GET('/api/v1/composite-templates/{composite_id}/editor', {
-        params: { path: { composite_id: compositeId } },
-      }),
+    const [templateResp, editorResp] = await Promise.all([
+      api.GET('/api/v1/composite-templates/{template_id}', {
+        params: { path: { template_id: compositeId } },
+      }).catch(() => ({ data: null })),
+      api.GET('/api/v1/composite-templates/{template_id}/editor', {
+        params: { path: { template_id: compositeId } },
+      }).catch(() => ({ data: null })),
     ])
+    const templateData = templateResp?.data ?? null
+    const editorData = editorResp?.data ?? null
 
     const template = templateData as any
     const editor = editorData as any
@@ -256,6 +260,7 @@ async function handleSaveAs() {
       body: {
         name: saveAsName.value,
         description: saveAsDescription.value || null,
+        version: '1.0.0',
         sub_pipeline_graph_json: {
           nodes: rawNodes.value,
           edges: rawEdges.value,
@@ -267,7 +272,9 @@ async function handleSaveAs() {
           description: p.description || null,
           type: p.type,
           required: p.required,
-          default_value: p.default ?? null,
+          default_value: p.default_value ?? null,
+          multiline: p.multiline,
+          options: p.options ?? null,
           target_injection: {
             mode: 'prompt_replace',
             node_id: '',

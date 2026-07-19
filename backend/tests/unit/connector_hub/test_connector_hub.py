@@ -23,6 +23,8 @@ from modulo.core.connector_hub import (
 )
 from modulo.core.secrets_backend import create_secrets_backend
 
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -51,132 +53,40 @@ class _FakeCI:
 # ---------------------------------------------------------------------------
 
 
-async def test_initialise_creates_filesystem_connector(tmp_path):
+@pytest.mark.parametrize(
+    "connector_type_id,config_json,credentials_json,expected_type",
+    [
+        ("filesystem", {"base_path": "/tmp"}, {}, ConnectorType.FILESYSTEM),
+        ("github", {}, {"token": "ghp_test"}, ConnectorType.GITHUB),
+        ("monday", {}, {"api_key": "monday_key"}, ConnectorType.MONDAY),
+        ("trello", {}, {"api_key": "trello_key", "token": "trello_token"}, ConnectorType.TRELLO),
+        ("asana", {}, {"personal_access_token": "asana_pat_123"}, ConnectorType.ASANA),
+        ("notion", {}, {"token": "ntn_test_token"}, ConnectorType.NOTION),
+        (
+            "confluence",
+            {"instance": "my-domain.atlassian.net/wiki"},
+            {"token": "confluence_token"},
+            ConnectorType.CONFLUENCE,
+        ),
+        ("shortcut", {}, {"token": "shortcut_token"}, ConnectorType.SHORTCUT),
+        ("youtrack", {}, {"token": "yt_perm_token_123"}, ConnectorType.YOUTRACK),
+    ],
+)
+async def test_initialise_creates_connector(connector_type_id, config_json, credentials_json, expected_type, tmp_path):
+    if connector_type_id == "filesystem":
+        config_json["base_path"] = str(tmp_path)
     ci = _FakeCI(
         id=uuid.uuid4(),
-        connector_type_id="filesystem",
-        config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt({}),
+        connector_type_id=connector_type_id,
+        config_json=config_json,
+        credentials_ciphertext=_encrypt(credentials_json),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value="{}"):
+    with patch.object(backend, "get_secret", return_value=json.dumps(credentials_json)):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
     connector = hub.get(ci.id)
-    assert connector.connector_type == ConnectorType.FILESYSTEM
-
-
-async def test_initialise_creates_github_connector():
-    ci = _FakeCI(
-        id=uuid.uuid4(),
-        connector_type_id="github",
-        credentials_ciphertext=_encrypt({"token": "ghp_test"}),
-    )
-    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value='{"token": "ghp_test"}'):
-        hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-    connector = hub.get(ci.id)
-    assert connector.connector_type == ConnectorType.GITHUB
-
-
-async def test_initialise_creates_monday_connector():
-    ci = _FakeCI(
-        id=uuid.uuid4(),
-        connector_type_id="monday",
-        credentials_ciphertext=_encrypt({"api_key": "monday_key"}),
-    )
-    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value='{"api_key": "monday_key"}'):
-        hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-    connector = hub.get(ci.id)
-    assert connector.connector_type == ConnectorType.MONDAY
-
-
-async def test_initialise_creates_trello_connector():
-    ci = _FakeCI(
-        id=uuid.uuid4(),
-        connector_type_id="trello",
-        credentials_ciphertext=_encrypt({"api_key": "trello_key", "token": "trello_token"}),
-    )
-    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value='{"api_key": "trello_key", "token": "trello_token"}'):
-        hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-    connector = hub.get(ci.id)
-    assert connector.connector_type == ConnectorType.TRELLO
-
-
-async def test_initialise_creates_asana_connector():
-    ci = _FakeCI(
-        id=uuid.uuid4(),
-        connector_type_id="asana",
-        credentials_ciphertext=_encrypt({"personal_access_token": "asana_pat_123"}),
-    )
-    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value='{"personal_access_token": "asana_pat_123"}'):
-        hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-    connector = hub.get(ci.id)
-    assert connector.connector_type == ConnectorType.ASANA
-
-
-async def test_initialise_creates_notion_connector():
-    ci = _FakeCI(
-        id=uuid.uuid4(),
-        connector_type_id="notion",
-        credentials_ciphertext=_encrypt({"token": "ntn_test_token"}),
-    )
-    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value='{"token": "ntn_test_token"}'):
-        hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-    connector = hub.get(ci.id)
-    assert connector.connector_type == ConnectorType.NOTION
-
-
-async def test_initialise_creates_confluence_connector():
-    ci = _FakeCI(
-        id=uuid.uuid4(),
-        connector_type_id="confluence",
-        config_json={"instance": "my-domain.atlassian.net/wiki"},
-        credentials_ciphertext=_encrypt({"token": "confluence_token"}),
-    )
-    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value='{"token": "confluence_token"}'):
-        hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-    connector = hub.get(ci.id)
-    assert connector.connector_type == ConnectorType.CONFLUENCE
-
-
-async def test_initialise_creates_shortcut_connector():
-    ci = _FakeCI(
-        id=uuid.uuid4(),
-        connector_type_id="shortcut",
-        credentials_ciphertext=_encrypt({"token": "shortcut_token"}),
-    )
-    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value='{"token": "shortcut_token"}'):
-        hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-    connector = hub.get(ci.id)
-    assert connector.connector_type == ConnectorType.SHORTCUT
-
-
-async def test_initialise_creates_youtrack_connector():
-    ci = _FakeCI(
-        id=uuid.uuid4(),
-        connector_type_id="youtrack",
-        credentials_ciphertext=_encrypt({"token": "yt_perm_token_123"}),
-    )
-    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with patch.object(backend, "get_secret", return_value='{"token": "yt_perm_token_123"}'):
-        hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-    connector = hub.get(ci.id)
-    assert connector.connector_type == ConnectorType.YOUTRACK
+    assert connector.connector_type == expected_type
 
 
 async def test_get_unknown_raises():

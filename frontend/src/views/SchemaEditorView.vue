@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Browse', to: '/schemas' },
     { label: 'Editor', to: '/schemas/editor' },
@@ -23,7 +23,7 @@
           {{ $t('views.SchemaEditorView.no_schemas_yet') }}
         </div>
         <template v-else>
-          <div
+          <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
             v-for="schema in filteredSchemas"
             :key="schema.id"
             class="cursor-pointer border-b px-4 py-3 transition-colors hover:bg-muted/50"
@@ -44,13 +44,14 @@
       </div>
 
       <div class="border-t p-4">
-        <button
+        <Button
+          variant="default"
+          class="w-full"
           data-testid="schema-editor-new"
-          class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           @click="createNewSchema"
         >
           {{ $t('views.SchemaEditorView.new_schema') }}
-        </button>
+        </Button>
       </div>
     </aside>
 
@@ -64,14 +65,14 @@
           <header class="flex items-center justify-between">
             <PageHeader :title="isNew ? $t('views.SchemaEditorView.new_schema_title') : $t('views.SchemaEditorView.edit_schema_title')" :subtitle="isNew ? $t('views.SchemaEditorView.define_new_schema') : schemaName" />
             <div class="flex items-center gap-2">
-              <button
+              <Button
+                variant="default"
                 data-testid="schema-editor-save"
                 :disabled="saving || !isValid"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 @click="saveSchema"
               >
                 {{ saving ? $t('views.SchemaEditorView.saving') : $t('views.SchemaEditorView.save') }}
-              </button>
+              </Button>
               <button
                 data-testid="schema-editor-cancel"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -103,8 +104,8 @@
                 <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaEditorView.schema_details') }}</h2>
                 <div class="space-y-4">
                   <div>
-                    <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.name') }}</label>
-                    <input
+                    <label for="schemaeditorview-field-8" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.name') }}</label>
+                    <input id="schemaeditorview-field-8"
                       v-model="schemaName"
                       type="text"
                       data-testid="schema-editor-name"
@@ -113,8 +114,8 @@
                     />
                   </div>
                   <div>
-                    <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.description') }}</label>
-                    <input
+                    <label for="schemaeditorview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.description') }}</label>
+                    <input id="schemaeditorview-field-7"
                       v-model="schemaDescription"
                       type="text"
                       data-testid="schema-editor-description"
@@ -123,8 +124,8 @@
                     />
                   </div>
                   <div>
-                    <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.version') }}</label>
-                    <input
+                    <label for="schemaeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.version') }}</label>
+                    <input id="schemaeditorview-field-6"
                       v-model="schemaVersion"
                       type="text"
                       data-testid="schema-editor-version"
@@ -138,13 +139,14 @@
               <section class="rounded-lg border bg-card p-6 shadow-sm">
                 <div class="mb-4 flex items-center justify-between">
                   <h2 class="text-base font-semibold">{{ $t('views.SchemaEditorView.fields') }}</h2>
-                  <button
+                  <Button
+                    variant="default"
+                    size="sm"
                     data-testid="schema-editor-add-field"
-                    class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                     @click="addField"
                   >
                     {{ $t('views.SchemaEditorView.add_field') }}
-                  </button>
+                  </Button>
                 </div>
 
                 <div v-if="fields.length === 0" class="py-4 text-center text-sm text-muted-foreground">
@@ -184,8 +186,8 @@
 
                         <div class="grid grid-cols-2 gap-3">
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_name') }}</label>
-                            <input
+                            <label for="schemaeditorview-field-5" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_name') }}</label>
+                            <input id="schemaeditorview-field-5"
                               v-model="field.name"
                               type="text"
                               data-testid="schema-editor-field-name"
@@ -194,26 +196,26 @@
                             />
                           </div>
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
-                            <select
-                              v-model="field.type"
-                              data-testid="schema-editor-field-type"
-                              aria-label="Field type"
-                              class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                            >
-                              <option value="string">string</option>
-                              <option value="number">number</option>
-                              <option value="boolean">boolean</option>
-                              <option value="array">array</option>
-                              <option value="object">object</option>
-                            </select>
+                            <label for="schemaeditorview-field-type" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
+                            <Select v-model="field.type">
+                              <SelectTrigger id="schemaeditorview-field-type" class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Field type" data-testid="schema-editor-field-type">
+                                <SelectValue placeholder="Select type" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="string">string</SelectItem>
+                                <SelectItem value="number">number</SelectItem>
+                                <SelectItem value="boolean">boolean</SelectItem>
+                                <SelectItem value="array">array</SelectItem>
+                                <SelectItem value="object">object</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </div>
                         </div>
 
                         <div class="grid grid-cols-2 gap-3">
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_description') }}</label>
-                            <input
+                            <label for="schemaeditorview-field-3" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_description') }}</label>
+                            <input id="schemaeditorview-field-3"
                               v-model="field.description"
                               type="text"
                               data-testid="schema-editor-field-description"
@@ -222,8 +224,8 @@
                             />
                           </div>
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.default_value') }}</label>
-                            <input
+                            <label for="schemaeditorview-field-2" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.default_value') }}</label>
+                            <input id="schemaeditorview-field-2"
                               v-model="field.defaultValue"
                               type="text"
                               data-testid="schema-editor-field-default"
@@ -234,8 +236,8 @@
                         </div>
 
                         <div class="flex items-center gap-4">
-                          <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                            <input
+                          <label for="schemaeditorview-field-1" class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <input id="schemaeditorview-field-1"
                               v-model="field.required"
                               type="checkbox"
                               data-testid="schema-editor-field-required"
@@ -330,10 +332,18 @@ import { formatDateShort } from '../lib/formatDate'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
+import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 const { t } = useI18n()
 
-type SchemaItem = components['schemas']['SchemaItem']
+type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse']
 
 interface SchemaField {
   _key: number

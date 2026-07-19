@@ -1,5 +1,6 @@
 """BDD step definitions: Remy Context Sources — source mode control, user overrides, MCP context tools."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import MagicMock
@@ -9,10 +10,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/remy/remy_context_sources.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────
@@ -104,9 +103,6 @@ def org_community_tier(ctx) -> None:
 @when("Remy builds a system prompt for a new session")
 @when("Remy builds a system prompt")
 def build_system_prompt(request, ctx) -> None:
-    org_id = ctx["org_id"]
-    user_id = ctx["user_id"]
-
     ctx_sources: dict[str, str] = dict(ctx["context_sources"])
 
     # Merge built-in defaults, then org defaults, then user overrides

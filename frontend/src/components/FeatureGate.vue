@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="relative" data-testid="feature-gate">
     <slot v-if="enabled" />
 
@@ -73,7 +73,7 @@ const props = withDefaults(defineProps<{
   showDisabled?: boolean;
   pricingUrl?: string;
 }>(), {
-  pricingUrl: "https://modulo.run/pricing",
+  pricingUrl: "/settings/license",
 });
 
 const planStore = usePlanStore();

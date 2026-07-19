@@ -15,14 +15,19 @@ code:
 bdd:
   - backend/tests/bdd/features/auth/sso_oidc.feature
   - backend/tests/bdd/features/auth/sso_saml.feature
+  - backend/tests/bdd/features/auth/sso_team_mapping.feature
 unit-tests:
   - backend/tests/unit/api/test_admin_sso.py
   - backend/tests/unit/api/test_sso_gating.py
   - backend/tests/unit/api/test_sso_programming_error.py
+  - backend/tests/unit/api/test_sso_sqlalchemy_error.py
   - backend/tests/unit/auth/test_sso.py
   - backend/tests/bdd/steps/test_sso_oidc.py
   - backend/tests/bdd/steps/test_sso_saml.py
   - backend/tests/bdd/steps/test_sso_team_mapping.py
+  - backend/tests/unit/auth/test_sso_oidc_bdd.py
+  - backend/tests/unit/auth/test_sso_saml_bdd.py
+  - backend/tests/unit/auth/test_sso_team_mapping_bdd.py
 depends-on: [feat-core-oidc-integration, feat-core-saml-integration, feat-auth-team-rbac]
 status: partial
 ---
@@ -48,7 +53,7 @@ Admin settings page for configuring OIDC and SAML 2.0 identity providers. Enterp
 ### Enterprise gating
 - [x] SSO settings page is hidden or locked behind enterprise license check (`<FeatureGate show-disabled>`)
 - [x] All 8 admin SSO routes return 402 when license lacks `sso` feature flag
-- [ ] Sidebar SSO nav entry is not feature-gated — all users see the link; free-tier users see a locked FeatureGate prompt on navigation
+- [~] Sidebar SSO nav entry is tier-gated (`required_tier: team` + `required_roles: [admin]` in manifest.yaml) but not feature-flag-gated — team-tier users see the link even if SSO is not enabled by license key (the FeatureGate on the page itself shows a locked prompt)
 
 ### API CRUD — Error handling
 - [x] GET /providers returns 501 with "migrations" message on ProgrammingError (table missing)
@@ -93,7 +98,7 @@ Admin settings page for configuring OIDC and SAML 2.0 identity providers. Enterp
 - [x] Test connection on SAML provider with invalid/empty metadata shows error inline
 - [ ] Delete provider warns about effect on active user sessions ("This action cannot be undone" only — no SSO session warning)
 - [x] SAML endpoints return 402 when enterprise license is absent
-- [ ] Form state is preserved on validation failure (no page loss)
+- [x] Form state is preserved on validation failure (no page loss)
 - [x] Test connection results show success or failure details inline (no page navigation)
 - [x] Empty provider list shows "No SSO providers configured" empty state
 - [x] Loading state shows LoadingSpinner component
@@ -132,7 +137,7 @@ Admin settings page for configuring OIDC and SAML 2.0 identity providers. Enterp
 - **No BDD scenarios for SSO provider admin UI** — BDD feature files exist only for the SSO auth flow (`sso_oidc.feature`, `sso_saml.feature`) but not for the admin provider CRUD operations (list/add/edit/delete/toggle/test). All admin UI testing is via unit tests.
 - **No Pinia store** — all state is component-local in `SettingsSsoView.vue` (acceptable but less maintainable as feature grows).
 - **Login page buttons** for configured OIDC/SAML providers do not exist — login flow is still Basic Auth (alpha); v1 SSO login UI is not implemented.
-- **Sidebar nav entry not feature-gated** — the SSO nav item in `navigation.ts` line 90 is visible to all users regardless of license tier. Community-tier users see the SSO link but get a 402 on API calls, or see a locked FeatureGate prompt on the page. Should be hidden or show a lock icon for free-tier users.
+- **Sidebar nav entry is tier-gated but not SSO-skill-gated** — the SSO nav item is correctly hidden for community users via `<<: *team` (required tier) and `required_roles: [admin]` in the manifest. However, it does not check the `sso` feature flag directly — a user on a team plan with an expired SSO license key still sees the link (the route itself will 402). The `FeatureGate show-disabled` UI on the page itself handles this gracefully (shows locked prompt), but the sidebar entry could show a lock icon. Fixed since last QA: manifest now properly gates via `required_tier: team`.
 - **No integration test for SAML real XML parsing** — unit tests mock the SAML parsing. No end-to-end test exercises real SAMLResponse XML against the actual XML parsing code path.
 - **ProgrammingError test coverage uses patch pattern** — all 8 ProgrammingError tests simulate the error via `@patch` on the CRUD function. This tests the route-level catch but does not exercise the actual CRUD-level ProgrammingError scenario (no test forces ProgrammingError from within a CRUD call).
 - **Authentication flow integration items are all v1 deferred** — the 6 auth flow behaviours (OIDC login, SAML ACS, JIT provisioning, group mapping) are not implemented in the current codebase. They require the v1 JWT/OIDC/SAML infrastructure which does not exist yet.

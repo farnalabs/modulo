@@ -3,6 +3,7 @@
     <button
       v-for="action in actions"
       :key="action.key"
+      type="button"
       @click="action.onClick"
       :disabled="action.disabled"
       class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-50"

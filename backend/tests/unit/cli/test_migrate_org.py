@@ -3,6 +3,7 @@
 import json
 import uuid
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -160,7 +161,7 @@ class TestExport:
 
 
 class TestImport:
-    HASHED_BUNDLE: dict = {
+    HASHED_BUNDLE: ClassVar[dict] = {
         "__meta__": {
             "version": 1,
             "exported_at": "2024-01-01",

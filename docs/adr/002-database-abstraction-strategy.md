@@ -3,6 +3,8 @@
 **Date**: 2026-06-26
 **Status**: Draft — implementation in progress
 
+> **Update 2026-07-11: MariaDB deprecated.** MariaDB support was added as premature generality (see architecture critique 2026-07-09). Production and demo run on Postgres (Supabase). MariaDB references are preserved for backward compatibility but the backend is not actively tested or maintained.
+
 ## Context
 
 Modulo ships as a self-hosted product. Currently it requires PostgreSQL for all deployments, including local development and CI. This creates friction for:
@@ -23,7 +25,7 @@ SQLAlchemy 2.0 already supports PostgreSQL, MySQL/MariaDB, SQLite, Oracle, and M
 |---|---|---|
 | Async | Native (`create_async_engine`) | — |
 | Postgres | asyncpg | — |
-| MySQL/MariaDB | aiomysql/asyncmy (untested against MariaDB) | Need testing |
+| MySQL/MariaDB | aiomysql (untested against MariaDB) | Need testing |
 | SQLite | aiosqlite | Already works (dev-only today) |
 | UUID PKs | Built-in `Uuid` (2.0.23+) | Replace `postgresql.UUID` |
 | JSON columns | Generic `JSON` type | Already generic |

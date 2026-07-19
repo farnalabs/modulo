@@ -8,31 +8,42 @@
         <circle cx="11" cy="11" r="8" />
         <path d="m21 21-4.3-4.3" />
       </svg>
-      <input
+      <input :aria-label="search.placeholder || $t('common.search')"
+        data-testid="filter-bar-search"
         :value="searchValue"
         type="text"
-        :placeholder="search.placeholder || 'Search...'"
+        :placeholder="search.placeholder || $t('common.search')"
         class="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring sm:w-auto"
         @input="$emit('update:search', ($event.target as HTMLInputElement).value)"
       />
     </div>
-    <select
+    <Select
       v-for="filter in selectFilters"
       :key="filter.key"
-      :value="filterValues[filter.key] ?? ''"
-      :aria-label="filter.label"
-      class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-      @change="$emit('update:filter', filter.key, ($event.target as HTMLSelectElement).value)"
+      :model-value="(filterValues[filter.key] ?? '') || '__all__'"
+      @update:model-value="(val) => $emit('update:filter', filter.key, val === '__all__' ? '' : String(val))"
     >
-      <option value="">{{ filter.label }}</option>
-      <option v-for="opt in filter.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-    </select>
+      <SelectTrigger
+        class="w-auto min-w-[140px]"
+        :aria-label="filter.label"
+        :data-testid="`filter-bar-${filter.key}`"
+      >
+        <SelectValue :placeholder="filter.label" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="__all__">{{ filter.label }}</SelectItem>
+        <SelectItem v-for="opt in filter.options" :key="opt.value" :value="opt.value">
+          {{ opt.label }}
+        </SelectItem>
+      </SelectContent>
+    </Select>
     <slot name="after" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed } from 'vue'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const props = defineProps<{
   search?: { placeholder?: string }
@@ -41,7 +52,7 @@ const props = defineProps<{
   filterValues?: Record<string, string>
 }>()
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'update:search', value: string): void
   (e: 'update:filter', key: string, value: string): void
 }>()

@@ -1,25 +1,18 @@
 """BDD step definitions: Filesystem & GitHub connector."""
 
+import contextlib
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/filesystem.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/github.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/github_issues.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/health_check.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given(parsers.parse('a filesystem connector configured with base_path "{path}"'))

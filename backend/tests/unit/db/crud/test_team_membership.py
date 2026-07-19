@@ -4,13 +4,14 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
 
 
 @pytest.fixture()
 def mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

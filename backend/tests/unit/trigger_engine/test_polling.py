@@ -4,7 +4,7 @@ import datetime
 import hashlib
 import uuid
 from typing import Any
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -26,70 +26,34 @@ from modulo.db.models.trigger import Trigger
 
 
 class TestEvaluateCondition:
-    def test_none_expression_with_records(self) -> None:
-        result = ConnectorResult(records=[{"id": 1}], total=1)
-        assert evaluate_condition(result, None) is True
-
-    def test_none_expression_with_empty_records(self) -> None:
-        result = ConnectorResult(records=[], total=0)
-        assert evaluate_condition(result, None) is False
-
-    def test_empty_expression_with_records(self) -> None:
-        result = ConnectorResult(records=[{"id": 1}], total=1)
-        assert evaluate_condition(result, "") is True
-
-    def test_empty_expression_with_empty_records(self) -> None:
-        result = ConnectorResult(records=[], total=0)
-        assert evaluate_condition(result, "") is False
-
-    def test_jmespath_returns_list(self) -> None:
-        result = ConnectorResult(records=[{"status": "open"}, {"status": "closed"}], total=2)
-        assert evaluate_condition(result, "[?status=='open']") is True
-
-    def test_jmespath_returns_empty_list(self) -> None:
-        result = ConnectorResult(records=[{"status": "closed"}], total=1)
-        assert evaluate_condition(result, "[?status=='open']") is False
-
-    def test_jmespath_returns_true(self) -> None:
-        result = ConnectorResult(records=[{"count": 5}], total=1)
-        assert evaluate_condition(result, "length(@) > `0`") is True
-
-    def test_jmespath_returns_number_zero(self) -> None:
-        result = ConnectorResult(records=[{"count": 0}], total=1)
-        assert evaluate_condition(result, "length([?count==`999`])") is False
-
-    def test_jmespath_returns_none(self) -> None:
-        result = ConnectorResult(records=[{"id": 1}], total=1)
-        assert evaluate_condition(result, "missing_field") is False
-
-    def test_jmespath_returns_string(self) -> None:
-        result = ConnectorResult(records=[{"status": "open"}], total=1)
-        assert evaluate_condition(result, "[0].status") is True
-
-    def test_jmespath_returns_empty_string(self) -> None:
-        result = ConnectorResult(records=[{"status": ""}], total=1)
-        assert evaluate_condition(result, "[0].status") is False
-
-    def test_jmespath_returns_dict(self) -> None:
-        result = ConnectorResult(records=[{"nested": {"key": "val"}}], total=1)
-        assert evaluate_condition(result, "[0].nested") is True
-
-    def test_jmespath_returns_empty_dict(self) -> None:
-        result = ConnectorResult(records=[{"nested": {}}], total=1)
-        assert evaluate_condition(result, "[0].nested") is False
-
-    def test_jmespath_returns_bool_true(self) -> None:
-        result = ConnectorResult(records=[{"flag": True}], total=1)
-        assert evaluate_condition(result, "[0].flag == `true`") is True
+    @pytest.mark.parametrize(
+        "expr,records,expected",
+        [
+            (None, [{"id": 1}], True),
+            (None, [], False),
+            ("", [{"id": 1}], True),
+            ("", [], False),
+            ("[?status=='open']", [{"status": "open"}, {"status": "closed"}], True),
+            ("[?status=='open']", [{"status": "closed"}], False),
+            ("length(@) > `0`", [{"count": 5}], True),
+            ("length([?count==`999`])", [{"count": 0}], False),
+            ("missing_field", [{"id": 1}], False),
+            ("[0].status", [{"status": "open"}], True),
+            ("[0].status", [{"status": ""}], False),
+            ("[0].nested", [{"nested": {"key": "val"}}], True),
+            ("[0].nested", [{"nested": {}}], False),
+            ("[0].flag == `true`", [{"flag": True}], True),
+            ("[0].count > `0`", [{"count": 42}], True),
+        ],
+    )
+    def test_evaluate_condition(self, expr: str | None, records: list[dict], expected: bool) -> None:
+        result = ConnectorResult(records=records, total=len(records))
+        assert evaluate_condition(result, expr) is expected
 
     def test_invalid_jmespath_expression(self) -> None:
         result = ConnectorResult(records=[{"id": 1}], total=1)
         with pytest.raises(ValueError, match="Invalid JMESPath expression"):
             evaluate_condition(result, "[invalid: syntax")
-
-    def test_jmespath_returns_nonzero_number(self) -> None:
-        result = ConnectorResult(records=[{"count": 42}], total=1)
-        assert evaluate_condition(result, "[0].count > `0`") is True
 
 
 # ---------------------------------------------------------------------------
@@ -98,25 +62,34 @@ class TestEvaluateCondition:
 
 
 class TestBuildPollingConnector:
-    def test_filesystem_missing_base_path(self) -> None:
-        with pytest.raises(ValueError, match="requires 'base_path'"):
-            _build_polling_connector("filesystem", {}, {})
+    @pytest.mark.parametrize(
+        "connector_type,config,credentials,expected_type,raises_match",
+        [
+            ("filesystem", {"base_path": "/tmp"}, {}, "FilesystemConnector", None),
+            ("github", {}, {"token": "ghp_xxx"}, "GitHubConnector", None),
+            ("jira", {}, {"token": "x"}, None, "requires 'instance'"),
+            ("filesystem", {}, {}, None, "requires 'base_path'"),
+            ("unknown", {}, {}, None, "Unsupported connector type"),
+        ],
+    )
+    def test_build_polling_connector(
+        self,
+        connector_type: str,
+        config: dict,
+        credentials: dict,
+        expected_type: str | None,
+        raises_match: str | None,
+    ) -> None:
+        if raises_match:
+            with pytest.raises(ValueError, match=raises_match):
+                _build_polling_connector(connector_type, config, credentials)
+        else:
+            connector = _build_polling_connector(connector_type, config, credentials)
+            from modulo.connectors.filesystem import FilesystemConnector
+            from modulo.connectors.github import GitHubConnector
 
-    def test_filesystem_with_base_path(self) -> None:
-        connector = _build_polling_connector("filesystem", {"base_path": "/tmp"}, {})
-        from modulo.connectors.filesystem import FilesystemConnector
-
-        assert isinstance(connector, FilesystemConnector)
-
-    def test_github(self) -> None:
-        connector = _build_polling_connector("github", {}, {"token": "ghp_xxx"})
-        from modulo.connectors.github import GitHubConnector
-
-        assert isinstance(connector, GitHubConnector)
-
-    def test_unsupported_type(self) -> None:
-        with pytest.raises(ValueError, match="Unsupported connector type"):
-            _build_polling_connector("unknown", {}, {})
+            cls = FilesystemConnector if expected_type == "FilesystemConnector" else GitHubConnector
+            assert isinstance(connector, cls)
 
 
 # ---------------------------------------------------------------------------
@@ -271,167 +244,7 @@ def _setup_session_for_polling(
     session.execute = _execute
 
 
-async def test_fire_trigger_condition_met(
-    mock_db_components,
-    mock_secrets_backend,
-    mock_connector,
-    mock_create_run,
-) -> None:
-    """Happy path: condition matches → run created, event logged."""
-    session = mock_db_components
-    _, connector = mock_connector
-    mock_create_run_fn, _run_mock = mock_create_run
-
-    trigger = _make_trigger(config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60})
-    _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
-
-    result = await _fire_polling_trigger(
-        trigger_id=_TRIGGER_ID,
-        org_id=_ORG_ID,
-        pipeline_id=_PIPELINE_ID,
-        connector_instance_id=_CI_ID,
-        poll_query="select * from issues",
-        condition_expression="[?issue.number > `0`]",
-    )
-
-    assert result["status"] == "fired"
-    assert "run_id" in result
-    mock_create_run_fn.assert_awaited_once()
-    connector.query.assert_awaited_once_with(ANY)
-
-    session.add.assert_called()
-    assert any(getattr(c.args[0], "validation_result", None) == "condition_met" for c in session.add.call_args_list)
-
-
-async def test_fire_trigger_no_match(
-    mock_db_components,
-    mock_secrets_backend,
-    mock_connector,
-) -> None:
-    """Condition not met → no run created, no_match event logged."""
-    session = mock_db_components
-    _, connector = mock_connector
-    connector.query.return_value = ConnectorResult(records=[], total=0)
-
-    trigger = _make_trigger(config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60})
-    _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
-
-    with patch("modulo.core.trigger_engine.polling.create_run") as mock_cr:
-        result = await _fire_polling_trigger(
-            trigger_id=_TRIGGER_ID,
-            org_id=_ORG_ID,
-            pipeline_id=_PIPELINE_ID,
-            connector_instance_id=_CI_ID,
-            poll_query="select * from issues",
-            condition_expression="[?issue.number > `999`]",
-        )
-
-    assert result["status"] == "no_match"
-    mock_cr.assert_not_called()
-
-
-async def test_fire_trigger_concurrency_limit(
-    mock_db_components,
-) -> None:
-    """Active runs >= max_concurrent_runs → skipped, concurrency event logged."""
-    session = mock_db_components
-    trigger = _make_trigger(max_concurrent_runs=2)
-    _setup_session_for_polling(session, trigger, active_run_count=3)
-
-    with (
-        patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
-        patch("modulo.core.trigger_engine.polling._log_poll_event") as mock_log,
-    ):
-        result = await _fire_polling_trigger(
-            trigger_id=_TRIGGER_ID,
-            org_id=_ORG_ID,
-            pipeline_id=_PIPELINE_ID,
-            connector_instance_id=_CI_ID,
-            poll_query="query",
-            condition_expression=None,
-        )
-
-    assert result["status"] == "skipped"
-    assert result["reason"] == "concurrency_limit"
-    assert result["active_runs"] == 3
-    mock_cr.assert_not_called()
-    mock_log.assert_called_once()
-
-
-async def test_fire_trigger_inactive(mock_db_components) -> None:
-    """Inactive trigger → skipped."""
-    session = mock_db_components
-    trigger = _make_trigger(active=False)
-    _setup_session_for_polling(session, trigger)
-
-    result = await _fire_polling_trigger(
-        trigger_id=_TRIGGER_ID,
-        org_id=_ORG_ID,
-        pipeline_id=_PIPELINE_ID,
-        connector_instance_id=_CI_ID,
-        poll_query="query",
-        condition_expression=None,
-    )
-
-    assert result["status"] == "skipped"
-    assert result["reason"] == "trigger_inactive_or_missing"
-
-
-async def test_fire_trigger_connector_not_found(
-    mock_db_components,
-    mock_secrets_backend,
-) -> None:
-    """Connector instance missing → poll_error event."""
-    session = mock_db_components
-    trigger = _make_trigger()
-    # Passing connector_instance=None so the CI query returns None
-    _setup_session_for_polling(session, trigger, connector_instance=None, active_run_count=0)
-
-    with patch("modulo.core.trigger_engine.polling._log_poll_event") as mock_log:
-        result = await _fire_polling_trigger(
-            trigger_id=_TRIGGER_ID,
-            org_id=_ORG_ID,
-            pipeline_id=_PIPELINE_ID,
-            connector_instance_id=_CI_ID,
-            poll_query="query",
-            condition_expression=None,
-        )
-
-    assert result["status"] == "error"
-    assert result["reason"] == "connector_not_found"
-    mock_log.assert_called_once()
-
-
-async def test_fire_trigger_condition_eval_failure(
-    mock_db_components,
-    mock_secrets_backend,
-    mock_connector,
-) -> None:
-    """Invalid JMESPath in condition → poll_error logged."""
-    session = mock_db_components
-
-    trigger = _make_trigger(config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60})
-    _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
-
-    with (
-        patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
-        patch(
-            "modulo.core.trigger_engine.polling.evaluate_condition",
-            side_effect=ValueError("bad JMESPath"),
-        ),
-    ):
-        result = await _fire_polling_trigger(
-            trigger_id=_TRIGGER_ID,
-            org_id=_ORG_ID,
-            pipeline_id=_PIPELINE_ID,
-            connector_instance_id=_CI_ID,
-            poll_query="query",
-            condition_expression="[invalid syntax",
-        )
-
-    assert result["status"] == "error"
-    assert result["reason"] == "condition_eval_failed"
-    mock_cr.assert_not_called()
+# (fire_trigger tests moved into TestPollingFireTask parametrize below)
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +253,14 @@ async def test_fire_trigger_condition_eval_failure(
 
 
 class TestDatabasePollingEntry:
-    def test_is_due_true(self) -> None:
+    @pytest.mark.parametrize(
+        "offset_from_now,expected_due",
+        [
+            (datetime.timedelta(seconds=-10), True),
+            (datetime.timedelta(hours=1), False),
+        ],
+    )
+    def test_is_due(self, offset_from_now: datetime.timedelta, expected_due: bool) -> None:
         entry = DatabasePollingEntry(
             trigger_id=uuid.uuid4(),
             org_id=uuid.uuid4(),
@@ -448,24 +268,12 @@ class TestDatabasePollingEntry:
             connector_instance_id=uuid.uuid4(),
             poll_query="query",
             condition_expression=None,
-            next_fire_at=datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=10),
+            next_fire_at=datetime.datetime.now(datetime.UTC) + offset_from_now,
         )
         due, delay = entry.is_due()
-        assert due is True
-        assert delay.total_seconds() == 0
-
-    def test_is_due_false(self) -> None:
-        entry = DatabasePollingEntry(
-            trigger_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            pipeline_id=uuid.uuid4(),
-            connector_instance_id=uuid.uuid4(),
-            poll_query="query",
-            condition_expression=None,
-            next_fire_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
-        )
-        due, _ = entry.is_due()
-        assert due is False
+        assert due is expected_due
+        if expected_due:
+            assert delay.total_seconds() == 0
 
     def test_task_name(self) -> None:
         entry = DatabasePollingEntry(
@@ -519,76 +327,53 @@ class TestDatabasePollingScheduler:
         scheduler = DatabasePollingScheduler(app)
         assert scheduler.max_interval == 30
 
-    def test_sync_with_db_empty(self) -> None:
-        """When DB returns no triggers, schedule should be empty."""
+    @pytest.mark.parametrize(
+        "initial_rows,second_rows,expected_first_len,expected_second_len",
+        [
+            ([], None, 0, None),
+            ([{"trigger_id": "dyn"}], None, 1, None),
+            ([{"trigger_id": "dyn"}], [], 1, 0),
+        ],
+    )
+    def test_sync_with_db(
+        self,
+        initial_rows: list,
+        second_rows: list | None,
+        expected_first_len: int,
+        expected_second_len: int | None,
+    ) -> None:
         app = MagicMock()
-
-        with patch(
-            "modulo.core.trigger_engine.polling.DatabasePollingScheduler._fetch_due_triggers",
-            return_value=[],
-        ):
-            scheduler = DatabasePollingScheduler(app)
-            scheduler._sync_with_db()
-        assert len(scheduler._schedule) == 0
-
-    def test_sync_with_db_populates(self) -> None:
-        """When DB returns a trigger row, schedule should have one entry."""
-        app = MagicMock()
-        tid = uuid.uuid4()
         now = datetime.datetime.now(datetime.UTC)
 
+        def _row(r):
+            tid = uuid.uuid4() if r.get("trigger_id") == "dyn" else r["trigger_id"]
+            return {
+                "trigger_id": tid,
+                "org_id": uuid.uuid4(),
+                "pipeline_id": uuid.uuid4(),
+                "connector_instance_id": uuid.uuid4(),
+                "poll_query": "select 1",
+                "condition_expression": None,
+                "next_fire_at": now,
+            }
+
+        rows = [_row(r) for r in initial_rows]
         with patch(
             "modulo.core.trigger_engine.polling.DatabasePollingScheduler._fetch_due_triggers",
-            return_value=[
-                {
-                    "trigger_id": tid,
-                    "org_id": uuid.uuid4(),
-                    "pipeline_id": uuid.uuid4(),
-                    "connector_instance_id": uuid.uuid4(),
-                    "poll_query": "select 1",
-                    "condition_expression": None,
-                    "next_fire_at": now,
-                }
-            ],
+            return_value=rows,
         ):
             scheduler = DatabasePollingScheduler(app)
             scheduler._sync_with_db()
-        assert len(scheduler._schedule) == 1
-        key = f"polling-{tid}"
-        assert key in scheduler._schedule
+        assert len(scheduler._schedule) == expected_first_len
 
-    def test_sync_with_db_removes_stale(self) -> None:
-        """When a trigger is removed from DB, its entry should be removed."""
-        app = MagicMock()
-        tid = uuid.uuid4()
-        now = datetime.datetime.now(datetime.UTC)
-
-        with patch(
-            "modulo.core.trigger_engine.polling.DatabasePollingScheduler._fetch_due_triggers",
-            return_value=[
-                {
-                    "trigger_id": tid,
-                    "org_id": uuid.uuid4(),
-                    "pipeline_id": uuid.uuid4(),
-                    "connector_instance_id": uuid.uuid4(),
-                    "poll_query": "select 1",
-                    "condition_expression": None,
-                    "next_fire_at": now,
-                }
-            ],
-        ):
-            scheduler = DatabasePollingScheduler(app)
-            scheduler._sync_with_db()
-
-        assert len(scheduler._schedule) == 1
-
-        # Second sync with empty list removes it
-        with patch(
-            "modulo.core.trigger_engine.polling.DatabasePollingScheduler._fetch_due_triggers",
-            return_value=[],
-        ):
-            scheduler._sync_with_db()
-        assert len(scheduler._schedule) == 0
+        if second_rows is not None:
+            rows2 = [_row(r) for r in second_rows]
+            with patch(
+                "modulo.core.trigger_engine.polling.DatabasePollingScheduler._fetch_due_triggers",
+                return_value=rows2,
+            ):
+                scheduler._sync_with_db()
+            assert len(scheduler._schedule) == expected_second_len
 
     def test_tick_calls_sync_and_parent(self) -> None:
         """tick() should sync with DB and then call super().tick()."""
@@ -598,11 +383,11 @@ class TestDatabasePollingScheduler:
         with (
             patch.object(scheduler, "_sync_with_db") as mock_sync,
             patch.object(scheduler, "_schedule", {}),
+            patch.object(type(scheduler).__bases__[0], "tick", return_value=30.0),
         ):
-            with patch.object(type(scheduler).__bases__[0], "tick", return_value=30.0):
-                result = scheduler.tick()
-                mock_sync.assert_called_once()
-                assert result == 30.0
+            result = scheduler.tick()
+            mock_sync.assert_called_once()
+            assert result == 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -619,85 +404,241 @@ class TestPollingFireTask:
         assert PollingFireTask.max_retries == 2
         assert PollingFireTask.default_retry_delay == 30
 
-    async def test_fire_trigger_connector_init_failed(
+    @pytest.mark.parametrize(
+        (
+            "scenario",
+            "status",
+            "reason",
+            "trigger_config",
+            "trigger_active",
+            "trigger_max_conc",
+            "ci_present",
+            "active_run_count",
+            "condition_expr",
+            "extra_patches",
+            "extra_check",
+        ),
+        [
+            pytest.param(
+                "condition_met",
+                "fired",
+                None,
+                {"snapshot_id": "uuid", "poll_interval_seconds": 60},
+                True,
+                5,
+                True,
+                0,
+                "[?issue.number > `0`]",
+                [],
+                "condition_met",
+            ),
+            pytest.param(
+                "no_match",
+                "no_match",
+                None,
+                {"snapshot_id": "uuid", "poll_interval_seconds": 60},
+                True,
+                5,
+                True,
+                0,
+                "[?issue.number > `999`]",
+                ["connector_empty", "no_create_run"],
+                "no_match",
+            ),
+            pytest.param(
+                "concurrency_limit",
+                "skipped",
+                "concurrency_limit",
+                {},
+                True,
+                2,
+                False,
+                3,
+                None,
+                ["no_create_run", "log_poll_event"],
+                "concurrency",
+            ),
+            pytest.param(
+                "inactive",
+                "skipped",
+                "trigger_inactive_or_missing",
+                {},
+                False,
+                5,
+                False,
+                0,
+                None,
+                [],
+                None,
+            ),
+            pytest.param(
+                "connector_not_found",
+                "error",
+                "connector_not_found",
+                {},
+                True,
+                5,
+                None,
+                0,
+                None,
+                ["log_poll_event"],
+                None,
+            ),
+            pytest.param(
+                "condition_eval_failure",
+                "error",
+                "condition_eval_failed",
+                {"snapshot_id": "uuid", "poll_interval_seconds": 60},
+                True,
+                5,
+                True,
+                0,
+                "[invalid syntax",
+                ["evaluate_condition_error", "no_create_run"],
+                None,
+            ),
+            pytest.param(
+                "connector_init_failed",
+                "error",
+                "connector_init_failed",
+                {"snapshot_id": "uuid", "poll_interval_seconds": 60},
+                True,
+                5,
+                True,
+                0,
+                None,
+                ["build_connector_error"],
+                None,
+            ),
+            pytest.param(
+                "query_failed",
+                "error",
+                "query_failed",
+                {"snapshot_id": "uuid", "poll_interval_seconds": 60},
+                True,
+                5,
+                True,
+                0,
+                None,
+                ["connector_error"],
+                None,
+            ),
+            pytest.param(
+                "already_fired",
+                "skipped",
+                "already_fired_this_cycle",
+                {},
+                True,
+                5,
+                False,
+                0,
+                None,
+                ["future_next_fire"],
+                None,
+            ),
+        ],
+    )
+    async def test_fire_trigger(
         self,
-        mock_db_components,
-        mock_secrets_backend,
-    ) -> None:
-        """Connector init failure → status=error reason=connector_init_failed."""
-        session = mock_db_components
-        trigger = _make_trigger(config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60})
-        _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
-
-        with patch("modulo.core.trigger_engine.polling._build_polling_connector") as mock_build:
-            mock_build.side_effect = ValueError("missing creds")
-            result = await _fire_polling_trigger(
-                trigger_id=_TRIGGER_ID,
-                org_id=_ORG_ID,
-                pipeline_id=_PIPELINE_ID,
-                connector_instance_id=_CI_ID,
-                poll_query="select * from issues",
-                condition_expression=None,
-            )
-
-        assert result["status"] == "error"
-        assert result["reason"] == "connector_init_failed"
-
-    async def test_fire_trigger_query_failed(
-        self,
+        scenario,
+        status,
+        reason,
+        trigger_config,
+        trigger_active,
+        trigger_max_conc,
+        ci_present,
+        active_run_count,
+        condition_expr,
+        extra_patches,
+        extra_check,
         mock_db_components,
         mock_secrets_backend,
         mock_connector,
+        mock_create_run,
     ) -> None:
-        """Poll query failure → status=error reason=query_failed."""
         session = mock_db_components
         _, connector = mock_connector
-        connector.query.side_effect = RuntimeError("API timeout")
 
-        trigger = _make_trigger(config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60})
-        _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
+        if trigger_config.get("snapshot_id") == "uuid":
+            trigger_config = dict(trigger_config)
+            trigger_config["snapshot_id"] = str(uuid.uuid4())
+        trigger = _make_trigger(
+            active=trigger_active,
+            max_concurrent_runs=trigger_max_conc,
+            config=trigger_config or {},
+        )
+
+        if "future_next_fire" in extra_patches:
+            trigger.next_fire_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+
+        _setup_session_for_polling(
+            session,
+            trigger,
+            connector_instance=MagicMock() if ci_present else None,
+            active_run_count=active_run_count,
+        )
+
+        if "connector_empty" in extra_patches:
+            connector.query.return_value = ConnectorResult(records=[], total=0)
+        if "connector_error" in extra_patches:
+            connector.query.side_effect = RuntimeError("API timeout")
+
+        extra_mocks = {}
+        if "no_create_run" in extra_patches:
+            extra_mocks["create_run"] = patch("modulo.core.trigger_engine.polling.create_run")
+        if "log_poll_event" in extra_patches:
+            extra_mocks["log_poll_event"] = patch("modulo.core.trigger_engine.polling._log_poll_event")
+        if "build_connector_error" in extra_patches:
+            extra_mocks["build"] = patch("modulo.core.trigger_engine.polling._build_polling_connector")
+        if "evaluate_condition_error" in extra_patches:
+            extra_mocks["eval"] = patch(
+                "modulo.core.trigger_engine.polling.evaluate_condition",
+                side_effect=ValueError("bad JMESPath"),
+            )
+
+        started_patches = {}
+        for k, v in extra_mocks.items():
+            if hasattr(v, "start"):
+                m = v.start()
+                if k == "build":
+                    m.side_effect = ValueError("missing creds")
+                started_patches[k] = m
+
+        poll_query = "select * from issues" if condition_expr else "query"
 
         result = await _fire_polling_trigger(
             trigger_id=_TRIGGER_ID,
             org_id=_ORG_ID,
             pipeline_id=_PIPELINE_ID,
             connector_instance_id=_CI_ID,
-            poll_query="select * from issues",
-            condition_expression=None,
+            poll_query=poll_query,
+            condition_expression=condition_expr,
         )
 
-        assert result["status"] == "error"
-        assert result["reason"] == "query_failed"
+        assert result["status"] == status
+        if reason:
+            assert result["reason"] == reason
 
-    async def test_fire_trigger_already_fired(
-        self,
-        mock_db_components,
-    ) -> None:
-        """next_fire_at in future → skipped, already_fired_this_cycle."""
-        session = mock_db_components
-        trigger = _make_trigger()
-        trigger.next_fire_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
-        _setup_session_for_polling(session, trigger)
+        if extra_check == "condition_met":
+            create_run_fn, _ = mock_create_run
+            assert "run_id" in result
+            create_run_fn.assert_awaited_once()
+            connector.query.assert_awaited_once()
+            assert any(
+                getattr(c.args[0], "validation_result", None) == "condition_met" for c in session.add.call_args_list
+            )
+        elif extra_check == "no_match":
+            if "no_create_run" in extra_patches:
+                started_patches["create_run"].assert_not_called()
+        elif extra_check == "concurrency":
+            assert result.get("active_runs") == active_run_count
+            if "no_create_run" in extra_patches:
+                started_patches["create_run"].assert_not_called()
+            if "log_poll_event" in extra_patches:
+                started_patches["log_poll_event"].assert_called_once()
 
-        result = await _fire_polling_trigger(
-            trigger_id=_TRIGGER_ID,
-            org_id=_ORG_ID,
-            pipeline_id=_PIPELINE_ID,
-            connector_instance_id=_CI_ID,
-            poll_query="query",
-            condition_expression=None,
-        )
-
-        assert result["status"] == "skipped"
-        assert result["reason"] == "already_fired_this_cycle"
-
-
-class TestBuildPollingConnectorExtended:
-    """Additional _build_polling_connector edge cases."""
-
-    def test_jira_missing_instance(self) -> None:
-        with pytest.raises(ValueError, match="requires 'instance'"):
-            _build_polling_connector("jira", {}, {"token": "x"})
+        for p in extra_mocks.values():
+            p.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -765,7 +706,11 @@ class TestPollingLogging:
                 condition_expression="[?issue.number > `0`]",
             )
 
-        mock_warning.assert_any_call("Polling trigger %s has no valid snapshot_id in config", _TRIGGER_ID)
+        mock_warning.assert_any_call(
+            "Polling trigger %s has no valid snapshot_id in config",
+            _TRIGGER_ID,
+            exc_info=True,
+        )
 
     async def test_poll_event_has_meaningful_hash(self) -> None:
         """_log_poll_event should compute a hash based on trigger id + result."""

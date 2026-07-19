@@ -218,6 +218,7 @@
           :class="{ active: slashHighlightIdx === idx }"
           @click="executeSlashCommand(cmd)"
           @mouseenter="slashHighlightIdx = idx"
+          @focus="slashHighlightIdx = idx"
         >
           <span class="remy-slash-command">{{ cmd.command }}</span>
           <span class="remy-slash-desc">{{ cmd.description }}</span>
@@ -248,7 +249,7 @@
         <Button
           :disabled="!inputText.trim() || store.isStreaming || store.isExecutingUi"
           @click="handleSend"
-          :aria-label="$t('remy.send_message')"
+          :aria-label="$t('components.remy.send_message')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -421,10 +422,7 @@ function onInputKeydown(e: KeyboardEvent) {
         inputText.value = cmd.command + ' '
         showSlashMenu.value = false
         nextTick(() => {
-          const textarea = document.querySelector('.remy-input') as HTMLTextAreaElement | null
-          if (textarea) {
-            textarea.focus()
-          }
+          textareaRef.value?.focus()
         })
       }
       return
@@ -605,7 +603,7 @@ async function handleSend() {
 
 function resizeInput() {
   nextTick(() => {
-    const el = document.querySelector('.remy-input') as HTMLTextAreaElement | null
+    const el = textareaRef.value
     if (el) {
       el.style.height = 'auto'
       el.style.height = Math.min(el.scrollHeight, 200) + 'px'
@@ -614,7 +612,7 @@ function resizeInput() {
 }
 
 function syncHighlightScroll() {
-  const el = document.querySelector('.remy-input') as HTMLTextAreaElement | null
+  const el = textareaRef.value
   const hl = document.querySelector('.remy-input-highlight') as HTMLElement | null
   if (el && hl) {
     hl.scrollTop = el.scrollTop

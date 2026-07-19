@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <BackLink to="/admin/errors" label="Back to Error Dashboard" />
   <div class="page-wide">
     <header class="flex items-center justify-between">
@@ -70,19 +70,18 @@
           >
             Archive
           </button>
-          <div class="ml-auto flex items-center gap-2">
-            <span class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</span>
-            <select
-              v-model="assigneeId"
-              aria-label="Assign to"
-              class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              @change="updateAssignee"
-            >
-              <option value="">Unassigned</option>
-              <option v-for="user in users" :key="user.id" :value="user.id">
-                {{ user.display_name || user.email }}
-              </option>
-            </select>
+            <div class="ml-auto flex items-center gap-2">
+            <label for="assignee-select" class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</label>
+            <Select v-model="assigneeId" aria-label="Assign to" @update:model-value="updateAssignee">
+              <SelectTrigger id="assignee-select" aria-label="Assign to" class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                <SelectValue placeholder="Unassigned" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="user in users" :key="user.id" :value="user.id">
+                  {{ user.display_name || user.email }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </div>
@@ -216,6 +215,8 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { shortId } from '../utils/format'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const route = useRoute()
 const router = useRouter()

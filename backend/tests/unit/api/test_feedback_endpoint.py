@@ -15,6 +15,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -55,6 +56,10 @@ def _make_mock_record(**overrides: object) -> MagicMock:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = MagicMock(id=_RUN_ID)
+    session.execute = AsyncMock(return_value=result)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -97,9 +102,6 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 class TestCreateFeedback:
     def test_creates_feedback_record(self, client: TestClient) -> None:
-        mock_run_result = MagicMock()
-        mock_run_result.scalar_one_or_none.return_value = MagicMock(id=_RUN_ID)
-
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
@@ -413,8 +415,8 @@ class TestReviewFeedback:
 
         assert resp.status_code == 200
         assert resp.json()["feedback_status"] == "dismissed"
-        call_args, call_kwargs = mock_update.call_args
-        assert call_args[1] == "dismissed"
+        call_args, _call_kwargs = mock_update.call_args
+        assert call_args[1] == "resolved"
 
     def test_rejects_invalid_action(self, client: TestClient) -> None:
         resp = client.post(

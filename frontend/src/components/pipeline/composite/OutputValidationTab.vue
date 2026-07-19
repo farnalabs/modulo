@@ -1,7 +1,8 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ref, computed } from "vue";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "../../ui/select";
 import { Badge } from "../../ui/badge";
 
 interface EvalConfig {
@@ -83,7 +84,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
 <template>
   <div class="space-y-4">
     <div class="flex items-center justify-between">
-      <label class="text-sm font-medium">{{ $t('components.pipeline.composite.OutputValidationTab.output_validation') }}</label>
+      <span class="text-sm font-medium">{{ $t('components.pipeline.composite.OutputValidationTab.output_validation') }}</span>
       <Badge variant="outline" class="text-xs">
         {{ evalCount }} eval{{ evalCount === 1 ? "" : "s" }} configured
       </Badge>
@@ -117,7 +118,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
 
       <div class="grid grid-cols-2 gap-3">
         <div class="space-y-1">
-          <label class="text-xs text-muted-foreground">Name</label>
+          <span class="text-xs text-muted-foreground">Name</span>
           <Input
             :model-value="evalDef.name"
             :placeholder="$t('components.pipeline.composite.OutputValidationTab.eval_name')"
@@ -128,49 +129,37 @@ const evalCount = computed(() => props.evalDefinitions.length);
           />
         </div>
         <div class="space-y-1">
-          <label class="text-xs text-muted-foreground">Type</label>
-          <select
-            :value="evalDef.type"
-            aria-label="Eval type"
-            class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm"
-            @change="
-              (e: Event) =>
-                updateEval(evalDef.id, {
-                  type: (e.target as HTMLSelectElement)
-                    .value as EvalConfig['type'],
-                })
-            "
-          >
-            <option value="regex">Regex</option>
-            <option value="json_schema">{{ $t('components.pipeline.composite.OutputValidationTab.json_schema') }}</option>
-            <option value="llm_judge">{{ $t('components.pipeline.composite.OutputValidationTab.llm_judge') }}</option>
-          </select>
+          <span class="text-xs text-muted-foreground">Type</span>
+          <Select :model-value="evalDef.type" @update:model-value="(val) => updateEval(evalDef.id, {type: val as EvalConfig['type']})">
+            <SelectTrigger class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm" aria-label="Eval type">
+              <SelectValue placeholder="Select type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="regex">Regex</SelectItem>
+              <SelectItem value="json_schema">{{ $t('components.pipeline.composite.OutputValidationTab.json_schema') }}</SelectItem>
+              <SelectItem value="llm_judge">{{ $t('components.pipeline.composite.OutputValidationTab.llm_judge') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
       <div class="space-y-1">
-        <label class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.failure_behaviour') }}</label>
-        <select
-          :value="evalDef.failure_behaviour"
-          aria-label="Failure behaviour"
-          class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm"
-          @change="
-            (e: Event) =>
-              updateEval(evalDef.id, {
-                failure_behaviour: (e.target as HTMLSelectElement)
-                  .value as EvalConfig['failure_behaviour'],
-              })
-          "
-        >
-          <option value="retry">Retry</option>
-          <option value="block">Block</option>
-          <option value="warn">Warn</option>
-        </select>
+        <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.failure_behaviour') }}</span>
+        <Select :model-value="evalDef.failure_behaviour" @update:model-value="(val) => updateEval(evalDef.id, {failure_behaviour: val as EvalConfig['failure_behaviour']})">
+          <SelectTrigger class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm" aria-label="Failure behaviour">
+            <SelectValue placeholder="Select behaviour" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="retry">Retry</SelectItem>
+            <SelectItem value="block">Block</SelectItem>
+            <SelectItem value="warn">Warn</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <template v-if="evalDef.type === 'regex'">
         <div class="space-y-1">
-          <label class="text-xs text-muted-foreground">Field</label>
+          <span class="text-xs text-muted-foreground">Field</span>
           <Input
             :model-value="String(evalDef.config.field ?? '')"
             :placeholder="$t('components.pipeline.composite.OutputValidationTab.output_field_name')"
@@ -181,8 +170,8 @@ const evalCount = computed(() => props.evalDefinitions.length);
           />
         </div>
         <div class="space-y-1">
-          <label class="text-xs text-muted-foreground">Pattern</label>
-          <textarea
+          <label for="outputvalidationtab-field-4" class="text-xs text-muted-foreground">Pattern</label>
+          <textarea id="outputvalidationtab-field-4"
             :value="String(evalDef.config.pattern ?? '')"
             class="bg-background border-input focus-visible:border-ring h-20 w-full rounded-lg border px-2.5 py-1.5 text-sm font-mono resize-none outline-none"
             :placeholder="$t('components.pipeline.composite.OutputValidationTab.regex_pattern')"
@@ -198,7 +187,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
 
       <template v-else-if="evalDef.type === 'json_schema'">
         <div class="space-y-1">
-          <label class="text-xs text-muted-foreground">Field (optional)</label>
+          <span class="text-xs text-muted-foreground">Field (optional)</span>
           <Input
             :model-value="String(evalDef.config.field ?? '')"
             placeholder="output field name (leave blank for entire output)"
@@ -209,8 +198,8 @@ const evalCount = computed(() => props.evalDefinitions.length);
           />
         </div>
         <div class="space-y-1">
-          <label class="text-xs text-muted-foreground">Schema (JSON)</label>
-          <textarea
+          <label for="outputvalidationtab-field-3" class="text-xs text-muted-foreground">Schema (JSON)</label>
+          <textarea id="outputvalidationtab-field-3"
             :value="JSON.stringify(evalDef.config.schema ?? {}, null, 2)"
             class="bg-background border-input focus-visible:border-ring h-28 w-full rounded-lg border px-2.5 py-1.5 text-sm font-mono resize-none outline-none"
             placeholder='{ "type": "object", "properties": { ... } }'
@@ -221,8 +210,8 @@ const evalCount = computed(() => props.evalDefinitions.length);
 
       <template v-else-if="evalDef.type === 'llm_judge'">
         <div class="space-y-1">
-          <label class="text-xs text-muted-foreground">Rubric</label>
-          <textarea
+          <label for="outputvalidationtab-field-2" class="text-xs text-muted-foreground">Rubric</label>
+          <textarea id="outputvalidationtab-field-2"
             :value="String(evalDef.config.rubric ?? '')"
             class="bg-background border-input focus-visible:border-ring h-20 w-full rounded-lg border px-2.5 py-1.5 text-sm resize-none outline-none"
             placeholder="Describe what constitutes a passing evaluation"
@@ -242,12 +231,12 @@ const evalCount = computed(() => props.evalDefinitions.length);
     </Button>
 
     <div class="pt-2 space-y-1">
-      <label class="text-xs text-muted-foreground">
+      <label for="outputvalidationtab-field-1" class="text-xs text-muted-foreground">
         Max Validation Retries: {{ localRetries }}
       </label>
       <div class="flex items-center gap-3">
         <span class="text-xs text-muted-foreground">0</span>
-        <input
+        <input id="outputvalidationtab-field-1"
           type="range"
           min="0"
           max="5"

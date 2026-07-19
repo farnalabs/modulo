@@ -1,138 +1,54 @@
-"""Local Docker RuntimeProvider — ephemeral containers via the docker Python SDK."""
+"""Legacy Local Docker API backed by the canonical async Docker provider."""
 
 from __future__ import annotations
 
-import asyncio
-import io
-import logging
-import os
-import tarfile
-import time
+import base64
+import shlex
 import uuid
 from typing import Any
 
-import docker
-from docker.errors import DockerException, ImageNotFound, NotFound
-
-from modulo.core.runtime_provider.base import RuntimeProvider
-
-_log = logging.getLogger(__name__)
-
-_DEFAULT_IMAGE = "python:3.12-slim"
-_DEFAULT_MEMORY_MB = 512
-_DEFAULT_CPU = 1
-_WORKSPACE_PREFIX = "modulo-ws-"
-_UUID_TRUNC_LEN = 12
+from modulo.core.runtime_provider import WorkspaceSpec
+from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 
 
-class LocalDockerRuntimeProvider(RuntimeProvider):
-    """RuntimeProvider backed by ephemeral Docker containers via the docker SDK.
+class LocalDockerRuntimeProvider:
+    """Compatibility adapter for callers using the original Docker contract.
 
-    Each workspace is a Docker container created from the profile's image_ref.
-    Containers are kept alive via ``sleep infinity`` and auto-removed when stopped.
-
-    The Docker daemon URL is resolved in this order:
-    1. ``docker_host`` constructor argument
-    2. ``DOCKER_HOST`` environment variable
-    3. ``None`` (local socket — default)
+    New orchestration code should use :class:`DockerRuntimeProvider` directly.
+    This adapter preserves the public Local Docker constructor and dictionary
+    command results without maintaining a second Docker implementation.
     """
+
+    provider_id = "local_docker"
+    provider_aliases = frozenset({"docker"})
 
     def __init__(
         self,
         docker_host: str | None = None,
-        default_image: str = _DEFAULT_IMAGE,
+        default_image: str = "python:3.12-slim",
         timeout_seconds: int = 120,
+        *,
+        provider: DockerRuntimeProvider | None = None,
     ) -> None:
-        self._docker_host = docker_host or os.environ.get("DOCKER_HOST")
-        self._default_image = default_image
-        self._timeout_seconds = timeout_seconds
-        self._client: docker.DockerClient | None = None
-        self._workspaces: dict[str, str] = {}
+        self._provider = provider or DockerRuntimeProvider(
+            docker_host=docker_host,
+            default_image=default_image,
+            create_timeout=timeout_seconds,
+        )
 
-    @property
-    def provider_id(self) -> str:
-        return "local_docker"
-
-    def _get_client(self) -> docker.DockerClient:
-        if self._client is None:
-            try:
-                self._client = (
-                    docker.from_env() if not self._docker_host else docker.DockerClient(base_url=self._docker_host)
-                )
-            except DockerException as exc:
-                raise RuntimeError(f"Failed to connect to Docker daemon: {exc}") from exc
-        return self._client
-
-    async def create_workspace(self, profile: Any, session: Any = None) -> Any:
-        """Create a Docker container as the workspace.
-
-        Returns a dict with container_id and name for use as the workspace object.
-        """
-        image = getattr(profile, "image_ref", None) or self._default_image
-        ref = uuid.uuid4().hex[:_UUID_TRUNC_LEN]
-        container_name = f"{_WORKSPACE_PREFIX}{ref}"
-
-        config_json = getattr(profile, "config_json", None) or {}
-        memory_mb = config_json.get("memory_mb", _DEFAULT_MEMORY_MB)
-        cpu_count = config_json.get("cpu", _DEFAULT_CPU)
-
-        try:
-            client = self._get_client()
-            await asyncio.to_thread(self._ensure_image, client, image)
-            container = await asyncio.to_thread(
-                lambda: client.containers.create(
-                    image=image,
-                    command=["sleep", "infinity"],
-                    name=container_name,
-                    detach=True,
-                    mem_limit=f"{memory_mb}m",
-                    nano_cpus=int(cpu_count * 1e9),
-                    auto_remove=True,
-                )
-            )
-            await asyncio.to_thread(container.start)
-        except DockerException as exc:
-            raise RuntimeError(f"Failed to create container for workspace {ref}: {exc}") from exc
-
-        workspace = {"container_id": container.id, "name": container_name, "ref": ref}
-        self._workspaces[ref] = container.id
-        return workspace
-
-    def _ensure_image(self, client: docker.DockerClient, image: str) -> None:
-        """Pull the image if not already present locally."""
-        try:
-            client.images.get(image)
-        except ImageNotFound:
-            _log.info("Pulling image %s ...", image)
-            try:
-                client.images.pull(image)
-            except DockerException as exc:
-                raise RuntimeError(f"Failed to pull image {image}: {exc}") from exc
+    async def create_workspace(self, profile: WorkspaceSpec | Any, session: Any = None) -> dict[str, str]:
+        """Create a workspace and return the original mapping-shaped handle."""
+        del session
+        spec = profile if isinstance(profile, WorkspaceSpec) else self._spec_from_profile(profile)
+        ref = await self._provider.create_workspace(spec)
+        return {"ref": ref, "container_id": self._provider._get_container_id(ref)}
 
     async def destroy_workspace(self, workspace: Any) -> None:
-        container_id = self._resolve_container_id(workspace)
-        if container_id is None:
-            return
-        try:
-            client = self._get_client()
-            container = await asyncio.to_thread(lambda: client.containers.get(container_id))
-            await asyncio.to_thread(lambda: container.stop(timeout=5))
-        except NotFound:
-            pass
-        except DockerException:
-            _log.warning("Failed to destroy container %s", container_id, exc_info=True)
-        self._workspaces.pop(container_id, None)
+        await self._provider.destroy_workspace(self._resolve_ref(workspace))
 
     async def workspace_health(self, workspace: Any) -> bool:
-        container_id = self._resolve_container_id(workspace)
-        if container_id is None:
-            return False
-        try:
-            client = self._get_client()
-            container = await asyncio.to_thread(lambda: client.containers.get(container_id))
-            return container.status == "running"
-        except (NotFound, DockerException):
-            return False
+        status = await self._provider.get_workspace_status(self._resolve_ref(workspace))
+        return status == "running"
 
     async def execute_command(
         self,
@@ -142,99 +58,95 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
         env: dict[str, str] | None = None,
         timeout_seconds: int = 60,
     ) -> dict[str, Any]:
-        container_id = self._resolve_container_id(workspace)
-        if container_id is None:
-            raise ValueError(f"Unknown workspace: {workspace}")
-        try:
-            client = self._get_client()
-            container = await asyncio.to_thread(lambda: client.containers.get(container_id))
-            exec_env = None
-            if env:
-                exec_env = {k: str(v) for k, v in env.items()}
-            exec_cmd = ["sh", "-c", command]
-            if cwd:
-                exec_cmd = ["sh", "-c", f"cd {cwd} && {command}"]
-            exit_code, output = await asyncio.to_thread(
-                lambda: container.exec_run(
-                    cmd=exec_cmd,
-                    environment=exec_env,
-                    workdir=cwd,
-                    demux=True,
-                    timeout=timeout_seconds,
-                )
-            )
-            stdout_bytes, stderr_bytes = output
-            return {
-                "stdout": (stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""),
-                "stderr": (stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""),
-                "exit_code": exit_code,
-            }
-        except (NotFound, DockerException) as exc:
-            raise RuntimeError(f"Command execution failed in container {container_id}: {exc}") from exc
+        """Execute a shell command and return the original mapping result."""
+        shell_parts: list[str] = []
+        if cwd:
+            shell_parts.append(f"cd {shlex.quote(cwd)}")
+        if env:
+            assignments = " ".join(f"{shlex.quote(key)}={shlex.quote(str(value))}" for key, value in env.items())
+            command = f"env {assignments} {command}"
+        shell_parts.append(command)
+        result = await self._provider.exec_command(
+            self._resolve_ref(workspace),
+            ["sh", "-c", " && ".join(shell_parts)],
+            timeout=timeout_seconds,
+        )
+        return {
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+        }
 
     async def write_file(self, workspace: Any, path: str, content: str) -> None:
-        container_id = self._resolve_container_id(workspace)
-        if container_id is None:
-            raise ValueError(f"Unknown workspace: {workspace}")
-        try:
-            client = self._get_client()
-            container = await asyncio.to_thread(lambda: client.containers.get(container_id))
-            tar_buffer = io.BytesIO()
-            with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
-                data = content.encode("utf-8")
-                info = tarfile.TarInfo(name=path.lstrip("/"))
-                info.size = len(data)
-                info.mtime = int(time.time())
-                tar.addfile(info, io.BytesIO(data))
-            tar_buffer.seek(0)
-            await asyncio.to_thread(lambda: container.put_archive("/", tar_buffer))
-        except (NotFound, DockerException) as exc:
-            raise RuntimeError(f"Failed to write file {path} in container {container_id}: {exc}") from exc
+        encoded = base64.b64encode(content.encode()).decode()
+        safe_path = shlex.quote(path)
+        safe_parent = shlex.quote(str(path.rpartition("/")[0] or "."))
+        result = await self.execute_command(
+            workspace,
+            f"mkdir -p {safe_parent} && printf %s {shlex.quote(encoded)} | base64 -d > {safe_path}",
+            timeout_seconds=30,
+        )
+        if result["exit_code"] != 0:
+            raise RuntimeError(f"Failed to write file {path}: {result['stderr']}")
 
     async def read_file(self, workspace: Any, path: str) -> str:
-        container_id = self._resolve_container_id(workspace)
-        if container_id is None:
-            raise ValueError(f"Unknown workspace: {workspace}")
-        try:
-            client = self._get_client()
-            container = await asyncio.to_thread(lambda: client.containers.get(container_id))
-            tar_stream, _ = await asyncio.to_thread(lambda: container.get_archive(path))
-            tar_buffer = io.BytesIO()
-            for chunk in tar_stream:
-                tar_buffer.write(chunk)
-            tar_buffer.seek(0)
-            with tarfile.open(fileobj=tar_buffer, mode="r") as tar:
-                member = tar.next()
-                if member is None:
-                    raise RuntimeError(f"Empty archive reading {path}")
-                content = tar.extractfile(member)
-                if content is None:
-                    raise RuntimeError(f"Failed to extract {path}")
-                return content.read().decode("utf-8")
-        except (NotFound, DockerException) as exc:
-            raise RuntimeError(f"Failed to read file {path} from container {container_id}: {exc}") from exc
+        result = await self.execute_command(
+            workspace,
+            f"cat {shlex.quote(path)}",
+            timeout_seconds=30,
+        )
+        if result["exit_code"] != 0:
+            raise RuntimeError(f"Failed to read file {path}: {result['stderr']}")
+        stdout = result["stdout"]
+        return stdout if isinstance(stdout, str) else str(stdout)
 
     async def list_files(self, workspace: Any, path: str) -> list[str]:
-        result = await self.execute_command(workspace, f"ls -1a {path}", timeout_seconds=30)
+        result = await self.execute_command(
+            workspace,
+            f"ls -1a {shlex.quote(path)}",
+            timeout_seconds=30,
+        )
         if result["exit_code"] != 0:
             raise RuntimeError(f"Failed to list files at {path}: {result['stderr']}")
-        lines = result["stdout"].strip().split("\n")
-        return [line.strip() for line in lines if line.strip() and line.strip() not in (".", "..")]
+        stdout = result["stdout"]
+        lines = stdout.splitlines() if isinstance(stdout, str) else []
+        return [line.strip() for line in lines if line.strip() not in {"", ".", ".."}]
 
-    def _resolve_container_id(self, workspace: Any) -> str | None:
-        if isinstance(workspace, dict):
-            ref = workspace.get("ref")
-            if ref and ref in self._workspaces:
-                return self._workspaces[ref]
-            cid = workspace.get("container_id")
-            if cid:
-                return cid
-            return None
-        if isinstance(workspace, str):
-            return self._workspaces.get(workspace)
-        return None
+    def supports(self, profile: Any) -> bool:
+        return self._provider.supports(profile)
 
     async def close(self) -> None:
-        if self._client is not None:
-            await asyncio.to_thread(self._client.close)
-            self._client = None
+        await self._provider.close()
+
+    @staticmethod
+    def _resolve_ref(workspace: Any) -> str:
+        if isinstance(workspace, str) and workspace:
+            return workspace
+        if isinstance(workspace, dict):
+            ref = workspace.get("ref")
+            if isinstance(ref, str) and ref:
+                return ref
+        raise ValueError(f"Unknown workspace: {workspace}")
+
+    @staticmethod
+    def _spec_from_profile(profile: Any) -> WorkspaceSpec:
+        profile_id = getattr(profile, "id", None)
+        organisation_id = getattr(profile, "organisation_id", None)
+        if not isinstance(profile_id, uuid.UUID) or not isinstance(organisation_id, uuid.UUID):
+            raise TypeError("profile must provide UUID id and organisation_id fields")
+
+        capabilities = getattr(profile, "capabilities_json", [])
+        config = getattr(profile, "config_json", {})
+        return WorkspaceSpec(
+            environment_profile_id=profile_id,
+            organisation_id=organisation_id,
+            image_ref=str(getattr(profile, "image_ref", "") or ""),
+            capabilities=[item for item in capabilities if isinstance(item, str)]
+            if isinstance(capabilities, list)
+            else [],
+            resource_limits=dict(config) if isinstance(config, dict) else {},
+        )
+
+
+__all__ = ["LocalDockerRuntimeProvider"]

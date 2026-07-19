@@ -1,26 +1,26 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.SettingsNotificationLogView.delivery_history_for_all_webhook_notifications')" />
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
-          <select
-            v-model="filterStatus"
-            data-testid="settings-notification-log-status"
-            aria-label="Status"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminErrorsView.all_statuses') }}</option>
-            <option value="delivered">Delivered</option>
-            <option value="failed">Failed</option>
-            <option value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</option>
-          </select>
+          <label for="settingsnotificationlogview-status" class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
+          <Select v-model="filterStatus">
+            <SelectTrigger id="settingsnotificationlogview-status" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Status" data-testid="settings-notification-log-status">
+              <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
+              <SelectItem value="delivered">Delivered</SelectItem>
+              <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
-          <input
+          <label for="settingsnotificationlogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
+          <input id="settingsnotificationlogview-field-2"
             v-model="filterDateFrom"
             type="date"
             data-testid="settings-notification-log-date-from"
@@ -28,8 +28,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
-          <input
+          <label for="settingsnotificationlogview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
+          <input id="settingsnotificationlogview-field-1"
             v-model="filterDateTo"
             type="date"
             data-testid="settings-notification-log-date-to"
@@ -37,13 +37,13 @@
           />
         </div>
         <div class="flex items-end gap-2">
-          <button
+          <Button
+            variant="default"
             data-testid="settings-notification-log-apply"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             @click="applyFilters"
           >
             Apply
-          </button>
+          </Button>
           <button
             data-testid="settings-notification-log-reset"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -138,13 +138,17 @@
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError } from '../lib/api/formatError'
-import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-
-type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
+import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)
@@ -154,7 +158,7 @@ const { loading, error, data: responseData, load: loadDeliveries } = useDataFetc
   async () => {
     const params: Record<string, unknown> = { limit: 50 }
     if (currentCursor.value) params.cursor = currentCursor.value
-    if (filterStatus.value) params.status = filterStatus.value
+    if (filterStatus.value !== '__all__') params.status = filterStatus.value
     if (filterDateFrom.value) params.from = filterDateFrom.value
     if (filterDateTo.value) params.to = filterDateTo.value
     const res = await api.GET('/api/v1/admin/notifications/deliveries', {
@@ -170,7 +174,7 @@ const { loading, error, data: responseData, load: loadDeliveries } = useDataFetc
 const items = computed(() => (responseData.value as any)?.items ?? [])
 const total = computed(() => (responseData.value as any)?.total ?? 0)
 
-const filterStatus = ref('')
+const filterStatus = ref('__all__')
 const filterDateFrom = ref('')
 const filterDateTo = ref('')
 
@@ -214,7 +218,7 @@ function applyFilters() {
 }
 
 function resetFilters() {
-  filterStatus.value = ''
+  filterStatus.value = '__all__'
   filterDateFrom.value = ''
   filterDateTo.value = ''
   currentCursor.value = null

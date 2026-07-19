@@ -362,51 +362,39 @@ class TestEvalDispatch:
 
 
 class TestEvaluateSuite:
-    def test_passing_suite_above_threshold(self) -> None:
+    @pytest.mark.parametrize(
+        ("pass_count", "fail_count", "threshold", "expected_passed", "expected_score"),
+        [
+            (4, 0, 0.75, True, 1.0),
+            (1, 1, 0.75, False, 0.5),
+            (0, 0, 0.8, True, 0.0),
+            (0, 1, None, True, 0.0),
+            (0, 1, 0.0, True, 0.0),
+            (1, 1, 1.0, False, 0.5),
+        ],
+    )
+    def test_suite_threshold(
+        self,
+        pass_count: int,
+        fail_count: int,
+        threshold: float | None,
+        expected_passed: bool,
+        expected_score: float,
+    ) -> None:
         results = [
-            EvalResult(id=uuid4(), run_id=uuid4(), node_id="n1", eval_id=uuid4(), passed=True, score=1.0)
-            for _ in range(4)
+            EvalResult(
+                id=uuid4(),
+                run_id=uuid4(),
+                node_id="n1",
+                eval_id=uuid4(),
+                passed=i < pass_count,
+                score=1.0 if i < pass_count else 0.0,
+            )
+            for i in range(pass_count + fail_count)
         ]
-        result = evaluate_suite(results, "suite-1", pass_threshold=0.75)
-        assert result.passed is True
-        assert result.aggregate_score == 1.0
-
-    def test_failing_suite_below_threshold(self) -> None:
-        results = [
-            EvalResult(id=uuid4(), run_id=uuid4(), node_id="n1", eval_id=uuid4(), passed=True, score=1.0),
-            EvalResult(id=uuid4(), run_id=uuid4(), node_id="n1", eval_id=uuid4(), passed=False, score=0.0),
-        ]
-        result = evaluate_suite(results, "suite-1", pass_threshold=0.75)
-        assert result.passed is False
-        assert result.aggregate_score == 0.5
-        assert len(result.blocking_failures) == 1
-
-    def test_empty_suite_always_passes(self) -> None:
-        result = evaluate_suite([], "suite-1", pass_threshold=0.8)
-        assert result.passed is True
-        assert result.aggregate_score == 0.0
-
-    def test_no_threshold_never_blocks(self) -> None:
-        results = [
-            EvalResult(id=uuid4(), run_id=uuid4(), node_id="n1", eval_id=uuid4(), passed=False, score=0.0),
-        ]
-        result = evaluate_suite(results, "suite-1", pass_threshold=None)
-        assert result.passed is True
-
-    def test_threshold_zero_always_passes(self) -> None:
-        results = [
-            EvalResult(id=uuid4(), run_id=uuid4(), node_id="n1", eval_id=uuid4(), passed=False, score=0.0),
-        ]
-        result = evaluate_suite(results, "suite-1", pass_threshold=0.0)
-        assert result.passed is True
-
-    def test_threshold_one_only_perfect_passes(self) -> None:
-        results = [
-            EvalResult(id=uuid4(), run_id=uuid4(), node_id="n1", eval_id=uuid4(), passed=True, score=1.0),
-            EvalResult(id=uuid4(), run_id=uuid4(), node_id="n1", eval_id=uuid4(), passed=False, score=0.0),
-        ]
-        result = evaluate_suite(results, "suite-1", pass_threshold=1.0)
-        assert result.passed is False
+        result = evaluate_suite(results, "suite-1", pass_threshold=threshold)
+        assert result.passed is expected_passed
+        assert result.aggregate_score == expected_score
 
     def test_suite_eval_result_model_fields(self) -> None:
         result = SuiteEvalResult(
@@ -460,25 +448,21 @@ class TestUnknownEvalType:
 
 
 class TestReDoSProtection:
-    def test_nested_quantifier_rejected(self) -> None:
+    @pytest.mark.parametrize(
+        ("pattern", "input_text", "expected_passed"),
+        [
+            (r"(\d+)+", "123", False),
+            (r"(a*)*", "a", False),
+            (r"\d{1,5}", "123", True),
+        ],
+    )
+    def test_redos(self, pattern: str, input_text: str, expected_passed: bool) -> None:
         engine = EvalEngine()
-        eval_def = _make_eval_def("regex", {"pattern": r"(\d+)+", "field": "text"})
-        result = engine.evaluate({"text": "123"}, eval_def)
-        assert result.passed is False
-        assert "nested quantifier" in result.detail.lower()
-
-    def test_nested_star_quantifier_rejected(self) -> None:
-        engine = EvalEngine()
-        eval_def = _make_eval_def("regex", {"pattern": r"(a*)*", "field": "text"})
-        result = engine.evaluate({"text": "a"}, eval_def)
-        assert result.passed is False
-        assert "nested quantifier" in result.detail.lower()
-
-    def test_safe_complex_pattern_allowed(self) -> None:
-        engine = EvalEngine()
-        eval_def = _make_eval_def("regex", {"pattern": r"\d{1,5}", "field": "text"})
-        result = engine.evaluate({"text": "123"}, eval_def)
-        assert result.passed is True
+        eval_def = _make_eval_def("regex", {"pattern": pattern, "field": "text"})
+        result = engine.evaluate({"text": input_text}, eval_def)
+        assert result.passed is expected_passed
+        if not expected_passed:
+            assert "nested quantifier" in result.detail.lower()
 
 
 class TestRegexErrorHandling:

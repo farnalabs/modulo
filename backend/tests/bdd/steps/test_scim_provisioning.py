@@ -4,6 +4,7 @@ Maps Gherkin scenarios from features/scim/scim_provisioning.feature to
 API calls against /scim/v2/Users and /scim/v2/Groups.
 """
 
+import contextlib
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
@@ -19,10 +20,8 @@ from modulo.settings import Settings, get_settings
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/scim/scim_provisioning.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants matching SCIM unit test patterns
@@ -195,7 +194,7 @@ def scim_client() -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
-    from modulo.api.dependencies import _get_engine, get_plan_context
+    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
     from modulo.api.main import app
     from modulo.core.feature_flags import LicenseData, LicenseKeyTier, PlanContext
 
@@ -310,16 +309,20 @@ def _when_post_user_no_auth(email: str, request: Any, ctx: dict[str, Any]) -> No
     body = dict(_USER_CREATE_BODY)
     body["userName"] = email
 
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
+
     app.dependency_overrides.clear()
     app.dependency_overrides[get_settings] = _make_scim_settings
     app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     headers = {"X-CSRF-Token": "test-csrf-token"}
-    resp = TestClient(app).post(
+    test_client = TestClient(app)
+    test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
+    resp = test_client.post(
         "/scim/v2/Users",
         json=body,
         headers=headers,
-        cookies={"XSRF-TOKEN": "test-csrf-token"},
     )
     app.dependency_overrides.clear()
     _store_response(request, ctx, resp)

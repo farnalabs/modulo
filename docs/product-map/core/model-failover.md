@@ -13,7 +13,7 @@ code:
   - backend/src/modulo/api/routes/model_backends.py
   - backend/src/modulo/db/models/model_backend.py
   - backend/src/modulo/db/crud/model_backend.py
-  - backend/src/modulo/db/migrations/versions/0035_model_fallback.py
+  - backend/src/modulo/db/migrations/versions/0003_v2_pipeline_runtime.py
 unit-tests:
   - backend/tests/unit/core/model_backend_hub/test_failover.py
   - backend/tests/unit/api/test_model_backends_endpoint.py
@@ -177,7 +177,7 @@ BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature f
 - No deletion protection for backends referenced as fallbacks by other backends
 - No audit events on CRUD operations (create/update/delete)
 - 6 DB columns not exposed via API: owner_team_id, status, cost_tracking, currency, last_health_check_at, last_health_check_error
-- `get_with_rotation()` lacks audit logger parameter — scan-all-fallbacks path emits no audit events
+- `get_with_rotation()` has `audit_logger` parameter but scan-all-fallbacks path does not emit audit events (only configured-fallback path does)
 - No concurrent-access guards on `_healthy` dict (documented not thread-safe)
 - 5 BDD scenarios only covered by unit tests, not wired as BDD step definitions (healthy primary, unhealthy+fallback, all unhealthy, fallback order, audit event)
 - 1 BDD scenario has zero coverage: "removing fallback from update removes it from rotation"
@@ -192,8 +192,9 @@ BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature f
 - No deletion protection for backends referenced as fallbacks
 - No audit events on CRUD operations (create/update/delete)
 - 6 DB columns not exposed via API: owner_team_id, status, cost_tracking, currency, last_health_check_at, last_health_check_error
-- `get_with_rotation()` lacks audit logger parameter — scan-all-fallbacks path emits no audit events
+- `get_with_rotation()` has `audit_logger` parameter but scan-all-fallbacks path does not emit audit events (only configured-fallback path does)
 - `_make_backend()` test helper sets `created_by` instead of `account_id` — causes mock attribute mismatch
 - No concurrent-access guards on `_healthy` dict (documented not thread-safe)
 - ~~3 edge cases lack unit tests~~ **RESOLVED** (index 174)
+- 2026-07-12: Cross-cutting QA (Round 2) — Fixed 5× B904 in `model_backends.py`: `IntegrityError` handlers now use `raise ... from None` instead of bare `raise` (list, create, get, update, delete endpoints). Fixed stale frontmatter: migration file path corrected from `0035_model_fallback.py` (does not exist) to `0003_v2_pipeline_runtime.py` (actual file). Fixed stale Known Gap #9: `get_with_rotation()` description updated to reflect it now has `audit_logger` parameter; the actual gap (scan-all-fallbacks path emitting no audit events) is preserved. Verified no CancelledError issues (all `except Exception:` blocks correctly don't catch `BaseException` in Python 3.12). Verified no dead code (all imports and variables used). Status: partial.
 - 2026-07-04: Cross-cutting QA (index 174) — Changed get_with_rotation() to raise BackendUnavailableError for unregistered IDs (matching product map spec); added SQLAlchemyError→503 catch to all 5 CRUD routes (matching established pattern); fixed integration test `created_by`→`account_id` param name (broken since column rename); added unit tests: empty hub rotation, self-referencing fallback, plugin build failure, get_with_rotation unregistered ID, 5 SQLAlchemyError→503 endpoint tests; updated product map checkboxes (5 [ ]→[x]); resolved 3 Known Gaps (unchecked edge cases).

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
     <PageTabs :tabs="[
@@ -108,7 +108,6 @@ import { shortId } from '../utils/format'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
@@ -116,7 +115,6 @@ import PageTabs from "../components/PageTabs.vue"
 import EmptyState from '../components/shared/EmptyState.vue'
 import { formatDateShortWithTime } from '../lib/formatDate'
 
-const planStore = usePlanStore()
 
 interface EvalProposalItem {
   id: string
@@ -147,7 +145,10 @@ interface ProposalsResponse {
 const { patch } = useApi()
 
 const { loading, error: pageError, data: proposalsResp, load: loadProposals } = useDataFetch<ProposalsResponse>(
-  () => api.GET('/api/v1/feedback/proposals', { params: {} as any }),
+  async () => {
+    const response = await api.GET('/api/v1/feedback/proposals')
+    return { data: response.data as unknown as ProposalsResponse | undefined, error: response.error }
+  },
   { initialValue: { items: [] as EvalProposalItem[], total: 0, page: 1, page_size: 20 } },
 )
 

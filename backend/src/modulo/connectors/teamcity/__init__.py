@@ -70,7 +70,8 @@ class TeamCityConnector(ConnectorBase):
             return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
         except httpx.HTTPStatusError as exc:
             return HealthResult(
-                ok=False, detail=f"TeamCity API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+                ok=False,
+                detail=f"TeamCity API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="TeamCity API timeout")
@@ -115,8 +116,9 @@ class TeamCityConnector(ConnectorBase):
         bt = data.get("buildType")
         if bt:
             build_type_id = bt.get("buildTypeId", bt.get("id", ""))
+        response_id = data.get("id")
         return CIRun(
-            id=str(data.get("id", run_id)),
+            id=str(response_id if response_id is not None else run_id),
             pipeline_id=build_type_id,
             status=status,
             url=f"{self._base_url}{href}" if href else "",
@@ -177,7 +179,7 @@ class TeamCityConnector(ConnectorBase):
                         updated_at=str(b.get("finishDate", "")),
                         duration_seconds=b.get("duration", None),
                         triggered_by="",
-                    )
+                    ),
                 )
             if status:
                 runs = [r for r in runs if r.status == status]
@@ -302,19 +304,19 @@ class _TeamCityTestDouble(TeamCityConnector):
             status=CIRunStatus.SUCCESS,
         )
 
-    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
+    async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=["line1", "line2"])
 
     async def list_runs(
         self,
         pipeline_id: str | None = None,
         status: CIRunStatus | None = None,
-        limit: int = 20,
+        _limit: int = 20,
     ) -> list[CIRun]:
         return [
             CIRun(
                 id=f"{self._uuid.uuid4()}",
                 pipeline_id=pipeline_id or "my-build-type",
                 status=status or CIRunStatus.SUCCESS,
-            )
+            ),
         ]

@@ -1,6 +1,9 @@
 app = 'staging-modulo'
 primary_region = 'lhr'
 
+[deploy]
+  strategy = 'rolling'
+
 [build]
   dockerfile = "backend/Dockerfile.fly"
 
@@ -32,8 +35,8 @@ primary_region = 'lhr'
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-staging-redis -r lhr,ams --enable-eviction
-  REDIS_URL = "redis://default:dbe262a26cfa48768a7f4ba0ffdb0d9f@fly-modulo-staging-redis.upstash.io:6379"
-  CORS_ORIGINS = "https://modulo.run,http://localhost:5173"
+  # Then store its connection string with `fly secrets set REDIS_URL=...`.
+  CORS_ORIGINS = "https://modulo.run,https://staging.modulo.run"
 
 [[vm]]
   memory = '1gb'

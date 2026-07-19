@@ -15,6 +15,7 @@ locations for maximum compatibility:
   - ``ctx["response"]``       — used by test_library.py's status_404 step
 """
 
+import contextlib
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -22,29 +23,21 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import jwt as pyjwt
 import pytest
-from jose import jwt as jose_jwt
 from pytest_bdd import given, parsers, scenarios, then, when
 
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/login.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/rbac.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/api_keys.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/tenant_isolation.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants matching conftest.py
@@ -135,7 +128,7 @@ def has_access_token(request: Any) -> None:
 def token_encodes_org_id(request: Any) -> None:
     body = request.node.response.json()
     token = body["access_token"]
-    payload: dict[str, object] = jose_jwt.decode(token, _VALID_32, algorithms=["HS256"])
+    payload: dict[str, object] = pyjwt.decode(token, _VALID_32, algorithms=["HS256"])
     assert "org_id" in payload, f"Token payload missing org_id: {payload}"
     assert payload["org_id"] is not None
 
@@ -158,7 +151,7 @@ def expired_jwt(org_name: str) -> str:
         "iat": now - timedelta(hours=48),
         "exp": now - timedelta(hours=1),  # expired 1 hour ago
     }
-    return str(jose_jwt.encode(payload, _VALID_32, algorithm="HS256"))
+    return str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
 
 
 @when("I make an authenticated request to /api/pipelines")

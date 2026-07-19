@@ -3,6 +3,7 @@
 import logging
 import uuid
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -10,8 +11,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.view import (
     create_view,
     delete_view,
@@ -23,6 +24,8 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
 
+_log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/views", tags=["views"])
 
 _VALID_VIEW_TYPES = {"run_list", "pipeline_list", "audit_log"}
@@ -33,7 +36,7 @@ class ViewCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     view_type: str = Field(..., pattern=r"^(run_list|pipeline_list|audit_log)$")
-    filters: dict = Field(default_factory=dict)
+    filters: dict[str, Any] = Field(default_factory=dict[str, Any])
     columns: list[str] | None = None
     sort_by: str | None = Field(None, max_length=100)
     sort_order: str = Field(default="desc", pattern=r"^(asc|desc)$")
@@ -42,7 +45,7 @@ class ViewCreate(BaseModel):
 class ViewUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
-    filters: dict | None = None
+    filters: dict[str, Any] | None = None
     columns: list[str] | None = None
     sort_by: str | None = Field(None, max_length=100)
     sort_order: str | None = Field(None, pattern=r"^(asc|desc)$")
@@ -54,7 +57,7 @@ class ViewResponse(BaseModel):
     name: str
     description: str | None
     view_type: str
-    filters: dict
+    filters: dict[str, Any]
     columns: list[str] | None
     sort_by: str | None
     sort_order: str
@@ -78,7 +81,7 @@ async def list_views_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ViewListResponse:
     try:
         async with session.begin():
@@ -122,7 +125,7 @@ async def list_views_endpoint(
 async def create_view_endpoint(
     req: ViewCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ViewResponse:
     try:
         async with session.begin():
@@ -167,7 +170,7 @@ async def create_view_endpoint(
 async def get_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ViewResponse:
     try:
         async with session.begin():
@@ -204,7 +207,7 @@ async def update_view_endpoint(
     view_id: uuid.UUID,
     req: ViewUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ViewResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -241,7 +244,7 @@ async def update_view_endpoint(
 async def delete_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():

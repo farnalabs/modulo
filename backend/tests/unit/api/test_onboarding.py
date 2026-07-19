@@ -2,8 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +11,9 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.models.onboarding_progress import OnboardingProgress
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -30,10 +31,13 @@ def _make_settings() -> Settings:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.flush = AsyncMock()
+    session.add = MagicMock()
     return session
 
 
@@ -73,30 +77,24 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture(autouse=True)
-def _clean_onboarding_state() -> Generator[None, None, None]:
-    """Replace file-based persistence with in-memory for tests."""
-    import modulo.api.routes.onboarding as onboarding_mod
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    original_load = onboarding_mod._load_onboarding_json
-    original_save = onboarding_mod._save_onboarding_state
 
-    state_store: dict[str, Any] | None = None
-
-    def fake_load() -> dict[str, Any] | None:
-        return state_store
-
-    def fake_save(state: Any) -> None:
-        nonlocal state_store
-        state_store = {"is_first_run": state.is_first_run, "completed_steps": state.completed_steps}
-
-    onboarding_mod._load_onboarding_json = fake_load
-    onboarding_mod._save_onboarding_state = fake_save
-
-    yield
-
-    onboarding_mod._load_onboarding_json = original_load
-    onboarding_mod._save_onboarding_state = original_save
+def _make_progress(
+    completed: list[str] | None = None,
+    skipped: list[str] | None = None,
+    dismissed: bool = False,
+) -> OnboardingProgress:
+    p = OnboardingProgress(
+        organisation_id=_ORG_ID,
+        completed_actions=completed or [],
+        skipped_actions=skipped or [],
+        dismissed=dismissed,
+    )
+    p.id = uuid.uuid4()
+    return p
 
 
 # ---------------------------------------------------------------------------
@@ -104,57 +102,93 @@ def _clean_onboarding_state() -> Generator[None, None, None]:
 # ---------------------------------------------------------------------------
 
 
-def _mock_no_pipelines(mock_session: AsyncMock) -> None:
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = None
-    mock_session.execute.return_value = mock_result
-
-
 def test_get_status_first_run(client: TestClient, mock_session: AsyncMock) -> None:
-    _mock_no_pipelines(mock_session)
-    resp = client.get("/api/v1/onboarding/status")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["is_first_run"] is True
-    assert data["completed_steps"] == []
-    assert data["current_step"] == 1
-    assert data["total_steps"] == 4
+    with (
+        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("modulo.api.routes.onboarding._check_auto_completion") as mock_auto,
+    ):
+        mock_get_progress.return_value = _make_progress()
+        mock_auto.return_value = set()
 
-
-def test_get_status_with_completed_steps(client: TestClient, mock_session: AsyncMock) -> None:
-    from modulo.api.routes.onboarding import _OnboardingState, _save_onboarding_state
-
-    _save_onboarding_state(
-        _OnboardingState(
-            is_first_run=True,
-            completed_steps=["connect_tools", "select_template"],
-        )
-    )
-
-    _mock_no_pipelines(mock_session)
-
-    resp = client.get("/api/v1/onboarding/status")
+        resp = client.get("/api/v1/onboarding/status")
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["is_first_run"] is True
-    assert data["completed_steps"] == ["connect_tools", "select_template"]
-    assert data["current_step"] == 3
+    assert data["completed_actions"] == []
+    assert data["skipped_actions"] == []
+    assert data["dismissed"] is False
+    assert data["progress_pct"] == 0.0
+    assert len(data["actions"]) == 6
+    assert data["actions"][0]["id"] == "login"
+    assert data["actions"][0]["completed"] is False
 
 
-def test_get_status_not_first_run(client: TestClient, mock_session: AsyncMock) -> None:
-    mock_pipeline_obj = MagicMock()
-    mock_pipeline_obj.id = uuid.uuid4()
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = mock_pipeline_obj
-    mock_session.execute.return_value = mock_result
+def test_get_status_with_completed_actions(client: TestClient, mock_session: AsyncMock) -> None:
+    with (
+        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("modulo.api.routes.onboarding._check_auto_completion") as mock_auto,
+    ):
+        mock_get_progress.return_value = _make_progress(completed=["login", "add_ai_model"])
+        mock_auto.return_value = set()
 
-    resp = client.get("/api/v1/onboarding/status")
+        resp = client.get("/api/v1/onboarding/status")
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["is_first_run"] is False
-    assert data["completed_steps"] == []
+    assert "login" in data["completed_actions"]
+    assert "add_ai_model" in data["completed_actions"]
+    assert data["progress_pct"] == pytest.approx(33.3, rel=0.1)
+
+
+def test_get_status_with_auto_detection(client: TestClient, mock_session: AsyncMock) -> None:
+    with (
+        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("modulo.api.routes.onboarding._check_auto_completion") as mock_auto,
+    ):
+        mock_get_progress.return_value = _make_progress()
+        mock_auto.return_value = {"login", "has_pipelines"}
+
+        resp = client.get("/api/v1/onboarding/status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "login" in data["completed_actions"]
+    assert data["actions"][0]["completed"] is True
+
+
+def test_get_status_dismissed(client: TestClient, mock_session: AsyncMock) -> None:
+    with (
+        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("modulo.api.routes.onboarding._check_auto_completion") as mock_auto,
+    ):
+        mock_get_progress.return_value = _make_progress(completed=["login"], dismissed=True)
+        mock_auto.return_value = set()
+
+        resp = client.get("/api/v1/onboarding/status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["dismissed"] is True
+    assert data["is_first_run"] is False
+
+
+def test_get_status_skipped_actions(client: TestClient, mock_session: AsyncMock) -> None:
+    with (
+        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("modulo.api.routes.onboarding._check_auto_completion") as mock_auto,
+    ):
+        mock_get_progress.return_value = _make_progress(skipped=["add_ai_model", "create_first_agent"])
+        mock_auto.return_value = set()
+
+        resp = client.get("/api/v1/onboarding/status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "add_ai_model" in data["skipped_actions"]
+    skipped_action = next(a for a in data["actions"] if a["id"] == "add_ai_model")
+    assert skipped_action["skipped"] is True
 
 
 def test_get_status_requires_auth(unauth_client: TestClient) -> None:
@@ -163,68 +197,182 @@ def test_get_status_requires_auth(unauth_client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/onboarding/step
+# POST /api/v1/onboarding/actions/{action_id}/complete
 # ---------------------------------------------------------------------------
 
 
-def test_mark_step_valid(client: TestClient, mock_session: AsyncMock) -> None:
-    _mock_no_pipelines(mock_session)
+def test_mark_action_complete_valid(client: TestClient, mock_session: AsyncMock) -> None:
+    with patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
+        progress = _make_progress()
+        mock_get_progress.return_value = progress
 
-    resp = client.post("/api/v1/onboarding/step", json={"step_id": "connect_tools"})
+        resp = client.post("/api/v1/onboarding/actions/login/complete")
+
     assert resp.status_code == 200
     data = resp.json()
-    assert data["step_id"] == "connect_tools"
+    assert data["action_id"] == "login"
     assert data["completed"] is True
-    assert "connect_tools" in data["completed_steps"]
+    assert "login" in progress.completed_actions
 
 
-def test_mark_step_invalid(client: TestClient) -> None:
-    resp = client.post("/api/v1/onboarding/step", json={"step_id": "invalid_step"})
+def test_mark_action_complete_already_done(client: TestClient, mock_session: AsyncMock) -> None:
+    with patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
+        progress = _make_progress(completed=["login"])
+        mock_get_progress.return_value = progress
+
+        resp = client.post("/api/v1/onboarding/actions/login/complete")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action_id"] == "login"
+    assert data["completed"] is True
+
+
+def test_mark_action_complete_invalid(client: TestClient) -> None:
+    resp = client.post("/api/v1/onboarding/actions/nonexistent/complete")
     assert resp.status_code == 422
 
 
-def test_mark_step_already_completed(client: TestClient, mock_session: AsyncMock) -> None:
-    _mock_no_pipelines(mock_session)
-
-    resp1 = client.post("/api/v1/onboarding/step", json={"step_id": "connect_tools"})
-    assert resp1.status_code == 200
-
-    resp2 = client.post("/api/v1/onboarding/step", json={"step_id": "connect_tools"})
-    assert resp2.status_code == 200
-    assert len(resp2.json()["completed_steps"]) == 1
-
-
-def test_mark_step_all_completed(client: TestClient, mock_session: AsyncMock) -> None:
-    _mock_no_pipelines(mock_session)
-
-    for step_id in ["connect_tools", "select_template", "configure_agent", "run_demo"]:
-        resp = client.post("/api/v1/onboarding/step", json={"step_id": step_id})
-        assert resp.status_code == 200
-
-    resp = client.get("/api/v1/onboarding/status")
-    data = resp.json()
-    assert data["is_first_run"] is False
-    assert len(data["completed_steps"]) == 4
-    assert data["current_step"] is None
-
-
 # ---------------------------------------------------------------------------
-# GET /api/v1/onboarding/step/{step_id}
+# POST /api/v1/onboarding/actions/{action_id}/skip
 # ---------------------------------------------------------------------------
 
 
-def test_get_step_data_valid(client: TestClient, mock_session: AsyncMock) -> None:
-    _mock_no_pipelines(mock_session)
+def test_mark_action_skip_valid(client: TestClient, mock_session: AsyncMock) -> None:
+    with patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
+        progress = _make_progress()
+        mock_get_progress.return_value = progress
 
-    resp = client.get("/api/v1/onboarding/step/connect_tools")
+        resp = client.post("/api/v1/onboarding/actions/add_ai_model/skip")
+
     assert resp.status_code == 200
     data = resp.json()
-    assert data["step_id"] == "connect_tools"
-    assert data["label"] == "Connect Tooling"
-    assert data["order"] == 1
-    assert "connectors" in data["data"]
+    assert data["action_id"] == "add_ai_model"
+    assert data["skipped"] is True
+    assert "add_ai_model" in progress.skipped_actions
 
 
-def test_get_step_data_not_found(client: TestClient) -> None:
-    resp = client.get("/api/v1/onboarding/step/nonexistent")
-    assert resp.status_code == 404
+def test_mark_action_skip_invalid(client: TestClient) -> None:
+    resp = client.post("/api/v1/onboarding/actions/nonexistent/skip")
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/onboarding/dismiss
+# ---------------------------------------------------------------------------
+
+
+def test_dismiss_onboarding(client: TestClient, mock_session: AsyncMock) -> None:
+    with patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
+        progress = _make_progress()
+        mock_get_progress.return_value = progress
+
+        resp = client.post("/api/v1/onboarding/dismiss")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["dismissed"] is True
+    assert progress.dismissed is True
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/onboarding/seed-examples
+# ---------------------------------------------------------------------------
+
+
+def test_seed_examples(client: TestClient, mock_session: AsyncMock) -> None:
+    mock_schema = MagicMock()
+    mock_schema.id = uuid.uuid4()
+
+    mock_agent = MagicMock()
+    mock_agent.id = uuid.uuid4()
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.id = uuid.uuid4()
+
+    mock_model_backend = MagicMock()
+    mock_model_backend.id = uuid.uuid4()
+
+    with (
+        patch("modulo.api.routes.onboarding.create_schema", return_value=mock_schema),
+        patch("modulo.api.routes.onboarding.create_schema_version") as mock_create_sv,
+        patch("modulo.api.routes.onboarding.create_agent", return_value=mock_agent),
+        patch("modulo.api.routes.onboarding.create_pipeline", return_value=mock_pipeline),
+        patch("modulo.api.routes.onboarding.replace_pipeline_graph"),
+        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+    ):
+        progress = _make_progress()
+        mock_get_progress.return_value = progress
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_model_backend
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
+        resp = client.post("/api/v1/onboarding/seed-examples")
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["agent_id"] == str(mock_agent.id)
+    assert data["schema_id"] == str(mock_schema.id)
+    assert data["pipeline_id"] == str(mock_pipeline.id)
+    assert mock_create_sv.call_count == 2
+    assert "create_first_schema" in progress.completed_actions
+    assert "create_first_agent" in progress.completed_actions
+    assert "create_first_pipeline" in progress.completed_actions
+
+
+def test_seed_examples_no_model_backend(client: TestClient, mock_session: AsyncMock) -> None:
+    mock_schema = MagicMock()
+    mock_schema.id = uuid.uuid4()
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.id = uuid.uuid4()
+
+    with (
+        patch("modulo.api.routes.onboarding.create_schema", return_value=mock_schema),
+        patch("modulo.api.routes.onboarding.create_schema_version"),
+        patch("modulo.api.routes.onboarding.create_pipeline", return_value=mock_pipeline),
+        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+    ):
+        progress = _make_progress()
+        mock_get_progress.return_value = progress
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
+        resp = client.post("/api/v1/onboarding/seed-examples")
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["agent_id"] is None
+    assert data["schema_id"] == str(mock_schema.id)
+    assert data["pipeline_id"] == str(mock_pipeline.id)
+    assert "create_first_schema" in progress.completed_actions
+    assert "create_first_pipeline" in progress.completed_actions
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/onboarding/starter-pipeline
+# ---------------------------------------------------------------------------
+
+
+def test_create_starter_pipeline(client: TestClient, mock_session: AsyncMock) -> None:
+    mock_schema = MagicMock()
+    mock_schema.id = uuid.uuid4()
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.id = uuid.uuid4()
+    mock_pipeline.name = "SDLC Starter Pipeline"
+
+    with (
+        patch("modulo.api.routes.onboarding.create_schema", return_value=mock_schema),
+        patch("modulo.api.routes.onboarding.create_pipeline", return_value=mock_pipeline),
+        patch("modulo.api.routes.onboarding.replace_pipeline_graph"),
+    ):
+        resp = client.post("/api/v1/onboarding/starter-pipeline")
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["pipeline_id"] == str(mock_pipeline.id)
+    assert data["name"] == "SDLC Starter Pipeline"

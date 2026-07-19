@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """Eval quality regression detection.
 
 Compares pass rates between a recent window and a baseline window
 for each eval definition, flagging significant drops.
 """
 
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
@@ -70,27 +69,24 @@ async def detect_regressions(
         q = text("""
             SELECT
                 er.eval_id,
-                ed.name               AS eval_name,
-                COUNT(*) FILTER (WHERE er.evaluated_at >= :recent_start)
+                MAX(ed.name)          AS eval_name,
+                SUM(CASE WHEN er.evaluated_at >= :recent_start THEN 1 ELSE 0 END)
                                        AS recent_total,
-                COUNT(*) FILTER (WHERE er.evaluated_at >= :recent_start AND er.passed)
+                SUM(CASE WHEN er.evaluated_at >= :recent_start AND er.passed THEN 1 ELSE 0 END)
                                        AS recent_passed,
-                COUNT(*) FILTER (WHERE er.evaluated_at < :recent_start)
+                SUM(CASE WHEN er.evaluated_at < :recent_start THEN 1 ELSE 0 END)
                                        AS baseline_total,
-                COUNT(*) FILTER (WHERE er.evaluated_at < :recent_start AND er.passed)
+                SUM(CASE WHEN er.evaluated_at < :recent_start AND er.passed THEN 1 ELSE 0 END)
                                        AS baseline_passed,
-                COALESCE(
-                    array_agg(DISTINCT er.run_id) FILTER (
-                        WHERE er.evaluated_at >= :recent_start AND NOT er.passed
-                    ),
-                    ARRAY[]::uuid[]
+                ARRAY_AGG(er.run_id) FILTER (
+                    WHERE er.evaluated_at >= :recent_start AND NOT er.passed
                 )                      AS affected_run_ids
             FROM eval_results er
             JOIN eval_definitions ed ON ed.id = er.eval_id
             WHERE er.organisation_id = :org_id
               AND ed.organisation_id = :org_id
               AND er.evaluated_at >= :baseline_start
-            GROUP BY er.eval_id, ed.name
+            GROUP BY er.eval_id
         """)
 
         rows = (
@@ -145,8 +141,8 @@ async def detect_regressions(
                 current_pass_rate=round(current_pass_rate, 4),
                 drop_pct=round(drop, 4),
                 trend=trend,
-                affected_run_ids=list(row.affected_run_ids),
-            )
+                affected_run_ids=list(row.affected_run_ids or []),
+            ),
         )
 
     return alerts

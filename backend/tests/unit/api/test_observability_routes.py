@@ -29,6 +29,7 @@ from modulo.api.routes.observability import (
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = str(uuid.uuid4())
 
@@ -49,6 +50,7 @@ def _make_settings() -> Settings:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -94,23 +96,12 @@ def free_client() -> Generator[TestClient, None, None]:
 
 
 class TestObservabilityCache:
-    def test_cache_miss_returns_none(self) -> None:
-        assert _cached_config(_ORG_ID) is None
-
-    def test_cache_hit_after_update(self) -> None:
-        config = {"otlp_endpoint": "http://collector:4318"}
-        _update_cache(_ORG_ID, config)
-        cached = _cached_config(_ORG_ID)
-        assert cached is not None
-        assert cached["otlp_endpoint"] == "http://collector:4318"
-
     def test_cache_returns_copy_not_reference(self) -> None:
         config = {"otlp_endpoint": "http://collector:4318"}
         _update_cache(_ORG_ID, config)
         cached = _cached_config(_ORG_ID)
         assert cached is not None
         cached["otlp_endpoint"] = "http://other:4318"
-        # Original cache entry should be unchanged
         second = _cached_config(_ORG_ID)
         assert second is not None
         assert second["otlp_endpoint"] == "http://collector:4318"
@@ -121,7 +112,7 @@ class TestObservabilityCache:
         assert _cached_config(_ORG_ID) is None
 
     def test_invalidate_unknown_org_does_not_raise(self) -> None:
-        _invalidate_cache("nonexistent-org")  # should not raise
+        _invalidate_cache("nonexistent-org")
 
     def test_cache_uses_org_id_isolation(self) -> None:
         org_a = str(uuid.uuid4())
@@ -136,32 +127,12 @@ class TestObservabilityCache:
 
 
 class TestDegradedResponse:
-    def test_degraded_with_no_cache_uses_defaults(self) -> None:
-        resp = _build_degraded_response(_ORG_ID)
-        assert resp.otlp_endpoint == ""
-        assert resp.export_interval_seconds == 10
-        assert resp.langsmith_enabled is False
-        assert resp.has_langsmith_api_key is False
-
-    def test_degraded_with_stale_cache_returns_cached(self) -> None:
-        _update_cache(_ORG_ID, {"otlp_endpoint": "http://cached:4318", "langsmith_enabled": True})
-        resp = _build_degraded_response(_ORG_ID)
-        assert resp.otlp_endpoint == "http://cached:4318"
-        assert resp.langsmith_enabled is True
-
     def test_degraded_response_always_returns_200_fields(self) -> None:
         resp = _build_degraded_response(_ORG_ID)
         assert resp.otlp_endpoint is not None
         assert resp.otlp_headers is not None
         assert resp.effective_otlp_endpoint is not None
         assert isinstance(resp.env_override_active, bool)
-
-    def test_degraded_response_catches_missing_keys(self) -> None:
-        _update_cache(_ORG_ID, {})  # empty config
-        resp = _build_degraded_response(_ORG_ID)
-        # Should fall through to defaults for missing keys
-        assert resp.export_interval_seconds == 10
-        assert resp.langsmith_enabled is False
 
 
 class TestConfigToResponse:

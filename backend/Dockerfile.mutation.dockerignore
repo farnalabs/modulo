@@ -1,0 +1,48 @@
+# Version control
+.git/
+.gitignore
+.github/
+.agents/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+backend/.venv/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/.pytest_cache/
+backend/htmlcov/
+backend/.coverage
+backend/build/
+backend/*.egg-info/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+
+# Development-only material
+docs/
+reports/
+Reviews/
+TestResults/
+*.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose*.yml
+
+# Logs
+*.log

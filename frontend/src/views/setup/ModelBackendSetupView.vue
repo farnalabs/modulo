@@ -12,10 +12,10 @@
         </Button>
       </div>
 
-      <form v-else @submit.prevent="submit" class="space-y-4">
+      <form v-else @submit.prevent="() => submit()" class="space-y-4">
         <div>
-          <label class="mb-1 block text-sm font-medium">API Key</label>
-          <Input
+          <span class="mb-1 block text-sm font-medium">API Key</span>
+          <Input aria-label="Form control"
             v-model="apiKey"
             type="password"
             placeholder="sk-..."

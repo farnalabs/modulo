@@ -7,7 +7,7 @@ never exposed in any response — only a boolean `has_credentials` field.
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -16,11 +16,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
-
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.db.crud.model_backend import (
     create_model_backend,
@@ -32,6 +31,9 @@ from modulo.db.crud.model_backend import (
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
+
 
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 
@@ -46,7 +48,7 @@ class ModelBackendCreate(BaseModel):
     provider: str = Field(..., min_length=1, max_length=128)
     model_id: str = Field(..., min_length=1, max_length=128)
     api_key: str = Field(..., min_length=1)
-    default_params: dict[str, Any] = {}
+    default_params: ClassVar[dict[str, Any]] = {}
     visibility: str = Field(default="org")
     owner_team_id: uuid.UUID | None = None
     fallback_backend_ids: list[uuid.UUID] | None = None
@@ -122,29 +124,32 @@ def _to_response(mb: Any) -> ModelBackendResponse:
         owner_team_id=mb.owner_team_id,
         tier=mb.tier,
         fallback_backend_ids=fallback_ids,
-        account_id=mb.account_id,
+        created_by=mb.account_id,
         created_at=mb.created_at,
         updated_at=mb.updated_at,
     )
 
 
+@handle_db_errors("model_backends.list_model_backends_endpoint")
 @router.get("", response_model=ModelBackendListResponse)
 async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ModelBackendListResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_model_backends(session, page=page, page_size=page_size)
+            result = await list_model_backends(
+                session, org_id=principal.organisation_id, page=page, page_size=page_size
+            )
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -214,7 +219,7 @@ def _validate_provider(provider: str) -> None:
     except Exception as exc:
         logger.warning("Plugin registry check failed for provider %r: %s", provider, exc)
     raise HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail=[
             {
                 "type": "value_error",
@@ -225,11 +230,12 @@ def _validate_provider(provider: str) -> None:
     )
 
 
+@handle_db_errors("model_backends.create_model_backend_endpoint")
 @router.post("", response_model=ModelBackendResponse, status_code=status.HTTP_201_CREATED)
 async def create_model_backend_endpoint(
     req: ModelBackendCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     _validate_provider(req.provider)
@@ -277,7 +283,7 @@ async def create_model_backend_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -296,14 +302,22 @@ async def create_model_backend_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating model backend.",
         ) from None
+    import json
+
+    from modulo.core.secrets_backend import create_secrets_backend
+
+    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+    secret_value = json.dumps({"api_key": req.api_key})
+    await secrets_backend.set_secret(str(mb.id), secret_value)
     return _to_response(mb)
 
 
+@handle_db_errors("model_backends.get_model_backend_endpoint")
 @router.get("/{backend_id}", response_model=ModelBackendResponse)
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ModelBackendResponse:
     try:
         async with session.begin():
@@ -314,7 +328,7 @@ async def get_model_backend_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -338,12 +352,13 @@ async def get_model_backend_endpoint(
     return _to_response(mb)
 
 
+@handle_db_errors("model_backends.update_model_backend_endpoint")
 @router.patch("/{backend_id}", response_model=ModelBackendResponse)
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
     req: ModelBackendUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
@@ -361,7 +376,7 @@ async def update_model_backend_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -382,14 +397,23 @@ async def update_model_backend_endpoint(
         ) from None
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+    if req.api_key is not None:
+        import json
+
+        from modulo.core.secrets_backend import create_secrets_backend
+
+        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+        secret_value = json.dumps({"api_key": req.api_key})
+        await secrets_backend.set_secret(str(mb.id), secret_value)
     return _to_response(mb)
 
 
+@handle_db_errors("model_backends.delete_model_backend_endpoint")
 @router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -400,7 +424,7 @@ async def delete_model_backend_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

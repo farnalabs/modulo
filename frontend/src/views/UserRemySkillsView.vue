@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-narrow">
       <TooltipProvider>
     <header class="flex items-center justify-between">

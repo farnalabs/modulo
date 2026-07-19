@@ -3,24 +3,16 @@
 # MOCKED: This conftest uses MagicMock-based DB fixtures instead of the
 # real async SQLAlchemy stack (testcontainers Postgres + Alembic migrations).
 # Scheduled for replacement with real-stack fixtures.
+#
+# Relies on ``tests/bdd/conftest.py`` for environment setup and shared UUIDs.
 """
 
-import os
-import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
-os.environ.setdefault("SECRET_KEY", "a" * 32)
-os.environ.setdefault("FERNET_KEY", "b" * 32)
-os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
-os.environ.setdefault("REDIS_URL", "")
-
-_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+from tests.bdd.conftest import ORG_ID, USER_ID
 
 
 def make_settings():
@@ -64,8 +56,8 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
-        organisation_id=_ORG_ID,
-        account_id=_USER_ID,
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
         org_role="admin",
     )
     yield TestClient(app)

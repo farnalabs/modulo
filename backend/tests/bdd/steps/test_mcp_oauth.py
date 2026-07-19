@@ -1,5 +1,6 @@
 """BDD step definitions: MCP OAuth 2.0 authorization code flow."""
 
+import contextlib
 import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,10 +13,8 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.rate_limiter import RateLimiterRegistry
 from tests.bdd.conftest import ORG_ID, USER_ID
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/mcp/mcp_oauth.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # --------------------------------------------------------------------------
@@ -242,7 +241,7 @@ def token_exchange(gt: str, code: str, cid: str, secret: str, ru: str, cv: str, 
 
     auth_code = getattr(request.node, "_auth_code", None)
     is_used = auth_code is not None and auth_code.used
-    is_unknown = cid in ("unknown_client",)
+    is_unknown = cid == "unknown_client"
     with (
         patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
         patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
@@ -437,10 +436,7 @@ def token_has_scopes(expected: str, request):
     expected_list = json.loads(expected)
     data = request.node._resp.json()
     scope_field = data.get("scope", data.get("scopes", ""))
-    if isinstance(scope_field, str):
-        actual = scope_field.split()
-    else:
-        actual = scope_field
+    actual = scope_field.split() if isinstance(scope_field, str) else scope_field
     for s in expected_list:
         assert s in actual, f"Expected scope '{s}' not in {actual}"
 

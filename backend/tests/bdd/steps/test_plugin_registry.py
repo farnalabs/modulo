@@ -4,6 +4,7 @@ Covers: discovery listing, health checks, startup discovery,
 manifest validation, and capability advertisement.
 """
 
+import contextlib
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -13,10 +14,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.plugin_registry import PluginHealth
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/plugins/plugin_registry.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Test data
@@ -117,10 +116,8 @@ def patches():
     collectors: list[Any] = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 # ===========================================================================

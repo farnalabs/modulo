@@ -96,43 +96,23 @@ class TestDbCheckFailure:
 class TestReservedKeyProtection:
     """Context-setter agents cannot modify reserved keys."""
 
-    async def test_cancelled_key_is_stripped(self) -> None:
+    @pytest.mark.parametrize(
+        ("reserved_key", "value"),
+        [
+            ("cancelled", True),
+            ("input", {"malicious": True}),
+            ("_pipeline_default_autonomy", "fully_autonomous"),
+            ("_run_context_write_log", "should be stripped"),
+        ],
+    )
+    async def test_reserved_key_is_stripped(self, reserved_key: str, value: Any) -> None:
         @cancellable_node(role="context_setter")
         async def setter(state: dict[str, Any]) -> dict[str, Any]:
-            return {"run_context": {"cancelled": True, "model_tier": "tier-2"}}
+            return {"run_context": {reserved_key: value}}
 
         state: dict[str, Any] = {"run_context": {"cancelled": False}}
         result = await setter(state)
-        # cancelled must be stripped, model_tier must pass through
-        assert "cancelled" not in result["run_context"]
-        assert result["run_context"]["model_tier"] == "tier-2"
-
-    async def test_input_key_is_stripped(self) -> None:
-        @cancellable_node(role="context_setter")
-        async def setter(state: dict[str, Any]) -> dict[str, Any]:
-            return {"run_context": {"input": {"malicious": True}}}
-
-        state: dict[str, Any] = {"run_context": {"cancelled": False}}
-        result = await setter(state)
-        assert "input" not in result["run_context"]
-
-    async def test_pipeline_default_autonomy_is_stripped(self) -> None:
-        @cancellable_node(role="context_setter")
-        async def setter(state: dict[str, Any]) -> dict[str, Any]:
-            return {"run_context": {"_pipeline_default_autonomy": "fully_autonomous"}}
-
-        state: dict[str, Any] = {"run_context": {"cancelled": False}}
-        result = await setter(state)
-        assert "_pipeline_default_autonomy" not in result["run_context"]
-
-    async def test_write_log_key_is_stripped(self) -> None:
-        @cancellable_node(role="context_setter")
-        async def setter(state: dict[str, Any]) -> dict[str, Any]:
-            return {"run_context": {"_run_context_write_log": "should be stripped"}}
-
-        state: dict[str, Any] = {"run_context": {"cancelled": False}}
-        result = await setter(state)
-        assert "_run_context_write_log" not in result["run_context"]
+        assert reserved_key not in result["run_context"]
 
     async def test_only_reserved_keys_returns_no_write_log(self) -> None:
         @cancellable_node(role="context_setter")

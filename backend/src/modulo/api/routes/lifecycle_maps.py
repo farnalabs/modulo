@@ -3,15 +3,17 @@
 import logging
 import uuid
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.lifecycle_map.service import (
     create_lifecycle_map,
     delete_lifecycle_map,
@@ -32,7 +34,7 @@ class LifecycleMapCreate(BaseModel):
     owner_team_id: uuid.UUID | None = None
     visibility: str = Field(default="org", pattern=r"^(org|team)$")
     version: int = Field(default=1, ge=1)
-    content_json: dict = Field(default_factory=dict)
+    content_json: dict[str, Any] = Field(default_factory=dict[str, Any])
 
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> "LifecycleMapCreate":
@@ -46,7 +48,7 @@ class LifecycleMapUpdate(BaseModel):
     description: str | None = Field(None, max_length=2000)
     owner_team_id: uuid.UUID | None = None
     visibility: str | None = Field(None, pattern=r"^(org|team)$")
-    content_json: dict | None = None
+    content_json: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> "LifecycleMapUpdate":
@@ -63,7 +65,7 @@ class LifecycleMapResponse(BaseModel):
     owner_team_id: uuid.UUID | None
     visibility: str
     version: int
-    content_json: dict
+    content_json: dict[str, Any]
     archived_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -78,6 +80,7 @@ class LifecycleMapListResponse(BaseModel):
     page_size: int
 
 
+@handle_db_errors("lifecycle_maps.list_lifecycle_maps_endpoint")
 @router.get("", response_model=LifecycleMapListResponse)
 async def list_lifecycle_maps_endpoint(
     page: int = Query(default=1, ge=1),
@@ -85,7 +88,7 @@ async def list_lifecycle_maps_endpoint(
     owner_team_id: uuid.UUID | None = Query(default=None),
     include_archived: bool = Query(default=False),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LifecycleMapListResponse:
     try:
         async with session.begin():
@@ -98,16 +101,16 @@ async def list_lifecycle_maps_endpoint(
                 owner_team_id=owner_team_id,
                 include_archived=include_archived,
             )
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -124,11 +127,12 @@ async def list_lifecycle_maps_endpoint(
     )
 
 
+@handle_db_errors("lifecycle_maps.create_lifecycle_map_endpoint")
 @router.post("", response_model=LifecycleMapResponse, status_code=status.HTTP_201_CREATED)
 async def create_lifecycle_map_endpoint(
     req: LifecycleMapCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():
@@ -145,16 +149,16 @@ async def create_lifecycle_map_endpoint(
                 version=req.version,
                 content_json=req.content_json,
             )
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -166,27 +170,28 @@ async def create_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
+@handle_db_errors("lifecycle_maps.get_lifecycle_map_endpoint")
 @router.get("/{lifecycle_map_id}", response_model=LifecycleMapResponse)
 async def get_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -200,12 +205,13 @@ async def get_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
+@handle_db_errors("lifecycle_maps.update_lifecycle_map_endpoint")
 @router.put("/{lifecycle_map_id}", response_model=LifecycleMapResponse)
 async def update_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     req: LifecycleMapUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LifecycleMapResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -218,16 +224,16 @@ async def update_lifecycle_map_endpoint(
             if "content_json" in updates:
                 updates["version"] = current.version + 1
             lifecycle_map = await update_lifecycle_map(session, lifecycle_map_id, updates)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -239,27 +245,28 @@ async def update_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
+@handle_db_errors("lifecycle_maps.delete_lifecycle_map_endpoint")
 @router.delete("/{lifecycle_map_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_lifecycle_map(session, lifecycle_map_id)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:

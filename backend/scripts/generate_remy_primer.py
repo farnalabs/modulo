@@ -44,20 +44,37 @@ _log = logging.getLogger(__name__)
 _GLOSSARY_TERMS: dict[str, str] = {
     "Pipeline": "An ordered graph of agents with explicit ConnectorBindings, executed as Runs.",
     "Run": "A single execution against a PipelineSnapshot, with unique ID, trace, cost record, and result.",
-    "Agent": "An atomic unit of work that takes defined input, applies a sandboxed prompt against a model backend, and produces defined output.",
+    "Agent": (
+        "An atomic unit of work that takes defined input, applies a sandboxed prompt against a model backend, "
+        "and produces defined output."
+    ),
     "Schema": "A versioned, reusable data structure definition that users control.",
     "Connector": "A configured, authenticated binding to an external system such as a git host or issue tracker.",
     "Trigger": "A first-class object that initiates a pipeline run (manual, webhook, cron, polling).",
     "HITL Gate": "A Human-in-the-Loop transition point that pauses execution until a human approves or rejects.",
     "Eval": "An automated quality check on agent output (llm_judge, regex, json_schema, custom_function).",
-    "Variant": "A set of runs against the same pipeline and input differing only in context overrides, used for A/B testing.",
+    "Variant": (
+        "A set of runs against the same pipeline and input differing only in context overrides, used for A/B testing."
+    ),
     "Library": "Published community primitives — schemas, workflows, agents, and integrations with metadata.",
-    "Remy": "Your AI SDLC assistant that can navigate the UI, trigger runs, review results, approve HITL gates, and configure settings.",
+    "Remy": (
+        "Your AI SDLC assistant that can navigate the UI, trigger runs, review results, approve HITL gates, "
+        "and configure settings."
+    ),
 }
 
 _KEY_CONCEPTS = [
-    "Pipeline", "Run", "Agent", "Schema", "Connector", "Trigger",
-    "HITL Gate", "Eval", "Variant", "Library", "Remy",
+    "Pipeline",
+    "Run",
+    "Agent",
+    "Schema",
+    "Connector",
+    "Trigger",
+    "HITL Gate",
+    "Eval",
+    "Variant",
+    "Library",
+    "Remy",
 ]
 
 
@@ -136,7 +153,8 @@ def _load_navigation() -> str:
 
 
 async def _get_org_counts(
-    session: AsyncSession, org_id: str,
+    session: AsyncSession,
+    org_id: str,
 ) -> dict[str, int]:
     """Query live counts for pipelines, connectors, and model backends."""
     models_and_keys: list[tuple[type, str]] = [
@@ -157,15 +175,15 @@ async def _get_org_counts(
 
 
 async def _get_user_context(
-    session: AsyncSession, org_id: str, user_id: str,
+    session: AsyncSession,
+    org_id: str,
+    user_id: str,
 ) -> dict[str, str]:
     """Fetch active user and org context for the primer."""
     ctx: dict[str, str] = {}
 
     try:
-        result = await session.execute(
-            select(Account).where(Account.id == user_id)
-        )
+        result = await session.execute(select(Account).where(Account.id == user_id))
         account = result.scalar_one_or_none()
         if account:
             ctx["display_name"] = account.display_name
@@ -186,9 +204,7 @@ async def _get_user_context(
         ctx["role"] = "unknown"
 
     try:
-        result = await session.execute(
-            select(Organisation).where(Organisation.id == org_id)
-        )
+        result = await session.execute(select(Organisation).where(Organisation.id == org_id))
         org = result.scalar_one_or_none()
         if org:
             ctx["org_name"] = org.name
@@ -201,7 +217,8 @@ async def _get_user_context(
 
 
 async def _get_active_context(
-    org_id: str | None, user_id: str | None,
+    org_id: str | None,
+    user_id: str | None,
 ) -> dict[str, str]:
     """Try to query DB for context; return defaults on failure."""
     ctx: dict[str, str] = {
@@ -248,7 +265,7 @@ _ABOUT_MODULO = (
 
 
 def _estimate_tokens(text: str) -> int:
-    """Rough token estimate (words × 1.3)."""
+    """Rough token estimate (words x 1.3)."""
     word_count = len(text.split())
     return int(word_count * 1.3)
 
@@ -278,7 +295,6 @@ def _truncate_primer(primer: str, max_tokens: int = _MAX_PRIMER_TOKENS) -> str:
 
     # Try dropping navigation last; if still over, drop key concepts too
     key_concepts_section = None
-    navigation_section = None
     active_context_section = None
     other_sections: list[str] = []
 
@@ -286,7 +302,7 @@ def _truncate_primer(primer: str, max_tokens: int = _MAX_PRIMER_TOKENS) -> str:
         if p.startswith("Key Concepts"):
             key_concepts_section = p
         elif p.startswith("Pages & Navigation"):
-            navigation_section = p
+            pass
         elif p.startswith("Active Context"):
             active_context_section = p
         else:
@@ -394,9 +410,7 @@ async def generate_primer(
     primer = "\n\n".join(sections)
 
     # Enforce token budget
-    primer = _truncate_primer(primer)
-
-    return primer
+    return _truncate_primer(primer)
 
 
 # ---------------------------------------------------------------------------

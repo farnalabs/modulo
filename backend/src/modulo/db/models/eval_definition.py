@@ -1,9 +1,8 @@
-from __future__ import annotations
-
 import uuid
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, Float, ForeignKey, String, Uuid
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -33,7 +32,7 @@ class EvalDefinition(OrgScoped):
     eval_type: Mapped[str] = mapped_column(String(30), nullable=False)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     failure_behaviour: Mapped[str] = mapped_column(String(10), nullable=False, server_default="warn")
-    pass_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pass_threshold: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     suite_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False

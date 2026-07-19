@@ -110,6 +110,10 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - Updated Error Handling section (12 checkboxes), Edge Cases section (7 checkboxes), Resilience section (3 checkboxes)
 - Status: partial (13 known gaps remain)
 
+#### 2026-07-12 — Round 3 QA (improve-architecture batch 3)
+- **Fixed (MINOR):** Added `exc_info=True` to `_log.warning()` in audit_logger for IntegrityError on append retry and cursor decode failure — both `except` blocks logged without exception traceback.
+- **Fixed (MINOR):** Moved resolved `[x]` item from Known Gaps to QA History (verify endpoint tests gap was fixed in cross-cutting QA 315 but remained in Known Gaps section with `[x]`).
+
 ### Security
 
 - [x] RLS isolates events per organisation
@@ -122,7 +126,6 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - No export bundle checksum/signature for tamper-evident SOC 2 artifacts
 - No chain verification data bundled with export (auditor must call /verify separately)
 - Export uses offset-based pagination which may skip/duplicate events if new events created during export
-- [x] No unit tests for the `/verify` endpoint ProgrammingError path — added with SQLAlchemyError + non-admin tests in cross-cutting QA 315
 - No integration test verifying full export flow (API → DB → paginated response)
 - No CLI export command for offline/automated evidence collection (e.g., monthly audit bundle)
 - No retention-aware export — deleted/expired events are invisible to export (no gap marking)

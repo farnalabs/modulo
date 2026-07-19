@@ -7,6 +7,7 @@ per-key isolation, and admin reconfiguration.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,10 +23,8 @@ from modulo.settings import Settings
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/rate_limiting.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------

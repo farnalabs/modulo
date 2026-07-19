@@ -748,7 +748,7 @@ class TestAuthBeforeFileRead:
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
         input_path = tmp_path / "should_not_exist.jsonl"
-        input_path.write_text("garbage")
+        input_path.write_text(json.dumps({"__meta__": {"version": 1}}) + "\n")
 
         runner = CliRunner()
         result = runner.invoke(

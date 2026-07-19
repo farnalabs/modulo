@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """PipelineExecutor — orchestrates a single run end-to-end.
 
 Responsibilities:
@@ -11,10 +9,11 @@ Responsibilities:
   - Stream graph execution, updating Run status on transitions
   - Mark run complete/failed/cancelled/awaiting_human/eval_failed in DB
 
-Handles NodeInterrupt by transitioning the run to awaiting_human.
+Handles GraphInterrupt by transitioning the run to awaiting_human.
 Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook triggers (phases 3+).
 """
 
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -25,9 +24,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from langgraph.errors import NodeInterrupt
+from langgraph.errors import GraphInterrupt
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine import (
@@ -48,6 +47,7 @@ from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
     set_cancellation_check,
+    set_connector_hub,
     set_model_backend_hub,
 )
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
@@ -145,6 +145,18 @@ def _map_lg_event(
     return None
 
 
+def _streamed_interrupts(lg_event: dict[str, Any]) -> tuple[Any, ...]:
+    """Extract native LangGraph interrupts from a top-level stream event."""
+    if lg_event.get("event") != "on_chain_stream":
+        return ()
+    data = lg_event.get("data")
+    chunk = data.get("chunk") if isinstance(data, dict) else None
+    interrupts = chunk.get("__interrupt__") if isinstance(chunk, dict) else None
+    if isinstance(interrupts, (list, tuple)):
+        return tuple(interrupts)
+    return (interrupts,) if interrupts is not None else ()
+
+
 @asynccontextmanager
 async def _checkpointer_scope(
     conn_string: str,
@@ -177,7 +189,7 @@ class PipelineExecutor:
         checkpointer_conn_string: str | None = None,
     ) -> None:
         self._engine = db_engine
-        self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
         self._checkpointer_conn_string = checkpointer_conn_string
         self._otel_bridge = LangGraphOtelBridge()
 
@@ -241,19 +253,19 @@ class PipelineExecutor:
 
     async def _load_eval_defs_for_pipeline(
         self,
-        session: Any,
+        session: AsyncSession,
         pipeline_id: uuid.UUID,
-    ) -> list[Any]:
+    ) -> list[EvalDefinition]:
         """Load eval definitions for a pipeline that are scoped to a node."""
         eval_stmt = select(EvalDefinition).where(
             EvalDefinition.pipeline_id == pipeline_id,
             EvalDefinition.node_id.isnot(None),
         )
-        return (await session.execute(eval_stmt)).scalars().all()
+        return list((await session.execute(eval_stmt)).scalars().all())
 
     @staticmethod
     def _build_eval_defs_by_node(
-        eval_rows: list[Any],
+        eval_rows: list[EvalDefinition],
         org_id: uuid.UUID,
         pipeline_id: uuid.UUID,
     ) -> dict[str, list[EvalDefDTO]]:
@@ -315,8 +327,62 @@ class PipelineExecutor:
                     await hub.__aenter__()
                     await hub.initialise(backend_rows, secrets_backend=secrets_backend)
                     set_model_backend_hub(hub)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.warning("pipeline.model_backend_hub_init_failed", exc_info=True)
+        return hub
+
+    async def _init_connector_hub(self, org_id: uuid.UUID) -> Any | None:
+        """Load active ConnectorInstance rows for the org and initialise ConnectorHub.
+
+        Sets the hub on the current ContextVar so make_connector_fn can access it.
+        Returns the hub (or None if no connectors are configured).
+        """
+        hub: Any | None = None
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                from sqlalchemy import select
+
+                from modulo.db.models.connector_instance import ConnectorInstance
+
+                rows = (
+                    (
+                        await session.execute(
+                            select(ConnectorInstance).where(
+                                ConnectorInstance.organisation_id == org_id,
+                                ConnectorInstance.status == "active",
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if isinstance(rows, list) and rows:
+                    from modulo.core.connector_hub import ConnectorHub
+                    from modulo.core.pipeline_engine.decorator import set_connector_hub
+                    from modulo.core.runtime_provider import create_default_hub
+                    from modulo.core.secrets_backend import create_secrets_backend
+                    from modulo.settings import get_settings
+
+                    _settings = get_settings()
+                    secrets_backend = create_secrets_backend(
+                        fernet_key=_settings.fernet_key,
+                        session=session,
+                    )
+                    runtime_hub = create_default_hub()
+                    hub = ConnectorHub(
+                        secrets_backend=secrets_backend,
+                        runtime_provider=runtime_hub,
+                    )
+                    await hub.__aenter__()
+                    await hub.initialise(rows)
+                    set_connector_hub(hub)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("pipeline.connector_hub_init_failed", exc_info=True)
         return hub
 
     def _check_db_cancellation(
@@ -347,7 +413,7 @@ class PipelineExecutor:
         run_id: uuid.UUID,
     ) -> bool:
         """Execute the DB cancellation check query."""
-        async with self._session_factory() as session:
+        async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             run = await get_run(session, run_id)
             return run is not None and run.cancellation_requested
@@ -362,12 +428,14 @@ class PipelineExecutor:
         if not node_token_usage:
             return None, None, None
 
-        total_tokens = sum(n.get("total_tokens", 0) for n in node_token_usage.values())
+        total_tokens = sum(n.get("total_tokens") or 0 for n in node_token_usage.values())
         total_cost = Decimal(0)
         result_usage: dict[str, dict[str, Any]] = {}
         for node_id, n_data in node_token_usage.items():
-            n_cost = Decimal(str(n_data.get("input_tokens", 0))) * input_rate
-            n_cost += Decimal(str(n_data.get("output_tokens", 0))) * output_rate
+            input_tokens = n_data.get("input_tokens")
+            output_tokens = n_data.get("output_tokens")
+            n_cost = Decimal(str(input_tokens if input_tokens is not None else 0)) * input_rate
+            n_cost += Decimal(str(output_tokens if output_tokens is not None else 0)) * output_rate
             result_usage[node_id] = {**n_data, "cost_usd": float(n_cost)}
             total_cost += n_cost
 
@@ -407,7 +475,7 @@ class PipelineExecutor:
 
             # Load eval definitions while session is active.
             eval_rows = await self._load_eval_defs_for_pipeline(session, run.pipeline_id)
-            resume_eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
+            self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
 
         pipeline_id = run.pipeline_id
         snapshot_id = run.snapshot_id
@@ -428,12 +496,14 @@ class PipelineExecutor:
                 token_budget=pipeline.token_budget,
             )
 
+        if not self._checkpointer_conn_string:
+            raise RuntimeError("Cannot resume without a checkpointer configured")
+
         compiled = get_or_compile(
             pipeline_id,
             snapshot_id,
             lambda: build_graph_from_json(
                 graph_json,
-                eval_definitions_by_node=resume_eval_defs_by_node,
                 session_factory=self._session_factory,
                 org_id=org_id,
             ),
@@ -445,11 +515,9 @@ class PipelineExecutor:
             str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
         }
 
-        if not self._checkpointer_conn_string:
-            raise RuntimeError("Cannot resume without a checkpointer configured")
-
         final_status: str = "failed"
         error_code: str | None = None
+        error_detail: str | None = None
         node_token_usage: dict[str, Any] | None = None
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
@@ -488,7 +556,12 @@ class PipelineExecutor:
                 error_code = "configuration_error"
             else:
                 raise
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
+            import traceback
+
+            error_detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[:2000]
             _log.exception("pipeline.resume_error", extra={"run_id": str(run_id)})
             final_status = "failed"
             error_code = type(exc).__name__
@@ -513,6 +586,8 @@ class PipelineExecutor:
                         resource_id=run_id,
                         payload_json={"error_detail": error_code},
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
 
@@ -529,6 +604,7 @@ class PipelineExecutor:
                 run_id,
                 final_status,
                 error_code=error_code,
+                error_detail=error_detail,
                 total_tokens=total_tokens,
                 total_cost_usd=total_cost if node_token_usage else None,
                 node_token_usage=node_token_usage,
@@ -608,6 +684,8 @@ class PipelineExecutor:
 
         # Load model backends for this run's org — provides LLM access to agent nodes.
         model_backend_hub = await self._init_model_backend_hub(org_id)
+        # Load connector hub for this run's org — provides connector access to connector nodes.
+        connector_hub = await self._init_connector_hub(org_id)
 
         try:
             # Compile (or retrieve from cache) the StateGraph.
@@ -670,10 +748,16 @@ class PipelineExecutor:
                     guard=guard,
                     node_token_budgets=node_token_budgets,
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
+            import traceback
+
+            _tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[:2000]
             _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
             final_status = "failed"
             error_code = type(exc).__name__
+            error_detail = _tb
 
         try:
             # Record audit events for block failures.
@@ -689,6 +773,8 @@ class PipelineExecutor:
                             resource_id=run_id,
                             payload_json={"error_detail": error_detail},
                         )
+                    except asyncio.CancelledError:
+                        raise
                     except Exception:
                         _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
 
@@ -724,6 +810,8 @@ class PipelineExecutor:
                                     "score": exc.score,
                                 },
                             )
+                        except asyncio.CancelledError:
+                            raise
                         except Exception:
                             _log.exception("audit.eval_suite_blocked_failed", extra={"run_id": str(run_id)})
 
@@ -748,6 +836,8 @@ class PipelineExecutor:
                                         sr.get("trigger_id", "?"),
                                         sr.get("run_id", "?"),
                                     )
+                            except asyncio.CancelledError:
+                                raise
                             except Exception:
                                 _log.exception(
                                     "agent_signal.failed",
@@ -756,14 +846,19 @@ class PipelineExecutor:
                                         "node_id": node_id,
                                     },
                                 )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("pipeline.post_stream_error", extra={"run_id": str(run_id)})
         finally:
             # Close broker after all post-stream work (suite checks, signals).
             set_cancellation_check(None)
             set_model_backend_hub(None)
+            set_connector_hub(None)
             if model_backend_hub is not None:
                 await model_backend_hub.__aexit__(None, None, None)
+            if connector_hub is not None:
+                await connector_hub.__aexit__(None, None, None)
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 
@@ -786,6 +881,7 @@ class PipelineExecutor:
                 total_tokens=total_tokens,
                 total_cost_usd=total_cost_usd_val,
                 node_token_usage=node_token_usage,
+                outputs_json=completed_node_outputs,
             )
 
         if final_run is None:
@@ -794,7 +890,7 @@ class PipelineExecutor:
 
     async def _check_eval_suites(
         self,
-        session: Any,
+        session: AsyncSession,
         run_id: uuid.UUID,
         pipeline_id: uuid.UUID,
     ) -> list[SuiteEvalResult]:
@@ -835,10 +931,11 @@ class PipelineExecutor:
             result_result = await session.execute(result_stmt)
             eval_results = result_result.scalars().all()
 
-            threshold = next(
+            threshold_raw = next(
                 (d.pass_threshold for d in defs_in_suite if d.pass_threshold is not None),
                 None,
             )
+            threshold = float(threshold_raw) if threshold_raw is not None else None
 
             suite_result_raw = evaluate_suite(
                 eval_results=[
@@ -871,6 +968,51 @@ class PipelineExecutor:
             results.append(suite_result)
 
         return results
+
+    async def _handle_graph_interrupt(
+        self,
+        interrupts: Any,
+        broker: RunEventBroker,
+        run_id: uuid.UUID,
+        *,
+        pipeline_id: uuid.UUID | None,
+        org_id: uuid.UUID | None,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
+        """Create the HITL gate and publish the awaiting event for an interrupt."""
+        first_interrupt = interrupts[0] if interrupts else None
+        value = getattr(first_interrupt, "value", None)
+        gate_payload = value if isinstance(value, dict) else {}
+        gate_id = gate_payload.get("gate_id", "")
+        required_team_id_str = gate_payload.get("required_team_id")
+        required_team_id = uuid.UUID(required_team_id_str) if required_team_id_str else None
+
+        if pipeline_id is not None and org_id is not None:
+            mgr = HITLManager()
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await mgr.create_gate(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    pipeline_id=pipeline_id,
+                    org_id=org_id,
+                    required_team_id=required_team_id,
+                )
+            broker.publish(
+                "hitl_awaiting",
+                {
+                    "gate_payload": gate_payload,
+                    "team_id": str(required_team_id) if required_team_id else None,
+                },
+            )
+            return "awaiting_human", None, None, None
+
+        _log.warning(
+            "hitl_gate.cannot_create",
+            extra={"run_id": str(run_id), "pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+        )
+        broker.publish("run_failed", {"error": "gate_creation_failed", "detail": "Pipeline or org ID is None"})
+        return "failed", "configuration_error", "Missing pipeline_id or org_id for HITL gate creation", None
 
     async def _stream_graph(
         self,
@@ -907,6 +1049,16 @@ class PipelineExecutor:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
                 if guard is not None:
                     guard.check_duration()
+
+                interrupts = _streamed_interrupts(lg_event)
+                if interrupts:
+                    return await self._handle_graph_interrupt(
+                        interrupts,
+                        broker,
+                        run_id,
+                        pipeline_id=pipeline_id,
+                        org_id=org_id,
+                    )
 
                 mapped = _map_lg_event(lg_event, node_ids)
                 if mapped is not None:
@@ -958,40 +1110,15 @@ class PipelineExecutor:
 
             broker.publish("run_completed", {})
             return "complete", None, None, node_token_usage or None
-        except NodeInterrupt as exc:
+        except GraphInterrupt as exc:
             interrupts = exc.args[0] if exc.args else []
-            gate_payload = interrupts[0].value if interrupts else {}
-            gate_id = gate_payload.get("gate_id", "")
-            required_team_id_str = gate_payload.get("required_team_id")
-            required_team_id = uuid.UUID(required_team_id_str) if required_team_id_str else None
-
-            if pipeline_id is not None and org_id is not None:
-                try:
-                    mgr = HITLManager()
-                    async with self._session_factory() as session, session.begin():
-                        await set_rls_org(session, org_id)
-                        await mgr.create_gate(
-                            session,
-                            run_id=run_id,
-                            gate_id=gate_id,
-                            pipeline_id=pipeline_id,
-                            org_id=org_id,
-                            required_team_id=required_team_id,
-                        )
-                except Exception:
-                    _log.exception(
-                        "hitl_gate.create_failed",
-                        extra={"run_id": str(run_id), "gate_id": gate_id},
-                    )
-
-            broker.publish(
-                "hitl_awaiting",
-                {
-                    "gate_payload": gate_payload,
-                    "team_id": str(required_team_id) if required_team_id else None,
-                },
+            return await self._handle_graph_interrupt(
+                interrupts,
+                broker,
+                run_id,
+                pipeline_id=pipeline_id,
+                org_id=org_id,
             )
-            return "awaiting_human", None, None, None
         except EvalBlockedError as exc:
             broker.publish("run_failed", {"error": "eval_blocked", "detail": str(exc)})
             return "eval_failed", "eval_blocked", str(exc), None
@@ -1022,7 +1149,11 @@ class PipelineExecutor:
                 extra={"run_id": str(run_id), "detail": error_detail},
             )
             return "failed", "node_timeout", error_detail, node_token_usage or None
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            _log.exception("pipeline.stream_error", extra={"run_id": str(run_id)})
-            broker.publish("run_failed", {"error": type(exc).__name__})
-            return "failed", type(exc).__name__, None, None
+            import traceback
+
+            _tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[:5000]
+            broker.publish("run_failed", {"error": type(exc).__name__, "detail": _tb[:5000]})
+            return "failed", type(exc).__name__, _tb[:5000], node_token_usage or None

@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """Configurable pricing for model backends.
 
 Provides a PRICING_TABLE of known model costs and a get_pricing() lookup
 that uses glob/prefix matching on model_id.
 """
 
+from __future__ import annotations
 
 import fnmatch
 from dataclasses import dataclass

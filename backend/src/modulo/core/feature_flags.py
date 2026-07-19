@@ -1,8 +1,13 @@
+"""Feature flag registry — catalogs all known feature flags and their current status.
+
+Tier structure (matching the DB tier_catalog):
+    community (0) — Free tier, all features active without a license
+    team      (1) — The one paid tier
+"""
+
 from __future__ import annotations
 
-"""Feature flag registry — catalogs all known feature flags and their current status."""
-
-
+import asyncio
 import logging
 import uuid
 from dataclasses import asdict, dataclass
@@ -75,6 +80,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
+        name="web_vitals_analytics",
+        description="Web Vitals analytics dashboard for monitoring frontend performance",
+        tier="community",
+    ),
+    FeatureFlag(
         name="remy",
         description="Remy in-app AI assistant",
         tier="community",
@@ -142,22 +152,20 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="External secrets backends (Vault, AWS, 1Password, Azure Key Vault)",
         tier="team",
     ),
-    # ── v1 tier ────────────────────────────────────────────────────────
     FeatureFlag(
         name="schema_union_types",
         description="Union types and polymorphic schemas",
-        tier="v1",
+        tier="team",
     ),
     FeatureFlag(
         name="migration_cli",
         description="CLI tool for migrating pipelines across instances",
-        tier="v1",
+        tier="team",
     ),
-    # ── v2 tier ────────────────────────────────────────────────────────
     FeatureFlag(
         name="checkpoint_encryption",
         description="Encrypt pipeline checkpoints at rest",
-        tier="v2",
+        tier="team",
     ),
     FeatureFlag(
         name="audit_crypto_chain",
@@ -167,17 +175,17 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="community_registry",
         description="Publish and discover community pipeline primitives",
-        tier="v2",
+        tier="team",
     ),
     FeatureFlag(
         name="prompt_optimization",
         description="Automated prompt tuning and optimisation",
-        tier="v2",
+        tier="team",
     ),
     FeatureFlag(
         name="pipeline_diff_rollback",
         description="Diff-based pipeline version comparison and rollback",
-        tier="v2",
+        tier="team",
     ),
     FeatureFlag(
         name="environment_profiles",
@@ -201,7 +209,7 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     ),
     FeatureFlag(
         name="error_forwarders",
-        description="External error tracking and alerting integrations",
+        description="Dispatch errors to external services via webhooks",
         tier="team",
     ),
     FeatureFlag(
@@ -244,7 +252,8 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
 ]
 
 
-TIER_RANK: dict[str, int] = {"community": 0, "team": 1, "v1": 2, "v2": 3}
+# community=Free, team=one paid tier
+TIER_RANK: dict[str, int] = {"community": 0, "team": 1}
 
 
 class CommunityTier:
@@ -372,6 +381,8 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
                         has_license_key=True,
                         license_features=set(validation.license_data.features),
                     )
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.warning("Failed to parse org-level license key", exc_info=True)
 
@@ -397,6 +408,8 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
                     has_license_key=True,
                     license_features=set(validation.license_data.features),
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.warning("Failed to parse env-var license key", exc_info=True)
 
@@ -563,6 +576,8 @@ class FeatureFlagRegistry:
                     overrides = org.settings_json.get("feature_overrides", {})
                     if flag_name in overrides:
                         return bool(overrides[flag_name])
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to check org flag override")
         return None
@@ -583,6 +598,8 @@ class FeatureFlagRegistry:
                     overrides = team.settings.get("feature_overrides", {})
                     if flag_name in overrides:
                         return bool(overrides[flag_name])
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to check team flag override")
         return None
@@ -603,9 +620,14 @@ class FeatureFlagRegistry:
                     overrides = account.preferences.get("feature_overrides", {})
                     if flag_name in overrides:
                         return bool(overrides[flag_name])
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to check user flag override")
         return None
+
+
+_registry: FeatureFlagRegistry | None = None
 
 
 def get_registry() -> FeatureFlagRegistry:
@@ -615,9 +637,10 @@ def get_registry() -> FeatureFlagRegistry:
     tier.  Granular overrides (org/team/user) are resolved from the DB at query
     time via ``resolve_flag()``.
     """
-    if not hasattr(get_registry, "_instance"):
-        get_registry._instance = FeatureFlagRegistry(current_tier="community")
-    return get_registry._instance
+    global _registry
+    if _registry is None:
+        _registry = FeatureFlagRegistry(current_tier="community")
+    return _registry
 
 
 async def get_plan_for_org(

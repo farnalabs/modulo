@@ -1,29 +1,29 @@
-from __future__ import annotations
-
 """Admin Remy configuration and skills management."""
 
+from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.remy_skill import RemySkill
 from modulo.db.models.system_config import SystemConfig
 from modulo.db.rls import set_rls_org
 
+# Labels for all known providers (both native and custom).
+# Derived from the Remy runtime providers and ModelBackendProvider enum (custom).
 logger = logging.getLogger(__name__)
 
-# Labels for all known providers (both native and custom).
-# Derived from _SIMPLE_BACKENDS (native) and ModelBackendProvider enum (custom).
 _PROVIDER_LABELS: dict[str, str] = {
     "ai21": "AI21",
     "anthropic": "Anthropic",
@@ -55,10 +55,12 @@ _PROVIDER_LABELS: dict[str, str] = {
     "custom": "Custom",
 }
 
+_log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/admin/remy", tags=["admin-remy"])
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -83,7 +85,7 @@ class RemyConfigResponse(BaseModel):
     default_model: str = "claude-sonnet-4-20250514"
     default_context_window: int = 200000
     allowed_providers: list[str] = ["anthropic", "openai", "gemini", "deepseek", "groq"]
-    allowed_models: list[str] = []
+    allowed_models: ClassVar[list[str]] = []
 
 
 class RemyConfigUpdate(BaseModel):
@@ -144,10 +146,11 @@ class ContextSourceModeUpdate(BaseModel):
 # ── Config endpoints ──────────────────────────────────────────────────
 
 
+@handle_db_errors("admin.remy.get_remy_config")
 @router.get("/config", response_model=RemyConfigResponse)
 async def get_remy_config(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RemyConfigResponse:
     _require_admin(principal)
     try:
@@ -189,16 +192,17 @@ async def get_remy_config(
         ) from None
 
 
+@handle_db_errors("admin.remy.get_available_providers")
 @router.get("/available-providers", response_model=AvailableProvidersResponse)
 async def get_available_providers(
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AvailableProvidersResponse:
     _require_admin(principal)
     try:
-        from modulo.api.routes.remy import _SIMPLE_BACKENDS
+        from modulo.api.routes.remy import SUPPORTED_PROVIDERS
         from modulo.db.enums import ModelBackendProvider
 
-        native_ids = set(_SIMPLE_BACKENDS.keys())
+        native_ids = set(SUPPORTED_PROVIDERS)
         native = [
             AvailableProviderInfo(id=k, label=_PROVIDER_LABELS.get(k, k.replace("_", " ").title()))
             for k in sorted(native_ids)
@@ -219,21 +223,22 @@ async def get_available_providers(
         ) from None
 
 
+@handle_db_errors("admin.remy.update_remy_config")
 @router.put("/config", response_model=RemyConfigResponse)
 async def update_remy_config(
     req: RemyConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RemyConfigResponse:
     _require_admin(principal)
     if req.allowed_providers is not None:
-        from modulo.api.routes.remy import _SIMPLE_BACKENDS
+        from modulo.api.routes.remy import SUPPORTED_PROVIDERS
 
-        invalid = [p for p in req.allowed_providers if p not in _SIMPLE_BACKENDS]
+        invalid = [p for p in req.allowed_providers if p not in SUPPORTED_PROVIDERS]
         if invalid:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Unsupported providers: {invalid}. Supported: {sorted(_SIMPLE_BACKENDS)}",
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Unsupported providers: {invalid}. Supported: {sorted(SUPPORTED_PROVIDERS)}",
             )
     try:
         async with session.begin():
@@ -326,10 +331,11 @@ def _skill_to_response(skill: RemySkill) -> SkillResponse:
     )
 
 
+@handle_db_errors("admin.remy.list_org_skills")
 @router.get("/skills", response_model=list[SkillResponse])
 async def list_org_skills(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[SkillResponse]:
     _require_admin(principal)
     try:
@@ -365,11 +371,12 @@ async def list_org_skills(
         ) from None
 
 
+@handle_db_errors("admin.remy.create_org_skill")
 @router.post("/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
 async def create_org_skill(
     req: SkillCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SkillResponse:
     _require_admin(principal)
     try:
@@ -408,12 +415,13 @@ async def create_org_skill(
         ) from None
 
 
+@handle_db_errors("admin.remy.update_org_skill")
 @router.put("/skills/{skill_id}", response_model=SkillResponse)
 async def update_org_skill(
     skill_id: uuid.UUID,
     req: SkillUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SkillResponse:
     _require_admin(principal)
     try:
@@ -452,11 +460,12 @@ async def update_org_skill(
         ) from None
 
 
+@handle_db_errors("admin.remy.delete_org_skill")
 @router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_org_skill(
     skill_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     _require_admin(principal)
     try:
@@ -487,10 +496,11 @@ async def delete_org_skill(
 # ── Org-level Context Sources ─────────────────────────────────────────
 
 
+@handle_db_errors("admin.remy.get_org_context_sources")
 @router.get("/context-sources")
 async def get_org_context_sources(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, object]:
     _require_admin(principal)
     try:
@@ -529,12 +539,13 @@ async def get_org_context_sources(
         ) from None
 
 
+@handle_db_errors("admin.remy.set_org_context_source")
 @router.put("/context-sources/{source_key}")
 async def set_org_context_source(
     source_key: str,
     req: ContextSourceModeUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     _require_admin(principal)
     try:
@@ -566,10 +577,11 @@ async def set_org_context_source(
         ) from None
 
 
+@handle_db_errors("admin.remy.reset_org_context_sources")
 @router.delete("/context-sources", status_code=status.HTTP_200_OK)
 async def reset_org_context_sources(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     _require_admin(principal)
     try:
@@ -609,12 +621,14 @@ async def reset_org_context_sources(
 # ── User-level helper (reused by me.py) ────────────────────────────────
 
 
-async def get_user_skills(session: AsyncSession, user_id: uuid.UUID) -> list[RemySkill]:
+async def get_user_skills(session: AsyncSession, user_id: uuid.UUID, org_id: uuid.UUID) -> list[RemySkill]:
     result = await session.execute(
         select(RemySkill)
         .where(
-            RemySkill.user_id == user_id,
-            RemySkill.organisation_id.is_(None),
+            or_(
+                RemySkill.user_id == user_id,
+                RemySkill.organisation_id == org_id,
+            )
         )
         .order_by(RemySkill.created_at.desc())
     )

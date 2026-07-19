@@ -1,26 +1,16 @@
 name: Staging E2E
 
 on:
-  workflow_run:
-    workflows: [Staging Auto-Deploy]
-    types: [completed]
-  schedule:
-    - cron: '0 6 * * *'
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    working-directory: backend
-
 jobs:
-  playwright-smoke:
-    runs-on: [self-hosted, windows, docker]
+  staging-suites:
+    name: Smoke, WCAG, and regression
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: frontend
@@ -32,7 +22,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Wait for staging health
-        shell: powershell
+        shell: bash
         timeout-minutes: 5
         run: |
           Write-Host "Waiting for staging.modulo.run ..."
@@ -49,113 +39,61 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium
       - name: Run @smoke Playwright tests against staging
-        run: npm run test:e2e:smoke -- --reporter=line --reporter=junit
+        id: smoke-tests
+        run: npm run test:e2e:smoke -- --reporter=line --reporter=junit --output=test-results/smoke
         timeout-minutes: 10
         env:
           E2E_TARGET: staging
           E2E_NO_WEBSERVER: "true"
-          PLAYWRIGHT_JUNIT_OUTPUT_NAME: test-results/junit.xml
-      - name: Upload test results
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: test-results/smoke-junit.xml
+        continue-on-error: true
+      - name: Upload smoke test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-smoke-results
-          path: frontend/test-results/
-
-  wcag-audit:
-    runs-on: [self-hosted, windows, docker]
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Wait for staging health
-        shell: powershell
-        timeout-minutes: 5
-        run: |
-          Write-Host "Waiting for staging.modulo.run ..."
-          for ($i=0; $i -lt 60; $i++) {
-            try {
-              $r = curl.exe -s -f "https://staging.modulo.run/healthz" 2>$null
-              if ($LASTEXITCODE -eq 0) { Write-Host "Staging ready after ${i}s"; exit 0 }
-            } catch {}
-            Start-Sleep -Seconds 5
-          }
-          exit 1
-      - name: Install frontend deps
-        run: npm ci
-      - name: Install Playwright browsers
-        run: npx playwright install chromium
+          path: |
+            frontend/test-results/smoke/
+            frontend/test-results/smoke-junit.xml
       - name: Run WCAG audit on staging
-        run: npx playwright test staging-wcag
+        id: wcag-tests
+        run: npx playwright test staging-wcag --output=test-results/wcag
         env:
           E2E_TARGET: staging
           E2E_NO_WEBSERVER: "true"
-      - name: Upload test results
+        continue-on-error: true
+      - name: Upload WCAG test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: staging-wcag-results
-          path: frontend/test-results/
-
-  playwright-regression:
-    runs-on: [self-hosted, windows, docker]
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Wait for staging health
-        shell: powershell
-        timeout-minutes: 5
-        run: |
-          Write-Host "Waiting for staging.modulo.run ..."
-          for ($i=0; $i -lt 60; $i++) {
-            try {
-              $r = curl.exe -s -f "https://staging.modulo.run/healthz" 2>$null
-              if ($LASTEXITCODE -eq 0) { Write-Host "Staging ready after ${i}s"; exit 0 }
-            } catch {}
-            Start-Sleep -Seconds 5
-          }
-          exit 1
-      - name: Install frontend deps
-        run: npm ci
-      - name: Install Playwright browsers
-        run: npx playwright install chromium
+          path: frontend/test-results/wcag/
       - name: Run Playwright E2E regression suite against staging
         id: regression-tests
-        run: npm run test:e2e:staging -- --reporter=line --reporter=junit
+        run: npm run test:e2e:staging -- --reporter=line --reporter=junit --output=test-results/regression
         timeout-minutes: 30
         env:
           E2E_TARGET: staging
           E2E_NO_WEBSERVER: "true"
-          PLAYWRIGHT_JUNIT_OUTPUT_NAME: test-results/junit.xml
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: test-results/regression-junit.xml
         continue-on-error: true
       - name: Upload Playwright test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-regression-results
-          path: frontend/test-results/
+          path: |
+            frontend/test-results/regression/
+            frontend/test-results/regression-junit.xml
       - name: Final cleanup
         if: always()
-        shell: powershell
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           Remove-Item -Path "$env:TEMP\ms-playwright" -Recurse -Force -ErrorAction SilentlyContinue
       - name: Fail job on test failure
-        if: steps.regression-tests.outcome == 'failure'
-        shell: powershell
+        if: steps.smoke-tests.outcome == 'failure' || steps.wcag-tests.outcome == 'failure' || steps.regression-tests.outcome == 'failure'
+        shell: bash
         run: |
-          Write-Host "::error::Playwright regression tests failed. Check the uploaded artifacts for details."
+          Write-Host "::error::One or more staging suites failed. Check the separate uploaded artifacts for details."
           exit 1

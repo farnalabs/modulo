@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="mcp_server" show-disabled>
 
     <div data-theme="agent" class="page-narrow">
@@ -113,14 +113,19 @@
         </CardHeader>
         <CardContent class="space-y-4">
           <div class="flex items-center gap-2">
-            <label class="text-sm font-medium whitespace-nowrap">Client:</label>
-            <select v-model="selectedMcpClient" aria-label="Client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-              <option value="opencode">opencode / Claude Code</option>
-              <option value="claude">Claude Desktop</option>
-              <option value="cursor">Cursor</option>
-              <option value="continue">Continue.dev</option>
-              <option value="custom">Custom</option>
-            </select>
+            <label for="settingsmcpview-client" class="text-sm font-medium whitespace-nowrap">Client:</label>
+            <Select v-model="selectedMcpClient">
+              <SelectTrigger id="settingsmcpview-client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Client">
+                <SelectValue placeholder="Select client" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="opencode">opencode / Claude Code</SelectItem>
+                <SelectItem value="claude">Claude Desktop</SelectItem>
+                <SelectItem value="cursor">Cursor</SelectItem>
+                <SelectItem value="continue">Continue.dev</SelectItem>
+                <SelectItem value="custom">Custom</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div class="rounded-lg bg-muted/30 p-4">
             <pre class="text-xs font-mono whitespace-pre-wrap break-all">{{ mcpConfigSnippet }}</pre>
@@ -153,8 +158,8 @@
     >
       <div class="space-y-4 py-2">
         <div>
-          <label class="mb-1 block text-sm font-medium">Key Name</label>
-          <input
+          <label for="settingsmcpview-field-2" class="mb-1 block text-sm font-medium">Key Name</label>
+          <input id="settingsmcpview-field-2"
             v-model="createKeyName"
             type="text"
             data-testid="settings-mcp-create-key-name"
@@ -168,16 +173,16 @@
           >Key name is required.</p>
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Role</label>
-          <select
-            v-model="createKeyRole"
-            data-testid="settings-mcp-create-key-role"
-            aria-label="Role"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="operator">Operator</option>
-            <option value="runner">Runner</option>
-          </select>
+          <label for="settingsmcpview-role" class="mb-1 block text-sm font-medium">Role</label>
+          <Select v-model="createKeyRole">
+            <SelectTrigger id="settingsmcpview-role" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Role" data-testid="settings-mcp-create-key-role">
+              <SelectValue placeholder="Select role" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="operator">Operator</SelectItem>
+              <SelectItem value="runner">Runner</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div v-if="createKeyError" class="text-sm text-destructive">{{ createKeyError }}</div>
       </div>
@@ -199,7 +204,7 @@
           <div>
             <p class="mb-1 text-sm font-medium">API Key</p>
             <div class="relative">
-              <input
+              <input aria-label="keyMasked ? "
                 :type="keyMasked ? 'password' : 'text'"
                 :value="createdKeyValue"
                 readonly
@@ -261,6 +266,13 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort } from '../lib/formatDate'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 const planStore = usePlanStore()
 
@@ -284,8 +296,8 @@ type ApiKeyCreatedResponse = components['schemas']['ApiKeyCreatedResponse']
 const { loading, error: loadError, data: mcpData, load: loadAll } = useDataFetch<McpPageData>(
   async () => {
     const [mcpResp, keysResp] = await Promise.all([
-      (api as any).GET('/api/v1/api-keys/mcp-config'),
-      (api as any).GET('/api/v1/api-keys'),
+      (api as any).GET('/api/v1/api-keys/mcp-config').catch(() => null),
+      (api as any).GET('/api/v1/api-keys').catch(() => null),
     ])
     if (mcpResp.error) return { error: mcpResp.error }
     if (keysResp.error) return { error: keysResp.error }

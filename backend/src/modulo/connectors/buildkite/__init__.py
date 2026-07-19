@@ -107,7 +107,8 @@ class BuildkiteConnector(ConnectorBase):
             return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
         except httpx.HTTPStatusError as exc:
             return HealthResult(
-                ok=False, detail=f"Buildkite API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+                ok=False,
+                detail=f"Buildkite API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Buildkite API timeout")
@@ -120,14 +121,14 @@ class BuildkiteConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.get("/organizations")
                     r.raise_for_status()
-                    records = cast(list[dict[str, Any]], r.json())
+                    records = cast("list[dict[str, Any]]", r.json())
                     return ConnectorResult(records=records, total=len(records))
             case "pipelines":
                 org = q.filters.get("organization", "")
                 async with self._client() as client:
                     r = await client.get(f"/organizations/{org}/pipelines")
                     r.raise_for_status()
-                    records = cast(list[dict[str, Any]], r.json())
+                    records = cast("list[dict[str, Any]]", r.json())
                     return ConnectorResult(records=records, total=len(records))
             case "builds":
                 org = q.filters.get("organization", "")
@@ -141,7 +142,7 @@ class BuildkiteConnector(ConnectorBase):
                         params=params,
                     )
                     r.raise_for_status()
-                    records = cast(list[dict[str, Any]], r.json())
+                    records = cast("list[dict[str, Any]]", r.json())
                     return ConnectorResult(records=records, total=len(records))
             case "jobs":
                 org = q.filters.get("organization", "")
@@ -152,7 +153,7 @@ class BuildkiteConnector(ConnectorBase):
                         f"/organizations/{org}/pipelines/{pipeline}/builds/{build_number}/jobs",
                     )
                     r.raise_for_status()
-                    records = cast(list[dict[str, Any]], r.json())
+                    records = cast("list[dict[str, Any]]", r.json())
                     return ConnectorResult(records=records, total=len(records))
             case _:
                 raise ValueError(f"Unsupported query resource: {q.resource!r}")
@@ -183,7 +184,7 @@ class BuildkiteConnector(ConnectorBase):
                 json=body,
             )
             r.raise_for_status()
-            return cast(dict[str, Any], r.json())
+            return cast("dict[str, Any]", r.json())
 
     async def trigger_run(
         self,
@@ -331,25 +332,25 @@ class _BuildkiteTestDouble(BuildkiteConnector):
             status=self._status,
         )
 
-    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
+    async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=self._run_logs)
 
     async def list_runs(
         self,
         pipeline_id: str | None = None,
         status: CIRunStatus | None = None,
-        limit: int = 20,
+        _limit: int = 20,
     ) -> list[CIRun]:
         return [
             CIRun(
                 id="build-1",
                 pipeline_id=pipeline_id or "my-org/my-pipeline",
                 status=status or CIRunStatus.SUCCESS,
-            )
+            ),
         ]
 
-    async def query(self, q: ConnectorQuery) -> ConnectorResult:
+    async def query(self, _q: ConnectorQuery) -> ConnectorResult:
         return ConnectorResult(records=[])
 
-    async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+    async def write(self, _payload: ConnectorPayload) -> dict[str, Any]:
         return {}

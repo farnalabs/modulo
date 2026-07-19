@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """HITL (Human-In-The-Loop) API routes.
 
 All HITL operations are scoped to the authenticated user's organisation.
@@ -10,12 +8,11 @@ claim.  ``human_only`` gates additionally reject MCP-initiated approve requests
 (checked by the ViewModel layer — this route does not distinguish clients).
 """
 
+from __future__ import annotations
 
 import logging
 import uuid
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -23,9 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -40,6 +38,11 @@ from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org
+from modulo.settings import get_settings
+
+logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["hitl"])
 
@@ -112,12 +115,18 @@ class PendingGatesResponse(BaseModel):
     response_model=ClaimResponse,
     status_code=status.HTTP_200_OK,
 )
+@handle_db_errors("hitl.claim_gate")
+@router.post(
+    "/runs/{run_id}/hitl/{gate_id}/claim",
+    response_model=ClaimResponse,
+    status_code=status.HTTP_200_OK,
+)
 async def claim_gate(
     run_id: uuid.UUID,
     gate_id: str,
     req: ClaimRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ClaimResponse:
     """Atomically claim a HITL gate. Returns a claim_token for approve/reject."""
     mgr = HITLManager()
@@ -184,13 +193,18 @@ async def claim_gate(
     "/runs/{run_id}/hitl/{gate_id}/approve",
     status_code=status.HTTP_200_OK,
 )
+@handle_db_errors("hitl.approve_gate")
+@router.post(
+    "/runs/{run_id}/hitl/{gate_id}/approve",
+    status_code=status.HTTP_200_OK,
+)
 async def approve_gate(
     run_id: uuid.UUID,
     gate_id: str,
     req: ApproveRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
     mgr = HITLManager()
@@ -240,7 +254,7 @@ async def approve_gate(
     try:
         executor = PipelineExecutor(
             engine,
-            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+            checkpointer_conn_string=pg_connection_string(get_settings().database_url),
         )
         await executor.resume(
             run_id=run_id,
@@ -266,13 +280,18 @@ async def approve_gate(
     "/runs/{run_id}/hitl/{gate_id}/approve-with-modification",
     status_code=status.HTTP_200_OK,
 )
+@handle_db_errors("hitl.approve_gate_with_modification")
+@router.post(
+    "/runs/{run_id}/hitl/{gate_id}/approve-with-modification",
+    status_code=status.HTTP_200_OK,
+)
 async def approve_gate_with_modification(
     run_id: uuid.UUID,
     gate_id: str,
     req: ApproveWithModificationRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Approve a HITL gate with a modified output payload.
 
@@ -331,7 +350,7 @@ async def approve_gate_with_modification(
     try:
         executor = PipelineExecutor(
             engine,
-            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+            checkpointer_conn_string=pg_connection_string(get_settings().database_url),
         )
         await executor.resume(
             run_id=run_id,
@@ -357,13 +376,18 @@ async def approve_gate_with_modification(
     "/runs/{run_id}/hitl/{gate_id}/reject",
     status_code=status.HTTP_200_OK,
 )
+@handle_db_errors("hitl.reject_gate")
+@router.post(
+    "/runs/{run_id}/hitl/{gate_id}/reject",
+    status_code=status.HTTP_200_OK,
+)
 async def reject_gate(
     run_id: uuid.UUID,
     gate_id: str,
     req: RejectRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Reject an interrupted HITL gate and route to reject_target or fail."""
     mgr = HITLManager()
@@ -438,13 +462,18 @@ async def reject_gate(
     "/runs/{run_id}/hitl/{gate_id}/deliver-manual",
     status_code=status.HTTP_200_OK,
 )
+@handle_db_errors("hitl.deliver_manual_output")
+@router.post(
+    "/runs/{run_id}/hitl/{gate_id}/deliver-manual",
+    status_code=status.HTTP_200_OK,
+)
 async def deliver_manual_output(
     run_id: uuid.UUID,
     gate_id: str,
     req: DeliverManualRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Deliver manually-supplied output at a HITL gate and resume the run.
 
@@ -454,7 +483,7 @@ async def deliver_manual_output(
     """
     if not req.output:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="output must be a non-empty object",
         )
 
@@ -529,13 +558,18 @@ async def deliver_manual_output(
     "/runs/{run_id}/manual/{gate_id}/submit",
     status_code=status.HTTP_200_OK,
 )
+@handle_db_errors("hitl.submit_manual_output")
+@router.post(
+    "/runs/{run_id}/manual/{gate_id}/submit",
+    status_code=status.HTTP_200_OK,
+)
 async def submit_manual_output(
     run_id: uuid.UUID,
     gate_id: str,
     req: ManualOutputRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Submit output for a manual-input node and resume the run."""
     mgr = HITLManager()
@@ -610,10 +644,15 @@ async def submit_manual_output(
     "/runs/{run_id}/hitl/pending",
     response_model=PendingGatesResponse,
 )
+@handle_db_errors("hitl.list_run_pending_gates")
+@router.get(
+    "/runs/{run_id}/hitl/pending",
+    response_model=PendingGatesResponse,
+)
 async def list_run_pending_gates(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PendingGatesResponse:
     """List all pending (undecided) HITL gates for a specific run."""
     try:
@@ -662,9 +701,14 @@ async def list_run_pending_gates(
     "/hitl/pending",
     response_model=PendingGatesResponse,
 )
+@handle_db_errors("hitl.list_org_pending_gates")
+@router.get(
+    "/hitl/pending",
+    response_model=PendingGatesResponse,
+)
 async def list_org_pending_gates(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PendingGatesResponse:
     """List all pending HITL gates across the organisation."""
     mgr = HITLManager()

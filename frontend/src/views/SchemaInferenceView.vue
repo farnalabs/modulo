@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
     { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
@@ -16,30 +16,29 @@
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaInferenceView.source') }}</h2>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
-            <select
-              v-model="selectedConnectorId"
-              data-testid="schema-inference-connector"
-              aria-label="Connector"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="" disabled>{{ $t('views.SchemaInferenceView.select_a_connector') }}</option>
-              <option
-                v-for="connector in connectors"
-                :key="connector.id"
-                :value="connector.id"
-              >
-                {{ connector.name }} ({{ connector.connector_type }})
-              </option>
-            </select>
+            <label for="schemainferenceview-connector" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
+            <Select v-model="selectedConnectorId">
+              <SelectTrigger id="schemainferenceview-connector" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Connector" data-testid="schema-inference-connector">
+                <SelectValue :placeholder="$t('views.SchemaInferenceView.select_a_connector')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="connector in connectors"
+                  :key="connector.id"
+                  :value="connector.id"
+                >
+                    {{ connector.name }} ({{ connector.connector_type_id }})
+                </SelectItem>
+              </SelectContent>
+            </Select>
             <p v-if="connectors.length === 0" class="mt-2 text-sm text-muted-foreground">
               {{ $t('views.SchemaInferenceView.no_connectors_available') }}
             </p>
           </div>
 
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.resource_type') }}</label>
-            <input
+            <label for="schemainferenceview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.resource_type') }}</label>
+            <input id="schemainferenceview-field-2"
               v-model="resourceType"
               type="text"
               data-testid="schema-inference-resource-type"
@@ -49,11 +48,11 @@
           </div>
 
           <div>
-            <label class="mb-1 block text-sm font-medium">
+            <label for="schemainferenceview-field-1" class="mb-1 block text-sm font-medium">
               {{ $t('views.SchemaInferenceView.sample_query') }}
               <span class="text-muted-foreground"> {{ $t('views.SchemaInferenceView.optional') }}</span>
             </label>
-            <textarea
+            <textarea id="schemainferenceview-field-1"
               v-model="sampleQuery"
               rows="2"
               data-testid="schema-inference-sample-query"
@@ -63,14 +62,14 @@
           </div>
 
           <div class="flex items-center gap-2">
-            <button
+            <Button
               :disabled="!selectedConnectorId || !resourceType.trim() || inferring"
+              variant="default"
               data-testid="schema-inference-infer-schema"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="inferSchema"
             >
               {{ inferring ? $t('views.SchemaInferenceView.inferring') : $t('views.SchemaInferenceView.infer_schema') }}
-            </button>
+            </Button>
           </div>
         </div>
         <div v-if="inferError" class="mt-3 text-sm text-destructive">{{ inferError }}</div>
@@ -80,17 +79,17 @@
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaInferenceView.draft_schema') }}</h2>
 
         <div class="mb-3">
-          <label class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.name_label') }}</label>
+          <span class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.name_label') }}</span>
           <p class="text-sm">{{ draftSchema.name }}</p>
         </div>
 
         <div v-if="draftSchema.description" class="mb-3">
-          <label class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.description_label') }}</label>
+          <span class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.description_label') }}</span>
           <p class="text-sm">{{ draftSchema.description }}</p>
         </div>
 
         <div class="mb-4">
-          <label class="mb-2 block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.fields_label') }}</label>
+          <span class="mb-2 block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.fields_label') }}</span>
           <table v-if="draftSchema.fields.length > 0" class="w-full text-sm">
             <thead>
               <tr class="border-b text-left text-muted-foreground">
@@ -142,14 +141,14 @@
         </div>
 
         <div class="flex items-center gap-2">
-          <button
+          <Button
             :disabled="publishing"
+            variant="default"
             data-testid="schema-inference-publish"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="publishSchema"
           >
             {{ publishing ? $t('views.SchemaInferenceView.publishing') : $t('views.SchemaInferenceView.publish') }}
-          </button>
+          </Button>
           <button
             data-testid="schema-inference-discard"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -175,8 +174,16 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
+import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
-type ConnectorItem = components['schemas']['ConnectorItem']
+type ConnectorItem = components['schemas']['ConnectorResponse']
 
 interface DraftSchema {
   name: string
@@ -266,7 +273,7 @@ async function inferSchema() {
       rawDefinitionJson.value = data.definition_json
       draftSchema.value = {
         name: data.suggestion_name,
-        description: data.suggestion_description,
+        description: data.suggestion_description ?? null,
         fields: extractFieldsFromDefinition(data.definition_json),
       }
     }

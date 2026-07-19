@@ -13,6 +13,7 @@ class Capability(StrEnum):
     WRITE = "write"
     GIT_PUSH = "git_push"
     CREATE_PR = "create_pr"
+    CODE_REVIEW = "code_review"
     TRIGGER_RUN = "trigger_run"
     GET_RUN_STATUS = "get_run_status"
     GET_RUN_LOGS = "get_run_logs"
@@ -90,9 +91,10 @@ class ConnectorType(StrEnum):
                         Capability.WRITE,
                         Capability.GIT_PUSH,
                         Capability.CREATE_PR,
+                        Capability.CODE_REVIEW,
                         Capability.TICKET_READ,
                         Capability.TICKET_WRITE,
-                    }
+                    },
                 )
             case ConnectorType.BITBUCKET:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
@@ -103,7 +105,7 @@ class ConnectorType(StrEnum):
                         Capability.GET_RUN_STATUS,
                         Capability.GET_RUN_LOGS,
                         Capability.LIST_RUNS,
-                    }
+                    },
                 )
             case ConnectorType.GITEA:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
@@ -118,7 +120,7 @@ class ConnectorType(StrEnum):
                         Capability.TICKET_WRITE,
                         Capability.TICKET_SEARCH,
                         Capability.TRIGGER_RUN,
-                    }
+                    },
                 )
             case ConnectorType.AZURE_REPOS:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
@@ -134,7 +136,7 @@ class ConnectorType(StrEnum):
                         Capability.TICKET_READ,
                         Capability.TICKET_WRITE,
                         Capability.TICKET_SEARCH,
-                    }
+                    },
                 )
             case ConnectorType.ASANA:
                 return frozenset(
@@ -144,7 +146,7 @@ class ConnectorType(StrEnum):
                         Capability.TICKET_READ,
                         Capability.TICKET_WRITE,
                         Capability.TICKET_SEARCH,
-                    }
+                    },
                 )
             case ConnectorType.SLACK:
                 return frozenset({Capability.MESSAGING, Capability.READ, Capability.WRITE})
@@ -165,7 +167,7 @@ class ConnectorType(StrEnum):
                         Capability.GET_RUN_STATUS,
                         Capability.GET_RUN_LOGS,
                         Capability.LIST_RUNS,
-                    }
+                    },
                 )
             case ConnectorType.BUILDKITE:
                 return frozenset(
@@ -174,7 +176,7 @@ class ConnectorType(StrEnum):
                         Capability.GET_RUN_STATUS,
                         Capability.GET_RUN_LOGS,
                         Capability.LIST_RUNS,
-                    }
+                    },
                 )
             case ConnectorType.JENKINS:
                 return frozenset(
@@ -183,7 +185,7 @@ class ConnectorType(StrEnum):
                         Capability.GET_RUN_STATUS,
                         Capability.GET_RUN_LOGS,
                         Capability.LIST_RUNS,
-                    }
+                    },
                 )
             case ConnectorType.TEAMCITY:
                 return frozenset(
@@ -192,7 +194,7 @@ class ConnectorType(StrEnum):
                         Capability.GET_RUN_STATUS,
                         Capability.GET_RUN_LOGS,
                         Capability.LIST_RUNS,
-                    }
+                    },
                 )
             case ConnectorType.AZURE_KEY_VAULT:
                 return frozenset(
@@ -200,7 +202,7 @@ class ConnectorType(StrEnum):
                         Capability.SECRETS_MANAGEMENT,
                         Capability.READ,
                         Capability.WRITE,
-                    }
+                    },
                 )
             case ConnectorType.AZURE_PIPELINES:
                 return frozenset(
@@ -209,7 +211,7 @@ class ConnectorType(StrEnum):
                         Capability.GET_RUN_STATUS,
                         Capability.GET_RUN_LOGS,
                         Capability.LIST_RUNS,
-                    }
+                    },
                 )
             case ConnectorType.DATADOG:
                 return frozenset({Capability.MONITORING, Capability.OBSERVABILITY, Capability.READ, Capability.WRITE})
@@ -220,7 +222,7 @@ class ConnectorType(StrEnum):
                         Capability.INCIDENT_MANAGEMENT,
                         Capability.READ,
                         Capability.WRITE,
-                    }
+                    },
                 )
             case ConnectorType.PAGERDUTY:
                 return frozenset(
@@ -229,7 +231,7 @@ class ConnectorType(StrEnum):
                         Capability.MONITORING,
                         Capability.READ,
                         Capability.WRITE,
-                    }
+                    },
                 )
             case ConnectorType.GRAFANA:
                 return frozenset(
@@ -238,7 +240,7 @@ class ConnectorType(StrEnum):
                         Capability.OBSERVABILITY,
                         Capability.READ,
                         Capability.WRITE,
-                    }
+                    },
                 )
             case ConnectorType.MICROSOFT_TEAMS:
                 return frozenset(
@@ -248,7 +250,7 @@ class ConnectorType(StrEnum):
                         Capability.NOTIFICATION,
                         Capability.READ,
                         Capability.WRITE,
-                    }
+                    },
                 )
             case ConnectorType.DISCORD:
                 return frozenset(
@@ -256,7 +258,7 @@ class ConnectorType(StrEnum):
                         Capability.COLLABORATION,
                         Capability.MESSAGING,
                         Capability.NOTIFICATION,
-                    }
+                    },
                 )
             case ConnectorType.OPSGENIE:
                 return frozenset(
@@ -264,7 +266,7 @@ class ConnectorType(StrEnum):
                         Capability.INCIDENT_MANAGEMENT,
                         Capability.MONITORING,
                         Capability.NOTIFICATION,
-                    }
+                    },
                 )
             case ConnectorType.SONARQUBE:
                 return frozenset(
@@ -273,7 +275,7 @@ class ConnectorType(StrEnum):
                         Capability.WRITE,
                         Capability.MONITORING,
                         Capability.OBSERVABILITY,
-                    }
+                    },
                 )
             case ConnectorType.CODECLIMATE:
                 return frozenset({Capability.MONITORING, Capability.OBSERVABILITY})
@@ -283,7 +285,7 @@ class ConnectorType(StrEnum):
                         Capability.READ,
                         Capability.VULNERABILITY_SCANNING,
                         Capability.MONITORING,
-                    }
+                    },
                 )
             case ConnectorType.TRIVY:
                 return frozenset(
@@ -291,7 +293,7 @@ class ConnectorType(StrEnum):
                         Capability.READ,
                         Capability.VULNERABILITY_SCANNING,
                         Capability.MONITORING,
-                    }
+                    },
                 )
             case ConnectorType.ONEPASSWORD:
                 return frozenset(
@@ -299,7 +301,7 @@ class ConnectorType(StrEnum):
                         Capability.SECRETS_MANAGEMENT,
                         Capability.READ,
                         Capability.WRITE,
-                    }
+                    },
                 )
             case ConnectorType.NPM:
                 return frozenset({Capability.PACKAGE_MANAGEMENT, Capability.READ})
@@ -315,8 +317,6 @@ class ConnectorType(StrEnum):
 
 class ConnectorPermissionError(ValueError):
     """Raised when a connector operation violates its ACL."""
-
-    pass
 
 
 class ConnectorACL:
@@ -340,11 +340,11 @@ class ConnectorACL:
         if self.allowed_operations is not None:
             if not self.allowed_operations:
                 raise ConnectorPermissionError(
-                    "No operations allowed — the allowlist is empty. Operator must grant at least one operation."
+                    "No operations allowed — the allowlist is empty. Operator must grant at least one operation.",
                 )
             if operation not in self.allowed_operations:
                 raise ConnectorPermissionError(
-                    f"Operation {operation!r} is not in allowed_operations: {sorted(self.allowed_operations)}"
+                    f"Operation {operation!r} is not in allowed_operations: {sorted(self.allowed_operations)}",
                 )
         if request_visibility == "team" and self.visibility == "org":
             raise ConnectorPermissionError("Attempted team-scoped access on an org-only connector")

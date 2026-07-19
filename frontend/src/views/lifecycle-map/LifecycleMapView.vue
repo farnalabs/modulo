@@ -19,22 +19,18 @@
           </span>
         </div>
         <div v-if="mapData?.versions && mapData.versions.length > 1" class="flex items-center gap-2">
-          <label class="text-sm text-muted-foreground">Version:</label>
-          <select
-            v-model="selectedVersion"
-            class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-            @change="onVersionChange"
-            data-testid="lifecycle-map-version-select"
-          >
-            <option
-              v-for="v in sortedVersions"
-              :key="v.version"
-              :value="v.version"
-            >
-              v{{ v.version }}
-              <template v-if="v.created_by"> — {{ v.created_by }}</template>
-            </option>
-          </select>
+          <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">Version:</label>
+          <Select v-model="selectedVersion" @update:model-value="onVersionChange">
+            <SelectTrigger data-testid="lifecycle-map-version-select" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
+              <SelectValue placeholder="Select version" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="v in sortedVersions" :key="v.version" :value="v.version">
+                v{{ v.version }}
+                <template v-if="v.created_by"> — {{ v.created_by }}</template>
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
     </header>
@@ -62,7 +58,7 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                 {{ mapData.owner }}
               </span>
-              <span>{{ mapData.stages.length }} stages</span>
+              <span>{{ (mapData.stages ?? []).length }} stages</span>
               <span>{{ graduatedCount }} graduated</span>
               <span>{{ manualCount }} manual</span>
             </div>
@@ -93,6 +89,7 @@ import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
 import LifecycleMapRenderer from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import type { LifecycleMapStage } from '../../stores/lifecycleMaps'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const route = useRoute()
 const router = useRouter()

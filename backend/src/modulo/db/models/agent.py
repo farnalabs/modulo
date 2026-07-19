@@ -34,6 +34,8 @@ class Agent(OrgScoped):
 
     is_executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     prompt_always_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    template_id: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
+    agent_command: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     input_schema_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
@@ -53,6 +55,9 @@ class Agent(OrgScoped):
     token_budget: Mapped[int | None] = mapped_column(Integer)
     library_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL")
+    )
+    parameter_schema_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("parameter_schemas.id", ondelete="RESTRICT"), nullable=True
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False

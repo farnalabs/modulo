@@ -8,6 +8,7 @@ Trivy server mode endpoints:
   - GET  /trivy/v1/health     — server health check
 """
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -70,6 +71,8 @@ class TrivyConnector(ConnectorBase):
             return HealthResult(ok=False, detail="Cannot connect to Trivy server")
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Trivy server timed out")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -139,13 +142,13 @@ class TrivyConnector(ConnectorBase):
         data: dict[str, Any] = resp.json()
         return ConnectorResult(records=[data])
 
-    async def _get_status(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _get_status(self, c: httpx.AsyncClient, _q: ConnectorQuery) -> ConnectorResult:
         resp = await c.get("/trivy/v1/health")
         resp.raise_for_status()
         data: dict[str, Any] = resp.json()
         return ConnectorResult(records=[data])
 
-    async def _list_plugins(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _list_plugins(self, c: httpx.AsyncClient, _q: ConnectorQuery) -> ConnectorResult:
         resp = await c.get("/trivy/v1/plugins")
         resp.raise_for_status()
         data: list[dict[str, Any]] = resp.json()

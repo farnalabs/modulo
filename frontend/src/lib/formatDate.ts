@@ -1,13 +1,25 @@
 import { format } from 'date-fns'
 
-export function formatDateShort(date: Date | string | number): string {
-  return format(new Date(date), 'MMM d, yyyy')
+function toDate(date: Date | string | number | null | undefined): Date | null {
+  if (date == null) return null
+  const d = date instanceof Date ? date : new Date(date)
+  return isNaN(d.getTime()) ? null : d
 }
 
-export function formatDateShortWithTime(date: Date | string | number): string {
-  return format(new Date(date), 'MMM d, yyyy, h:mm a')
+export function formatDateShort(date: Date | string | number | null | undefined): string {
+  const d = toDate(date)
+  if (!d) return '—'
+  return format(d, 'MMM d, yyyy')
 }
 
-export function formatDateFilename(date: Date | string | number): string {
-  return format(new Date(date), 'yyyy-MM-dd')
+export function formatDateShortWithTime(date: Date | string | number | null | undefined): string {
+  const d = toDate(date)
+  if (!d) return '—'
+  return format(d, 'MMM d, yyyy, h:mm a')
+}
+
+export function formatDateFilename(date: Date | string | number | null | undefined): string {
+  const d = toDate(date)
+  if (!d) return '—'
+  return format(d, 'yyyy-MM-dd')
 }

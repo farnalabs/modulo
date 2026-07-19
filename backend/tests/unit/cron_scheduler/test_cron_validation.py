@@ -80,3 +80,44 @@ class TestComputeNextFire:
     def test_next_fire_without_after_defaults_to_now(self):
         result = compute_next_fire("* * * * *")
         assert result > datetime.datetime.now(datetime.UTC)
+
+    def test_new_york_winter_and_summer_offsets(self):
+        winter = compute_next_fire(
+            "0 9 * * *",
+            after=datetime.datetime(2026, 1, 15, 12, tzinfo=datetime.UTC),
+            timezone="America/New_York",
+        )
+        summer = compute_next_fire(
+            "0 9 * * *",
+            after=datetime.datetime(2026, 7, 15, 12, tzinfo=datetime.UTC),
+            timezone="America/New_York",
+        )
+
+        assert winter == datetime.datetime(2026, 1, 15, 14, tzinfo=datetime.UTC)
+        assert summer == datetime.datetime(2026, 7, 15, 13, tzinfo=datetime.UTC)
+
+    def test_nonexistent_dst_time_advances_to_first_valid_instant(self):
+        result = compute_next_fire(
+            "30 2 * * *",
+            after=datetime.datetime(2026, 3, 7, 12, tzinfo=datetime.UTC),
+            timezone="America/New_York",
+        )
+
+        assert result == datetime.datetime(2026, 3, 8, 7, tzinfo=datetime.UTC)
+
+    def test_ambiguous_dst_time_uses_first_occurrence(self):
+        result = compute_next_fire(
+            "30 1 * * *",
+            after=datetime.datetime(2026, 10, 31, 12, tzinfo=datetime.UTC),
+            timezone="America/New_York",
+        )
+
+        assert result == datetime.datetime(2026, 11, 1, 5, 30, tzinfo=datetime.UTC)
+
+    def test_default_timezone_is_utc(self):
+        result = compute_next_fire(
+            "0 9 * * *",
+            after=datetime.datetime(2026, 1, 1, 8, tzinfo=datetime.UTC),
+        )
+
+        assert result == datetime.datetime(2026, 1, 1, 9, tzinfo=datetime.UTC)

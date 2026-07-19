@@ -54,7 +54,7 @@ class SeedClient:
         try:
             body = resp.json()
         except requests.JSONDecodeError:
-            _log.error("Auth endpoint returned non-JSON: %s", resp.text[:200])
+            _log.error("Auth endpoint returned non-JSON (status %s)", resp.status_code)
             raise
         token = body["access_token"]
         self._session.headers.update({"Authorization": f"Bearer {token}"})
@@ -76,7 +76,7 @@ class SeedClient:
         try:
             return resp.json()
         except requests.JSONDecodeError:
-            _log.warning("Non-JSON response %s %s: %s", method, path, resp.text[:200])
+            _log.warning("Non-JSON response %s %s (status %s)", method, path, resp.status_code)
             return None
 
     def get(self, path: str) -> dict[str, Any] | list[Any] | None:

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />
@@ -48,60 +48,42 @@
 
     <template v-else>
       <div class="table-wrapper">
-        <table class="w-full">
-          <thead>
-            <tr>
-              <th class="table-header">Level</th>
-              <th class="table-header">Message</th>
-              <th class="table-header table-cell-numeric">Count</th>
-              <th class="table-header">{{ $t('views.AdminErrorDetailView.first_seen') }}</th>
-              <th class="table-header">{{ $t('views.AdminErrorDetailView.last_seen') }}</th>
-              <th class="table-header">Status</th>
-              <th class="table-header">Assignee</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y">
-            <tr
-              v-for="group in groups"
-              :key="group.id"
-              class="cursor-pointer transition-colors hover:bg-muted/30"
-              role="button"
-              tabindex="0"
-              @click="navigateToDetail(group.id)"
-              @keydown.enter="navigateToDetail(group.id)"
-              @keydown.space.prevent="navigateToDetail(group.id)"
-            >
-              <td class="table-cell">
-                <span :class="levelBadgeClass(group.level_peak)">
-                  {{ group.level_peak }}
-                </span>
-              </td>
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <td class="table-cell max-w-xs truncate font-medium">{{ group.sample_message || '(no message)' }}</td>
-                </TooltipTrigger>
-                <TooltipContent side="top" class="max-w-xs">
-                  <p>{{ group.sample_message || '(no message)' }}</p>
-                </TooltipContent>
-              </Tooltip>
-              <td class="table-cell-numeric">{{ group.count }}</td>
-              <td class="table-cell whitespace-nowrap text-muted-foreground">
-                {{ formatDate(group.first_seen) }}
-              </td>
-              <td class="table-cell whitespace-nowrap text-muted-foreground">
-                {{ formatDate(group.last_seen) }}
-              </td>
-              <td class="table-cell">
-                <span :class="statusBadgeClass(group.status)">
-                  {{ group.status }}
-                </span>
-              </td>
-              <td class="table-cell text-xs text-muted-foreground font-mono">
-                {{ group.assigned_to ? shortId(group.assigned_to) : '—' }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <DataTable
+          :columns="[
+            { key: 'level_peak', label: 'Level' },
+            { key: 'sample_message', label: 'Message' },
+            { key: 'count', label: 'Count', numeric: true },
+            { key: 'first_seen', label: $t('views.AdminErrorDetailView.first_seen') },
+            { key: 'last_seen', label: $t('views.AdminErrorDetailView.last_seen') },
+            { key: 'status', label: 'Status' },
+            { key: 'assignee', label: 'Assignee' },
+          ]"
+          :rows="groups"
+          @row-click="(row: any) => navigateToDetail(row.id)"
+        >
+          <template #cell-level_peak="{ value }">
+            <span :class="levelBadgeClass(value as string)">
+              {{ value }}
+            </span>
+          </template>
+          <template #cell-sample_message="{ value }">
+            <span class="max-w-xs truncate font-medium">{{ value || '(no message)' }}</span>
+          </template>
+          <template #cell-first_seen="{ value }">
+            <span class="whitespace-nowrap text-muted-foreground">{{ formatDate(value as string) }}</span>
+          </template>
+          <template #cell-last_seen="{ value }">
+            <span class="whitespace-nowrap text-muted-foreground">{{ formatDate(value as string) }}</span>
+          </template>
+          <template #cell-status="{ value }">
+            <span :class="statusBadgeClass(value as string)">
+              {{ value }}
+            </span>
+          </template>
+          <template #cell-assignee="{ row }">
+            <span class="text-xs text-muted-foreground font-mono">{{ (row as any).assigned_to ? shortId((row as any).assigned_to) : '—' }}</span>
+          </template>
+        </DataTable>
       </div>
 
       <div class="flex items-center justify-between">
@@ -143,13 +125,9 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '../components/ui/tooltip'
 import { formatApiError } from "../lib/api/formatError"
 import { Button } from '@/components/ui/button'
+import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 
 const router = useRouter()
@@ -158,7 +136,7 @@ const limit = ref(20)
 const offset = ref(0)
 const currentPage = ref(1)
 
-const { data: groupsData, loading, error, load: loadGroups } = useDataFetch(
+const { data: groupsData, loading, error, load: loadGroups } = useDataFetch<{ items: ErrorGroupSummary[]; total: number }>(
   () => fetchErrorGroups(buildParams()).then(
     d => ({ data: d }),
     e => ({ error: { detail: `Failed to load error groups: ${formatApiError(e)}` } }),

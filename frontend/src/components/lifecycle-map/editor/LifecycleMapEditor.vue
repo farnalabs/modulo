@@ -39,13 +39,14 @@
 
           <div class="ml-auto flex items-center gap-2">
             <span v-if="saveError" class="text-xs text-destructive">{{ saveError }}</span>
-            <button
+            <Button
               :disabled="saving"
-              class="rounded-md bg-primary px-4 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              variant="default"
+              size="xs"
               @click="handleSave"
             >
               {{ saving ? 'Saving...' : 'Save' }}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -93,9 +94,9 @@
           :stage-id="selectedNode.id"
           :name="selectedNodeData.name"
           :description="selectedNodeData.description"
-          :stage-type="selectedNodeData.stage_type"
-          :pipeline-id="selectedNodeData.pipeline_id"
-          :external-url="selectedNodeData.external_url"
+          :stage_type="selectedNodeData.stage_type"
+          :pipeline_id="selectedNodeData.pipeline_id"
+          :external_url="selectedNodeData.external_url"
           :owner="selectedNodeData.owner"
           :graduated="selectedNodeData.graduated"
           :pipelines="pipelines"
@@ -118,11 +119,11 @@
           </button>
         </div>
         <EdgeConfigPanel
-          :trigger-type="selectedEdgeData.trigger_type"
+          :trigger_type="selectedEdgeData.trigger_type"
           :description="selectedEdgeData.description"
-          :condition-expression="selectedEdgeData.condition_expression"
-          :estimated-frequency="selectedEdgeData.estimated_frequency"
-          :trigger-link="selectedEdgeData.trigger_link"
+          :condition_expression="selectedEdgeData.condition_expression"
+          :estimated_frequency="selectedEdgeData.estimated_frequency"
+          :trigger_link="selectedEdgeData.trigger_link"
           @update="onEdgeFieldUpdate"
         />
       </aside>
@@ -144,13 +145,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { VueFlow, useVueFlow } from '@vue-flow/core'
+import { VueFlow, useVueFlow, type EdgeMouseEvent, type NodeMouseEvent } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
-import { XIcon, LayersIcon } from '@lucide/vue'
+import { X as XIcon, Layers as LayersIcon } from '@lucide/vue'
 import StageNode from './StageNode.vue'
 import StageConfigPanel from './StageConfigPanel.vue'
 import EdgeConfigPanel from './EdgeConfigPanel.vue'
@@ -160,6 +161,7 @@ import VersionHistoryDropdown from './VersionHistoryDropdown.vue'
 import { useApi } from '../../../composables/useApi'
 import { formatApiError } from '../../../lib/api/formatError'
 import type { StageType, TriggerType, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
+import { Button } from '@/components/ui/button'
 
 function genId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
@@ -171,6 +173,7 @@ const props = defineProps<{
 
 const emitEvent = defineEmits<{
   saved: []
+  'load-version': [versionId: string]
 }>()
 
 const { get, post, put } = useApi()
@@ -268,8 +271,8 @@ function edgeToBackend(edge: any): LifecycleEdge {
 async function loadData() {
   try {
     const [mapData, pipelinesData] = await Promise.all([
-      get<any>(`/api/v1/lifecycle-maps/${props.mapId}`),
-      get<{ items: PipelineSummary[] }>('/api/v1/pipelines?limit=200'),
+      get<any>(`/api/v1/lifecycle-maps/${props.mapId}`).catch(() => null),
+      get<{ items: PipelineSummary[] }>('/api/v1/pipelines?limit=200').catch(() => ({ items: [] })),
     ])
     mapName.value = mapData.name
     pipelines.value = pipelinesData.items || []
@@ -319,14 +322,16 @@ async function handleSave() {
   }
 }
 
-function onDragOver(event: DragEvent) {
+function onDragOver(event: unknown) {
+  if (!(event instanceof DragEvent)) return
   event.preventDefault()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'copy'
   }
 }
 
-function onDrop(event: DragEvent) {
+function onDrop(event: unknown) {
+  if (!(event instanceof DragEvent)) return
   event.preventDefault()
   const type = event.dataTransfer?.getData('application/lifecycle-stage') as StageType | undefined
   if (!type) return
@@ -348,12 +353,12 @@ function onDrop(event: DragEvent) {
   flowNodes.value.push(node)
 }
 
-function onNodeClick(_event: any, node: any) {
+function onNodeClick({ node }: NodeMouseEvent) {
   selectedNode.value = node
   selectedEdge.value = null
 }
 
-function onEdgeClick(_event: any, edge: any) {
+function onEdgeClick({ edge }: EdgeMouseEvent) {
   selectedEdge.value = edge
   selectedNode.value = null
 }

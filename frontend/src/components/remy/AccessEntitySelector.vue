@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-3">
     <div class="relative">
-      <input
+      <input :aria-label="placeholder"
         ref="inputRef"
         v-model="query"
         type="text"

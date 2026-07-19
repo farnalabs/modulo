@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import uuid
 from typing import Any
 
@@ -14,7 +12,7 @@ class EnvironmentProfile(OrgScoped):
     __table_args__ = (
         CheckConstraint("visibility IN ('org', 'team')", name="ck_env_profiles_visibility"),
         CheckConstraint(
-            "provider_type IN ('local_docker', 'e2b')",
+            "provider_type IN ('local_docker', 'e2b', 'local')",
             name="ck_env_profiles_provider_type",
         ),
         CheckConstraint(

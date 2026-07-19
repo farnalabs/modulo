@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import Generator
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.routes.admin import router as admin_router
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from tests.unit.api.mock_session import configure_mock_session
 
 ORG_ID = uuid.uuid4()
 USER_ID = uuid.uuid4()
@@ -32,7 +34,7 @@ VIEWER_PRINCIPAL = AuthenticatedPrincipal(
 class _FakeAsyncSession(AsyncMock):
     """Mock session supporting `async with session.begin():` protocol."""
 
-    async def __aenter__(self) -> "_FakeAsyncSession":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *args: object) -> None:
@@ -50,7 +52,9 @@ def _make_app(mock_session: _FakeAsyncSession) -> FastAPI:
 
 
 def _mock_session() -> _FakeAsyncSession:
-    return _FakeAsyncSession()
+    session = _FakeAsyncSession()
+    configure_mock_session(session)
+    return session
 
 
 # ---------------------------------------------------------------------------

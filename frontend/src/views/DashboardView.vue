@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <DashboardNotificationsPanel class="mb-4" />
     <PageHeader :title="$t('views.DashboardView.dashboard')" :subtitle="$t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs')" data-testid="dashboard-title" />
@@ -21,116 +21,24 @@
 
     <template v-else-if="summary">
 
-      <!-- Config warnings -->
-      <div v-if="summary.config_warnings && summary.config_warnings.length > 0" class="space-y-2">
-        <div
-          v-for="w in summary.config_warnings"
-          :key="w.type"
-          class="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning"
-        >
-          <div class="flex items-center gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            <span>{{ w.message }}</span>
-          </div>
-          <a
-            :href="w.action_url"
-            class="shrink-0 rounded-md bg-warning/15 px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/25 transition-colors"
-          >
-            {{ w.action_label }}
-          </a>
-        </div>
-      </div>
-
-      <!-- Collapsible Welcome section -->
-      <div class="rounded-lg border bg-card p-4">
-        <button
-          @click="toggleWelcome"
-          class="flex w-full items-center justify-between gap-2 text-left"
-          :aria-expanded="welcomeExpanded"
-          aria-controls="welcome-content"
-        >
-          <h2 class="text-base font-semibold">{{ $t('views.DashboardView.welcome_to_modulo') }}</h2>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            :class="{ 'rotate-180': welcomeExpanded }"
-            class="shrink-0 text-muted-foreground transition-transform duration-200"
-          >
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
-        </button>
-        <div
-          v-if="welcomeExpanded"
-          id="welcome-content"
-          role="region"
-          :aria-label="$t('views.DashboardView.welcome_to_modulo')"
-          class="mt-4 space-y-4"
-        >
-          <p class="text-sm text-muted-foreground">{{ $t('views.DashboardView.welcome_subtitle') }}</p>
-          <div class="flex flex-wrap items-center gap-3">
-            <Button
-              @click="createStarterPipeline"
-              :disabled="creatingPipeline"
-              variant="default"
-              class="px-5 py-2.5"
-            >
-              <svg
-                v-if="creatingPipeline"
-                class="h-4 w-4 animate-spin"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              {{ $t('views.DashboardView.map_your_sdlc') }}
-            </Button>
-            <a
-              href="/onboarding"
-              class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2.5 text-sm font-medium hover:bg-accent transition-all"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-              {{ $t('views.DashboardView.see_what_modulo_can_do') }}
-            </a>
-          </div>
-          <div v-if="pipelineError" class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {{ pipelineError }}
-          </div>
-          <div class="flex flex-wrap items-center gap-3 text-sm">
-            <a href="/library" class="font-medium text-primary hover:underline">{{ $t('views.DashboardView.create_pipeline') }}</a>
-            <span class="text-muted-foreground">·</span>
-            <a href="/templates" class="font-medium text-primary hover:underline">{{ $t('views.DashboardView.browse_templates') }}</a>
-            <span class="text-muted-foreground">·</span>
-            <a href="/admin/model-backends" class="font-medium text-primary hover:underline">{{ $t('views.DashboardView.configure_ai_provider') }}</a>
-          </div>
-        </div>
-      </div>
-
       <!-- Row 1: Summary stat cards -->
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.total_runs" color="primary" to="/pipelines">
-          <template #icon><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></template>
-        </StatCard>
-        <StatCard :label="$t('views.DashboardView.active_pipelines')" :value="summary.active_pipelines" color="primary" to="/pipelines">
+        <StatCard :label="$t('views.DashboardView.pipelines')" :value="summary.active_pipelines" color="primary" to="/pipelines">
           <template #icon><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.running')" :value="summary.run_counts_by_status?.running ?? 0" color="success" to="/pipelines">
+        <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.total_runs" color="primary" to="/runs">
+          <template #icon><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></template>
+        </StatCard>
+        <StatCard :label="$t('views.DashboardView.running')" :value="summary.run_counts_by_status?.running ?? 0" color="success" :to="`/runs?status=${RUN_STATUS.RUNNING}`">
           <template #icon><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="summary.run_counts_by_status?.awaiting_human ?? 0" color="warning" to="/stages">
+        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="summary.run_counts_by_status?.awaiting_human ?? 0" color="warning" :to="`/runs?status=${RUN_STATUS.AWAITING_HUMAN}`">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></template>
         </StatCard>
       </div>
 
       <div class="grid gap-4 sm:grid-cols-2">
-        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.run_counts_by_status?.failed ?? 0" color="destructive" to="/admin/errors">
+        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.run_counts_by_status?.failed ?? 0" color="destructive" :to="`/runs?status=${RUN_STATUS.FAILED}`">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></template>
         </StatCard>
         <StatCard :label="$t('views.DashboardView.idle')" :value="summary.run_counts_by_status?.idle ?? 0" color="muted" to="/pipelines">
@@ -143,7 +51,7 @@
         <!-- Eval pass rate card -->
         <router-link to="/eval-editor" class="card card-hover p-4 block">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.eval_pass_rate') }}</p>
-          <div v-if="summary.eval_pass_rate">
+          <div v-if="summary.eval_pass_rate != null">
             <p class="text-2xl font-semibold tabular-nums">{{ summary.eval_pass_rate.overall_pass_rate }}%</p>
             <div class="flex items-center gap-2 mt-1">
               <span :class="evalTrendClass" class="inline-flex items-center text-sm font-medium">
@@ -210,8 +118,8 @@
                 @keydown.space.prevent="toggleTeam(team.id)">
               <td class="py-2.5 font-medium">{{ team.name }}</td>
               <td class="py-2.5 text-right">{{ team.total_runs }}</td>
-              <td class="py-2.5 text-right text-success">{{ team.run_counts_by_status.running }}</td>
-              <td class="py-2.5 text-right text-destructive">{{ team.run_counts_by_status.failed }}</td>
+              <td class="py-2.5 text-right text-success">{{ team.run_counts_by_status?.running ?? 0 }}</td>
+              <td class="py-2.5 text-right text-destructive">{{ team.run_counts_by_status?.failed ?? 0 }}</td>
               <td class="py-2.5 text-right">{{ team.eval_pass_rate ? team.eval_pass_rate.pass_rate + '%' : '—' }}</td>
               <td class="py-2.5 text-right">
                 <svg v-if="expandedTeam === team.id" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
@@ -221,7 +129,7 @@
             <tr v-if="expandedTeam && expandedTeamData">
               <td colspan="6" class="py-3 pl-6">
                 <div class="text-xs text-muted-foreground space-y-1">
-                  <p>{{ $t('views.DashboardView.active_pipelines') }}: <span class="font-medium text-foreground">{{ expandedTeamData.active_pipelines }}</span></p>
+                  <p>{{ $t('views.DashboardView.pipelines') }}: <span class="font-medium text-foreground">{{ expandedTeamData.active_pipelines }}</span></p>
                   <p>{{ $t('views.DashboardView.awaiting_human') }}: <span class="font-medium text-foreground">{{ expandedTeamData.run_counts_by_status.awaiting_human }}</span></p>
                   <p>{{ $t('views.DashboardView.idle') }}: <span class="font-medium text-foreground">{{ expandedTeamData.run_counts_by_status.idle }}</span></p>
                   <p v-if="expandedTeamData.eval_pass_rate">
@@ -281,10 +189,10 @@
                   <p>{{ run.pipeline_name }}</p>
                 </TooltipContent>
               </Tooltip>
-              <p class="text-xs text-muted-foreground">{{ formatTimestamp(run.created_at) }}</p>
+              <p class="text-xs text-muted-foreground">{{ formatRunDate(run.created_at) }}</p>
             </div>
             <div class="flex items-center gap-2 ml-3">
-              <span :class="statusBadgeClass(run.status)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
+              <span :class="runStatusBadgeClass(run.status)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
                 {{ run.status }}
               </span>
               <span class="text-xs text-muted-foreground hidden sm:inline">{{ run.trigger_type }}</span>
@@ -303,9 +211,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Button } from '@/components/ui/button'
 import PageHeader from '../components/shared/PageHeader.vue'
 import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -313,13 +220,13 @@ import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
 import StatCard from '../components/StatCard.vue'
-import { useRouter } from 'vue-router'
-import { useApi } from '../composables/useApi'
 import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
+import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
+import { RUN_STATUS } from '../constants/filters'
 
 const { t } = useI18n()
 
@@ -332,41 +239,6 @@ const summary = computed(() => dashboardStore.summary)
 const totalSpend = computed(() => dashboardStore.totalSpend)
 
 const isTeam = computed(() => planStore.isTeam)
-
-const router = useRouter()
-const { post } = useApi()
-
-const welcomeExpanded = ref(true)
-const userToggledWelcome = ref(false)
-const creatingPipeline = ref(false)
-const pipelineError = ref<string | null>(null)
-
-watch(summary, (s) => {
-  if (s && !userToggledWelcome.value) {
-    welcomeExpanded.value = s.total_runs === 0 && s.active_pipelines === 0
-  }
-})
-
-function toggleWelcome() {
-  userToggledWelcome.value = true
-  welcomeExpanded.value = !welcomeExpanded.value
-}
-
-async function createStarterPipeline() {
-  pipelineError.value = null
-  creatingPipeline.value = true
-  try {
-    const result = await post<{ pipeline_id: string; name: string }>('/api/v1/onboarding/starter-pipeline')
-    if (result.pipeline_id) {
-      router.push(`/pipelines/${result.pipeline_id}/editor`)
-    }
-  } catch (err: any) {
-    const msg = err?.detail || err?.message || t('views.DashboardView.failed_to_create_starter_pipeline')
-    pipelineError.value = msg
-  } finally {
-    creatingPipeline.value = false
-  }
-}
 
 const expandedTeam = ref<string | null>(null)
 
@@ -465,29 +337,7 @@ const trendRunCounts = computed(() => trendData.value.map(d => d.run_count))
 const trendEvalRates = computed(() => trendData.value.map(d => d.eval_pass_rate ?? 0))
 const trendSpendData = computed(() => trendData.value.map(d => d.token_spend_usd))
 
-function statusBadgeClass(status: string): string {
-  const map: Record<string, string> = {
-    complete: 'bg-success/10 text-success',
-    failed: 'bg-destructive/10 text-destructive',
-    running: 'bg-primary/10 text-primary',
-    pending: 'bg-muted text-muted-foreground',
-    awaiting_human: 'bg-warning/10 text-warning',
-    cancelled: 'bg-muted text-muted-foreground',
-    eval_failed: 'bg-destructive/10 text-destructive',
-    claimed: 'bg-warning/10 text-warning',
-    waiting_for_lock: 'bg-muted text-muted-foreground',
-  }
-  return map[status] ?? 'bg-muted text-muted-foreground'
-}
 
-function formatTimestamp(iso: string): string {
-  try {
-    const d = new Date(iso)
-    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  } catch {
-    return iso
-  }
-}
 
 onMounted(async () => {
   const promises: Promise<unknown>[] = [

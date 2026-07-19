@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from langchain_core.messages import BaseMessage
@@ -14,9 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.prompt_optimizer import OptimizationFailedError, PromptOptimizer
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.agent import (
@@ -35,6 +36,7 @@ from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 
@@ -43,19 +45,21 @@ class AgentCreate(BaseModel):
     description: str | None = None
     is_executable: bool = True
     input_schema_id: uuid.UUID
-    input_schema_version: str
+    input_schema_version: str | None = None
     output_schema_id: uuid.UUID
-    output_schema_version: str
+    output_schema_version: str | None = None
     prompt_template: str = Field(min_length=1)
     model_backend_id: uuid.UUID
-    connector_type_refs: list[dict[str, Any]] = []
-    evals: list[dict[str, Any]] = []
-    retry_policy: dict[str, Any] = {}
+    connector_type_refs: ClassVar[list[dict[str, Any]]] = []
+    evals: ClassVar[list[dict[str, Any]]] = []
+    retry_policy: ClassVar[dict[str, Any]] = {}
     token_budget: int | None = Field(default=None, ge=0)
     max_input_length: int | None = Field(default=None, ge=0)
     library_id: uuid.UUID | None = None
     prompt_always_visible: bool = False
-    required_environment_capabilities: list[str] = Field(default_factory=list)
+    required_environment_capabilities: list[str]
+    template_id: str | None
+    agent_command: str | None = Field(default=None)
 
 
 class AgentUpdate(BaseModel):
@@ -70,7 +74,9 @@ class AgentUpdate(BaseModel):
     token_budget: int | None = Field(default=None, ge=0)
     max_input_length: int | None = Field(default=None, ge=0)
     prompt_always_visible: bool | None = None
-    required_environment_capabilities: list[str] | None = None
+    required_environment_capabilities: list[str]
+    template_id: str | None
+    agent_command: str | None = None
 
 
 class AgentResponse(BaseModel):
@@ -94,6 +100,8 @@ class AgentResponse(BaseModel):
     library_id: uuid.UUID | None
     prompt_always_visible: bool
     required_environment_capabilities: list[str]
+    template_id: str | None
+    agent_command: str | None
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
@@ -132,7 +140,7 @@ class PromptVersionListEntry(BaseModel):
     created_at: str
     notes: str
     optimized_from: str | None = None
-    eval_result_ids: list[str] = []
+    eval_result_ids: ClassVar[list[str]] = []
 
 
 class PromptVersionDetail(BaseModel):
@@ -141,7 +149,7 @@ class PromptVersionDetail(BaseModel):
     created_at: str
     notes: str
     optimized_from: str | None = None
-    eval_result_ids: list[str] = []
+    eval_result_ids: ClassVar[list[str]] = []
 
 
 class PromptDiffRequest(BaseModel):
@@ -179,7 +187,7 @@ def _validate_generic_agent(
     Library-sourced agents (those with a ``library_id``) inherit trust and
     documentation from their source — they bypass generic-agent checks.
 
-    Generic user-defined agents are experimental per PRD §8.2 and must
+    Generic user-defined agents are experimental per PRD Â§8.2 and must
     satisfy the following criteria before they can execute in a pipeline:
       - An executable generic agent MUST have a ``description`` so other
         pipeline authors can understand its purpose.
@@ -188,7 +196,7 @@ def _validate_generic_agent(
       - Executable generic agents with *novel schema pairs* (no matching
         library primitive) SHOULD define at least one eval for quality
         assurance.  In alpha this is a logged advisory; in production it
-        becomes a hard requirement (see PRD §15 — "require eval rubric
+        becomes a hard requirement (see PRD Â§15 — "require eval rubric
         before production promotion").
     """
     if library_id is not None:
@@ -217,7 +225,7 @@ def _validate_generic_agent(
     if is_executable and not evals:
         _log.warning(
             "Generic executable agent '%s' has no eval definitions. "
-            "Per PRD §8.2, generic agents are experimental and require "
+            "Per PRD Â§8.2, generic agents are experimental and require "
             "an eval rubric before production promotion. "
             "Consider adding at least one eval before deploying this agent "
             "in a production pipeline.",
@@ -225,12 +233,13 @@ def _validate_generic_agent(
         )
 
 
+@handle_db_errors("agents.list_agents_endpoint")
 @router.get("", response_model=AgentListResponse)
 async def list_agents_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AgentListResponse:
     try:
         async with session.begin():
@@ -242,6 +251,7 @@ async def list_agents_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -260,11 +270,12 @@ async def list_agents_endpoint(
     )
 
 
+@handle_db_errors("agents.create_agent_endpoint")
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_agent_endpoint(
     req: AgentCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AgentResponse:
     _validate_generic_agent(
         name=req.name,
@@ -276,15 +287,19 @@ async def create_agent_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            input_ver = req.input_schema_version or "latest"
+            output_ver = req.output_schema_version or "latest"
             agent = await create_agent(
                 session,
                 org_id=principal.organisation_id,
                 name=req.name,
                 account_id=principal.account_id,
                 input_schema_id=req.input_schema_id,
-                input_schema_version=req.input_schema_version,
+                input_schema_version=input_ver,
                 output_schema_id=req.output_schema_id,
-                output_schema_version=req.output_schema_version,
+                output_schema_version=output_ver,
+                template_id=req.template_id,
+                agent_command=req.agent_command,
                 prompt_template=req.prompt_template,
                 model_backend_id=req.model_backend_id,
                 is_executable=req.is_executable,
@@ -300,7 +315,7 @@ async def create_agent_endpoint(
             )
     except IntegrityError:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Referenced schema version or model backend not found. Verify the IDs are correct.",
         ) from None
     except ProgrammingError:
@@ -309,6 +324,7 @@ async def create_agent_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed during agent creation")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -322,27 +338,24 @@ async def create_agent_endpoint(
     return AgentResponse.model_validate(agent)
 
 
+@handle_db_errors("agents.get_agent_endpoint")
 @router.get("/{agent_id}", response_model=AgentResponse)
 async def get_agent_endpoint(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AgentResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -358,28 +371,25 @@ async def get_agent_endpoint(
     return AgentResponse.model_validate(agent)
 
 
+@handle_db_errors("agents.update_agent_endpoint")
 @router.patch("/{agent_id}", response_model=AgentResponse)
 async def update_agent_endpoint(
     agent_id: uuid.UUID,
     req: AgentUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AgentResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -414,13 +424,14 @@ async def update_agent_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -436,17 +447,18 @@ async def update_agent_endpoint(
     return AgentResponse.model_validate(updated)
 
 
+@handle_db_errors("agents.optimize_prompt")
 @router.post("/{agent_id}/prompts/{version}/optimize", response_model=PromptOptimizeResponse)
 async def optimize_prompt(
     agent_id: uuid.UUID,
     version: str,
     req: PromptOptimizeRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PromptOptimizeResponse:
     if not req.eval_result_ids:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="At least one eval_result_id is required",
         )
 
@@ -460,6 +472,7 @@ async def optimize_prompt(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -469,15 +482,18 @@ async def optimize_prompt(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     try:
-        eval_results, eval_defs = await get_eval_results_with_defs(
-            session, req.eval_result_ids, principal.organisation_id
-        )
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            eval_results, eval_defs = await get_eval_results_with_defs(
+                session, req.eval_result_ids, principal.organisation_id
+            )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -492,18 +508,21 @@ async def optimize_prompt(
     backend_id = req.model_backend_id or agent.model_backend_id
 
     try:
-        mb_result = await session.execute(
-            select(ModelBackend).where(
-                ModelBackend.id == backend_id,
-                ModelBackend.organisation_id == principal.organisation_id,
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mb_result = await session.execute(
+                select(ModelBackend).where(
+                    ModelBackend.id == backend_id,
+                    ModelBackend.organisation_id == principal.organisation_id,
+                )
             )
-        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -547,6 +566,7 @@ async def optimize_prompt(
             detail="Prompt optimization failed: LLM call failed after retries",
         ) from None
     except Exception:
+        _log.exception("Unexpected error during prompt optimization")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Prompt optimization failed unexpectedly",
@@ -563,13 +583,14 @@ async def optimize_prompt(
     )
 
 
+@handle_db_errors("agents.apply_optimized_prompt")
 @router.post("/{agent_id}/prompts/{version}/apply", response_model=AgentResponse)
 async def apply_optimized_prompt(
     agent_id: uuid.UUID,
     version: str,
     req: ApplyOptimizedPromptRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AgentResponse:
     try:
         async with session.begin():
@@ -587,13 +608,14 @@ async def apply_optimized_prompt(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -609,11 +631,12 @@ async def apply_optimized_prompt(
     return AgentResponse.model_validate(agent)
 
 
+@handle_db_errors("agents.list_prompt_versions")
 @router.get("/{agent_id}/prompts", response_model=list[PromptVersionListEntry])
 async def list_prompt_versions(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[PromptVersionListEntry]:
     try:
         async with session.begin():
@@ -625,6 +648,7 @@ async def list_prompt_versions(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -651,12 +675,13 @@ async def list_prompt_versions(
     ]
 
 
+@handle_db_errors("agents.get_prompt_version_endpoint")
 @router.get("/{agent_id}/prompts/{version}", response_model=PromptVersionDetail)
 async def get_prompt_version_endpoint(
     agent_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PromptVersionDetail:
     try:
         async with session.begin():
@@ -668,6 +693,7 @@ async def get_prompt_version_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -690,12 +716,13 @@ async def get_prompt_version_endpoint(
     )
 
 
+@handle_db_errors("agents.rollback_prompt")
 @router.put("/{agent_id}/prompts/rollback/{version}", response_model=PromptRollbackResponse)
 async def rollback_prompt(
     agent_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PromptRollbackResponse:
     try:
         async with session.begin():
@@ -705,13 +732,14 @@ async def rollback_prompt(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -733,12 +761,13 @@ async def rollback_prompt(
     )
 
 
+@handle_db_errors("agents.diff_prompt_versions")
 @router.post("/{agent_id}/prompts/diff", response_model=PromptDiffResponse)
 async def diff_prompt_versions(
     agent_id: uuid.UUID,
     req: PromptDiffRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PromptDiffResponse:
     try:
         async with session.begin():
@@ -750,6 +779,7 @@ async def diff_prompt_versions(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -861,11 +891,12 @@ async def diff_prompt_versions(
     return PromptDiffResponse(version_a=req.version_a, version_b=req.version_b, lines=diff_lines)
 
 
+@handle_db_errors("agents.delete_agent_endpoint")
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent_endpoint(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -875,13 +906,14 @@ async def delete_agent_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",

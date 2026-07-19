@@ -1,14 +1,15 @@
-from __future__ import annotations
-
 """RFC 9457 Problem Details for HTTP APIs."""
 
+from __future__ import annotations
 
 import enum
+from collections.abc import Sequence
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException
 
 
 class ProblemType(enum.StrEnum):
@@ -80,6 +81,24 @@ class ProblemDetail(BaseModel):
             headers=merged,
         )
 
+    @staticmethod
+    def fallback_internal_error(request_id: str | None = None) -> JSONResponse:
+        """Build a 500 response when even ProblemDetail construction fails.
+
+        This is a safety net so that an exception in the exception handler
+        itself still produces a valid HTTP response.
+        """
+        return JSONResponse(
+            status_code=500,
+            content={
+                "type": "urn:problem:modulo:internal_error",
+                "title": "Internal Error",
+                "detail": "An unexpected error occurred",
+                "status": 500,
+            },
+            headers={"X-Request-ID": request_id or ""},
+        )
+
 
 class ProblemException(HTTPException):
     """Raise this anywhere to produce a structured ProblemDetail response."""
@@ -137,7 +156,7 @@ def problem_from_http_exception(
 
 def problem_from_validation_error(
     request: Request,
-    errors: list[dict[str, Any]],
+    errors: Sequence[dict[str, Any]],
 ) -> ProblemDetail:
     detail = "; ".join(f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', '')}" for e in errors)
     return ProblemDetail.from_type(

@@ -1,9 +1,12 @@
 import os
 from pathlib import Path
+from typing import Any
 
 import yaml
 
-_MANIFEST: dict | None = None
+Manifest = dict[str, Any]
+
+_MANIFEST: Manifest | None = None
 
 
 def get_manifest_path() -> Path:
@@ -17,18 +20,24 @@ def get_manifest_path() -> Path:
     return Path(__file__).parent.parent.parent.parent.parent / "frontend" / "src" / "manifest.yaml"
 
 
-def load_manifest() -> dict:
+def load_manifest() -> Manifest:
     global _MANIFEST
     path = get_manifest_path()
     if path.exists():
-        with open(path) as f:
-            _MANIFEST = yaml.safe_load(f)
+        try:
+            with open(path) as f:
+                loaded = yaml.safe_load(f)
+                if not isinstance(loaded, dict):
+                    raise ValueError("manifest root must be a mapping")
+                _MANIFEST = loaded
+        except (yaml.YAMLError, OSError, ValueError) as exc:
+            raise RuntimeError(f"Failed to load manifest from {path}: {exc}") from exc
     else:
         _MANIFEST = {"routes": {}, "elements": {}, "sidebar_groups": {}}
     return _MANIFEST
 
 
-def get_manifest() -> dict:
+def get_manifest() -> Manifest:
     if _MANIFEST is None:
         return load_manifest()
     return _MANIFEST

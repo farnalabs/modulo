@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """License key parsing, verification, and storage.
 
 License keys are base64-encoded, Ed25519-signed JSON payloads in the
@@ -9,12 +7,13 @@ format::
 
 The payload is a JSON object with keys:
 
-    tier        — "community" | "team" | "v1" | "v2"
+    tier        — "community" | "team"
     features    — list of feature flag names
     expires_at  — ISO 8601 expiration timestamp
     org_id      — organisation identifier
 """
 
+from __future__ import annotations
 
 import base64
 import json

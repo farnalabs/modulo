@@ -1,5 +1,6 @@
 """SnykConnector — async Snyk REST API connector for vulnerability scanning."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -16,7 +17,7 @@ from modulo.connectors.base import (
 _API_BASE = "https://api.snyk.io/rest"
 
 
-def _next_cursor(body: dict[str, Any], limit: int) -> str | None:
+def _next_cursor(body: dict[str, Any]) -> str | None:
     links = body.get("links", {})
     if isinstance(links, dict) and "next" in links:
         nxt = links["next"]
@@ -56,6 +57,8 @@ class SnykConnector(ConnectorBase):
                 return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Cannot connect to Snyk API")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -108,7 +111,7 @@ class SnykConnector(ConnectorBase):
         return ConnectorResult(
             records=data,
             total=body.get("meta", {}).get("count", len(data)),
-            next_cursor=_next_cursor(body, q.limit),
+            next_cursor=_next_cursor(body),
         )
 
     async def _get_project(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -151,7 +154,7 @@ class SnykConnector(ConnectorBase):
         return ConnectorResult(
             records=data,
             total=body.get("meta", {}).get("count", len(data)),
-            next_cursor=_next_cursor(body, q.limit),
+            next_cursor=_next_cursor(body),
         )
 
     async def _aggregated_issues(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -162,7 +165,7 @@ class SnykConnector(ConnectorBase):
         packages = q.filters.get("packages", [])
         if not packages:
             raise ValueError(
-                "Snyk aggregated_issues query requires 'packages' in filters (list of {name, version, ecosystem})"
+                "Snyk aggregated_issues query requires 'packages' in filters (list of {name, version, ecosystem})",
             )
         body_payload: dict[str, Any] = {"data": {"attributes": {"packages": packages}}}
         resp = await c.post(f"/orgs/{org_id}/packages/issues", params=params, json=body_payload)
@@ -185,7 +188,7 @@ class SnykConnector(ConnectorBase):
         return ConnectorResult(
             records=data,
             total=body.get("meta", {}).get("count", len(data)),
-            next_cursor=_next_cursor(body, q.limit),
+            next_cursor=_next_cursor(body),
         )
 
     async def _list_tests(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -205,7 +208,7 @@ class SnykConnector(ConnectorBase):
         return ConnectorResult(
             records=data,
             total=body.get("meta", {}).get("count", len(data)),
-            next_cursor=_next_cursor(body, q.limit),
+            next_cursor=_next_cursor(body),
         )
 
     async def _trigger_test(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:

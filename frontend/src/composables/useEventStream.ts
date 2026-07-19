@@ -15,9 +15,11 @@ let reconnectAttempts = 0
 const MAX_RECONNECT_ATTEMPTS = 10
 const FETCH_TIMEOUT_MS = 30000
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let _disconnecting = false
 
 function connect(): void {
   if (abortController) return
+  _disconnecting = false
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
@@ -75,7 +77,9 @@ async function doConnect(): Promise<void> {
               }
             }
           }
-          dispatchToStore(parsed)
+          try { dispatchToStore(parsed) } catch (e) {
+            console.error('[EventBus] dispatchToStore error', e)
+          }
         } catch {
           console.warn('[EventBus] Failed to parse SSE data')
         }
@@ -83,7 +87,10 @@ async function doConnect(): Promise<void> {
     }
   } catch (e: unknown) {
     clearTimeout(timeoutId)
-    if (e instanceof Error && e.name === 'AbortError') return
+    if (e instanceof Error && e.name === 'AbortError') {
+      if (!_disconnecting) scheduleReconnect()
+      return
+    }
     scheduleReconnect()
     return
   } finally {
@@ -91,7 +98,7 @@ async function doConnect(): Promise<void> {
     connected.value = false
   }
 
-  scheduleReconnect()
+  if (!_disconnecting) scheduleReconnect()
 }
 
 function cleanup(): void {
@@ -107,6 +114,7 @@ function cleanup(): void {
 }
 
 function disconnect(): void {
+  _disconnecting = true
   cleanup()
   clearAllHandlers()
 }

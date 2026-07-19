@@ -1,9 +1,9 @@
-from __future__ import annotations
-
 """Admin feature flag inspection — lists all known flags and their current status."""
 
+from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -12,14 +12,18 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
+from modulo.core.license import get_license, parse_and_verify
 from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
 
@@ -39,10 +43,10 @@ async def _resolve_tier(settings: Settings, session: AsyncSession, current_user:
     4. Org.plan_id (per-org, from DB)
     5. Community fallback
     """
-    from modulo.core.license import get_license, parse_and_verify
-
-    async with session.begin():
-        org = await get_organisation(session, current_user.organisation_id)
+    org = None
+    if current_user.organisation_id is not None:
+        async with session.begin():
+            org = await get_organisation(session, current_user.organisation_id)
 
     # 1. Org-level license key
     if org is not None:
@@ -85,8 +89,6 @@ async def _build_registry(
     settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal
 ) -> FeatureFlagRegistry:
     tier = await _resolve_tier(settings, session, current_user)
-    from modulo.core.license import get_license
-
     lic = get_license()
     has_key = bool(settings.modulo_license_key) or lic is not None
 
@@ -104,12 +106,13 @@ async def _build_registry(
         )
 
 
-@router.get("")
+@handle_db_errors("admin.feature_flags.list_feature_flags")
+@router.get("", response_model=None)
 async def list_feature_flags(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-) -> Response:
+) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
         return {
@@ -175,13 +178,14 @@ async def list_feature_flags(
         )
 
 
-@router.get("/{flag_name}")
+@handle_db_errors("admin.feature_flags.get_feature_flag")
+@router.get("/{flag_name}", response_model=None)
 async def get_feature_flag(
     flag_name: str,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-) -> Response:
+) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
         flag = registry.get_flag(flag_name)
@@ -238,14 +242,15 @@ class ToggleFlagRequest(BaseModel):
     enabled: bool
 
 
-@router.put("/{flag_name}")
+@handle_db_errors("admin.feature_flags.toggle_feature_flag")
+@router.put("/{flag_name}", response_model=None)
 async def toggle_feature_flag(
     flag_name: str,
     req: ToggleFlagRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-) -> Response:
+) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
         flag = registry.get_flag(flag_name)
@@ -300,13 +305,15 @@ async def toggle_feature_flag(
         )
 
 
-@router.get("/{flag_name}/org-override")
+@handle_db_errors("admin.feature_flags.get_org_flag_override")
+@router.get("/{flag_name}/org-override", response_model=None)
 async def get_org_flag_override(
     flag_name: str,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict:
+) -> Response | dict[str, Any]:
     _require_admin(current_user)
+    assert current_user.organisation_id is not None
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
@@ -351,14 +358,16 @@ async def get_org_flag_override(
         )
 
 
-@router.put("/{flag_name}/org-override")
+@handle_db_errors("admin.feature_flags.set_org_flag_override")
+@router.put("/{flag_name}/org-override", response_model=None)
 async def set_org_flag_override(
     flag_name: str,
     req: ToggleFlagRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict:
+) -> Response | dict[str, Any]:
     _require_admin(current_user)
+    assert current_user.organisation_id is not None
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
@@ -408,13 +417,15 @@ async def set_org_flag_override(
         )
 
 
-@router.delete("/{flag_name}/org-override")
+@handle_db_errors("admin.feature_flags.clear_org_flag_override")
+@router.delete("/{flag_name}/org-override", response_model=None)
 async def clear_org_flag_override(
     flag_name: str,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict:
+) -> Response | dict[str, Any]:
     _require_admin(current_user)
+    assert current_user.organisation_id is not None
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)

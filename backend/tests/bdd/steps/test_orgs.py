@@ -1,5 +1,6 @@
 """Step definitions for organisation management features — onboarding, membership."""
 
+import contextlib
 import json
 import os
 import uuid
@@ -12,14 +13,10 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/orgs/member_management.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/orgs/org_onboarding.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +155,6 @@ def remove_user_from_team(request, username: str, team_name: str, client, ctx):
 @when(parsers.parse('I deactivate user "{username}"'))
 def deactivate_user(request, username: str, client, ctx):
     target_user_id = ctx.get("target_user_id", str(uuid.uuid4()))
-    now_iso = datetime.now(UTC).isoformat()
 
     mock_account = MagicMock()
     mock_account.id = target_user_id

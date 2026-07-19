@@ -3,9 +3,9 @@
 import time
 from datetime import UTC, datetime
 
+import jwt as pyjwt
 import pytest
-from jose import JWTError
-from jose import jwt as jose_jwt
+from jwt import InvalidTokenError as JWTError
 
 from modulo.auth.jwt import (
     _ALGORITHM,
@@ -28,13 +28,13 @@ def _make_access_token(subject: str = "alice") -> str:
     return create_access_token(subject, _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
 
 
-def test_roundtrip() -> None:
+def test_create_access_token_and_decode_principal_roundtrip() -> None:
     token = _make_access_token()
     principal = decode_principal(token, _KEY)
     assert principal.username == "alice"
 
 
-def test_wrong_key_raises() -> None:
+def test_decode_principal_rejects_wrong_key() -> None:
     token = _make_access_token()
     with pytest.raises(JWTError):
         decode_principal(token, "wrong_key_but_long_enough_to_pass_validator")
@@ -50,7 +50,7 @@ def test_expired_token_raises() -> None:
         "iat": past - 86400,
         "exp": past,
     }
-    token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
+    token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError):
         decode_principal(token, _KEY)
 
@@ -58,7 +58,7 @@ def test_expired_token_raises() -> None:
 def test_none_algorithm_rejected() -> None:
     """Tokens with alg:none must be rejected at decode time.
 
-    Manually constructs a JWT with alg: none (bypassing python-jose encode-time
+    Manually constructs a JWT with alg: none (bypassing PyJWT encode-time
     validation) and verifies that decode_principal rejects it since HS256 is the
     only allowed algorithm.
     """
@@ -81,14 +81,14 @@ def test_none_algorithm_rejected() -> None:
 
 def test_missing_sub_raises() -> None:
     claims = {"org_id": _ORG, "account_id": _ACCOUNT, "org_role": "admin", "exp": int(time.time()) + 3600}
-    token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
+    token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError, match="sub"):
         decode_principal(token, _KEY)
 
 
 def test_empty_sub_raises() -> None:
     claims = {"sub": "", "org_id": _ORG, "account_id": _ACCOUNT, "org_role": "admin", "exp": int(time.time()) + 3600}
-    token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
+    token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError, match="sub"):
         decode_principal(token, _KEY)
 
@@ -101,7 +101,7 @@ def test_token_is_string() -> None:
 
 def test_token_carries_org_context() -> None:
     token = _make_access_token("alice")
-    claims = jose_jwt.decode(token, _KEY, algorithms=[_ALGORITHM])
+    claims = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
     assert claims["org_id"] == _ORG
     assert claims["org_role"] == "admin"
 
@@ -138,7 +138,7 @@ def test_decode_principal_rejects_token_without_account_id() -> None:
         "org_role": "admin",
         "exp": int(time.time()) + 3600,
     }
-    token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
+    token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError, match="account_id"):
         decode_principal(token, _KEY)
 
@@ -225,7 +225,7 @@ def test_refresh_token_has_refresh_purpose() -> None:
         token_family="f",
         token_sequence=1,
     )
-    payload = jose_jwt.decode(token, _KEY, algorithms=[_ALGORITHM])
+    payload = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
     assert payload.get("purpose") == "refresh"
     assert payload.get("token_family") == "f"
     assert payload.get("token_sequence") == 1
@@ -386,7 +386,7 @@ def test_decode_claim_token_expired_raises() -> None:
         "iat": past - 900,
         "exp": past,
     }
-    token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
+    token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError):
         decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
 
@@ -401,7 +401,7 @@ def test_decode_claim_token_missing_purpose_raises() -> None:
         "iat": future - 3600,
         "exp": future,
     }
-    token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
+    token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError, match="purpose"):
         decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
 
@@ -417,6 +417,6 @@ def test_decode_claim_token_wrong_purpose_raises() -> None:
         "iat": future - 3600,
         "exp": future,
     }
-    token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
+    token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError, match="purpose"):
         decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)

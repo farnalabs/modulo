@@ -14,6 +14,7 @@ All outcomes (pass and fail) are recorded as a TriggerEvent row.
 The caller is responsible for background execution of the created run.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -22,8 +23,6 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
-
-_log = logging.getLogger(__name__)
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +36,8 @@ from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -98,7 +99,9 @@ _ACTIVE_STATUSES = ("pending", "running", "awaiting_human", "claimed", "waiting_
 # ---------------------------------------------------------------------------
 
 
-def _sha256_hex(data: bytes) -> str:
+def _sha256_hex(data: bytes | None) -> str:
+    if not isinstance(data, bytes):
+        return ""
     return hashlib.sha256(data).hexdigest()
 
 
@@ -115,14 +118,14 @@ def _is_unique_violation(exc: IntegrityError) -> bool:
     # PostgreSQL — asyncpg raises with pgcode attribute
     pgcode = getattr(orig, "pgcode", None)
     if pgcode is not None:
-        return pgcode == "23505"
+        return str(pgcode) == "23505"
 
     # SQLite — aiosqlite wraps the message as a string
     msg = str(orig)
     if "UNIQUE constraint failed" in msg:
         return True
 
-    # MariaDB / MySQL — asyncmy raises with args[0] as error number
+    # MariaDB / MySQL DBAPI errors expose the numeric code in args[0].
     if isinstance(orig, Exception):
         err_args = getattr(orig, "args", None)
         if err_args and len(err_args) > 0 and err_args[0] == 1062:
@@ -217,7 +220,7 @@ class TriggerEngine:
         try:
             ts = _verify_timestamp(modulo_timestamp)
         except TimestampExpiredError as exc:
-            _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc)
+            _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
             await self._log_event(
                 session,
                 trigger=trigger,
@@ -231,7 +234,7 @@ class TriggerEngine:
         # HMAC is computed over timestamp.body for replay protection
         cfg = trigger.config_json or {}
         hmac_secret: str | None = cfg.get("hmac_secret")
-        if hmac_secret and not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
+        if hmac_secret is not None and not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
             _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
             await self._log_event(
                 session,
@@ -418,10 +421,6 @@ class TriggerEngine:
         return run, trigger_event, input_payload
 
     # ------------------------------------------------------------------
-    # Dedup cleanup
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
     # Polling trigger
     # ------------------------------------------------------------------
 
@@ -501,17 +500,23 @@ class TriggerEngine:
                 instance.config_json,
                 creds,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"Connector init failed: {str(exc)[:200]}"}
 
         try:
             query = ConnectorQuery(resource=poll_query)
             query_result = await connector.query(query)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"Query failed: {str(exc)[:200]}"}
 
         try:
             matched = _evaluate_condition(query_result, condition_expression)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"Condition evaluation failed: {str(exc)[:200]}"}
 

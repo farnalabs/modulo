@@ -19,9 +19,7 @@ Modulo is a governed orchestration layer for agentic SDLC pipelines. It
 provides a composable pipeline of atomic AI agents that automate work between
 existing tools like GitHub, Linear, and Notion.
 
-We're glad you're here. By participating in this project, you agree to abide
-by our [Code of Conduct](CODE_OF_CONDUCT.md) — be respectful, constructive,
-and assume good faith.
+We're glad you're here. Be respectful, constructive, and assume good faith.
 
 ---
 
@@ -39,7 +37,7 @@ and assume good faith.
 ### Required services
 
 The project needs a running PostgreSQL 16 and Redis 7 instance. Use Docker
-Comose to start them:
+Compose to start them:
 
 ```powershell
 docker compose up -d db redis
@@ -63,7 +61,7 @@ docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
 ```
 
 The backend auto-detects MariaDB and configures the connection string
-(`mysql+asyncmy://modulo:modulo@localhost:3306/modulo`).
+(`mysql+aiomysql://modulo:modulo@localhost:3306/modulo`).
 
 ---
 
@@ -428,20 +426,18 @@ alpha phase (`0.x`), breaking changes may occur in minor releases.
 
 ### How releases work
 
-Releases are triggered via the `Release` GitHub Actions workflow. It runs
-manually (`workflow_dispatch`) or on a weekly schedule. The process:
+Releases are triggered manually via the `Release` GitHub Actions workflow
+(`workflow_dispatch`). The process:
 
 1. **Check for changes** — compares the latest `v*` tag against `HEAD`
 2. **Determine version** — accepts `patch`, `minor`, or `major` bump (manual)
    or an explicit tag like `v1.2.3`
-3. **Update files** — increments version in:
-   - `backend/pyproject.toml`
-   - `frontend/package.json`
-   - `docs/prd.md`
-   - `LICENSE` Change Date (3 years from release)
-4. **Generate SBOM** — runs `backend/scripts/generate-sbom.py`
-5. **Commit and tag** — `git tag -a v<version>`
-6. **Push** — tags and commits are pushed to origin
+3. **Build and publish** — builds the configured package and container artifacts
+4. **Tag** — publishes only from an existing semantic-version tag
+
+Before a release tag is created, maintainers must update both application
+version files together and set the `LICENSE` Change Date to three years after
+that release date. The release workflow does not perform these edits.
 
 ### Changelog
 

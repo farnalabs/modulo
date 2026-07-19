@@ -1,7 +1,7 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="saved_views" data-testid="view-toggle-gate" show-disabled>
     <div class="flex items-center gap-2" data-testid="view-toggle">
-      <Select v-model="selectedViewId" @update:model-value="onViewSelect($event as string)">
+      <Select aria-label="Form control" v-model="selectedViewId" @update:model-value="onViewSelect($event as string)">
         <SelectTrigger class="w-[200px]" data-testid="view-toggle-trigger">
           <SelectValue :placeholder="$t('components.ViewToggle.select_a_saved_view')" />
         </SelectTrigger>
@@ -95,12 +95,14 @@ async function fetchViews() {
   try {
     const { data, error } = await (api as any).GET("/api/v1/views");
     if (error) {
+      console.warn("ViewToggle: failed to fetch views", error);
       return;
     }
     if (data && Array.isArray(data.views)) {
       views.value = data.views;
     }
   } catch {
+    console.warn("ViewToggle: exception fetching views");
   }
 }
 

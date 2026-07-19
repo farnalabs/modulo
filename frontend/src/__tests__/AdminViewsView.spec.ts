@@ -119,7 +119,7 @@ describe('AdminViewsView', () => {
       },
     })
     await flush()
-    const deleteBtns = wrapper.findAll('[data-testid="admin-views-delete"]')
+    const deleteBtns = wrapper.findAll('button').filter(button => button.text() === 'Delete')
     expect(deleteBtns.length).toBe(2)
     await deleteBtns[0].trigger('click')
     expect(wrapper.text()).toContain('Delete "Active Runs"?')
@@ -133,7 +133,7 @@ describe('AdminViewsView', () => {
     })
     await flush()
 
-    const dupBtns = wrapper.findAll('[data-testid="admin-views-duplicate"]')
+    const dupBtns = wrapper.findAll('button').filter(button => button.text() === 'Duplicate')
     expect(dupBtns.length).toBe(2)
     await dupBtns[0].trigger('click')
     await flush()

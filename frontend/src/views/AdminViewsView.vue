@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-narrow">
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('components.ViewToggle.saved_views')" :subtitle="$t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data')" />
@@ -23,8 +23,8 @@
         <h2 class="mb-4 text-base font-semibold" data-testid="admin-views-form-title">{{ editingId ? 'Edit View' : 'New View' }}</h2>
         <form class="space-y-4" @submit.prevent="handleSave">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="adminviewsview-field-6" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="adminviewsview-field-6"
               v-model="form.name"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               :placeholder="$t('views.AdminViewsView.my_view')"
@@ -33,22 +33,22 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
-            <select
-              v-model="form.view_type"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              data-testid="admin-views-type-select"
-              aria-label="View type"
-            >
-              <option value="table">Table</option>
-              <option value="grid">Grid</option>
-              <option value="kanban">Kanban</option>
-              <option value="timeline">Timeline</option>
-            </select>
+            <label for="adminviewsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
+            <Select v-model="form.view_type">
+              <SelectTrigger data-testid="admin-views-type-select" aria-label="View type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+                <SelectValue placeholder="table" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="table">Table</SelectItem>
+                <SelectItem value="grid">Grid</SelectItem>
+                <SelectItem value="kanban">Kanban</SelectItem>
+                <SelectItem value="timeline">Timeline</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.filters_json') }}</label>
-            <textarea
+            <label for="adminviewsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.filters_json') }}</label>
+            <textarea id="adminviewsview-field-4"
               v-model="form.filters"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
               rows="4"
@@ -57,8 +57,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Columns</label>
-            <input
+            <label for="adminviewsview-field-3" class="mb-1 block text-sm font-medium">Columns</label>
+            <input id="adminviewsview-field-3"
               v-model="form.columns"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               :placeholder="$t('views.AdminViewsView.name_status_createdat')"
@@ -67,8 +67,8 @@
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.sort_by') }}</label>
-              <input
+              <label for="adminviewsview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.sort_by') }}</label>
+              <input id="adminviewsview-field-2"
                 v-model="form.sort_by"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 placeholder="created_at"
@@ -76,16 +76,16 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
-            <select
-              v-model="form.sort_order"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              data-testid="admin-views-sort-order-select"
-              aria-label="Sort order"
-              >
-                <option value="desc">Descending</option>
-                <option value="asc">Ascending</option>
-              </select>
+              <label for="adminviewsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
+            <Select v-model="form.sort_order">
+              <SelectTrigger data-testid="admin-views-sort-order-select" aria-label="Sort order" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+                <SelectValue placeholder="desc" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="desc">Descending</SelectItem>
+                <SelectItem value="asc">Ascending</SelectItem>
+              </SelectContent>
+            </Select>
             </div>
           </div>
           <div v-if="saveError" class="text-sm text-destructive">{{ saveError }}</div>
@@ -223,6 +223,7 @@ import {
 import { formatApiError } from '../lib/api/formatError'
 import { formatDateShort } from '../lib/formatDate'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import TableActions from '../components/shared/TableActions.vue'
 
 interface SavedView {
@@ -392,8 +393,8 @@ async function deleteView() {
       const errData = await res.json().catch(() => null)
       throw new Error(errData?.detail ?? `Delete failed (${res.status})`)
     }
-    views.value = views.value.filter(v => v.id !== deleteConfirmId.value)
     deleteConfirmId.value = null
+    await loadViews()
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
   } finally {

@@ -1,6 +1,5 @@
 """Unit tests for AWSSecretsManagerBackend."""
 
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,30 +13,19 @@ try:
 except ImportError:
     _BOTO3_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(
-    not _BOTO3_AVAILABLE,
-    reason="boto3 package not installed",
-)
-
-
-@pytest.fixture(autouse=True)
-def _env():
-    with patch.dict(
-        os.environ,
-        {
-            "AWS_REGION": "us-east-1",
-            "AWS_ACCESS_KEY_ID": "test-key",
-            "AWS_SECRET_ACCESS_KEY": "test-secret",
-        },
-    ):
-        yield
+pytestmark = [
+    pytest.mark.skipif(not _BOTO3_AVAILABLE, reason="boto3 package not installed"),
+    pytest.mark.usefixtures("aws_env"),
+]
 
 
 @pytest.fixture
 def mock_boto3():
-    with patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True):
-        with patch("modulo.core.secrets_backend.aws._boto3") as mb:
-            yield mb
+    with (
+        patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.aws._boto3") as mb,
+    ):
+        yield mb
 
 
 def _make_backend():
@@ -65,7 +53,7 @@ class TestAWSSecretsManagerBackend:
         assert value == "my-value"
         backend._client.get_secret_value.assert_called_once_with(SecretId="my-key")
 
-    async def test_get_secret_unknown_key_raises(self, mock_boto3):
+    async def test_get_secret_unknown_key_raises_key_error(self, mock_boto3):
         backend = _make_backend()
         backend._client.get_secret_value.side_effect = backend._client.exceptions.ResourceNotFoundException()
 
@@ -124,9 +112,11 @@ class TestAWSSecretsManagerBackend:
 
         backend = _make_backend()
 
-        with patch.object(asyncio, "wait_for", side_effect=TimeoutError()):
-            with pytest.raises(RuntimeError, match="timeout reading secret"):
-                await backend.get_secret("my-key")
+        with (
+            patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
+            pytest.raises(RuntimeError, match="timeout reading secret"),
+        ):
+            await backend.get_secret("my-key")
 
     async def test_get_secret_network_error_wraps_as_runtime_error(self, mock_boto3):
         backend = _make_backend()

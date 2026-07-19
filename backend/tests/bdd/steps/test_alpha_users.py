@@ -1,22 +1,17 @@
 """BDD step definitions: User roles, runner role."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/users/basic_auth.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/users/roles.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/users/runner_role.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("I am authenticated as a viewer in org {org}")

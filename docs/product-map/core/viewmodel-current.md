@@ -62,6 +62,9 @@ Aggregate endpoint returning the current user's full view of the system — org 
 - Fixed pre-existing test bug: mock views in `test_viewmodel_view.py` missing `account_id` attribute, causing `ViewInfo.model_validate` failure with `ValidationError`
 - Created website docs stub at `Website/modulo-website/src/docs/viewmodel.md`
 
+### 2026-07-12 — Round 3 QA (improve-architecture batch 3)
+- **Fixed (MINOR):** Added `from None` to 10 `except` blocks missing explicit exception chaining across `license_info`, `me`, `viewmodel_current`, and `viewmodel_list_views` handlers. B904 requires explicit `raise ... from err` or `raise ... from None` within except blocks.
+
 ### 2026-07-03 — Cross-cutting QA pass
 - Added `try/except ProgrammingError` → 501 to `viewmodel_current()` and `viewmodel_list_views()` in backend/src/modulo/api/routes/viewmodel.py
 - Created `backend/tests/unit/api/test_viewmodel_error_paths.py` with 7 error-path tests:

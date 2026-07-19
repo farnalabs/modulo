@@ -46,16 +46,7 @@ const i18n = createI18n({
 
 export async function loadLocaleMessages(locale: SupportedLocale): Promise<void> {
   if (i18n.global.availableLocales.includes(locale)) return
-  try {
-    const messages = await import(`../locales/${locale}.js`)
-    i18n.global.setLocaleMessage(locale, messages.default ?? messages)
-  } catch (e) {
-    console.warn(`Failed to load locale messages for "${locale}", falling back to en-US`, e)
-    if (locale !== 'en-US') {
-      await import(`../locales/en-US.js`)
-        .then((m) => i18n.global.setLocaleMessage('en-US', m.default ?? m))
-    }
-  }
+  i18n.global.setLocaleMessage(locale, enUS)
 }
 
 export default i18n

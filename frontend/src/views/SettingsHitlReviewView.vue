@@ -18,30 +18,24 @@
   >
     <template #after>
       <div class="flex items-center gap-2">
-        <select
-          v-model="pipelineFilter"
-          data-testid="hitl-review-pipeline-select"
-          aria-label="Pipeline"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadGates"
-        >
-          <option value="">All Pipelines</option>
-          <option
-            v-for="p in pipelines"
-            :key="p.id"
-            :value="p.id"
-          >
-            {{ p.name }}
-          </option>
-        </select>
-        <input
+        <Select v-model="pipelineFilter" @update:model-value="loadGates">
+          <SelectTrigger data-testid="hitl-review-pipeline-select" aria-label="Pipeline" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <SelectValue placeholder="All Pipelines" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">
+              {{ p.name }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <input aria-label="date"
           v-model="dateFrom"
           type="date"
           data-testid="hitl-review-date-from"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadGates"
         />
-        <input
+        <input aria-label="date"
           v-model="dateTo"
           type="date"
           data-testid="hitl-review-date-to"
@@ -166,18 +160,19 @@
                 <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Actions</h3>
                 <div class="space-y-3">
                   <div v-if="gateStatus(gate) === 'pending'">
-                    <button
+                    <Button
                       :disabled="claiming[expandKey(gate)]"
+                      variant="default"
+                      class="w-full"
                       data-testid="hitl-review-claim"
-                      class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                       @click="claimGate(gate)"
                     >
                       {{ claiming[expandKey(gate)] ? 'Claiming...' : 'Claim Gate' }}
-                    </button>
+                    </Button>
                   </div>
                   <div v-if="gateStatus(gate) === 'claimed'">
                     <div class="space-y-2">
-                      <textarea
+                      <textarea aria-label="Review notes..."
                         v-model="reviewNotes[expandKey(gate)]"
                         rows="2"
                         data-testid="hitl-review-notes"
@@ -186,7 +181,7 @@
                       />
                       <div class="flex gap-2">
                         <button
-                          :disabled="actioning[expandKey(gate)]"
+                          :disabled="Boolean(actioning[expandKey(gate)])"
                           data-testid="hitl-review-approve"
                           class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
                           @click="approveGate(gate)"
@@ -194,7 +189,7 @@
                           {{ actioning[expandKey(gate)] === 'approve' ? 'Approving...' : 'Approve' }}
                         </button>
                         <button
-                          :disabled="actioning[expandKey(gate)]"
+                          :disabled="Boolean(actioning[expandKey(gate)])"
                           data-testid="hitl-review-reject"
                           class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
                           @click="rejectGate(gate)"
@@ -227,7 +222,6 @@
       </div>
     </div>
   </template>
-</div>
 </template>
 
 <script setup lang="ts">
@@ -239,9 +233,12 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
+import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const planStore = usePlanStore()
 
@@ -266,7 +263,6 @@ interface PipelineItem {
 const { loading, error, data: gates, load: loadGates } = useDataFetch<GateItem[]>(
   async () => {
     const res = await api.GET('/api/v1/hitl/pending')
-    if (res.error) return { error: res.error }
     const raw = (res.data as any)?.gates || []
     return { data: raw.map((g: any) => ({
       ...g,
@@ -306,7 +302,7 @@ const refreshCountdown = ref(30)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 
-const currentClaimToken = computed(() => claimTokens)
+const currentClaimToken = computed(() => claimTokens.value)
 
 function expandKey(gate: GateItem): string {
   return `${gate.run_id}:${gate.gate_id}`
@@ -332,6 +328,7 @@ function statusBadgeClass(status: string): string {
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return '-'
   return formatDateShortWithTime(d)
 }
 
@@ -351,14 +348,18 @@ const filteredGates = computed(() => {
     }
     if (dateFrom.value) {
       const from = new Date(dateFrom.value)
-      const created = new Date(gate.created_at || gate.claimed_at || '')
-      if (created < from) return false
+      const ts = gate.created_at || gate.claimed_at
+      if (!ts) return false
+      const created = new Date(ts)
+      if (isNaN(created.getTime()) || created < from) return false
     }
     if (dateTo.value) {
       const to = new Date(dateTo.value)
       to.setHours(23, 59, 59, 999)
-      const created = new Date(gate.created_at || gate.claimed_at || '')
-      if (created > to) return false
+      const ts = gate.created_at || gate.claimed_at
+      if (!ts) return false
+      const created = new Date(ts)
+      if (isNaN(created.getTime()) || created > to) return false
     }
     return true
   })
@@ -377,7 +378,7 @@ async function claimGate(gate: GateItem) {
       actionMessage.value[key] = {
         type: 'error',
         text: err && typeof err === 'object' && 'detail' in err
-          ? `Claim failed: ${(err as ProblemDetail).detail}`
+          ? `Claim failed: ${(err as unknown as ProblemDetail).detail}`
           : `Claim failed: ${formatApiError(err)}`,
       }
     } else if (data) {
@@ -416,7 +417,7 @@ async function approveGate(gate: GateItem) {
       actionMessage.value[key] = {
         type: 'error',
         text: err && typeof err === 'object' && 'detail' in err
-          ? `Approve failed: ${(err as ProblemDetail).detail}`
+          ? `Approve failed: ${(err as unknown as ProblemDetail).detail}`
           : `Approve failed: ${formatApiError(err)}`,
       }
     } else {
@@ -455,7 +456,7 @@ async function rejectGate(gate: GateItem) {
       actionMessage.value[key] = {
         type: 'error',
         text: err && typeof err === 'object' && 'detail' in err
-          ? `Reject failed: ${(err as ProblemDetail).detail}`
+          ? `Reject failed: ${(err as unknown as ProblemDetail).detail}`
           : `Reject failed: ${formatApiError(err)}`,
       }
     } else {

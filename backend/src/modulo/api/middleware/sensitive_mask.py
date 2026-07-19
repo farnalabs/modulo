@@ -18,13 +18,13 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.secret_storage import decode_stored_secret
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
-logger = logging.getLogger(__name__)
 _log = logging.getLogger(__name__)
 
 SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
@@ -98,7 +98,7 @@ class RevealResponse(BaseModel):
     expires_in_seconds: int = 30
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -107,62 +107,73 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 
 
 async def _fetch_value(
-    body: RevealRequest,
+    payload: RevealRequest,
     session: AsyncSession,
-    principal: AuthenticatedPrincipal,
+    principal: TenantPrincipal,
+    settings: Settings,
 ) -> str:
-    resource_id = body.resource_id
-    field = body.field
+    resource_id = payload.resource_id
+    field = payload.field
 
-    if body.resource_type == "connector":
+    if payload.resource_type == "connector":
         from modulo.db.models.connector_instance import ConnectorInstance
 
-        result = await session.execute(
+        connector_result = await session.execute(
             select(ConnectorInstance).where(
                 ConnectorInstance.id == uuid.UUID(resource_id),
                 ConnectorInstance.organisation_id == principal.organisation_id,
             )
         )
-        ci = result.scalar_one_or_none()
+        ci = connector_result.scalar_one_or_none()
         if ci is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
         raw = ci.config_json.get(field, "") if field else json.dumps(ci.config_json)
         return raw if isinstance(raw, str) else json.dumps(raw)
 
-    if body.resource_type == "sso_provider":
-        result = await session.execute(
+    if payload.resource_type == "sso_provider":
+        provider_result = await session.execute(
             select(SsoProvider).where(
                 SsoProvider.id == uuid.UUID(resource_id),
                 SsoProvider.organisation_id == principal.organisation_id,
             )
         )
-        provider = result.scalar_one_or_none()
+        provider = provider_result.scalar_one_or_none()
         if provider is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SSO provider not found")
-        return provider.client_secret or ""
+        if provider.client_secret is None:
+            return ""
+        try:
+            return decode_stored_secret(provider.client_secret, settings.fernet_key)
+        except ValueError:
+            _log.exception("middleware.sensitive_mask.invalid_sso_secret")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Stored SSO provider secret is invalid",
+            ) from None
 
-    if body.resource_type == "observability":
+    if payload.resource_type == "observability":
         from modulo.db.models.organisation import Organisation
 
-        result = await session.execute(
+        config_result = await session.execute(
             select(Organisation.otel_config_json).where(Organisation.id == principal.organisation_id)
         )
-        row = result.scalar_one_or_none()
-        config = row or {}
+        row = config_result.scalar_one_or_none()
+        config: dict[str, Any] = row or {}
         if field:
-            return config.get(field, "")
+            value = config.get(field, "")
+            return value if isinstance(value, str) else json.dumps(value)
         return json.dumps(config)
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Unknown resource_type: {body.resource_type}",
+        detail=f"Unknown resource_type: {payload.resource_type}",
     )
 
 
 @router.post("/reveal", response_model=RevealResponse)
 async def reveal_sensitive_value(
-    body: RevealRequest,
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    payload: RevealRequest,
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> RevealResponse:
@@ -171,15 +182,15 @@ async def reveal_sensitive_value(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            actual_value = await _fetch_value(body, session, principal)
+            actual_value = await _fetch_value(payload, session, principal, settings)
 
     except ProgrammingError:
-        logger.exception("middleware.sensitive_mask")
+        _log.exception("middleware.sensitive_mask")
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     token = str(uuid.uuid4())
     redis: Redis | None = None

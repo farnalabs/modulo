@@ -15,6 +15,8 @@ from modulo.core.hitl_manager import (
 )
 from modulo.db.models.hitl_claim import HitlClaim
 
+from .conftest import _session_decide
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -29,7 +31,7 @@ _TEAM = uuid.uuid4()
 
 def _gate(
     *,
-    claimed_by: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
     claim_token: str | None = None,
     expires_at: datetime | None = None,
     decision: str | None = None,
@@ -43,8 +45,8 @@ def _gate(
     g.gate_id = _GATE
     g.pipeline_id = _PIPELINE
     g.organisation_id = _ORG
-    g.claimed_by = claimed_by
-    g.claimed_at = claimed_at or (datetime.now(UTC) if claimed_by else None)
+    g.account_id = account_id
+    g.claimed_at = claimed_at or (datetime.now(UTC) if account_id else None)
     g.claim_token = claim_token
     g.expires_at = expires_at
     g.decision = decision
@@ -52,41 +54,6 @@ def _gate(
     g.required_team_id = required_team_id
     g.delivered_at = delivered_at
     return g
-
-
-def _session_decide(
-    *,
-    update_returns_id: uuid.UUID | None = None,
-    diagnosis_gate: HitlClaim | None = None,
-    session_get_gate: HitlClaim | None = None,
-) -> AsyncMock:
-    """Session mock replicating the _decide() call sequence."""
-    session = AsyncMock()
-    session.add = MagicMock()
-    session.flush = AsyncMock()
-
-    update_result = MagicMock()
-    update_result.scalar_one_or_none.return_value = update_returns_id
-
-    diag_result = MagicMock()
-    diag_result.scalar_one_or_none.return_value = diagnosis_gate
-
-    call_count = 0
-
-    async def _execute(stmt) -> MagicMock:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return update_result
-        return diag_result
-
-    session.execute = _execute
-    session.get = AsyncMock(return_value=session_get_gate)
-    begin_nested_cm = AsyncMock()
-    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin_nested = MagicMock(return_value=begin_nested_cm)
-    return session
 
 
 # ---------------------------------------------------------------------------
@@ -97,9 +64,9 @@ def _session_decide(
 async def test_approve_logs_output_delivered_audit_event():
     """Approving a claim creates a hitl.output_delivered audit event."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="good-token", expires_at=future, required_team_id=_TEAM)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future, required_team_id=_TEAM)
     gate_decided = _gate(
-        claimed_by=None,
+        account_id=None,
         claim_token=None,
         expires_at=None,
         decision="approved",
@@ -138,8 +105,8 @@ async def test_approve_logs_output_delivered_audit_event():
 async def test_approve_without_actor_id_omits_actor_in_audit():
     """approve() with actor_id=None still logs audit with actor_user_id=None."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
@@ -166,8 +133,8 @@ async def test_approve_without_actor_id_omits_actor_in_audit():
 async def test_approve_team_id_none_in_audit_payload():
     """When required_team_id is None, team_id is None in the audit payload."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
@@ -186,8 +153,8 @@ async def test_approve_team_id_none_in_audit_payload():
 async def test_approve_sets_delivered_at():
     """Approving a claim sets delivered_at on the gate."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="good-token", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock):
@@ -203,8 +170,8 @@ async def test_approve_sets_delivered_at():
 async def test_delivered_at_is_recent():
     """delivered_at should be set to approximately now."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock):
@@ -224,7 +191,7 @@ async def test_delivered_at_is_recent():
 async def test_approve_wrong_token_raises_and_no_audit():
     """If _decide() fails, no audit event is logged."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="correct", expires_at=future)
+    gate = _gate(account_id=_USER, claim_token="correct", expires_at=future)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
 
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
@@ -237,7 +204,7 @@ async def test_approve_wrong_token_raises_and_no_audit():
 
 async def test_approve_expired_token_raises_and_no_audit():
     past = datetime.now(UTC) - timedelta(minutes=1)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=past)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=past)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
 
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
@@ -284,8 +251,8 @@ async def test_delivery_failure_propagates():
     with the active transaction. This test documents the current behaviour.
     """
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="good-token", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
     with (
@@ -318,8 +285,8 @@ async def test_delivery_failure_propagates():
 async def test_delivery_failure_does_not_set_delivered_at():
     """When audit fails, delivered_at is NOT set on the gate."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
     with (
@@ -340,8 +307,8 @@ async def test_delivery_failure_does_not_set_delivered_at():
 async def test_delivery_failure_propagates_original_error():
     """The original error from append_audit_event propagates to the caller."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
     with (
@@ -360,8 +327,8 @@ async def test_delivery_failure_propagates_original_error():
 async def test_delivery_failure_logged_even_when_failed_event_also_fails():
     """If both audit attempts fail, the original error still propagates."""
     future = datetime.now(UTC) + timedelta(minutes=5)
-    gate = _gate(claimed_by=_USER, claim_token="tok", expires_at=future)
-    gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
     with (

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.routes.pipelines import (
     ConvertToAgentRequest,
@@ -37,7 +38,7 @@ def make_principal():
 
 
 def make_session():
-    session = AsyncMock()
+    session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -46,7 +47,12 @@ def make_session():
     begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
     begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin_nested = MagicMock(return_value=begin_nested_cm)
+    session.in_transaction = MagicMock(return_value=True)
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.get_bind = MagicMock(return_value=bind)
     session.info = {}
+    session.add = MagicMock()
     default_result = MagicMock()
     default_result.scalar_one_or_none = MagicMock(return_value=None)
     default_result.scalar_one = MagicMock(return_value=0)
@@ -138,8 +144,12 @@ def setup_execute_side_effect(session, results):
                 raise val
             result.scalar_one_or_none = MagicMock(return_value=val)
         else:
+            val = None
             result.scalar_one_or_none = MagicMock(return_value=None)
         result.scalar_one = MagicMock(return_value=0)
+        scalar_result = MagicMock()
+        scalar_result.all = MagicMock(return_value=val if isinstance(val, list) else [])
+        result.scalars = MagicMock(return_value=scalar_result)
         return result
 
     session.execute = AsyncMock(side_effect=execute_side)
@@ -159,6 +169,7 @@ class TestConvertToAgent:
             session,
             [
                 make_pipeline_row(nodes=[make_manual_node()]),
+                [],
                 make_agent_mock(),
                 make_connector_mock(),
                 make_model_backend_mock(),
@@ -234,7 +245,7 @@ class TestConvertToAgent:
                 principal=principal,
             )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_agent_not_found(self):
         session = make_session()
@@ -242,6 +253,7 @@ class TestConvertToAgent:
             session,
             [
                 make_pipeline_row(nodes=[make_manual_node()]),
+                [],
                 None,
             ],
         )
@@ -266,6 +278,7 @@ class TestConvertToAgent:
             session,
             [
                 make_pipeline_row(nodes=[make_manual_node()]),
+                [],
                 make_agent_mock(),
                 None,
             ],
@@ -291,6 +304,7 @@ class TestConvertToAgent:
             session,
             [
                 make_pipeline_row(nodes=[make_manual_node()]),
+                [],
                 make_agent_mock(),
                 make_connector_mock(connector_type="gitlab"),
             ],
@@ -307,7 +321,7 @@ class TestConvertToAgent:
                 principal=principal,
             )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_model_backend_not_found(self):
         session = make_session()
@@ -315,6 +329,7 @@ class TestConvertToAgent:
             session,
             [
                 make_pipeline_row(nodes=[make_manual_node()]),
+                [],
                 make_agent_mock(),
                 make_connector_mock(),
                 None,
@@ -341,6 +356,7 @@ class TestConvertToAgent:
             session,
             [
                 make_pipeline_row(nodes=[make_manual_node()]),
+                [],
                 make_agent_mock(),
                 make_connector_mock(),
                 make_model_backend_mock(),
@@ -450,23 +466,24 @@ class TestRevertToManual:
                 principal=principal,
             )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_snapshot_not_found(self):
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=None):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
-
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=None),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
         assert "Snapshot not found" in excinfo.value.detail
 
@@ -480,17 +497,19 @@ class TestRevertToManual:
             ]
         )
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_snapshot_node_not_manual(self):
         session = make_session()
@@ -502,17 +521,19 @@ class TestRevertToManual:
             ]
         )
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_snapshot_no_output_schema(self):
         session = make_session()
@@ -524,17 +545,19 @@ class TestRevertToManual:
             ]
         )
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_integrity_error_returns_409(self):
         session = make_session()

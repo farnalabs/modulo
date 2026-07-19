@@ -21,8 +21,8 @@
         <h2 class="mb-4 text-base font-semibold">New Team</h2>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="settingsteamsview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="settingsteamsview-field-2"
               v-model="createName"
               type="text"
               data-testid="settings-teams-create-name"
@@ -31,8 +31,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
+            <label for="settingsteamsview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <textarea id="settingsteamsview-field-1"
               v-model="createDescription"
               rows="2"
               data-testid="settings-teams-create-description"
@@ -41,9 +41,9 @@
             ></textarea>
           </div>
           <div class="flex items-center gap-2">
-            <button :disabled="!createName.trim() || creatingTeam" data-testid="settings-teams-create-submit" class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="createTeam">
+            <Button :disabled="!createName.trim() || creatingTeam" data-testid="settings-teams-create-submit" @click="createTeam">
               {{ creatingTeam ? 'Creating...' : 'Create' }}
-            </button>
+            </Button>
             <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-create-cancel" @click="cancelCreate">
               Cancel
             </button>
@@ -78,10 +78,10 @@
 
           <div v-if="expandedTeamId === team.id" class="p-4">
             <div v-if="renameTeamId === team.id" class="mb-4 flex items-center gap-2">
-              <input v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
-              <button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="saveRename">
+              <input aria-label="text" v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
+              <Button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" @click="saveRename">
                 {{ renamingTeam ? 'Saving...' : 'Save' }}
-              </button>
+              </Button>
               <button class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-rename-cancel" @click="cancelRename">
                 Cancel
               </button>
@@ -128,11 +128,16 @@
                     <td class="py-2">{{ userDisplayName(member.user_id) }}</td>
                     <td class="py-2 text-muted-foreground">{{ userEmail(member.user_id) }}</td>
                     <td class="py-2">
-                      <select v-model="member.role" data-testid="settings-teams-member-role" aria-label="Member role" class="rounded border border-input bg-background px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @change="changeMemberRole(team.id, member)">
-                        <option value="viewer">Viewer</option>
-                        <option value="runner">Runner</option>
-                        <option value="operator">Operator</option>
-                      </select>
+                      <Select v-model="member.role" @update:model-value="changeMemberRole(team.id, member)">
+                        <SelectTrigger data-testid="settings-teams-member-role" aria-label="Member role" class="rounded border border-input bg-background px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                          <SelectValue placeholder="Select role" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="viewer">Viewer</SelectItem>
+                          <SelectItem value="runner">Runner</SelectItem>
+                          <SelectItem value="operator">Operator</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </td>
                     <td class="py-2 text-right">
                       <TableActions :actions="memberActions(team.id, member)" />
@@ -143,20 +148,29 @@
             </div>
 
             <div v-if="addMemberTeamId === team.id" class="mt-4 flex items-center gap-2 rounded-lg border bg-muted/30 p-3">
-              <select v-model="addMemberUserId" data-testid="settings-teams-add-member-user" aria-label="Select user" class="flex-1 rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <option value="" disabled>Select a user...</option>
-                <option v-for="user in availableUsers(team.id)" :key="user.id" :value="user.id">
-                  {{ user.display_name }} ({{ user.email }})
-                </option>
-              </select>
-              <select v-model="addMemberRole" data-testid="settings-teams-add-member-role" aria-label="Select role" class="rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <option value="viewer">Viewer</option>
-                <option value="runner">Runner</option>
-                <option value="operator">Operator</option>
-              </select>
-              <button :disabled="!addMemberUserId || addingMember" data-testid="settings-teams-add-member-submit" class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="addMember(team.id)">
+              <Select v-model="addMemberUserId">
+                <SelectTrigger data-testid="settings-teams-add-member-user" aria-label="Select user" class="flex-1 rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectValue placeholder="Select a user..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="user in availableUsers(team.id)" :key="user.id" :value="user.id">
+                    {{ user.display_name }} ({{ user.email }})
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <Select v-model="addMemberRole">
+                <SelectTrigger data-testid="settings-teams-add-member-role" aria-label="Select role" class="rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectValue placeholder="Select role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="viewer">Viewer</SelectItem>
+                  <SelectItem value="runner">Runner</SelectItem>
+                  <SelectItem value="operator">Operator</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button :disabled="!addMemberUserId || addingMember" data-testid="settings-teams-add-member-submit" @click="addMember(team.id)">
                 {{ addingMember ? 'Adding...' : 'Add' }}
-              </button>
+              </Button>
               <button class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-add-member-cancel" @click="addMemberTeamId = null">
                 Cancel
               </button>
@@ -198,12 +212,17 @@ import FeatureGate from '../components/FeatureGate.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const planStore = usePlanStore()
 
 type AdminTeamItem = components['schemas']['AdminTeamItem']
 type MembershipResponse = components['schemas']['MembershipResponse']
-type AdminUserListItem = components['schemas']['AdminUserListItem']
+interface AdminUserListItem {
+  id: string
+  display_name: string | null
+  email: string
+}
 
 const { loading, error, data: teams, load: loadTeams } = useDataFetch<AdminTeamItem[]>(
   async () => {

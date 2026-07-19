@@ -255,7 +255,7 @@ class TestMigrationBackendConfig:
     def test_detect_mysql(self) -> None:
         from modulo.db.migrations.env import _detect_backend
 
-        assert _detect_backend("mysql+asyncmy://user:pass@localhost/db") == "mysql"
+        assert _detect_backend("mysql+aiomysql://user:pass@localhost/db") == "mysql"
 
     def test_detect_sqlite(self) -> None:
         from modulo.db.migrations.env import _detect_backend
@@ -273,9 +273,11 @@ class TestMigrationBackendConfig:
         assert "+async" not in converted
         assert "psycopg2" in converted
 
-    def test_asyncmy_converts_to_pymysql(self) -> None:
-        url = "mysql+asyncmy://user:pass@localhost/db"
-        converted = url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
+    @pytest.mark.parametrize("driver", ["aiomysql", "asyncmy"])
+    def test_async_mysql_driver_converts_to_pymysql(self, driver: str) -> None:
+        from modulo.db.migrations.env import _to_sync_url
+
+        converted = _to_sync_url(f"mysql+{driver}://user:pass@localhost/db")
         assert "+async" not in converted
         assert "pymysql" in converted
 
@@ -297,7 +299,7 @@ class TestMigrationBackendConfig:
     def test_render_as_batch_disabled_for_mysql(self) -> None:
         from modulo.db.migrations.env import _detect_backend
 
-        backend = _detect_backend("mysql+asyncmy://user:pass@localhost/db")
+        backend = _detect_backend("mysql+aiomysql://user:pass@localhost/db")
         assert backend == "mysql"
 
 

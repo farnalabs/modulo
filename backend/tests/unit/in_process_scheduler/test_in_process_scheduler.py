@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestStartSchedulers:
-    def test_returns_three_tasks(self):
+    async def test_returns_three_tasks(self):
         """start_schedulers() should return cron, polling, and cleanup tasks."""
         import modulo.core.in_process_scheduler as ips
 
@@ -16,15 +16,16 @@ class TestStartSchedulers:
             patch.object(ips, "async_sessionmaker", return_value=MagicMock()),
             patch.object(ips, "create_async_engine", return_value=mock_engine),
         ):
-            tasks = asyncio.run(ips.start_schedulers(engine=mock_engine))
+            tasks = await ips.start_schedulers(engine=mock_engine)
         assert len(tasks) == 3
         assert tasks[0].get_name() == "cron-scheduler"
         assert tasks[1].get_name() == "polling-scheduler"
         assert tasks[2].get_name() == "cleanup-scheduler"
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    def test_creates_engine_when_not_provided(self):
+    async def test_creates_engine_when_not_provided(self):
         """start_schedulers() should create an engine when not provided."""
         import modulo.core.in_process_scheduler as ips
 
@@ -37,13 +38,14 @@ class TestStartSchedulers:
             patch.object(ips, "create_async_engine", return_value=mock_engine) as mock_create,
             patch.object(ips, "async_sessionmaker", return_value=MagicMock()),
         ):
-            tasks = asyncio.run(ips.start_schedulers())
+            tasks = await ips.start_schedulers()
         assert mock_create.called
         assert len(tasks) == 3
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    def test_uses_provided_engine(self):
+    async def test_uses_provided_engine(self):
         """start_schedulers() should use the engine provided."""
         import modulo.core.in_process_scheduler as ips
 
@@ -54,11 +56,12 @@ class TestStartSchedulers:
             patch.object(ips, "create_async_engine") as mock_create,
             patch.object(ips, "async_sessionmaker", return_value=MagicMock()),
         ):
-            tasks = asyncio.run(ips.start_schedulers(engine=mock_engine))
+            tasks = await ips.start_schedulers(engine=mock_engine)
         assert not mock_create.called
         assert len(tasks) == 3
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class TestDisposeSchedulerEngine:
@@ -192,28 +195,44 @@ class TestFetchDuePollingTriggers:
 
 
 class TestFireCronWrapper:
-    async def test_calls_fire_cron_trigger(self):
-        """_fire_cron_wrapper should call fire_cron_trigger on success."""
+    async def test_calls_fire_cron_trigger_and_submits_to_worker(self):
+        """_fire_cron_wrapper should call fire_cron_trigger and submit run to bg worker."""
         import uuid
 
         import modulo.core.in_process_scheduler as ips
 
         trigger_id = uuid.uuid4()
+        run_id = uuid.uuid4()
+        org_id = uuid.uuid4()
         info = {
             "id": trigger_id,
-            "org_id": uuid.uuid4(),
+            "org_id": org_id,
             "pipeline_id": uuid.uuid4(),
             "snapshot_id": uuid.uuid4(),
             "cron_expression": "0 6 * * *",
         }
 
+        mock_worker = MagicMock()
+
         with (
             patch("modulo.core.in_process_scheduler.fire_cron_trigger", new_callable=AsyncMock) as mock_fire,
         ):
-            mock_fire.return_value = {"status": "fired", "run_id": str(uuid.uuid4())}
+            mock_fire.return_value = {"status": "fired", "run_id": str(run_id), "input_payload": {"key": "val"}}
             factory = MagicMock()
+
+            # Test without worker (should still work, just log warning)
             await ips._fire_cron_wrapper(factory, info)
-        mock_fire.assert_awaited_once_with(
+            mock_worker.submit.assert_not_called()
+
+            # Test with worker set
+            ips._bg_worker = mock_worker
+            await ips._fire_cron_wrapper(factory, info)
+            mock_worker.submit.assert_called_once_with(run_id, org_id, {"key": "val"})
+
+            # Clean up
+            ips._bg_worker = None
+
+        mock_fire.assert_awaited_with(
             trigger_id=info["id"],
             org_id=info["org_id"],
             pipeline_id=info["pipeline_id"],

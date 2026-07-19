@@ -12,6 +12,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -41,6 +42,7 @@ def _settings_with_license() -> Settings:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -134,7 +136,7 @@ class TestAuditGating:
 
         with patch("modulo.api.routes.audit.list_audit_events", return_value={"items": [], "total": 0}):
             resp = client_no_audit.get("/api/v1/admin/audit")
-        assert resp.status_code in (200,), f"Expected free-tier access, got {resp.status_code}"
+        assert resp.status_code == 200, f"Expected free-tier access, got {resp.status_code}"
 
     def test_batch_detail_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
         _assert_feature_402(client_no_audit.post("/api/v1/admin/audit/batch-detail", json={"event_ids": []}))
@@ -145,7 +147,7 @@ class TestAuditGating:
 
         with patch("modulo.api.routes.audit.verify_chain", return_value={"valid": True}):
             resp = client_no_audit.get("/api/v1/admin/audit/verify")
-        assert resp.status_code in (200,), f"Expected free-tier access, got {resp.status_code}"
+        assert resp.status_code == 200, f"Expected free-tier access, got {resp.status_code}"
 
     def test_export_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
         _assert_feature_402(client_no_audit.get("/api/v1/admin/audit/export"))

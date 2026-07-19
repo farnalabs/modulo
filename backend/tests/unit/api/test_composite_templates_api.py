@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -33,6 +33,7 @@ def _make_settings() -> Settings:
 def _make_template(**overrides: object) -> MagicMock:
     t = MagicMock()
     t.id = overrides.get("id", _TEMPLATE_ID)
+    t.parameter_schema_id = overrides.get("parameter_schema_id")
     t.organisation_id = overrides.get("organisation_id", _ORG_ID)
     t.name = overrides.get("name", "Devil's Advocate")
     t.description = overrides.get("description")
@@ -68,6 +69,12 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,

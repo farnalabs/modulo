@@ -23,6 +23,16 @@ class TestAuditAppendOnlyDbTrigger:
     async def _seed_event(self, db_session: AsyncSession) -> None:
         """Insert a test audit event for use by test methods via db_session.info."""
         org_id = uuid.uuid4()
+
+        await db_session.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
+            ),
+            {"id": str(org_id), "name": "Audit Test Org", "slug": f"audit-{org_id.hex[:8]}"},
+        )
+        await db_session.commit()
+
         event_id = uuid.uuid4()
 
         await db_session.execute(
@@ -111,6 +121,15 @@ class TestAuditAppendOnlyOrmGuard:
         # Create and persist an event
         org_id = uuid.uuid4()
 
+        await fresh_session.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
+            ),
+            {"id": str(org_id), "name": "ORM Update Org", "slug": f"orm-upd-{org_id.hex[:8]}"},
+        )
+        await fresh_session.commit()
+
         # Insert via raw SQL to avoid ORM listeners during creation
         await fresh_session.execute(
             text("""
@@ -141,6 +160,15 @@ class TestAuditAppendOnlyOrmGuard:
         """ORM delete should raise RuntimeError for AuditEvent."""
         org_id = uuid.uuid4()
         event_id = uuid.uuid4()
+
+        await fresh_session.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
+            ),
+            {"id": str(org_id), "name": "ORM Delete Org", "slug": f"orm-del-{org_id.hex[:8]}"},
+        )
+        await fresh_session.commit()
 
         # Insert via raw SQL
         await fresh_session.execute(
@@ -173,6 +201,15 @@ class TestAuditReadOperations:
 
     async def test_insert_still_works(self, db_session: AsyncSession) -> None:
         """INSERT on audit_events should still work."""
+        org_id = uuid.uuid4()
+        await db_session.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
+            ),
+            {"id": str(org_id), "name": "Insert Test Org", "slug": f"ins-{org_id.hex[:8]}"},
+        )
+        await db_session.commit()
         await db_session.execute(
             text("""
                 INSERT INTO audit_events
@@ -181,7 +218,7 @@ class TestAuditReadOperations:
             """),
             {
                 "id": uuid.uuid4(),
-                "org_id": uuid.uuid4(),
+                "org_id": org_id,
                 "event_type": "test.insert",
             },
         )

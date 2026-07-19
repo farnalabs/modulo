@@ -22,7 +22,6 @@ from modulo.db.crud.run import create_run, get_run
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
-from modulo.db.rls import set_rls_org
 
 logger = logging.getLogger(__name__)
 
@@ -66,23 +65,17 @@ class ValidationError(FeedbackManagerError):
 
 
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"routing", "correcting", "resolved", "dismissed"},
-    "routing": {"escalated", "correcting", "resolved", "dismissed"},
+    "pending": {"routing", "correcting", "resolved"},
+    "routing": {"escalated", "correcting", "resolved"},
     "correcting": {"correcting", "resolved", "escalated"},
     "escalated": {"resolved"},
     "resolved": set(),
-    "dismissed": set(),
 }
 
 
 def _rls(method: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(method)
     async def wrapper(self: "FeedbackManager", *args: Any, **kwargs: Any) -> Any:
-        try:
-            await set_rls_org(self._session, self._org_id)
-        except Exception:
-            logger.exception("RLS setup failed for org %s on method %s", self._org_id, method.__name__)
-            raise
         return await method(self, *args, **kwargs)
 
     return wrapper
@@ -181,7 +174,7 @@ class FeedbackManager:
             .limit(page_size)
         )
         rows = (await self._session.execute(q)).scalars().all()
-        return rows, total
+        return list(rows), total
 
     @_rls
     async def get_feedback_records(

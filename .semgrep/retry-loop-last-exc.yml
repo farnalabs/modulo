@@ -1,20 +1,36 @@
 rules:
   - id: retry-loop-last-exc
     patterns:
-      - pattern-inside: |
+      - pattern: |
           for $I in range(...):
             try:
               ...
             except $EXC as $E:
               ...
-      - pattern-not-inside: |
+          ...
+          raise $ERR
+      - pattern-not: |
           for $I in range(...):
             try:
               ...
             except $EXC as $E:
               ...
-              last_exc = $E
-    message: "Retry loop except block must assign `last_exc = exc` so raise ... from last_exc preserves the chain"
+              if ...:
+                raise
+          ...
+          raise $ERR
+      - pattern-not: |
+          for $I in range(...):
+            try:
+              ...
+            except $FINAL:
+              ...
+              if $I == ...:
+                raise
+            ...
+          ...
+          raise $ERR
+    message: "Retry exhaustion raises a new exception without chaining the last caught error"
     languages: [python]
     severity: ERROR
     paths:

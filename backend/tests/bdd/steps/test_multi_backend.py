@@ -1,6 +1,7 @@
 """Step definitions for multi-backend database support — ADR 002."""
 
 import asyncio
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,10 +22,8 @@ from modulo.db.repositories.postgres import PostgresRepository
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/organisation/multi_backend.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Shared test entities
@@ -204,7 +203,7 @@ def check_only_other_org_returned(ctx) -> None:
 def database_urls(ctx) -> None:
     ctx["urls"] = {
         "sqlite": "sqlite:///test.db",
-        "mariadb": "mysql+asyncmy://user:pass@localhost/test",
+        "mariadb": "mysql+aiomysql://user:pass@localhost/test",
         "postgres": "postgresql+asyncpg://user:pass@localhost/test",
     }
 
@@ -221,11 +220,10 @@ def configure_migration_backend(ctx) -> None:
     conversions = {}
     for name, url in ctx["urls"].items():
         converted = url
-        if "+async" in converted:
-            if converted.startswith("postgresql+asyncpg://"):
-                converted = converted.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
-            elif converted.startswith("mysql+asyncmy://"):
-                converted = converted.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
+        if converted.startswith("postgresql+asyncpg://"):
+            converted = converted.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+        elif converted.startswith("mysql+aiomysql://"):
+            converted = converted.replace("mysql+aiomysql://", "mysql+pymysql://", 1)
         conversions[name] = converted
     ctx["conversions"] = conversions
 

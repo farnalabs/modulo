@@ -1,5 +1,6 @@
 """MondayConnector — async Monday.com GraphQL API v2 connector."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -196,6 +197,8 @@ class MondayConnector(ConnectorBase):
                 ok=False,
                 detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}",
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 

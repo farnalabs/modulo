@@ -1,7 +1,7 @@
 """JWT utilities for Modulo v1 user management.
 
 Always uses HS256. The `none` algorithm is excluded from decode's allowed list,
-so tokens signed with `alg: none` are rejected by python-jose before we see them.
+so tokens signed with `alg: none` are rejected by PyJWT before we see them.
 
 Token families: Each refresh token belongs to a family. On refresh, the sequence
 number is incremented. If a stale sequence is presented (token theft), the entire
@@ -14,7 +14,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError as JWTError
 
 _log = logging.getLogger(__name__)
 
@@ -37,6 +38,13 @@ class AuthenticatedPrincipal:
     @property
     def user_id(self) -> uuid.UUID:
         return self.account_id
+
+
+class TenantPrincipal(AuthenticatedPrincipal):
+    """Authenticated principal with validated tenant-scoped claims."""
+
+    organisation_id: uuid.UUID
+    org_role: str
 
 
 def create_access_token(

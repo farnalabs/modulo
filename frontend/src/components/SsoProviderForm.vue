@@ -1,7 +1,7 @@
-﻿<template>
+<template>
   <div class="space-y-4">
     <div>
-      <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.provider_type') }}</label>
+      <span class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.provider_type') }}</span>
       <div class="flex gap-2">
         <button
           class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors"
@@ -47,8 +47,8 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.name') }}</label>
-      <input
+      <label for="ssoproviderform-field-9" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.name') }}</label>
+      <input id="ssoproviderform-field-9"
         :value="data.name"
         type="text"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -64,8 +64,8 @@
 
     <template v-if="data.provider_type === 'oidc'">
       <div>
-        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.client_id') }}</label>
-        <input
+        <label for="ssoproviderform-field-8" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.client_id') }}</label>
+        <input id="ssoproviderform-field-8"
           :value="data.client_id"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -79,8 +79,8 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.client_secret') }}</label>
-        <input
+        <label for="ssoproviderform-field-7" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.client_secret') }}</label>
+        <input id="ssoproviderform-field-7"
           :value="data.client_secret"
           type="password"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -94,8 +94,8 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.discovery_url') }}</label>
-        <input
+        <label for="ssoproviderform-field-6" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.discovery_url') }}</label>
+        <input id="ssoproviderform-field-6"
           :value="data.discovery_url"
           type="url"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -110,8 +110,8 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.scopes') }}</label>
-        <input
+        <label for="ssoproviderform-field-5" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.scopes') }}</label>
+        <input id="ssoproviderform-field-5"
           :value="data.scopes"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -131,8 +131,8 @@
 
     <template v-if="data.provider_type === 'saml'">
       <div>
-        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.metadata_url') }}</label>
-        <input
+        <label for="ssoproviderform-field-4" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.metadata_url') }}</label>
+        <input id="ssoproviderform-field-4"
           :value="data.metadata_url"
           type="url"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -146,8 +146,8 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.metadata_xml') }}</label>
-        <textarea
+        <label for="ssoproviderform-field-3" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.metadata_xml') }}</label>
+        <textarea id="ssoproviderform-field-3"
           :value="data.metadata_xml"
           rows="4"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring font-mono"
@@ -161,8 +161,8 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.entity_id') }}</label>
-        <input
+        <label for="ssoproviderform-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.entity_id') }}</label>
+        <input id="ssoproviderform-field-2"
           :value="data.entity_id"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -178,9 +178,9 @@
     </template>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.auto_provision') }}</label>
+      <span class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.auto_provision') }}</span>
       <div class="flex items-center gap-2">
-        <label
+        <span
           class="relative inline-flex cursor-pointer items-center"
           role="switch"
           :aria-checked="data.auto_provision"
@@ -206,7 +206,7 @@
               style="margin-top: 2px"
             />
           </div>
-        </label>
+        </span>
         <span class="text-sm text-muted-foreground">
           {{
             data.auto_provision
@@ -218,21 +218,16 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.default_role') }}</label>
-      <select
-        :value="data.default_role"
-        :aria-label="$t('components.SsoProviderForm.default_role')"
-        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        @change="
-          emitUpdate({
-            ...data,
-            default_role: ($event.target as HTMLSelectElement).value,
-          })
-        "
-      >
-        <option value="runner">{{ $t('components.SsoProviderForm.role_runner') }}</option>
-        <option value="operator">{{ $t('components.SsoProviderForm.role_operator') }}</option>
-      </select>
+      <label for="ssoproviderform-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.default_role') }}</label>
+      <Select :model-value="data.default_role" @update:model-value="(val) => emitUpdate({...data, default_role: val as string})">
+        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('components.SsoProviderForm.default_role')">
+          <SelectValue :placeholder="$t('components.SsoProviderForm.default_role')" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="runner">{{ $t('components.SsoProviderForm.role_runner') }}</SelectItem>
+          <SelectItem value="operator">{{ $t('components.SsoProviderForm.role_operator') }}</SelectItem>
+        </SelectContent>
+      </Select>
     </div>
 
     <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
@@ -257,6 +252,7 @@
 
 <script setup lang="ts">
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 interface SsoFormState {
   provider_type: string;

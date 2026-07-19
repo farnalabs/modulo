@@ -6,11 +6,13 @@ that overrides `get_settings` (e.g. in tests), tests should pass settings
 explicitly rather than relying on the module-level `get_settings()` call.
 """
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar
 
+import jwt
 from fastapi import FastAPI, Request, Response
-from jose import jwt as jose_jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from modulo.api.models.problem import ProblemDetail, ProblemType
@@ -22,9 +24,10 @@ RATELIMIT_BYPASS_HEADER = "MODULO_RATELIMIT_BYPASS_TOKEN"
 
 redis_available: bool = False
 
-_log = logging.getLogger(__name__)
 
 # Tracked Redis clients for graceful shutdown.
+_log = logging.getLogger(__name__)
+
 _redis_clients: set[Any] = set()
 
 
@@ -49,6 +52,8 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry:
             redis_available = True
             _log.info("ratelimit.redis_enabled")
             return registry
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.warning("ratelimit.redis_fallback", extra={"error": str(exc)})
 
@@ -94,7 +99,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._bypass_token = resolved.modulo_ratelimit_bypass_token
         self._registry = registry or _create_registry(resolved)
 
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         if self._should_rate_limit(request):
             client_key = self._client_key(request)
             rule = self._rule_for(request)
@@ -151,7 +156,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 return f"ak:none:{prefix}:{path}"
 
             try:
-                claims = jose_jwt.get_unverified_claims(token)
+                claims = jwt.decode(token, options={"verify_signature": False})
                 org_id = claims.get("org_id", "")
                 user_id = claims.get("user_id", "") or claims.get("account_id", "")
                 if org_id and user_id:
@@ -209,6 +214,8 @@ def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCl
                 window_s=window_s,
             )
             return _auth_rate_limiter
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.warning("auth_ratelimit.redis_fallback", extra={"error": str(exc)})
 
@@ -238,7 +245,7 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         self._bypass_token = resolved.modulo_ratelimit_bypass_token
         self._rate_limiter = rate_limiter or get_auth_rate_limiter(resolved)
 
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         if not self._should_rate_limit(request):
             return await call_next(request)
 
@@ -285,6 +292,8 @@ async def shutdown_rate_limiters() -> None:
     for client in list(_redis_clients):
         try:
             await client.aclose()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to close rate limiter Redis client")
     _redis_clients.clear()

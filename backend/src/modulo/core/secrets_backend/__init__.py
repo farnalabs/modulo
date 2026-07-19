@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """SecretsBackend ABC and factory — pluggable secret storage.
 
 Usage:
@@ -9,6 +7,7 @@ Usage:
     await backend.delete_secret("my-key")
 """
 
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -25,11 +24,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT: float = 30.0
 
 
-async def run_sync(callable: Callable[..., Any], *args: Any, timeout: float = DEFAULT_TIMEOUT, **kwargs: Any) -> Any:
+async def run_sync(
+    callable: Callable[..., Any],
+    *args: Any,
+    timeout_seconds: float = DEFAULT_TIMEOUT,
+    **kwargs: Any,
+) -> Any:
     """Run a synchronous callable in a thread pool with a timeout."""
     return await asyncio.wait_for(
         asyncio.to_thread(callable, *args, **kwargs),
-        timeout=timeout,
+        timeout=timeout_seconds,
     )
 
 
@@ -65,20 +69,33 @@ def validate_key(key: str) -> str:
 
 
 def _check_external_secrets_licensed() -> bool:
-    """Return True if a valid license permits external secrets backends."""
+    """Return True if the current plan permits external secrets backends.
+
+    Uses FeatureFlagRegistry to check the ``external_secrets`` flag rather
+    than an ad-hoc license check, so gating stays consistent with the
+    centralized flag definition and tier catalog.
+    """
+    from modulo.core.feature_flags import FeatureFlagRegistry
     from modulo.core.license import get_license, parse_and_verify
+
+    tier: str = "community"
+    has_license: bool = False
 
     lic = get_license()
     if lic is not None:
-        return True
+        tier = lic.tier
+        has_license = True
+    else:
+        raw_key = os.environ.get("MODULO_LICENSE_KEY", "")
+        if raw_key:
+            validation = parse_and_verify(raw_key)
+            if validation.valid and validation.license_data is not None:
+                tier = validation.license_data.tier
+                has_license = True
 
-    raw_key = os.environ.get("MODULO_LICENSE_KEY", "")
-    if raw_key:
-        validation = parse_and_verify(raw_key)
-        if validation.valid and validation.license_data is not None:
-            return True
-
-    return False
+    registry = FeatureFlagRegistry(current_tier=tier, has_license_key=has_license)
+    flag = registry.get_flag("external_secrets")
+    return flag is not None and flag.currently_active
 
 
 def create_secrets_backend(

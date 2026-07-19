@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader title="Notifications" :subtitle="$t('views.NotificationsPage.view_and_manage_your_notifications')" />
 
@@ -87,7 +87,6 @@ import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from "../components/shared/LoadingSpinner.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
 import { Button } from "@/components/ui/button";
-import { formatApiError } from "../lib/api/formatError";
 import EmptyState from "../components/shared/EmptyState.vue";
 
 const total = ref(0);
@@ -133,7 +132,7 @@ watch(data, (d) => {
 
 function applyFilters() {
   page.value = 1;
-  void loadNotifications(1);
+  void loadNotifications();
 }
 
 function resetFilters() {
@@ -141,15 +140,19 @@ function resetFilters() {
   filterScope.value = "";
   filterStatus.value = "";
   page.value = 1;
-  void loadNotifications(1);
+  void loadNotifications();
 }
 
 function prevPage() {
-  if (page.value > 1) void loadNotifications(page.value - 1);
+  if (page.value > 1) {
+    page.value -= 1
+    void loadNotifications()
+  }
 }
 
 function nextPage() {
-  void loadNotifications(page.value + 1);
+  page.value += 1
+  void loadNotifications()
 }
 
 function onDismissed(id: string) {

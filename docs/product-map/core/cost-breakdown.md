@@ -87,7 +87,10 @@ Discovered from 1 completed delivery tasks.
 
 ### API — Scheduled Reports
 
-- [x] `POST /reports` creates a scheduled report
+- [x] `POST /reports` creates a cost-only report with the first daily/weekly/monthly UTC occurrence populated
+- [x] Scheduled cost reports use the canonical cost aggregation and SMTP email delivery
+- [x] One-time reports deactivate after their first successful delivery; recurring reports advance to the next cron occurrence
+- [x] Scheduled report list/get/delete operations filter `report_type=cost` and cannot expose or delete other report types
 - [x] `POST /reports` with empty recipients returns 422
 - [x] `GET /reports` lists reports for the org
 - [x] `GET /reports` returns empty list when none exist

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "group:monorepos",
+    "group:recommended"
+  ],
+  "timezone": "Europe/London",
+  "schedule": ["after 1am and before 7am every day"],
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Dependency updates",
+  "dependencyDashboardApproval": false,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": ["at any time"]
+  },
+  "osvVulnerabilityAlerts": true,
+  "prHourlyLimit": 6,
+  "prConcurrentLimit": 20,
+  "branchConcurrentLimit": 20,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "enabledManagers": [
+    "docker-compose",
+    "dockerfile",
+    "github-actions",
+    "helm-values",
+    "npm",
+    "pep621",
+    "pre-commit",
+    "regex"
+  ],
+  "packageRules": [
+    {
+      "description": "Group non-major updates by ecosystem",
+      "matchUpdateTypes": ["minor", "patch", "digest", "lockFileMaintenance"],
+      "matchManagers": ["npm"],
+      "groupName": "JavaScript dependencies"
+    },
+    {
+      "description": "Group non-major Python updates",
+      "matchUpdateTypes": ["minor", "patch", "lockFileMaintenance"],
+      "matchManagers": ["pep621"],
+      "groupName": "Python dependencies"
+    },
+    {
+      "description": "Group CI and development-tool updates",
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "matchManagers": ["github-actions", "pre-commit"],
+      "groupName": "CI tooling"
+    },
+    {
+      "description": "Automerge patch and digest updates after required checks",
+      "matchUpdateTypes": ["patch", "digest", "lockFileMaintenance"],
+      "matchCurrentVersion": "!/^0/",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true,
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Keep unstable dependencies under manual review",
+      "matchCurrentVersion": "/^0/",
+      "automerge": false
+    },
+    {
+      "description": "Never automerge major updates",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update pinned tool versions in PowerShell scripts",
+      "managerFilePatterns": ["/(^|/)\\w[^/]*\\.ps1$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+[^\\r\\n]*?(?<currentValue>v?\\d+(?:\\.\\d+)+)"
+      ]
+    }
+  ]
+}

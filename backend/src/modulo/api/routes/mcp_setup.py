@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,9 +10,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.mcp_setup_handoff import consume_handoff
 from modulo.db.crud.model_backend import get_model_backend, update_model_backend
 from modulo.db.rls import set_rls_org
@@ -27,13 +29,14 @@ class CompleteSetupRequest(BaseModel):
     api_key: str = Field(..., min_length=1, description="The API key to configure")
 
 
+@handle_db_errors("mcp_setup.complete_model_backend_setup")
 @router.post("/model-backends/{backend_id}/complete-setup")
 async def complete_model_backend_setup(
     backend_id: uuid.UUID,
-    body: CompleteSetupRequest,
+    payload: CompleteSetupRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict:
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
     """Complete the setup of a model backend by providing the API key via browser."""
     settings = get_settings()
     org_id = principal.organisation_id
@@ -43,7 +46,7 @@ async def complete_model_backend_setup(
             await set_rls_org(session, org_id)
             record = await consume_handoff(
                 session,
-                raw_token=body.token,
+                raw_token=payload.token,
                 resource_type="model-backend",
                 org_id=org_id,
             )
@@ -89,7 +92,7 @@ async def complete_model_backend_setup(
                 ) from exc
 
             try:
-                ciphertext = fernet.encrypt(body.api_key.encode())
+                ciphertext = fernet.encrypt(payload.api_key.encode())
             except Exception as exc:
                 _log.error("Failed to encrypt API key: %s", exc)
                 raise HTTPException(

@@ -1,12 +1,13 @@
-from __future__ import annotations
-
 """Node model — a pipeline node that can be composed into a hierarchy
 with parent-child relationships and temporal execution constraints.
+
+DEPRECATED: This model is not used by the pipeline execution engine.
+Used only by db/crud/node_composite.py for composite template functionality.
+Scheduled for removal once composite templates are migrated to use PipelineEdge directly.
 """
 
-
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -52,17 +53,17 @@ class Node(OrgScoped):
         nullable=False,
     )
 
-    children: Mapped[list[Node]] = relationship(
+    children: Mapped[list["Node"]] = relationship(
         "Node",
         back_populates="parent",
         lazy="selectin",
         order_by="Node.name",
     )
-    parent: Mapped[Node | None] = relationship(
+    parent: Mapped[Optional["Node"]] = relationship(
         "Node",
         back_populates="children",
         remote_side="Node.id",
         lazy="selectin",
     )
-    pipeline: Mapped[Pipeline] = relationship()
-    creator: Mapped[Account] = relationship()
+    pipeline: Mapped["Pipeline"] = relationship()
+    creator: Mapped["Account"] = relationship()

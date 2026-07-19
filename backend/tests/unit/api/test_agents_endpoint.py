@@ -3,6 +3,7 @@
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,8 +11,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -48,8 +49,12 @@ def _make_agent() -> MagicMock:
     a.retry_policy = {}
     a.token_budget = None
     a.library_id = None
+    a.template_id = None
+    a.agent_command = None
     a.account_id = uuid.uuid4()
     a.required_environment_capabilities = []
+    a.template_id = None
+    a.agent_command = None
     a.created_at = _NOW
     a.updated_at = _NOW
     return a
@@ -64,6 +69,8 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
+_PATCH_REQUIRED = {"required_environment_capabilities": [], "template_id": None}
+
 _AGENT_BODY = {
     "name": "Test Agent",
     "description": "A test agent for unit tests",
@@ -73,7 +80,92 @@ _AGENT_BODY = {
     "output_schema_version": "1.0",
     "prompt_template": "Hello",
     "model_backend_id": str(_BACKEND_ID),
+    "required_environment_capabilities": [],
+    "template_id": None,
 }
+
+_UPDATE_BODY: dict[str, Any] = {
+    "required_environment_capabilities": [],
+    "template_id": None,
+}
+
+_AGENT_PATCH_PREFIX = "modulo.api.routes.agents."
+
+
+def _crud_cases() -> list[dict[str, object]]:
+    page_result = MagicMock(items=[_make_agent()], total=1, page=1, page_size=20)
+    agent = _make_agent()
+    updated_agent = _make_agent()
+    updated_agent.name = "Updated"
+    return [
+        {
+            "id": "list",
+            "method": "GET",
+            "url": "/api/v1/agents",
+            "body": None,
+            "patches": [("list_agents", page_result)],
+            "expected_status": 200,
+            "check": lambda resp: resp.json()["total"] == 1,
+        },
+        {
+            "id": "create",
+            "method": "POST",
+            "url": "/api/v1/agents",
+            "body": _AGENT_BODY,
+            "patches": [("create_agent", _make_agent())],
+            "expected_status": 201,
+            "check": lambda resp: resp.json()["name"] == "Test Agent",
+        },
+        {
+            "id": "get",
+            "method": "GET",
+            "url": f"/api/v1/agents/{_AGENT_ID}",
+            "body": None,
+            "patches": [("get_agent", _make_agent())],
+            "expected_status": 200,
+        },
+        {
+            "id": "get_not_found",
+            "method": "GET",
+            "url": f"/api/v1/agents/{uuid.uuid4()}",
+            "body": None,
+            "patches": [("get_agent", None)],
+            "expected_status": 404,
+        },
+        {
+            "id": "update",
+            "method": "PATCH",
+            "url": f"/api/v1/agents/{_AGENT_ID}",
+            "body": {**_UPDATE_BODY, "name": "Updated"},
+            "patches": [("get_agent", agent), ("update_agent", updated_agent)],
+            "expected_status": 200,
+            "check": lambda resp: resp.json()["name"] == "Updated",
+        },
+        {
+            "id": "update_not_found",
+            "method": "PATCH",
+            "url": f"/api/v1/agents/{uuid.uuid4()}",
+            "body": {**_UPDATE_BODY, "name": "x"},
+            "patches": [("get_agent", None), ("update_agent", None)],
+            "expected_status": 404,
+        },
+        {
+            "id": "delete",
+            "method": "DELETE",
+            "url": f"/api/v1/agents/{_AGENT_ID}",
+            "body": None,
+            "patches": [("delete_agent", True)],
+            "expected_status": 204,
+        },
+        {
+            "id": "delete_not_found",
+            "method": "DELETE",
+            "url": f"/api/v1/agents/{uuid.uuid4()}",
+            "body": None,
+            "patches": [("delete_agent", False)],
+            "expected_status": 404,
+        },
+    ]
 
 
 @pytest.fixture()
@@ -87,6 +179,12 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
         account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
@@ -109,84 +207,42 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-def test_list_agents_returns_200(client: TestClient) -> None:
-    page_result = MagicMock(items=[_make_agent()], total=1, page=1, page_size=20)
-    with (
-        patch("modulo.api.routes.agents.list_agents", return_value=page_result),
-        patch("modulo.api.routes.agents.set_rls_org"),
-    ):
-        resp = client.get("/api/v1/agents")
-    assert resp.status_code == 200
-    assert resp.json()["total"] == 1
+@pytest.mark.parametrize("case", _crud_cases(), ids=lambda c: c["id"])
+def test_crud(client: TestClient, case: dict[str, object]) -> None:
+    method = case["method"]
+    url = case["url"]
+    body = case.get("body")
+    expected_status = case["expected_status"]
+    check = case.get("check")
 
+    patchers = []
+    for func_name, ret in case["patches"]:
+        patchers.append(patch(f"{_AGENT_PATCH_PREFIX}{func_name}", return_value=ret))
+    patchers.append(patch(f"{_AGENT_PATCH_PREFIX}set_rls_org"))
 
-def test_create_agent_returns_201(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.agents.create_agent", return_value=_make_agent()),
-        patch("modulo.api.routes.agents.set_rls_org"),
-    ):
-        resp = client.post("/api/v1/agents", json=_AGENT_BODY)
-    assert resp.status_code == 201
-    assert resp.json()["name"] == "Test Agent"
+    for p in patchers:
+        p.start()
 
+    try:
+        if method == "GET":
+            resp = client.get(url)
+        elif method == "POST":
+            resp = client.post(url, json=body or {})
+        elif method == "PATCH":
+            resp = client.patch(url, json=body or {})
+        elif method == "DELETE":
+            resp = client.delete(url)
+        elif method == "PUT":
+            resp = client.put(url, json=body or {})
+        else:
+            raise ValueError(f"Unsupported method: {method}")
 
-def test_get_agent_returns_200(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.agents.get_agent", return_value=_make_agent()),
-        patch("modulo.api.routes.agents.set_rls_org"),
-    ):
-        resp = client.get(f"/api/v1/agents/{_AGENT_ID}")
-    assert resp.status_code == 200
-
-
-def test_get_agent_not_found_returns_404(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.agents.get_agent", return_value=None),
-        patch("modulo.api.routes.agents.set_rls_org"),
-    ):
-        resp = client.get(f"/api/v1/agents/{uuid.uuid4()}")
-    assert resp.status_code == 404
-
-
-def test_update_agent_returns_200(client: TestClient) -> None:
-    agent = _make_agent()
-    agent.name = "Updated"
-    with (
-        patch("modulo.api.routes.agents.get_agent", return_value=agent),
-        patch("modulo.api.routes.agents.update_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
-    ):
-        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"name": "Updated"})
-    assert resp.status_code == 200
-    assert resp.json()["name"] == "Updated"
-
-
-def test_update_agent_not_found_returns_404(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.agents.get_agent", return_value=None),
-        patch("modulo.api.routes.agents.update_agent", return_value=None),
-        patch("modulo.api.routes.agents.set_rls_org"),
-    ):
-        resp = client.patch(f"/api/v1/agents/{uuid.uuid4()}", json={"name": "x"})
-    assert resp.status_code == 404
-
-
-def test_delete_agent_returns_204(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.agents.delete_agent", return_value=True),
-        patch("modulo.api.routes.agents.set_rls_org"),
-    ):
-        resp = client.delete(f"/api/v1/agents/{_AGENT_ID}")
-    assert resp.status_code == 204
-
-
-def test_delete_agent_not_found_returns_404(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.agents.delete_agent", return_value=False),
-        patch("modulo.api.routes.agents.set_rls_org"),
-    ):
-        resp = client.delete(f"/api/v1/agents/{uuid.uuid4()}")
-    assert resp.status_code == 404
+        assert resp.status_code == expected_status, f"Expected {expected_status}, got {resp.status_code}: {resp.text}"
+        if check:
+            assert check(resp)
+    finally:
+        for p in patchers:
+            p.stop()
 
 
 def test_list_agents_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
@@ -227,7 +283,7 @@ def test_update_agent_max_input_length(client: TestClient) -> None:
         patch("modulo.api.routes.agents.update_agent", return_value=agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"max_input_length": 10000})
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={**_UPDATE_BODY, "max_input_length": 10000})
     assert resp.status_code == 200
     assert resp.json()["max_input_length"] == 10000
 
@@ -281,7 +337,7 @@ def test_update_generic_agent_clearing_description_returns_422(client: TestClien
         patch("modulo.api.routes.agents.get_agent", return_value=agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"description": ""})
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={**_UPDATE_BODY, "description": ""})
     assert resp.status_code == 422
     assert "description" in resp.json()["detail"].lower()
 
@@ -295,7 +351,7 @@ def test_update_library_agent_clearing_description_succeeds(client: TestClient) 
         patch("modulo.api.routes.agents.update_agent", return_value=agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"description": ""})
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={**_UPDATE_BODY, "description": ""})
     assert resp.status_code == 200
 
 
@@ -308,7 +364,7 @@ def test_update_agent_making_non_executable_without_description_returns_422(clie
     ):
         resp = client.patch(
             f"/api/v1/agents/{_AGENT_ID}",
-            json={"is_executable": False},
+            json={**_UPDATE_BODY, "is_executable": False},
         )
     assert resp.status_code == 422
     assert "description" in resp.json()["detail"].lower()

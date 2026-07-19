@@ -5,10 +5,12 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from tests.unit.api.mock_session import configure_mock_session
 
 ORG_ID = uuid4()
 USER_ID = uuid4()
@@ -33,6 +35,7 @@ def mock_session():
     from unittest.mock import MagicMock
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.flush.return_value = None
     execute_result = MagicMock()
     execute_result.scalar_one_or_none.return_value = None
@@ -96,6 +99,12 @@ class TestAdminListConfig:
         assert data[0]["key"] == "test_key"
         assert data[0]["value"] == "test_val"
 
+    @pytest.mark.anyio
+    async def test_list_config_programming_error_returns_501(self, client_sys_admin, mock_session):
+        mock_session.execute.side_effect = ProgrammingError("", "", "")
+        resp = await client_sys_admin.get("/api/v1/system-admin/config")
+        assert resp.status_code == 501
+
 
 class TestAdminSetConfig:
     @pytest.mark.anyio
@@ -133,6 +142,24 @@ class TestAdminSetConfig:
         assert data["key"] == "my_key"
         assert data["value"] == "updated"
 
+    @pytest.mark.anyio
+    async def test_set_config_integrity_error_returns_409(self, client_sys_admin, mock_session):
+        mock_session.execute.side_effect = IntegrityError("", "", "")
+        resp = await client_sys_admin.put(
+            "/api/v1/system-admin/config/my_key",
+            json={"value": "my_value"},
+        )
+        assert resp.status_code == 409
+
+    @pytest.mark.anyio
+    async def test_set_config_programming_error_returns_501(self, client_sys_admin, mock_session):
+        mock_session.execute.side_effect = ProgrammingError("", "", "")
+        resp = await client_sys_admin.put(
+            "/api/v1/system-admin/config/my_key",
+            json={"value": "my_value"},
+        )
+        assert resp.status_code == 501
+
 
 class TestAdminDeleteConfig:
     @pytest.mark.anyio
@@ -154,3 +181,9 @@ class TestAdminDeleteConfig:
         mock_session.execute.return_value.scalar_one_or_none.return_value = None
         resp = await client_sys_admin.delete("/api/v1/system-admin/config/missing")
         assert resp.status_code == 404
+
+    @pytest.mark.anyio
+    async def test_delete_config_programming_error_returns_501(self, client_sys_admin, mock_session):
+        mock_session.execute.side_effect = ProgrammingError("", "", "")
+        resp = await client_sys_admin.delete("/api/v1/system-admin/config/some_key")
+        assert resp.status_code == 501

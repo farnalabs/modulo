@@ -15,7 +15,28 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.postgres import PostgresContainer
 
+# Collection imports the FastAPI app before database fixtures run. Provide only
+# test-local defaults here so standalone collection never depends on a caller's
+# shell environment. ``setdefault`` still lets CI supply explicit values.
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/modulo_integration")
+os.environ.setdefault("SECRET_KEY", "a" * 32)
+os.environ.setdefault("FERNET_KEY", "a" * 32)
+os.environ.setdefault("REDIS_URL", "")
+os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
+os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
+
 BACKEND_ROOT = Path(__file__).parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_cache() -> Generator[None, None, None]:
+    """Keep settings derived from one integration test out of the next."""
+    from modulo.settings import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 async def _domain_table_names(database_url: str) -> set[str]:
@@ -85,6 +106,14 @@ def migrated_db_url(db_url: str) -> str:
                     ),
                 )
 
+            # organisations: otel_config_json has no server default, causing NOT NULL
+            # violations on raw SQL INSERTs that don't include the column.
+            cols = await _existing_cols(conn, "organisations")
+            if "otel_config_json" in cols:
+                await conn.execute(
+                    text("ALTER TABLE organisations ALTER COLUMN otel_config_json SET DEFAULT '{}'::json"),
+                )
+
             # webhook_payloads: ORM expects raw_body + raw_payload (migration has payload_ciphertext)
             cols = await _existing_cols(conn, "webhook_payloads")
             if "raw_body" not in cols:
@@ -95,8 +124,9 @@ def migrated_db_url(db_url: str) -> str:
                 await conn.execute(text("ALTER TABLE webhook_payloads ALTER COLUMN payload_ciphertext DROP NOT NULL"))
 
             # Force RLS on all org-scoped tables so it applies to the testcontainers
-            # superuser too. Without FORCE, PostgreSQL superusers bypass ENABLE RLS,
-            # which breaks cross-tenant isolation tests that rely on SET LOCAL ROLE.
+            # superuser role too. In production, the modulo_app role is not a superuser
+            # so RLS applies automatically — but testcontainers run as the DB superuser
+            # which bypasses ENABLE RLS, hence the explicit FORCE in tests.
             for _tbl in (
                 "org_daily_run_counts",
                 "org_memberships",

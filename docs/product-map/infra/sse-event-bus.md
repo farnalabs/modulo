@@ -17,7 +17,8 @@ code:
   - frontend/src/composables/useEventStream.ts
   - frontend/src/composables/useSyncStore.ts
   - frontend/src/stores/syncRegistry.ts
-depends-on: []
+depends-on:
+  - feat-auth-jwt-auth
 status: partial
 ---
 
@@ -135,7 +136,7 @@ In-memory (and optionally Redis-backed) event pub/sub that pushes resource-chang
 - No per-event type opt-in from the SSE client (client gets all events for their org)
 - `planStore` and `dashboard` have `registerHandler()` wired; other stores (agents, schemas, connectors, triggers, model_backends, evals, feedback, library) do not yet register SSE sync handlers
 - No website docs page at Website/modulo-website/src/docs/ covering SSE Event Bus
-- `_background_tasks` set has no cleanup mechanism for completed fire-and-forget tasks — the set grows without bound under sustained Redis broadcast volume, leaking memory proportional to event throughput. Should add `task.add_done_callback(set.discard)` or use `asyncio.TaskGroup`.
+- ~~`_background_tasks` set has no cleanup mechanism for completed fire-and-forget tasks — the set grows without bound under sustained Redis broadcast volume, leaking memory proportional to event throughput. Should add `task.add_done_callback(set.discard)` or use `asyncio.TaskGroup`.~~ **FIXED**: Both `event_bus.py` and `listeners.py` call `task.add_done_callback(_background_tasks.discard)`. No memory leak.
 - SSE per-org/per-user connection limit rejection has no specified error response — clients receive no structured error body explaining which limit was hit, their current count, or the limit value.
 
 ## QA History

@@ -20,30 +20,50 @@
  * @module
  */
 
-import type { MonitorBackend, MonitorConfig, ErrorEventInput, UserInfo } from '../types'
+import type { ErrorEventInput, MonitorBackend, MonitorConfig, MonitorLevel, UserInfo } from '../types'
+import { isModuleNotFound } from './sdk-utils'
+
+interface DatadogRumApi {
+  init(config: Record<string, unknown>): void
+  addError(message: string, context: Record<string, unknown>): void
+  setUser(user: { id: string; name?: string; email?: string }): void
+  clearUser(): void
+  addGlobalContext(key: string, value: string): void
+}
+
+interface DatadogLogsApi {
+  init(config: Record<string, unknown>): void
+  logger: { log(message: string, context: Record<string, unknown>, level: string): void }
+}
 
 export class DatadogRumMonitorBackend implements MonitorBackend {
   readonly key = 'datadog-rum'
   private initialized = false
-  private ddRum: any = null
-  private ddLogger: any = null
+  private ddRum: DatadogRumApi | null = null
+  private ddLogger: DatadogLogsApi | null = null
 
   async init(config: MonitorConfig): Promise<boolean> {
-    if (!config['datadog-rum']?.clientToken) {
+    if (!config.datadogRum?.clientToken) {
       console.warn('[monitor] Datadog RUM: no clientToken configured')
       return false
     }
 
     try {
-      const datadogRum = await import(/* @vite-ignore */ '@datadog/browser-rum')
+      const rumModuleName = '@datadog/browser-rum'
+      const datadogRum = await import(/* @vite-ignore */ rumModuleName) as {
+        datadogRum: DatadogRumApi
+      }
       this.ddRum = datadogRum.datadogRum
 
       try {
-        const datadogLogs = await import(/* @vite-ignore */ '@datadog/browser-logs')
+        const logsModuleName = '@datadog/browser-logs'
+        const datadogLogs = await import(/* @vite-ignore */ logsModuleName) as {
+          datadogLogs: DatadogLogsApi
+        }
         this.ddLogger = datadogLogs.datadogLogs
       } catch { /* logs SDK is optional */ }
 
-      const cfg = config['datadog-rum']!
+      const cfg = config.datadogRum
 
       this.ddRum.init({
         clientToken: cfg.clientToken,
@@ -71,10 +91,10 @@ export class DatadogRumMonitorBackend implements MonitorBackend {
       }
 
       this.initialized = true
-      console.info('[monitor] Datadog RUM backend initialized')
+      console.warn('[monitor] Datadog RUM backend initialized')
       return true
-    } catch (e: any) {
-      if (e?.code === 'MODULE_NOT_FOUND' || e?.message?.includes('Cannot find module')) {
+    } catch (e: unknown) {
+      if (isModuleNotFound(e)) {
         console.warn('[monitor] @datadog/browser-rum not installed — Datadog RUM unavailable. Run: npm install @datadog/browser-rum')
       } else {
         console.error('[monitor] Datadog RUM init failed:', e)
@@ -96,7 +116,7 @@ export class DatadogRumMonitorBackend implements MonitorBackend {
     }
   }
 
-  captureMessage(message: string, level: 'error' | 'warning' | 'critical'): void {
+  captureMessage(message: string, level: MonitorLevel): void {
     if (!this.initialized) return
     try {
       if (this.ddLogger) {

@@ -16,8 +16,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.runtime_provider import RuntimeProvider, create_default_hub
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.db.crud.environment_profile import (
@@ -31,6 +31,7 @@ from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/environments", tags=["environments"])
 
 
@@ -134,7 +135,7 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
         initialisation_strategy=p.initialisation_strategy,
         secret_refs=p.secret_refs_json,
         persistence_policy=p.persistence_policy,
-        status=p.status,
+        status=p.status or "active",
         owner_team_id=str(p.owner_team_id) if p.owner_team_id else None,
         visibility=p.visibility,
         created_at=p.created_at.isoformat() if p.created_at else None,
@@ -162,17 +163,17 @@ async def list_profiles(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileListResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             result = await list_environment_profiles(session, page=page, page_size=page_size)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -208,7 +209,7 @@ async def list_profiles(
 async def create_profile(
     req: ProfileCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileResponse:
     try:
         async with session.begin():
@@ -260,17 +261,17 @@ async def create_profile(
 async def get_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             profile = await _get_profile_or_404(session, profile_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -297,7 +298,7 @@ async def update_profile(
     profile_id: uuid.UUID,
     req: ProfileUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ProfileResponse:
     updates = req.model_dump(exclude_unset=True)
     if "capabilities" in updates:
@@ -347,17 +348,17 @@ async def update_profile(
 async def delete_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             deleted = await delete_environment_profile(session, profile_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -478,18 +479,18 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
 async def test_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> StreamingResponse:
     """Provision a sandbox from the profile, run echo, destroy it — stream events."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             profile = await _get_profile_or_404(session, profile_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

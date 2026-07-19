@@ -6,8 +6,21 @@ bdd:
   - backend/tests/bdd/features/remy/remy_sessions.feature
   - backend/tests/bdd/features/remy/remy_messages.feature
   - backend/tests/bdd/features/remy/remy_access_control.feature
+  - backend/tests/bdd/features/remy/remy_admin_config.feature
+  - backend/tests/bdd/features/remy/remy_skills.feature
+  - backend/tests/bdd/features/remy/remy_ui_commands.feature
+  - backend/tests/bdd/features/remy/remy_context_window.feature
+  - backend/tests/bdd/features/remy/remy_context_sources.feature
 unit-tests:
-  - backend/tests/unit/api/test_remy.py
+  - backend/tests/unit/remy/test_config_service.py
+  - backend/tests/unit/remy/test_context_source_service.py
+  - backend/tests/unit/remy/test_context_tools.py
+  - backend/tests/unit/remy/test_documentation_indexer.py
+  - backend/tests/unit/remy/test_manifest.py
+  - backend/tests/unit/remy/test_skill_loader.py
+  - backend/tests/unit/remy/test_ui_commands_api.py
+  - backend/tests/unit/remy/test_ui_tools.py
+  - backend/tests/unit/db/test_remy_models.py
 code:
   - backend/src/modulo/api/routes/remy.py
   - backend/src/modulo/api/routes/admin_remy.py
@@ -15,8 +28,22 @@ code:
   - backend/src/modulo/db/models/remy_message.py
   - backend/src/modulo/db/models/remy_skill.py
   - backend/src/modulo/core/remy/
+  - backend/src/modulo/core/remy/skill_loader.py
+  - backend/src/modulo/core/remy/config_service.py
+  - backend/src/modulo/core/remy/context_source_service.py
+  - backend/src/modulo/core/remy/redis_registry.py
   - frontend/src/views/AdminRemyView.vue
   - frontend/src/views/UserRemySkillsView.vue
+  - frontend/src/components/remy/RemyPanel.vue
+  - frontend/src/components/remy/RemyChat.vue
+  - frontend/src/components/remy/RemySessionDrawer.vue
+  - frontend/src/components/remy/RemySkillManager.vue
+  - frontend/src/components/remy/RemySkillDialog.vue
+  - frontend/src/composables/useRemyStore.ts
+  - frontend/src/composables/useRemyStream.ts
+  - frontend/src/composables/useRemyContext.ts
+  - frontend/src/composables/useUiCommandExecutor.ts
+  - frontend/src/types/remy.ts
 depends-on: [feat-model-backends-management]
 status: partial
 ---

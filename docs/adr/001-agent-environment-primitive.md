@@ -80,6 +80,16 @@ Example profiles: `python-dev`, `node-monorepo`, `modulo-itself`.
 
 Registered in a `RuntimeProviderHub`, parallel to ConnectorHub and ModelBackendHub.
 
+`EnvironmentProfile.provider_type` is authoritative during resolution. The
+persisted IDs are `local_docker` and `e2b`; `local` and `docker` are accepted
+as defensive configuration aliases. If the requested provider is unavailable,
+resolution fails instead of silently running on a different provider.
+
+The hub-facing provider contract is `WorkspaceSpec` in and `ExecResult` out.
+`LocalDockerRuntimeProvider` remains a compatibility adapter for the older
+ShellConnector dictionary contract; it delegates to `DockerRuntimeProvider`
+and does not contain a second Docker implementation.
+
 **WorkspaceLease** — a per-run realisation of an EnvironmentProfile:
 - Concrete sandbox/container ID issued by the provider
 - Checked-out repository at the correct ref

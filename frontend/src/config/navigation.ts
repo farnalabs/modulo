@@ -26,10 +26,12 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   dashboard: { icon: 'LayoutDashboard', labelKey: 'components.SidebarNav.item_dashboard' },
   notifications: { icon: 'Bell', labelKey: 'components.SidebarNav.item_notifications' },
   library: { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_library' },
+  'lifecycle-maps': { icon: 'Map', labelKey: 'components.SidebarNav.item_lifecycle_maps' },
   'pipeline-list': { icon: 'GitFork', labelKey: 'components.SidebarNav.item_my_pipelines' },
 
   'pipeline-copy': { icon: 'Copy', labelKey: 'components.SidebarNav.item_copy_pipeline' },
   stages: { icon: 'Columns', labelKey: 'components.SidebarNav.item_stages_board' },
+  'runs-list': { icon: 'CirclePlay', labelKey: 'components.SidebarNav.item_runs_list' },
   'runs-diff': { icon: 'GitCommit', labelKey: 'components.SidebarNav.item_output_diff' },
   'eval-editor': { icon: 'CheckSquare', labelKey: 'components.SidebarNav.item_evals' },
   'eval-proposals-queue': { icon: 'Clipboard', labelKey: 'components.SidebarNav.item_eval_proposals' },
@@ -73,6 +75,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'api-changelog': { icon: 'History', labelKey: 'components.SidebarNav.item_api_changelog' },
   'team-comparison': { icon: 'BarChart', labelKey: 'components.SidebarNav.item_team_comparison' },
   'admin-plugins': { icon: 'Puzzle', labelKey: 'components.SidebarNav.item_plugins' },
+  'environment-profiles': { icon: 'Container', labelKey: 'components.SidebarNav.item_environment_profiles' },
   'feedback-inbox': { icon: 'MessageSquare', labelKey: 'components.SidebarNav.item_feedback_inbox' },
 }
 
@@ -110,6 +113,7 @@ interface ManifestSidebarGroup {
   default_expanded: boolean
   simple_mode: boolean
   labelKey?: string
+  system_admin_only?: boolean
 }
 
 interface Manifest {
@@ -182,6 +186,7 @@ function buildSidebarGroups(): NavGroup[] {
       items: itemsByGroup[id] || [],
       defaultCollapsed: !sg.default_expanded,
       simpleMode: sg.simple_mode,
+      systemAdminOnly: sg.system_admin_only || undefined,
     }))
     .filter((g) => g.items.length > 0)
 }
@@ -191,11 +196,14 @@ export function canSeeItem(
   user: { role: string; permissions?: string[] },
   plan: { isAtMinimumTier: (tier: string) => boolean },
 ): boolean {
-  if (item.requiredRoles && item.requiredRoles.length > 0 && !item.requiredRoles.includes(user.role)) return false
+  if (item.requiredRoles != null) {
+    if (item.requiredRoles.length === 0 || !item.requiredRoles.includes(user.role)) return false
+  }
   if (item.requiredTier && !plan.isAtMinimumTier(item.requiredTier)) return false
-  if (item.requiredPermissions && item.requiredPermissions.length > 0) {
-    if (!user.permissions || user.permissions.length === 0) return false
-    if (!item.requiredPermissions.some((p) => user.permissions.includes(p))) return false
+  if (item.requiredPermissions != null) {
+    if (item.requiredPermissions.length === 0) return false
+    const permissions = user.permissions
+    if (!permissions || !item.requiredPermissions.some((p) => permissions.includes(p))) return false
   }
   return true
 }
@@ -206,5 +214,5 @@ export function getNavGroups(): NavGroup[] {
   if (_cachedGroups === null) {
     _cachedGroups = buildSidebarGroups()
   }
-  return _cachedGroups
+  return _cachedGroups.map((g) => ({ ...g, items: [...g.items] }))
 }

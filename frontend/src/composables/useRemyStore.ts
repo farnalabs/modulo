@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useStorage } from '@vueuse/core'
-import { api } from '@/lib/api/client'
+import { api, type components } from '@/lib/api/client'
 import { formatApiError } from '@/lib/api/formatError'
 import { pauseUiCommands, resumeUiCommands } from './useUiCommandExecutor'
 import type { ChatSession, ChatMessage, PageContext } from '@/types/remy'
@@ -36,7 +36,7 @@ export const useRemyStore = defineStore('remy', () => {
   const sessions = ref<ChatSession[]>([])
   const activeSessionId = useStorage<string | null>('remy-active-session', null)
   const messages = ref<ChatMessage[]>([])
-  const panelState = ref<'closed' | 'floating' | 'docked' | 'maximised'>('docked')
+  const panelState = useStorage<'closed' | 'floating' | 'docked' | 'maximised'>('remy-panel-state', 'docked')
   const panelPosition = useStorage('remy-panel-position', { x: Math.max(8, window.innerWidth - 460), y: 80 })
   const panelSize = useStorage('remy-panel-size', { width: Math.min(440, window.innerWidth - 16), height: Math.min(600, window.innerHeight - 120) })
   const isStreaming = ref(false)
@@ -81,7 +81,8 @@ export const useRemyStore = defineStore('remy', () => {
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
       } else {
-        sessions.value = resp.data?.items ?? []
+        const payload = resp.data as unknown as { items?: ChatSession[] } | undefined
+        sessions.value = payload?.items ?? []
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : extractErrorMessage(e)
@@ -94,13 +95,13 @@ export const useRemyStore = defineStore('remy', () => {
     error.value = null
     try {
       const resp = await api.POST('/api/v1/remy/sessions', {
-        body: { name: null, provider: null, model: null, context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS } as unknown as Record<string, unknown>,
+        body: { name: null, provider: null, model: null, context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS } as unknown as components['schemas']['CreateSessionRequest'],
       })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
         return null
       }
-      const session = resp.data!
+      const session = resp.data as unknown as ChatSession
       if (Array.isArray(sessions.value)) sessions.value.unshift(session)
       activeSessionId.value = session.id
       messages.value = []
@@ -116,13 +117,13 @@ export const useRemyStore = defineStore('remy', () => {
     error.value = null
     messages.value = []
     try {
-      const resp = await api.GET('/api/v1/remy/sessions/{id}/messages', {
-        params: { path: { id } },
+      const resp = await api.GET('/api/v1/remy/sessions/{session_id}/messages', {
+        params: { path: { session_id: id } },
       })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
       } else {
-        messages.value = (resp.data as any)?.items ?? []
+        messages.value = (resp.data as unknown as { items?: ChatMessage[] } | undefined)?.items ?? []
         activeSessionId.value = id
       }
     } catch (e: unknown) {
@@ -135,18 +136,18 @@ export const useRemyStore = defineStore('remy', () => {
   async function renameSession(id: string, name: string): Promise<boolean> {
     error.value = null
     try {
-      const resp = await api.PATCH('/api/v1/remy/sessions/{id}', {
-        params: { path: { id } },
+      const resp = await api.PATCH('/api/v1/remy/sessions/{session_id}', {
+        params: { path: { session_id: id } },
         body: { name },
       })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
         return false
       }
-      const updated = resp.data!
+      const updated = resp.data as unknown as ChatSession
       if (Array.isArray(sessions.value)) {
         const idx = sessions.value.findIndex(s => s.id === id)
-        if (idx >= 0) sessions.value[idx] = updated as any
+        if (idx >= 0) sessions.value[idx] = updated
       }
       return true
     } catch (e: unknown) {
@@ -158,8 +159,8 @@ export const useRemyStore = defineStore('remy', () => {
   async function deleteSession(id: string) {
     error.value = null
     try {
-      const resp = await api.DELETE('/api/v1/remy/sessions/{id}', {
-        params: { path: { id } },
+      const resp = await api.DELETE('/api/v1/remy/sessions/{session_id}', {
+        params: { path: { session_id: id } },
       })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)

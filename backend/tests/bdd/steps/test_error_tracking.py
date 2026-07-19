@@ -1,5 +1,6 @@
 """BDD step definitions for error tracking — ingestion, dashboard, notifications."""
 
+import contextlib
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,18 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/error_tracking/error_ingestion.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/error_tracking/error_dashboard.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/error_tracking/error_notifications.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @pytest.fixture

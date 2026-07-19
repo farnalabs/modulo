@@ -20,7 +20,7 @@ class PathTraversalError(ValueError):
 
     def __init__(self, path: str, base_path: Path) -> None:
         super().__init__(
-            f"Path {path!r} resolves outside base_path {str(base_path)!r}. Path traversal is not permitted."
+            f"Path {path!r} resolves outside base_path {str(base_path)!r}. Path traversal is not permitted.",
         )
 
 
@@ -62,9 +62,9 @@ class FilesystemConnector(ConnectorBase):
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "file":
-                rel_path = q.filters.get("path")
-                if not rel_path:
+                if "path" not in q.filters:
                     raise ValueError("Filesystem file query requires 'path' filter")
+                rel_path = q.filters["path"]
                 path = self._safe_path(rel_path)
                 try:
                     content = await asyncio.to_thread(path.read_text, encoding="utf-8")
@@ -90,9 +90,9 @@ class FilesystemConnector(ConnectorBase):
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         match payload.resource:
             case "file":
-                rel_path = payload.data.get("path")
-                if not rel_path:
+                if "path" not in payload.data:
                     raise ValueError("Filesystem file write requires 'path' in data")
+                rel_path = payload.data["path"]
                 content = payload.data.get("content")
                 if content is None:
                     raise ValueError("Filesystem file write requires 'content' in data")

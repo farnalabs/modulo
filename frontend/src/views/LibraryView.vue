@@ -16,23 +16,68 @@
           <FilterBar
             :search="{ placeholder: $t('views.LibraryView.search_primitives') }"
             :search-value="search"
-            :filters="[{ key: 'type', label: $t('views.AdminNotificationDeliveryLogView.all_types'), options: [
-              { value: 'pipeline_template', label: $t('views.LibraryView.pipeline_templates') },
-              { value: 'workflow', label: $t('views.LibraryView.type_workflows') },
-              { value: 'agent', label: $t('views.LibraryView.type_agents') },
-              { value: 'schema', label: $t('views.LibraryView.type_schemas') },
-              { value: 'integration', label: $t('views.LibraryView.type_integrations') },
-              { value: 'composite', label: $t('views.LibraryView.type_composites') },
-            ] }]"
-            :filter-values="{ type: typeFilter }"
             @update:search="search = $event; onSearchInput()"
-            @update:filter="(key, value) => { if (key === 'type') { typeFilter = value; onFilterChange() } }"
           />
+          <div class="relative" ref="typeFilterRef">
+            <button
+              type="button"
+              class="flex items-center gap-2 rounded-lg border border-input bg-background px-3 py-2 text-sm hover:bg-accent transition-colors"
+              @click="showTypeDropdown = !showTypeDropdown"
+              data-testid="library-type-filter-button"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+              {{ $t('views.AdminNotificationDeliveryLogView.all_types') }}
+              <span v-if="selectedTypes.length > 0" class="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">{{ selectedTypes.length }}</span>
+            </button>
+            <div
+              v-if="showTypeDropdown"
+              class="absolute right-0 top-full z-50 mt-1 w-56 rounded-lg border bg-card p-2 shadow-lg"
+              data-testid="library-type-filter-dropdown"
+            >
+              <label
+                v-for="opt in typeOptions"
+                :key="opt.value"
+                class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  :checked="selectedTypes.includes(opt.value)"
+                  class="rounded border-input"
+                  @change="toggleType(opt.value)"
+                />
+                {{ opt.label }}
+              </label>
+            </div>
+          </div>
         </div>
       </div>
     </header>
 
     <main class="page-wide">
+      <div v-if="selectedTypes.length > 0" class="flex flex-wrap items-center gap-2 py-2">
+        <span
+          v-for="type in selectedTypes"
+          :key="type"
+          class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+        >
+          {{ typeLabel(type) }}
+          <button
+            type="button"
+            class="ml-0.5 rounded-full p-0.5 hover:bg-primary/20 transition-colors"
+            @click="removeType(type)"
+            :aria-label="`Remove ${typeLabel(type)} filter`"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </span>
+        <button
+          type="button"
+          class="text-xs text-muted-foreground hover:text-foreground underline"
+          @click="selectedTypes = []; onFilterChange()"
+        >
+          {{ $t('views.NotificationsPage.clear_filters') }}
+        </button>
+      </div>
       <div class="flex items-center gap-2 border-b border-border" role="tablist">
         <button
           type="button"
@@ -68,22 +113,16 @@
         {{ error }}
       </div>
 
-      <div
       <EmptyState
-        v-else-if="section === 'native' &amp;&amp; nativePrimitives.length === 0 &amp;&amp; previewPrimitives.length === 0"
+        v-else-if="section === 'community' && communityPrimitives.length === 0"
+        :title="$t('views.LibraryView.no_primitives_found')"
+      />
+      <EmptyState
+        v-else-if="section === 'native' && nativePrimitives.length === 0 && previewPrimitives.length === 0"
         :title="$t('views.LibraryView.no_primitives_found')"
       />
 
-      <EmptyState
-        v-else-if="section === 'community' &amp;&amp; communityPrimitives.length === 0"
-        :title="$t('views.LibraryView.no_primitives_found')"
-      />
-      <EmptyState
-        v-else-if="section === 'native' &amp;&amp; nativePrimitives.length === 0 &amp;&amp; previewPrimitives.length === 0"
-        :title="$t('views.LibraryView.no_primitives_found')"
-      />
-
-      <div v-else-if="section === 'native' &amp;&amp; nativePrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div v-else-if="section === 'native' && nativePrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div
           v-for="prim in nativePrimitives"
           :key="prim.id"
@@ -303,6 +342,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
@@ -338,15 +378,55 @@ interface ListResponse {
 const router = useRouter()
 const route = useRoute()
 
+const search = ref('')
+const selectedTypes = ref<string[]>([])
+const showTypeDropdown = ref(false)
+const typeFilterRef = ref<HTMLElement | null>(null)
+const page = ref(1)
+const pageSize = ref(12)
+const total = ref(0)
+
+const typeOptions = [
+  { value: 'pipeline_template', label: 'Pipeline Templates' },
+  { value: 'workflow', label: 'Workflows' },
+  { value: 'agent', label: 'Agents' },
+  { value: 'schema', label: 'Schemas' },
+  { value: 'integration', label: 'Integrations' },
+  { value: 'composite', label: 'Composites' },
+]
+
+const typeLabelMap = Object.fromEntries(typeOptions.map(o => [o.value, o.label]))
+
+function typeLabel(type: string): string {
+  return typeLabelMap[type] ?? type
+}
+
+function toggleType(value: string) {
+  if (selectedTypes.value.includes(value)) {
+    selectedTypes.value = selectedTypes.value.filter(t => t !== value)
+  } else {
+    selectedTypes.value = [...selectedTypes.value, value]
+  }
+  onFilterChange()
+}
+
+function removeType(value: string) {
+  selectedTypes.value = selectedTypes.value.filter(t => t !== value)
+  onFilterChange()
+}
+
+type LibrarySection = 'native' | 'community'
+const section = ref<LibrarySection>('native')
+
 const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<ListResponse>(
   async () => {
     const params = new URLSearchParams({
       page: String(page.value),
       page_size: String(pageSize.value),
     })
-    if (typeFilter.value) params.set('primitive_type', typeFilter.value)
     if (search.value) params.set('search', search.value)
     if (section.value === 'community') params.set('source', 'community')
+    if (selectedTypes.value.length === 1) params.set('primitive_type', selectedTypes.value[0])
 
     const { data, error: err } = await api.GET('/api/v1/libraries', {
       params: { query: Object.fromEntries(params) as any },
@@ -358,21 +438,13 @@ const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<Li
 )
 
 const primitives = ref<LibraryPrimitive[]>([])
-watch(loadResp, (d) => {
+
+watch([loadResp, section], ([d]) => {
   if (d) {
     primitives.value = section.value === 'native' ? d.items.filter(p => p.source !== 'community') : d.items
-    total.value = section.value === 'native' ? primitives.value.length : d.total
+    total.value = d.total
   }
 }, { immediate: true })
-
-const search = ref('')
-const typeFilter = ref('')
-const page = ref(1)
-const pageSize = ref(12)
-const total = ref(0)
-
-type LibrarySection = 'native' | 'community'
-const section = ref<LibrarySection>('native')
 
 function switchSection(next: LibrarySection) {
   if (section.value === next) return
@@ -381,9 +453,14 @@ function switchSection(next: LibrarySection) {
   loadPrimitives()
 }
 
-const nativePrimitives = computed(() => primitives.value.filter(p => (p.tier ?? 'native') !== 'preview' && (p.tier ?? 'native') !== 'in_dev'))
-const previewPrimitives = computed(() => primitives.value.filter(p => p.tier === 'preview'))
-const communityPrimitives = computed(() => primitives.value.filter(p => p.source === 'community'))
+function applyTypeFilter(items: LibraryPrimitive[]): LibraryPrimitive[] {
+  if (selectedTypes.value.length === 0) return items
+  return items.filter(p => selectedTypes.value.includes(p.primitive_type))
+}
+
+const nativePrimitives = computed(() => applyTypeFilter(primitives.value.filter(p => (p.tier ?? 'native') !== 'preview' && (p.tier ?? 'native') !== 'in_dev')))
+const previewPrimitives = computed(() => applyTypeFilter(primitives.value.filter(p => p.tier === 'preview')))
+const communityPrimitives = computed(() => applyTypeFilter(primitives.value.filter(p => p.source === 'community')))
 
 function onSearchInput() {
   page.value = 1
@@ -393,7 +470,14 @@ function onSearchInput() {
 
 function onFilterChange() {
   page.value = 1
+  showTypeDropdown.value = false
   loadPrimitives()
+}
+
+function onClickOutside(e: MouseEvent) {
+  if (typeFilterRef.value && !typeFilterRef.value.contains(e.target as Node)) {
+    showTypeDropdown.value = false
+  }
 }
 
 function prevPage() {
@@ -437,8 +521,8 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
   const newValue = !prim.auto_update
   toggleLoading.value[prim.id] = true
   try {
-    const { data } = await api.PATCH('/api/v1/libraries/{library_id}', {
-      params: { path: { library_id: prim.id } },
+    const { data } = await api.PATCH('/api/v1/libraries/{primitive_id}', {
+      params: { path: { primitive_id: prim.id } },
       body: { auto_update: newValue },
     })
     const idx = primitives.value.findIndex(x => x.id === prim.id)
@@ -452,12 +536,14 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
 
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer)
+  document.removeEventListener('mousedown', onClickOutside)
 })
 onMounted(() => {
   const typeParam = route.query.type
   if (typeof typeParam === 'string' && typeParam) {
-    typeFilter.value = typeParam
+    selectedTypes.value = [typeParam]
   }
+  document.addEventListener('mousedown', onClickOutside)
   loadPrimitives()
 })
 </script>

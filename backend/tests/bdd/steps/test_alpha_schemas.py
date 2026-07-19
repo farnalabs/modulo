@@ -1,22 +1,17 @@
 """BDD step definitions: Schema create, version, deletion protection."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/schemas/create.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/schemas/version.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/schemas/deletion_protection.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @when(parsers.parse('I POST /api/schemas with name "{name}" and valid JSON Schema'))

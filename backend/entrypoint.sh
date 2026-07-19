@@ -1,10 +1,13 @@
 #!/bin/sh
 set -e
 
+echo "=== Bootstrapping modulo_app role ==="
+python -m modulo.db.bootstrap_role
+
 echo "Running database migrations..."
 
 # Phase 1: apply the initial schema (creates version table with VARCHAR(32))
-alembic upgrade 0001_initial_schema
+alembic upgrade 0001_v2_identity_org
 
 # Widen the version_num column to VARCHAR(64) — long revision IDs like
 # 0005_library_community_visibility (34 chars) exceed the default 32.

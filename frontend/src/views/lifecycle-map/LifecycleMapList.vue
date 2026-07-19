@@ -9,27 +9,26 @@
           @update:search="search = $event; page = 1"
         >
           <template #after>
-            <select
-              v-model="ownerFilter"
-              class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-              data-testid="lifecycle-map-list-owner-filter"
-            >
-              <option value="">All teams</option>
-              <option v-for="owner in uniqueOwners" :key="owner" :value="owner">{{ owner }}</option>
-            </select>
+            <Select v-model="ownerFilter">
+              <SelectTrigger aria-label="Form control" data-testid="lifecycle-map-list-owner-filter" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
+                <SelectValue placeholder="All teams" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="owner in uniqueOwners" :key="owner" :value="owner">{{ owner }}</SelectItem>
+              </SelectContent>
+            </Select>
           </template>
         </FilterBar>
           <Button
             variant="default"
-            as="router-link"
-            to="/lifecycle-maps/new"
+            class="cursor-pointer"
+            @click="handleNewMap"
             data-testid="lifecycle-map-list-new"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Map
           </Button>
         </div>
-      </div>
     </header>
 
     <main class="page-wide">
@@ -58,8 +57,8 @@
       >
         <Button
           variant="default"
-          as="router-link"
-          to="/lifecycle-maps/new"
+          class="cursor-pointer"
+          @click="handleNewMap"
           data-testid="lifecycle-map-list-empty-new"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -68,7 +67,7 @@
       </EmptyState>
 
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div
+        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
           v-for="m in pagedMaps"
           :key="m.id"
           class="card card-hover p-5 cursor-pointer"
@@ -130,12 +129,62 @@
         </button>
       </div>
     </main>
+
+    <!-- Create dialog -->
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+      v-if="showCreateDialog"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      @click.self="showCreateDialog = false"
+    >
+      <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+        <h3 class="mb-4 text-base font-semibold">Create Lifecycle Map</h3>
+        <div class="space-y-4">
+          <div>
+            <label for="lifecyclemaplist-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="lifecyclemaplist-field-2"
+              v-model="newName"
+              @keydown.space.stop
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              placeholder="My Delivery Lifecycle"
+            />
+          </div>
+          <div>
+            <label for="lifecyclemaplist-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <textarea id="lifecyclemaplist-field-1"
+              v-model="newDescription"
+              @keydown.space.stop
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              rows="3"
+              placeholder="Optional description"
+            />
+          </div>
+          <div v-if="createError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            {{ createError }}
+          </div>
+          <div class="flex justify-end gap-2">
+            <button
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+              @click="showCreateDialog = false"
+            >
+              Cancel
+            </button>
+            <Button
+              :disabled="!newName.trim() || creating"
+              variant="default"
+              @click="handleCreateConfirm"
+            >
+              {{ creating ? 'Creating...' : 'Create' }}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import FilterBar from '../../components/shared/FilterBar.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
@@ -144,9 +193,14 @@ import EmptyState from '../../components/shared/EmptyState.vue'
 import { Button } from '@/components/ui/button'
 import type { LifecycleMapSummary } from '../../stores/lifecycleMaps'
 import { formatDateShort } from '../../lib/formatDate'
+import { useApi } from '../../composables/useApi'
+import { formatApiError } from '../../lib/api/formatError'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const router = useRouter()
+const route = useRoute()
 const store = useLifecycleMapsStore()
+const { post } = useApi()
 
 const search = ref('')
 const ownerFilter = ref('')
@@ -204,5 +258,41 @@ function openMap(m: LifecycleMapSummary): void {
   router.push(`/lifecycle-maps/${m.id}`)
 }
 
-onMounted(loadMaps)
+const showCreateDialog = ref(false)
+const newName = ref('')
+const newDescription = ref('')
+const creating = ref(false)
+const createError = ref<string | null>(null)
+
+function handleNewMap(): void {
+  newName.value = ''
+  newDescription.value = ''
+  createError.value = null
+  showCreateDialog.value = true
+}
+
+async function handleCreateConfirm(): Promise<void> {
+  if (!newName.value.trim()) return
+  creating.value = true
+  createError.value = null
+  try {
+    const data = await post<LifecycleMapSummary>('/api/v1/lifecycle-maps', {
+        name: newName.value.trim(),
+        description: newDescription.value.trim() || null,
+    })
+    showCreateDialog.value = false
+    if (data) router.push({ name: 'lifecycle-map-editor', params: { id: (data as LifecycleMapSummary).id } })
+  } catch (e: unknown) {
+    createError.value = formatApiError(e)
+  } finally {
+    creating.value = false
+  }
+}
+
+onMounted(async () => {
+  await loadMaps()
+  if (route.query.create === 'true') {
+    handleNewMap()
+  }
+})
 </script>

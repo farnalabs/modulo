@@ -1,6 +1,8 @@
 # Version control
 .git/
 .gitignore
+.github/
+.agents/
 
 # Python
 __pycache__/
@@ -14,10 +16,22 @@ backend/htmlcov/
 backend/.coverage
 backend/build/
 backend/*.egg-info/
+backend/tests/
 
 # Node
 frontend/node_modules/
 frontend/dist/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+frontend/tests/
+
+# Development-only material
+docs/
+reports/
+Reviews/
+TestResults/
+*.md
 
 # IDE
 .idea/
@@ -34,6 +48,3 @@ docker-compose*.yml
 
 # Logs
 *.log
-
-# Agent worktrees
-.agents/worktrees/
