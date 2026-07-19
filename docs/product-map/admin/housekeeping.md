@@ -1,6 +1,6 @@
 ﻿---
+prd: 0.0
 id: feat-admin-housekeeping
-prd: ~
 delivery-tasks: [task-housekeeping-admin]
 bdd: []
 unit-tests: []
