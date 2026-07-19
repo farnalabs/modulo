@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.dashboard import _in_memory_cache
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -297,6 +298,8 @@ class TestSessionLevelErrors:
         exc = _make_exc(error_type)
         session = _raise_session(exc)
         _override_session(client, session)
+
+        _in_memory_cache.clear()
 
         if method == "GET":
             resp = client.get(url)
