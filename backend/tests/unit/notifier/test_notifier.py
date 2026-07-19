@@ -355,68 +355,30 @@ async def test_dispatch_event_with_subscriber_sends_notification(notifier: Notif
 _TEAM = uuid.uuid4()
 
 
-async def test_team_scoped_dispatch_routes_to_team_endpoints(notifier: Notifier) -> None:
-    """When team_id is provided, dispatch to team-specific endpoints."""
-    team_ep = _fake_endpoint(team_id=_TEAM)
-
+@pytest.mark.parametrize(
+    "team_id,expected_team_id",
+    [
+        (_TEAM, _TEAM),
+        (_TEAM, None),
+        (None, None),
+    ],
+)
+async def test_team_scoped_dispatch(notifier: Notifier, team_id, expected_team_id) -> None:
+    ep = _fake_endpoint(team_id=expected_team_id)
     with (
-        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[team_ep])) as mock_get,
+        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])) as mock_get,
         patch.object(notifier, "_dispatch_to_endpoint") as mock_dispatch,
     ):
         mock_dispatch.return_value = DispatchResult(
-            endpoint_id=team_ep.id,
+            endpoint_id=ep.id,
             status="delivered",
             attempt_count=1,
             response_code=200,
         )
-
-        results = await notifier.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)}, team_id=_TEAM)
-
+        results = await notifier.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)}, team_id=team_id)
     assert len(results) == 1
     assert results[0].status == "delivered"
-    mock_get.assert_called_once_with(_ORG, "hitl_awaiting", team_id=_TEAM)
-
-
-async def test_team_scoped_dispatch_falls_back_to_org_wide(notifier: Notifier) -> None:
-    """When team_id is provided but no team-specific endpoints exist, fall back to org-wide."""
-    org_ep = _fake_endpoint(team_id=None)
-
-    with (
-        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[org_ep])) as mock_get,
-        patch.object(notifier, "_dispatch_to_endpoint") as mock_dispatch,
-    ):
-        mock_dispatch.return_value = DispatchResult(
-            endpoint_id=org_ep.id,
-            status="delivered",
-            attempt_count=1,
-            response_code=200,
-        )
-
-        results = await notifier.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)}, team_id=_TEAM)
-
-    assert len(results) == 1
-    assert results[0].status == "delivered"
-    mock_get.assert_called_once_with(_ORG, "hitl_awaiting", team_id=_TEAM)
-
-
-async def test_org_wide_dispatch_excludes_team_endpoints(notifier: Notifier) -> None:
-    """When team_id is None, only org-wide endpoints are returned."""
-    org_ep = _fake_endpoint(team_id=None)
-
-    with (
-        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[org_ep])) as mock_get,
-        patch.object(notifier, "_dispatch_to_endpoint") as mock_dispatch,
-    ):
-        mock_dispatch.return_value = DispatchResult(
-            endpoint_id=org_ep.id,
-            status="delivered",
-            attempt_count=1,
-            response_code=200,
-        )
-        results = await notifier.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)})
-
-    assert len(results) == 1
-    mock_get.assert_called_once_with(_ORG, "hitl_awaiting", team_id=None)
+    mock_get.assert_called_once_with(_ORG, "hitl_awaiting", team_id=team_id)
 
 
 # ---------------------------------------------------------------------------
@@ -455,48 +417,19 @@ def _make_session_factory(
     )
 
 
-async def test_get_subscribed_endpoints_team_id_returns_team_endpoints(notifier: Notifier) -> None:
-    ep = _fake_endpoint(team_id=_TEAM)
-    factory = _make_session_factory([ep], [])
-
+@pytest.mark.parametrize(
+    "team_id,team_endpoints,org_endpoints,expected_count,expected_team",
+    [
+        (_TEAM, [_fake_endpoint(team_id=_TEAM)], [], 1, _TEAM),
+        (_TEAM, [], [_fake_endpoint(team_id=None)], 1, None),
+        (None, [_fake_endpoint(team_id=None)], [], 1, None),
+    ],
+)
+async def test_get_subscribed_endpoints(
+    notifier: Notifier, team_id, team_endpoints, org_endpoints, expected_count, expected_team
+) -> None:
+    factory = _make_session_factory(team_endpoints, org_endpoints)
     with patch.object(notifier, "_session_factory", factory):
-        found = await notifier._get_subscribed_endpoints(_ORG, "hitl_awaiting", team_id=_TEAM)
-
-    assert len(found) == 1
-    assert found[0].team_id == _TEAM
-
-
-async def test_get_subscribed_endpoints_team_id_falls_back_to_org(notifier: Notifier) -> None:
-    """No team endpoints exist; fall back to org-wide."""
-    org_ep = _fake_endpoint(team_id=None)
-    factory = _make_session_factory([], [org_ep])
-
-    with patch.object(notifier, "_session_factory", factory):
-        found = await notifier._get_subscribed_endpoints(_ORG, "hitl_awaiting", team_id=_TEAM)
-
-    assert len(found) == 1
-    assert found[0].team_id is None
-
-
-async def test_get_subscribed_endpoints_no_team_id_returns_org_wide_only(notifier: Notifier) -> None:
-    """When team_id is None, only org-wide endpoints are returned."""
-    org_ep = _fake_endpoint(team_id=None)
-    factory = _make_session_factory([org_ep], [])
-
-    with patch.object(notifier, "_session_factory", factory):
-        found = await notifier._get_subscribed_endpoints(_ORG, "hitl_awaiting", team_id=None)
-
-    assert len(found) == 1
-    assert found[0].team_id is None
-
-
-async def test_get_subscribed_endpoints_no_team_id_skips_team_endpoints(notifier: Notifier) -> None:
-    """Org-wide dispatch excludes endpoints with a team_id."""
-    org_ep = _fake_endpoint(team_id=None)
-    factory = _make_session_factory([org_ep], [])
-
-    with patch.object(notifier, "_session_factory", factory):
-        found = await notifier._get_subscribed_endpoints(_ORG, "hitl_awaiting", team_id=None)
-
-    assert len(found) == 1
-    assert found[0].team_id is None
+        found = await notifier._get_subscribed_endpoints(_ORG, "hitl_awaiting", team_id=team_id)
+    assert len(found) == expected_count
+    assert found[0].team_id == expected_team

@@ -102,6 +102,22 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+_ENV_AUTH_CASES = [
+    ("GET", "/api/v1/environments"),
+    ("POST", "/api/v1/environments"),
+    ("GET", f"/api/v1/environments/{_PROFILE_ID}"),
+    ("PATCH", f"/api/v1/environments/{_PROFILE_ID}"),
+    ("DELETE", f"/api/v1/environments/{_PROFILE_ID}"),
+    ("POST", f"/api/v1/environments/{_PROFILE_ID}/test"),
+]
+
+
+@pytest.mark.parametrize("method,url", _ENV_AUTH_CASES, ids=["list", "create", "get", "update", "delete", "test"])
+def test_endpoints_unauthenticated(unauth_client: TestClient, method: str, url: str) -> None:
+    resp = getattr(unauth_client, method.lower())(url)
+    assert resp.status_code in (401, 403), f"Expected 401/403 for {method} {url}, got {resp.status_code}"
+
+
 class TestListProfiles:
     URL = "/api/v1/environments"
 
@@ -134,10 +150,6 @@ class TestListProfiles:
         assert data["total"] == 0
         assert data["items"] == []
 
-    def test_list_profiles_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.get(self.URL)
-        assert resp.status_code in (401, 403)
-
 
 class TestCreateProfile:
     URL = "/api/v1/environments"
@@ -163,10 +175,6 @@ class TestCreateProfile:
         assert data["name"] == "new-env"
         assert data["image_ref"] == "ubuntu:22.04"
         assert data["capabilities"] == ["docker", "gpu"]
-
-    def test_create_profile_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.post(self.URL, json=self.PAYLOAD)
-        assert resp.status_code in (401, 403)
 
     def test_create_profile_with_defaults(self, client: TestClient) -> None:
         resp = client.post(self.URL, json={"name": "incomplete"})
@@ -202,10 +210,6 @@ class TestGetProfile:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
 
-    def test_get_profile_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.get(f"{self.URL}/{_PROFILE_ID}")
-        assert resp.status_code in (401, 403)
-
 
 class TestUpdateProfile:
     URL = "/api/v1/environments"
@@ -231,10 +235,6 @@ class TestUpdateProfile:
             resp = client.patch(f"{self.URL}/{_PROFILE_ID}", json={"name": "nope"})
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
-
-    def test_update_profile_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.patch(f"{self.URL}/{_PROFILE_ID}", json={"name": "x"})
-        assert resp.status_code in (401, 403)
 
     def test_update_profile_invalid_network_policy(self, client: TestClient) -> None:
         with (
@@ -270,17 +270,9 @@ class TestDeleteProfile:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
 
-    def test_delete_profile_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.delete(f"{self.URL}/{_PROFILE_ID}")
-        assert resp.status_code in (401, 403)
-
 
 class TestProfileTestEndpoint:
     URL = "/api/v1/environments"
-
-    def test_profile_test_unauthorized(self, unauth_client: TestClient) -> None:
-        resp = unauth_client.post(f"{self.URL}/{_PROFILE_ID}/test")
-        assert resp.status_code in (401, 403)
 
     def test_profile_test_profile_not_found(self, client: TestClient) -> None:
         with (

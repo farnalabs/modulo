@@ -25,100 +25,46 @@ class TestPricingConfig:
 
 
 class TestGetPricing:
-    def test_known_openai_model(self) -> None:
-        pricing = get_pricing("openai", "gpt-4o")
+    @pytest.mark.parametrize(
+        ("provider", "model", "expected_input", "expected_output"),
+        [
+            ("openai", "gpt-4o", 2.50, 10.00),
+            ("openai", "gpt-4o-2024-08-06", 2.50, None),
+            ("openai", "gpt-4o-mini-2024-07-18", 0.15, None),
+            ("anthropic", "claude-sonnet-4-20250514", 3.00, None),
+            ("anthropic", "claude-haiku-3.5-20241022", 0.80, None),
+            ("deepseek", "deepseek-chat", 0.27, 1.10),
+            ("deepseek", "deepseek-v3", 0.27, None),
+            ("deepseek", "deepseek-r1", 0.55, None),
+            ("groq", "llama-3.3-70b-versatile", 0.0, 0.0),
+            ("groq", "mixtral-8x7b-32768", 0.0, None),
+            ("perplexity", "sonar", 1.00, None),
+            ("perplexity", "sonar-pro", 3.00, None),
+            ("perplexity", "sonar-reasoning", 1.00, 5.00),
+            ("togetherai", "mixtral-8x22b-instruct", 0.60, None),
+            ("togetherai", "Llama-3.3-70B-Instruct-Turbo", 0.80, None),
+            ("azure_openai", "gpt-4o-2024-08-06", 2.50, None),
+        ],
+    )
+    def test_known_model_pricing(
+        self, provider: str, model: str, expected_input: float, expected_output: float | None
+    ) -> None:
+        pricing = get_pricing(provider, model)
         assert pricing is not None
-        assert pricing.input_price_per_1k == 2.50
-        assert pricing.output_price_per_1k == 10.00
+        assert pricing.input_price_per_1k == expected_input
+        if expected_output is not None:
+            assert pricing.output_price_per_1k == expected_output
 
-    def test_known_openai_model_variant(self) -> None:
-        pricing = get_pricing("openai", "gpt-4o-2024-08-06")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 2.50
-
-    def test_known_openai_mini_variant(self) -> None:
-        pricing = get_pricing("openai", "gpt-4o-mini-2024-07-18")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 0.15
-
-    def test_known_anthropic_model(self) -> None:
-        pricing = get_pricing("anthropic", "claude-sonnet-4-20250514")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 3.00
-
-    def test_known_anthropic_haiku(self) -> None:
-        pricing = get_pricing("anthropic", "claude-haiku-3.5-20241022")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 0.80
-
-    def test_known_deepseek_chat(self) -> None:
-        pricing = get_pricing("deepseek", "deepseek-chat")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 0.27
-        assert pricing.output_price_per_1k == 1.10
-
-    def test_known_deepseek_v3(self) -> None:
-        pricing = get_pricing("deepseek", "deepseek-v3")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 0.27
-
-    def test_known_deepseek_r1(self) -> None:
-        pricing = get_pricing("deepseek", "deepseek-r1")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 0.55
-
-    def test_groq_free_tier(self) -> None:
-        pricing = get_pricing("groq", "llama-3.3-70b-versatile")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 0.0
-        assert pricing.output_price_per_1k == 0.0
-
-    def test_groq_any_model(self) -> None:
-        pricing = get_pricing("groq", "mixtral-8x7b-32768")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 0.0
-
-    def test_perplexity_sonar(self) -> None:
-        pricing = get_pricing("perplexity", "sonar")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 1.00
-
-    def test_perplexity_sonar_pro(self) -> None:
-        pricing = get_pricing("perplexity", "sonar-pro")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 3.00
-
-    def test_perplexity_sonar_reasoning(self) -> None:
-        pricing = get_pricing("perplexity", "sonar-reasoning")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 1.00
-        assert pricing.output_price_per_1k == 5.00
-
-    def test_togetherai_mixtral(self) -> None:
-        pricing = get_pricing("togetherai", "mixtral-8x22b-instruct")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 0.60
-
-    def test_togetherai_llama(self) -> None:
-        pricing = get_pricing("togetherai", "Llama-3.3-70B-Instruct-Turbo")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 0.80
-
-    def test_azure_openai(self) -> None:
-        pricing = get_pricing("azure_openai", "gpt-4o-2024-08-06")
-        assert pricing is not None
-        assert pricing.input_price_per_1k == 2.50
-
-    def test_unknown_provider_returns_none(self) -> None:
-        pricing = get_pricing("nonexistent", "gpt-4o")
-        assert pricing is None
-
-    def test_unknown_model_returns_none(self) -> None:
-        pricing = get_pricing("openai", "gpt-3.5-turbo")
-        assert pricing is None
-
-    def test_wrong_provider_returns_none(self) -> None:
-        pricing = get_pricing("anthropic", "gpt-4o")
+    @pytest.mark.parametrize(
+        ("provider", "model"),
+        [
+            ("nonexistent", "gpt-4o"),
+            ("openai", "gpt-3.5-turbo"),
+            ("anthropic", "gpt-4o"),
+        ],
+    )
+    def test_unknown_returns_none(self, provider: str, model: str) -> None:
+        pricing = get_pricing(provider, model)
         assert pricing is None
 
 

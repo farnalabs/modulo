@@ -550,15 +550,17 @@ class TestRoundTrip:
 
 
 class TestRenameField:
-    def test_rename_field(self) -> None:
+    @pytest.mark.parametrize(
+        ("data", "assertions"),
+        [
+            ({"old": "val", "keep": "stay"}, lambda r: r == {"new": "val", "keep": "stay"}),
+            ({"keep": "stay"}, lambda r: r == {"keep": "stay"}),
+        ],
+    )
+    def test_rename(self, data: dict, assertions) -> None:
         fn = rename_field("old", "new")
-        result = fn({"old": "val", "keep": "stay"})
-        assert result == {"new": "val", "keep": "stay"}
-
-    def test_rename_nonexistent_field_noop(self) -> None:
-        fn = rename_field("old", "new")
-        result = fn({"keep": "stay"})
-        assert result == {"keep": "stay"}
+        result = fn(data)
+        assert assertions(result)
 
     def test_rename_does_not_mutate_original(self) -> None:
         fn = rename_field("old", "new")
@@ -573,15 +575,17 @@ class TestRenameField:
 
 
 class TestConvertField:
-    def test_convert_with_int(self) -> None:
-        fn = convert_field("count", int)
-        result = fn({"count": "42"})
-        assert result == {"count": 42}
-
-    def test_convert_with_custom_callable(self) -> None:
-        fn = convert_field("active", lambda v: v.lower() == "true")
-        result = fn({"active": "True"})
-        assert result["active"] is True
+    @pytest.mark.parametrize(
+        ("data", "converter", "expected"),
+        [
+            ({"count": "42"}, int, {"count": 42}),
+            ({"active": "True"}, lambda v: v.lower() == "true", {"active": True}),
+        ],
+    )
+    def test_convert(self, data: dict, converter, expected: dict) -> None:
+        fn = convert_field(next(iter(data.keys())), converter)
+        result = fn(data)
+        assert result == expected
 
     def test_convert_missing_field_noop(self) -> None:
         fn = convert_field("missing", int)
@@ -620,7 +624,6 @@ class TestSetDefault:
         result = fn({"name": "Alice"})
         assert result == {"name": "Alice", "tags": []}
         result["tags"].append("admin")
-        # Subsequent calls should not share the same list
         result2 = fn({"name": "Bob"})
         assert result2["tags"] == []
 
@@ -650,16 +653,17 @@ class TestAddField:
 
 
 class TestRemoveField:
-    def test_remove_existing_field(self) -> None:
+    @pytest.mark.parametrize(
+        ("data", "expected"),
+        [
+            ({"name": "Alice", "legacy": "old"}, {"name": "Alice"}),
+            ({"name": "Alice"}, {"name": "Alice"}),
+        ],
+    )
+    def test_remove(self, data: dict, expected: dict) -> None:
         fn = remove_field("legacy")
-        result = fn({"name": "Alice", "legacy": "old"})
-        assert result == {"name": "Alice"}
-
-    def test_remove_nonexistent_field_noop(self) -> None:
-        fn = remove_field("missing")
-        data = {"name": "Alice"}
         result = fn(data)
-        assert result == data
+        assert result == expected
 
     def test_remove_does_not_mutate_original(self) -> None:
         fn = remove_field("legacy")

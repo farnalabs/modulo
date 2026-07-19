@@ -29,22 +29,25 @@ class TestCrypto:
         assert len(fp) == 16
         assert isinstance(fp, str)
 
-    def test_sign_and_verify_roundtrip(self):
+    @pytest.mark.parametrize(
+        "tamper,expected",
+        [
+            (None, True),
+            (lambda p: {"a": 2}, False),
+            ("wrong_key", False),
+        ],
+    )
+    def test_sign_and_verify(self, tamper, expected):
         private, public = generate_signing_key()
-        payload = {"hello": "world", "nested": [1, 2, 3]}
+        payload = {"hello": "world"}
         sig = sign_manifest(payload, private)
-        assert verify_manifest(payload, sig, public) is True
-
-    def test_verify_rejects_tampered_payload(self):
-        private, public = generate_signing_key()
-        sig = sign_manifest({"a": 1}, private)
-        assert verify_manifest({"a": 2}, sig, public) is False
-
-    def test_verify_rejects_wrong_key(self):
-        private, _ = generate_signing_key()
-        _, wrong_public = generate_signing_key()
-        sig = sign_manifest({"a": 1}, private)
-        assert verify_manifest({"a": 1}, sig, wrong_public) is False
+        if tamper == "wrong_key":
+            _, wrong_public = generate_signing_key()
+            assert verify_manifest(payload, sig, wrong_public) is expected
+        elif tamper:
+            assert verify_manifest(tamper(payload), sig, public) is expected
+        else:
+            assert verify_manifest(payload, sig, public) is expected
 
     def test_canonical_json_stable(self):
         a = _canonical_json({"b": 2, "a": 1})
@@ -59,20 +62,21 @@ class TestCrypto:
 
 
 class TestBundleIntegrity:
-    def test_compute_bundle_hash(self):
-        bundle = {"pipeline": {"name": "test"}}
-        h = compute_bundle_hash(bundle)
-        assert len(h) == 64
-
-    def test_verify_bundle_integrity_match(self):
-        bundle = {"key": "value"}
-        h = compute_bundle_hash(bundle)
-        assert verify_bundle_integrity(bundle, h) is True
-
-    def test_verify_bundle_integrity_mismatch(self):
-        bundle = {"key": "value"}
-        h = compute_bundle_hash({"key": "different"})
-        assert verify_bundle_integrity(bundle, h) is False
+    @pytest.mark.parametrize(
+        "bundle,hash_bundle,expected",
+        [
+            ({"pipeline": {"name": "test"}}, None, True),
+            ({"key": "value"}, {"key": "value"}, True),
+            ({"key": "value"}, {"key": "different"}, False),
+        ],
+    )
+    def test_bundle_integrity(self, bundle, hash_bundle, expected):
+        if hash_bundle is None:
+            h = compute_bundle_hash(bundle)
+            assert len(h) == 64
+        else:
+            h = compute_bundle_hash(hash_bundle)
+            assert verify_bundle_integrity(bundle, h) is expected
 
 
 class TestRegistryCRUD:
@@ -102,20 +106,18 @@ class TestRegistryCRUD:
         entry = get_registry_primitive("nonexistent/foo")
         assert entry is None
 
-    def test_resolve_namespaced_slug_with_author(self):
-        author, name = resolve_namespaced_slug("modulo/prd-input-schema")
-        assert author == "modulo"
-        assert name == "prd-input-schema"
-
-    def test_resolve_namespaced_slug_default_author(self):
-        author, name = resolve_namespaced_slug("my-schema")
-        assert author == "modulo"
-        assert name == "my-schema"
-
-    def test_resolve_namespaced_slug_custom_author(self):
-        author, name = resolve_namespaced_slug("community/awesome-schema")
-        assert author == "community"
-        assert name == "awesome-schema"
+    @pytest.mark.parametrize(
+        "slug,expected_author,expected_name",
+        [
+            ("modulo/prd-input-schema", "modulo", "prd-input-schema"),
+            ("my-schema", "modulo", "my-schema"),
+            ("community/awesome-schema", "community", "awesome-schema"),
+        ],
+    )
+    def test_resolve_namespaced_slug(self, slug, expected_author, expected_name):
+        author, name = resolve_namespaced_slug(slug)
+        assert author == expected_author
+        assert name == expected_name
 
     def test_builtin_primitives_have_valid_signatures(self):
         for slug, entry in _BUILTIN_REGISTRY.items():
