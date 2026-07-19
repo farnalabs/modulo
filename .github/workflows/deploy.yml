@@ -68,13 +68,13 @@ jobs:
         uses: ./.github/actions/capture-git-metadata
 
       - name: Deploy to staging-modulo
-        shell: pwsh
+        shell: bash
         run: |
-          fly deploy --app staging-modulo --config fly.staging.toml `
-            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
-            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" `
-            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" `
-            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" `
+          fly deploy --app staging-modulo --config fly.staging.toml \
+            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
+            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
+            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
+            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
             --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"
 
       - name: Verify deployment
@@ -185,13 +185,13 @@ jobs:
         uses: ./.github/actions/capture-git-metadata
 
       - name: Deploy to app-modulo
-        shell: pwsh
+        shell: bash
         run: |
-          fly deploy --app app-modulo --config fly.toml `
-            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
-            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" `
-            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" `
-            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" `
+          fly deploy --app app-modulo --config fly.toml \
+            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
+            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
+            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
+            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
             --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"
 
       - name: Verify deployment
