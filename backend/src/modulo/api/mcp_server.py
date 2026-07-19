@@ -24,7 +24,7 @@ from typing import Any
 
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -2153,44 +2153,13 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
 async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired â€” re-authenticate")
+            return _tool_auth_error("Token revoked or expired \u2014 re-authenticate")
         check_tool_scope(_ctx_role_val(), "perform_housekeeping")
-        from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
+        from modulo.core.housekeeping import delete_housekeeping_items as hk_delete
 
         org_id = _ctx_org_id_val()
-        deleted_count = 0
-        errors: list[dict[str, str]] = []
-
-        grouped: dict[str, list[str]] = {}
-        for item in items:
-            et = item.get("entity_type", "")
-            eid = item.get("id", "")
-            if not et or not eid:
-                errors.append({"error": "item missing entity_type or id", "item": str(item)})
-                continue
-            grouped.setdefault(et, []).append(eid)
-
         async with _session(org_id) as s:
-            for entity_type, ids in grouped.items():
-                model_cls = HK_ENTITY_MAP.get(entity_type)
-                if model_cls is None:
-                    errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
-                    continue
-
-                try:
-                    async with s.begin_nested():
-                        for eid in ids:
-                            obj = await s.get(model_cls, eid)
-                            if obj is not None:
-                                await s.delete(obj)
-                                deleted_count += 1
-                except IntegrityError:
-                    _log.warning("IntegrityError cleaning up %s group", entity_type)
-                    errors.append({"entity_type": entity_type, "error": "Foreign key constraint violation"})
-                except Exception as exc:
-                    _log.exception("Error cleaning up %s group", entity_type)
-                    errors.append({"entity_type": entity_type, "error": str(exc)})
-
+            deleted_count, errors = await hk_delete(s, org_id, items)
         return {"deleted_count": deleted_count, "errors": errors}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}

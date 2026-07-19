@@ -517,6 +517,7 @@ routes:
         type: page
         <<: *community
         deprecated: false
+        feature_flag:
 
     /admin/environments:
         name: admin-environments

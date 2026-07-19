@@ -1,12 +1,12 @@
 """Housekeeping service — scans for cleanup candidates within an org scope."""
 
-import contextlib
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.agent import Agent
@@ -29,6 +29,17 @@ ENTITY_MODEL_MAP: dict[str, type] = {
     "pipeline_snapshot": PipelineSnapshot,
     "trigger": Trigger,
     "webhook_dedup": WebhookDedupHash,
+}
+
+CATEGORY_TO_ENTITY: dict[str, str] = {
+    "orphan_secrets": "secret",
+    "unbound_connectors": "connector",
+    "untriggered_pipelines": "pipeline",
+    "stale_pipelines": "pipeline",
+    "unused_model_backends": "model_backend",
+    "inactive_triggers": "trigger",
+    "orphan_snapshots": "pipeline_snapshot",
+    "expired_webhook_dedups": "webhook_dedup",
 }
 
 _CATEGORY_LABELS: dict[str, str] = {
@@ -55,11 +66,12 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
 
 
 class Candidate:
-    def __init__(self, id: str, name: str, detail: str, created_at: str | None = None) -> None:
+    def __init__(self, id: str, name: str, detail: str, created_at: str | None = None, entity_type: str = "") -> None:
         self.id = id
         self.name = name
         self.detail = detail
         self.created_at = created_at
+        self.entity_type = entity_type
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -67,6 +79,7 @@ class Candidate:
             "name": self.name,
             "detail": self.detail,
             "created_at": self.created_at,
+            "entity_type": self.entity_type,
         }
 
 
@@ -122,6 +135,7 @@ async def _scan_orphan_secrets(session: AsyncSession, org_id: uuid.UUID) -> list
                     name=s.key,
                     detail="Orphan secret — no connector or agent references this key",
                     created_at=s.created_at.isoformat() if s.created_at else None,
+                    entity_type="secret",
                 )
             )
     return candidates
@@ -148,8 +162,11 @@ async def _scan_unbound_connectors(session: AsyncSession, org_id: uuid.UUID) -> 
         for b in bindings:
             cid = b.get("connector_instance_id") or b.get("connector_id")
             if cid:
-                with contextlib.suppress(ValueError, TypeError):
-                    bound_ids.add(uuid.UUID(cid) if isinstance(cid, str) else cid)
+                try:
+                    parsed = uuid.UUID(cid) if isinstance(cid, str) else cid
+                    bound_ids.add(parsed)
+                except (ValueError, TypeError) as exc:
+                    _log.warning("Malformed connector_instance_id in binding: %s — %s", cid, exc)
 
     candidates: list[Candidate] = []
     for c in connectors:
@@ -160,6 +177,7 @@ async def _scan_unbound_connectors(session: AsyncSession, org_id: uuid.UUID) -> 
                     name=c.name,
                     detail=f"Connector instance (type: {c.connector_type_id}) — not bound to any snapshot",
                     created_at=c.created_at.isoformat() if c.created_at else None,
+                    entity_type="connector",
                 )
             )
     return candidates
@@ -187,6 +205,7 @@ async def _scan_untriggered_pipelines(session: AsyncSession, org_id: uuid.UUID) 
             name=p.name,
             detail="Pipeline has no triggers and no runs",
             created_at=p.created_at.isoformat() if p.created_at else None,
+            entity_type="pipeline",
         )
         for p in pipelines
     ]
@@ -226,6 +245,7 @@ async def _scan_stale_pipelines(session: AsyncSession, org_id: uuid.UUID) -> lis
             name=p.name,
             detail="Pipeline last run over 90 days ago",
             created_at=p.created_at.isoformat() if p.created_at else None,
+            entity_type="pipeline",
         )
         for p in pipelines
     ]
@@ -250,6 +270,7 @@ async def _scan_unused_model_backends(session: AsyncSession, org_id: uuid.UUID) 
                     name=mb.name,
                     detail=f"Model backend ({mb.provider}/{mb.model_id}) — not assigned to any agent",
                     created_at=mb.created_at.isoformat() if mb.created_at else None,
+                    entity_type="model_backend",
                 )
             )
     return candidates
@@ -275,6 +296,7 @@ async def _scan_inactive_triggers(session: AsyncSession, org_id: uuid.UUID) -> l
             name=f"Trigger {t.trigger_type} for pipeline {t.pipeline_id}",
             detail="Trigger is inactive and has never fired",
             created_at=t.created_at.isoformat() if t.created_at else None,
+            entity_type="trigger",
         )
         for t in triggers
     ]
@@ -300,6 +322,7 @@ async def _scan_orphan_snapshots(session: AsyncSession, org_id: uuid.UUID) -> li
             name=f"Snapshot v{s.snapshot_version} for pipeline {s.pipeline_id}",
             detail="Orphan snapshot — referenced pipeline no longer exists",
             created_at=s.created_at.isoformat() if s.created_at else None,
+            entity_type="pipeline_snapshot",
         )
         for s in snapshots
     ]
@@ -325,6 +348,7 @@ async def _scan_expired_webhook_dedups(session: AsyncSession, org_id: uuid.UUID)
             name=f"Webhook dedup {r.payload_hash[:16]}...",
             detail="Expired webhook deduplication hash",
             created_at=r.expires_at.isoformat() if r.expires_at else None,
+            entity_type="webhook_dedup",
         )
         for r in rows
     ]
@@ -352,3 +376,67 @@ async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryRes
             _log.exception("Housekeeping scanner '%s' failed", category)
             results.append(CategoryResult(category=category, candidates=[]))
     return results
+
+
+_DELETE_BATCH_LIMIT = 500
+
+
+def _normalize_entity_type(entity_type: str) -> str:
+    return CATEGORY_TO_ENTITY.get(entity_type, entity_type)
+
+
+async def delete_housekeeping_items(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    items: list[dict[str, str]],
+) -> tuple[int, list[dict[str, str]]]:
+    normalized_items = []
+    for item in items:
+        et = _normalize_entity_type(item.get("entity_type", ""))
+        eid = item.get("id", "")
+        if not et or not eid:
+            continue
+        normalized_items.append({"entity_type": et, "id": eid})
+
+    if len(normalized_items) > _DELETE_BATCH_LIMIT:
+        return 0, [{"error": f"Batch size exceeds limit of {_DELETE_BATCH_LIMIT}"}]
+
+    grouped: dict[str, list[str]] = {}
+    for item in normalized_items:
+        et = item["entity_type"]
+        eid = item["id"]
+        grouped.setdefault(et, []).append(eid)
+
+    deleted_count = 0
+    errors: list[dict[str, str]] = []
+
+    for entity_type, ids in grouped.items():
+        model_cls = ENTITY_MODEL_MAP.get(entity_type)
+        if model_cls is None:
+            errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
+            continue
+
+        try:
+            async with session.begin_nested():
+                group_count = 0
+                for eid in ids:
+                    try:
+                        obj = await session.get(model_cls, eid)
+                        if obj is not None:
+                            if hasattr(obj, "organisation_id") and obj.organisation_id != org_id:
+                                _log.warning("Cross-tenant cleanup blocked for %s %s", entity_type, eid)
+                                errors.append(
+                                    {"id": eid, "entity_type": entity_type, "error": "Cross-tenant access blocked"}
+                                )
+                                continue
+                            await session.delete(obj)
+                            group_count += 1
+                    except Exception as exc:
+                        _log.exception("Error cleaning up %s %s", entity_type, eid)
+                        errors.append({"id": eid, "entity_type": entity_type, "error": str(exc)})
+                deleted_count += group_count
+        except IntegrityError:
+            _log.exception("IntegrityError cleaning up %s group", entity_type)
+            errors.append({"entity_type": entity_type, "error": "Foreign key constraint violation"})
+
+    return deleted_count, errors

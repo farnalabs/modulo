@@ -40,6 +40,14 @@
       />
 
       <div v-else>
+        <div
+          v-if="cleaningFeedback"
+          class="mb-4 rounded-lg border border-primary/50 bg-primary/10 p-4"
+          data-testid="hk-feedback"
+        >
+          <p class="text-sm text-primary">{{ cleaningFeedback }}</p>
+        </div>
+
         <div class="mb-4 flex items-center gap-4 rounded-lg border bg-card p-3 shadow-sm">
           <label class="flex items-center gap-2 text-sm">
             <input
@@ -155,7 +163,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useApi } from '../composables/useApi'
 import { Button } from '../components/ui/button'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -176,6 +184,7 @@ interface CandidateItem {
   name: string
   detail: string
   created_at: string | null
+  entity_type: string
 }
 
 interface HousekeepingCategory {
@@ -210,6 +219,7 @@ const totalCount = ref(0)
 const selectedIds = ref<Set<string>>(new Set())
 const showConfirm = ref(false)
 const cleaningUp = ref(false)
+const cleaningFeedback = ref<string | null>(null)
 
 function formatDate(iso: string): string {
   const d = new Date(iso)
@@ -226,17 +236,23 @@ async function scan() {
     totalCount.value = resp.total_count ?? 0
     selectedIds.value = new Set()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Failed to scan for housekeeping candidates'
+    error.value = typeof e === 'object' && e !== null && 'detail' in e
+      ? String((e as Record<string, unknown>).detail)
+      : e instanceof Error
+        ? e.message
+        : 'Failed to scan for housekeeping candidates'
   } finally {
     loading.value = false
   }
 }
 
-const allCandidates = computed<{ id: string; category: string }[]>(() => {
-  const result: { id: string; category: string }[] = []
+onMounted(() => { scan() })
+
+const allCandidates = computed<{ id: string; category: string; entity_type: string }[]>(() => {
+  const result: { id: string; category: string; entity_type: string }[] = []
   for (const cat of categories.value) {
     for (const c of cat.candidates) {
-      result.push({ id: c.id, category: cat.category })
+      result.push({ id: c.id, category: cat.category, entity_type: c.entity_type })
     }
   }
   return result
@@ -318,20 +334,29 @@ function confirmDelete() {
 
 async function doCleanup() {
   cleaningUp.value = true
+  cleaningFeedback.value = null
   try {
     const items: CleanupItem[] = allCandidates.value
       .filter(c => selectedIds.value.has(c.id))
-      .map(c => ({ id: c.id, entity_type: c.category }))
+      .map(c => ({ id: c.id, entity_type: c.entity_type || c.category }))
 
-    await post<CleanupResponse>('/api/v1/admin/housekeeping/cleanup', { items })
+    const resp = await post<CleanupResponse>('/api/v1/admin/housekeeping/cleanup', { items })
     showConfirm.value = false
+    const errs = resp.errors ?? []
+    if (errs.length > 0) {
+      cleaningFeedback.value = `Deleted ${resp.deleted_count} item${resp.deleted_count === 1 ? '' : 's'} with ${errs.length} error${errs.length === 1 ? '' : 's'}`
+    } else if (resp.deleted_count > 0) {
+      cleaningFeedback.value = `Deleted ${resp.deleted_count} item${resp.deleted_count === 1 ? '' : 's'} successfully`
+    }
     await scan()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Cleanup failed'
+    error.value = typeof e === 'object' && e !== null && 'detail' in e
+      ? String((e as Record<string, unknown>).detail)
+      : e instanceof Error
+        ? e.message
+        : 'Cleanup failed'
   } finally {
     cleaningUp.value = false
   }
 }
-
-scan()
 </script>

@@ -49,7 +49,7 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "get_run_evals": "runner",
     "list_eval_definitions": "runner",
     "list_triggers": "runner",
-    "list_housekeeping": "runner",
+    "list_housekeeping": "operator",
     "perform_housekeeping": "operator",
 }
 

@@ -4,13 +4,13 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.housekeeping import ENTITY_MODEL_MAP, scan_all
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.housekeeping import delete_housekeeping_items, scan_all
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/housekeeping", tags=["admin-housekeeping"])
 
 
-def _require_admin(principal: TenantPrincipal) -> None:
+def _require_admin(principal: AuthenticatedPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -31,6 +31,7 @@ class CandidateItem(BaseModel):
     name: str
     detail: str
     created_at: str | None = None
+    entity_type: str = ""
 
 
 class HousekeepingCategory(BaseModel):
@@ -63,13 +64,17 @@ class CleanupResponse(BaseModel):
 @router.get("", response_model=HousekeepingScanResponse)
 async def list_housekeeping(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> HousekeepingScanResponse:
     _require_admin(principal)
+    org_id = principal.organisation_id
+    if org_id is None:
+        return HousekeepingScanResponse(categories=[], total_count=0)
+
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            results = await scan_all(session, principal.organisation_id)
+            await set_rls_org(session, org_id)
+            results = await scan_all(session, org_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -101,6 +106,7 @@ async def list_housekeeping(
                     name=c.name,
                     detail=c.detail,
                     created_at=c.created_at,
+                    entity_type=c.entity_type,
                 )
                 for c in r.candidates
             ],
@@ -116,39 +122,19 @@ async def list_housekeeping(
 async def perform_cleanup(
     req: CleanupRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> CleanupResponse:
     _require_admin(principal)
-    deleted_count = 0
-    errors: list[dict[str, str]] = []
+    org_id = principal.organisation_id
+    if org_id is None:
+        return CleanupResponse(deleted_count=0, errors=[])
 
-    grouped: dict[str, list[str]] = {}
-    for item in req.items:
-        grouped.setdefault(item.entity_type, []).append(item.id)
+    items_list = [{"entity_type": i.entity_type, "id": i.id} for i in req.items]
 
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-
-            for entity_type, ids in grouped.items():
-                model_cls = ENTITY_MODEL_MAP.get(entity_type)
-                if model_cls is None:
-                    errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
-                    continue
-
-                try:
-                    async with session.begin_nested():
-                        for eid in ids:
-                            try:
-                                obj = await session.get(model_cls, eid)
-                                if obj is not None:
-                                    await session.delete(obj)
-                                    deleted_count += 1
-                            except Exception as exc:
-                                errors.append({"id": eid, "entity_type": entity_type, "error": str(exc)})
-                except IntegrityError:
-                    _log.warning("IntegrityError cleaning up %s group — skipping", entity_type)
-                    errors.append({"entity_type": entity_type, "error": "Foreign key constraint violation"})
+            await set_rls_org(session, org_id)
+            deleted_count, errors = await delete_housekeeping_items(session, org_id, items_list)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

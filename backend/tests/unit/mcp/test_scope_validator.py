@@ -30,7 +30,8 @@ class TestCheckToolScope:
             ("runner", "cancel_run"),
             ("runner", "list_pending_hitl"),
             ("runner", "copy_library_primitive"),
-            ("runner", "list_housekeeping"),
+            ("operator", "list_housekeeping"),
+            ("admin", "list_housekeeping"),
             ("operator", "perform_housekeeping"),
             ("admin", "perform_housekeeping"),
             ("operator", "review_hitl"),
@@ -49,6 +50,7 @@ class TestCheckToolScope:
             ("viewer", "copy_library_primitive"),
             ("viewer", "review_hitl"),
             ("viewer", "list_housekeeping"),
+            ("runner", "list_housekeeping"),
             ("runner", "review_hitl"),
         ],
     )
