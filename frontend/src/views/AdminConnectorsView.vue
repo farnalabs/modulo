@@ -318,6 +318,8 @@ async function loadConnectorTypes() {
     connectorTypes.value = resp.data.items as {id: string, display_name: string}[]
   }
 
+}
+
 watch(data, response => {
   const items = (response as { items?: components['schemas']['ConnectorResponse'][] } | null)?.items ?? []
   connectors.value = items.map(item => ({
