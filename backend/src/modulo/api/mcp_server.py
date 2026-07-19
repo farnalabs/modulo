@@ -54,6 +54,7 @@ from modulo.auth.oauth import (
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
 from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
+from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
 from modulo.core.documentation_indexer import DocumentationIndex
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
@@ -1804,6 +1805,10 @@ async def create_trigger(
                 )
                 if cron_expression:
                     trigger.cron_expression = cron_expression
+                    error = validate_cron_expression(cron_expression)
+                    if error:
+                        return {"error": "invalid_cron", "detail": error}
+                    trigger.next_fire_at = compute_next_fire(cron_expression, timezone=trigger.cron_timezone or "UTC")
                 s.add(trigger)
                 await s.flush()
 
