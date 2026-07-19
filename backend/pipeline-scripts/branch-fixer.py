@@ -98,8 +98,10 @@ def commit_and_push_fixes(repo_path, local_ref, repo_full_name, token, failure_d
     run_git(["remote", "set-url", "origin", get_git_url(token, owner, repo)], cwd=repo_path)
     run_git(["push", "origin", f"{local_ref}:{local_ref}"], cwd=repo_path, timeout=120)
 
-    if local_ref.startswith("merge-queue/") and failure_description:
-        _push_fixes_to_main(repo_path, commit_sha, local_ref, repo_full_name, token)
+    # Only push fixes to main when failure is from pre-existing main issues.
+    # With main green, queue failures are almost always from new PRs.
+    # if local_ref.startswith("merge-queue/") and failure_description:
+    #     _push_fixes_to_main(repo_path, commit_sha, local_ref, repo_full_name, token)
 
     return commit_sha
 
