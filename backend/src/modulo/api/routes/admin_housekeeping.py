@@ -136,19 +136,20 @@ async def perform_cleanup(
                     errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
                     continue
 
-                try:
-                    async with session.begin_nested():
-                        for eid in ids:
-                            try:
-                                obj = await session.get(model_cls, eid)
-                                if obj is not None:
-                                    await session.delete(obj)
-                                    deleted_count += 1
-                            except Exception as exc:
-                                errors.append({"id": eid, "entity_type": entity_type, "error": str(exc)})
-                except IntegrityError:
-                    _log.warning("IntegrityError cleaning up %s group — skipping", entity_type)
-                    errors.append({"entity_type": entity_type, "error": "Foreign key constraint violation"})
+                for eid in ids:
+                    try:
+                        async with session.begin_nested():
+                            stmt = select(model_cls).where(
+                                model_cls.id == eid,
+                                model_cls.organisation_id == principal.organisation_id,
+                            )
+                            obj = (await session.execute(stmt)).scalar_one_or_none()
+                            if obj is not None:
+                                await session.delete(obj)
+                                deleted_count += 1
+                    except IntegrityError:
+                        _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
+                        errors.append({"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"})
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
