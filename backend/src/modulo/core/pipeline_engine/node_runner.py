@@ -68,6 +68,9 @@ _log = logging.getLogger(__name__)
 
 _is_truthy = bool
 
+_MAX_ARTIFACT_LOG = 102400
+_MAX_OTEL_LOG_ATTR = 32768
+
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
     """Evaluate an eval-reference condition using the given operator.
@@ -596,7 +599,7 @@ def make_sandbox_agent_fn(
 
     @cancellable_node(timeout=timeout or sandbox_timeout, role="sandbox_agent")
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
-        import json as _json
+        import os
         import time as _time
 
         from e2b import AsyncSandbox  # type: ignore[import-untyped]
@@ -644,10 +647,10 @@ def make_sandbox_agent_fn(
                     "MODULO_RUN_ID": run_id,
                     "MODULO_PIPELINE_ID": pipeline_id,
                     "MODULO_ORG_ID": org_id,
-                    "APP_MODULO_OPENCODE_API_KEY": __import__("os").environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
-                    "GITHUB_TOKEN": __import__("os").environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
-                    or __import__("os").environ.get("GITHUB_DOGFOOD_PAT_WR", "")
-                    or __import__("os").environ.get("GITHUB_TOKEN", ""),
+                    "APP_MODULO_OPENCODE_API_KEY": os.environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
+                    "GITHUB_TOKEN": os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
+                    or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
+                    or os.environ.get("GITHUB_TOKEN", ""),
                     **env_vars_extra,
                 },
             )
@@ -656,14 +659,14 @@ def make_sandbox_agent_fn(
             exit_code: int = getattr(cmd_result, "exit_code", -1)
             agent_stdout: str = getattr(cmd_result, "stdout", "") or ""
             agent_stderr: str = getattr(cmd_result, "stderr", "") or ""
-            agent_stdout = agent_stdout[-102400:]
-            agent_stderr = agent_stderr[-102400:]
+            agent_stdout = agent_stdout[:_MAX_ARTIFACT_LOG]
+            agent_stderr = agent_stderr[:_MAX_ARTIFACT_LOG]
 
             raw_output: str = ""
             output_json: Any = None
             try:
                 raw_output = await sandbox.files.read("/home/user/output.json")
-                output_json = _json.loads(raw_output)
+                output_json = json.loads(raw_output)
             except Exception:
                 _log.info(
                     "sandbox_agent.no_output_json",
@@ -675,8 +678,8 @@ def make_sandbox_agent_fn(
                 _span.add_event(
                     "sandbox.agent.output",
                     {
-                        "stdout": agent_stdout[-32768:],
-                        "stderr": agent_stderr[-32768:],
+                        "stdout": agent_stdout[:_MAX_OTEL_LOG_ATTR],
+                        "stderr": agent_stderr[:_MAX_OTEL_LOG_ATTR],
                         "stdout_length": len(agent_stdout),
                         "stderr_length": len(agent_stderr),
                     },
@@ -773,8 +776,17 @@ def make_sandbox_agent_fn(
                     "exc_msg": _exc_msg,
                 },
             )
-            _exc_stdout = agent_stdout if "agent_stdout" in locals() else ""
-            _exc_stderr = agent_stderr if "agent_stderr" in locals() else ""
+            _span = _otel_trace.get_current_span()
+            if _span.is_recording():
+                _span.add_event(
+                    "sandbox.agent.output",
+                    {
+                        "stdout": locals().get("agent_stdout", "")[:_MAX_OTEL_LOG_ATTR],
+                        "stderr": locals().get("agent_stderr", "")[:_MAX_OTEL_LOG_ATTR],
+                    },
+                )
+            _exc_stdout = locals().get("agent_stdout", "")
+            _exc_stderr = locals().get("agent_stderr", "")
             return {
                 "artifacts": [
                     {
