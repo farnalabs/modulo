@@ -170,7 +170,7 @@
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.cost') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.trace_id') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.io') }}</th>
-              <th class="pb-2 pr-4 font-medium">Logs</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.logs') }}</th>
               <th class="pb-2 font-medium">{{ $t('views.RunDetailView.prompt') }}</th>
             </tr>
           </thead>
@@ -219,9 +219,9 @@
                   class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
                   @click="toggleNodeLogs(node.name)"
                 >
-                  {{ expandedLogs.has(node.name) ? 'Hide' : 'View' }}
+                  {{ expandedLogs.has(node.name) ? $t('views.RunDetailView.hide') : $t('views.RunDetailView.view') }}
                 </button>
-                <span v-else class="text-muted-foreground">&mdash;</span>
+                <span v-else class="text-muted-foreground">—</span>
               </td>
               <td class="py-3">
                 <button
@@ -270,15 +270,15 @@
             >
               <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
                 <div v-if="getNodeLog(node.name, 'agent_stdout')" class="rounded-lg border bg-muted p-4">
-                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Agent Stdout</h4>
+                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.agent_stdout') }}</h4>
                   <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stdout') }}</code></pre>
                 </div>
                 <div v-if="getNodeLog(node.name, 'agent_stderr')" class="rounded-lg border bg-destructive/10 p-4">
-                  <h4 class="mb-2 text-xs font-semibold text-destructive">Agent Stderr</h4>
+                  <h4 class="mb-2 text-xs font-semibold text-destructive">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stderr') }}</code></pre>
                 </div>
                 <div v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr')" class="text-center text-sm text-muted-foreground py-4">
-                  No agent logs for this node.
+                  {{ $t('views.RunDetailView.no_agent_logs') }}
                 </div>
               </td>
             </tr>
