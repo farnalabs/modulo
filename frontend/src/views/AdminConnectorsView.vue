@@ -39,13 +39,10 @@
                 <SelectTrigger data-testid="admin-connectors-type-select" aria-label="Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                   <SelectValue placeholder="PostgreSQL" />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="postgresql">PostgreSQL</SelectItem>
-                  <SelectItem value="mysql">MySQL</SelectItem>
-                  <SelectItem value="bigquery">BigQuery</SelectItem>
-                  <SelectItem value="snowflake">Snowflake</SelectItem>
-                  <SelectItem value="redshift">Redshift</SelectItem>
-                  <SelectItem value="http">HTTP API</SelectItem>
+                <SelectContent position="popper">
+                  <SelectItem v-for="ct in connectorTypes" :key="ct.id" :value="ct.id">
+                    {{ ct.display_name }}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -300,7 +297,7 @@ interface ConnectorFormState {
 function emptyForm(): ConnectorFormState {
   return {
     name: '',
-    connector_type: 'postgresql',
+    connector_type: '',
     description: '',
     config_json: '',
   }
@@ -312,6 +309,13 @@ const { loading, error, data, load: loadConnectors } = useDataFetch(
 )
 
 const connectors = ref<ConnectorItem[]>([])
+const connectorTypes = ref<{id: string, display_name: string}[]>([])
+
+async function loadConnectorTypes() {
+  const { data } = await api.GET('/api/v1/connectors/types')
+  if (data) connectorTypes.value = data.items
+}
+
 watch(data, response => {
   const items = (response as { items?: components['schemas']['ConnectorResponse'][] } | null)?.items ?? []
   connectors.value = items.map(item => ({
@@ -319,6 +323,7 @@ watch(data, response => {
     name: item.name,
     connector_type: item.connector_type_id,
     description: typeof item.config_json?.description === 'string' ? item.config_json.description : null,
+    enabled: item.status === 'active',
     tier: item.tier === 'preview' || item.tier === 'in_dev' ? item.tier : 'native',
   }))
 }, { immediate: true })
@@ -406,6 +411,7 @@ async function createConnector() {
         name: data.name,
         connector_type: data.connector_type_id,
         description: typeof data.config_json.description === 'string' ? data.config_json.description : null,
+        enabled: true,
       })
       closeForm()
     }
@@ -435,6 +441,7 @@ async function updateConnector() {
           name: data.name,
           connector_type: data.connector_type_id,
           description: typeof data.config_json.description === 'string' ? data.config_json.description : null,
+          enabled: true,
         }
       }
       closeEditForm()
@@ -490,5 +497,5 @@ function connectorActions(connector: ConnectorItem) {
   ]
 }
 
-onMounted(() => { planStore.fetchPlan(); loadConnectors() })
+onMounted(() => { planStore.fetchPlan(); loadConnectors(); loadConnectorTypes() })
 </script>
