@@ -7,7 +7,7 @@ on:
 
 jobs:
   review:
-    name: Review and approve
+    name: AI-Powered Code Review
     runs-on: ubicloud-standard-2
     permissions:
       contents: read
@@ -15,9 +15,78 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
+
+      - name: Install opencode CLI
+        id: install
+        shell: bash
+        run: |
+          OPENCODE_VERSION="v0.0.55"
+          TARBALL_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x86_64.tar.gz"
+          DEB_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-amd64.deb"
+
+          echo "::group::Download opencode ${OPENCODE_VERSION}"
+
+          if curl -sL "$TARBALL_URL" -o /tmp/opencode.tar.gz && [ -s /tmp/opencode.tar.gz ]; then
+            sudo tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin/ opencode 2>/dev/null
+            if command -v opencode &>/dev/null; then
+              echo "installed=true" >> "$GITHUB_OUTPUT"
+              echo "::endgroup::"
+              opencode --version 2>/dev/null || echo "opencode installed"
+              exit 0
+            fi
+          fi
+
+          echo "Tarball failed, trying .deb"
+          if curl -sL "$DEB_URL" -o /tmp/opencode.deb && [ -s /tmp/opencode.deb ]; then
+            sudo dpkg -i /tmp/opencode.deb 2>/dev/null || sudo apt-get install -f -y -qq 2>/dev/null
+            if command -v opencode &>/dev/null; then
+              echo "installed=true" >> "$GITHUB_OUTPUT"
+              echo "::endgroup::"
+              opencode --version 2>/dev/null || echo "opencode installed"
+              exit 0
+            fi
+          fi
+
+          echo "installed=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::opencode CLI could not be installed via tarball or deb"
+          echo "::endgroup::"
+
+      - name: Configure opencode auth
+        if: steps.install.outputs.installed == 'true'
+        shell: bash
+        run: |
+          mkdir -p ~/.local/share/opencode
+          cat > ~/.local/share/opencode/auth.json << AUTHJSON
+          {"opencode":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"},"opencode-go":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"}}
+          AUTHJSON
+
+      - name: Get changed files
+        id: changed-files
+        shell: bash
+        run: |
+          FILES=$(git diff --name-only origin/main...HEAD --diff-filter=ACM 2>/dev/null | paste -sd ' ' -)
+          echo "files=${FILES}" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo "${FILES}" | wc -w)" >> "$GITHUB_OUTPUT"
+
+      - name: Run opencode QA review
+        id: qa-review
+        if: steps.install.outputs.installed == 'true' && steps.changed-files.outputs.count > 0
+        shell: bash
+        run: |
+          FILES="${{ steps.changed-files.outputs.files }}"
+          echo "::group::opencode qa ${FILES}"
+
+          QA_OUTPUT=$(opencode qa ${FILES} 2>&1) || true
+
+          echo "::notice::QA completed"
+          echo "critical_count=$(echo "${QA_OUTPUT}" | grep -ci '\[critical\]' || echo 0)" >> "$GITHUB_OUTPUT"
+          echo "major_count=$(echo "${QA_OUTPUT}" | grep -ci '\[major\]' || echo 0)" >> "$GITHUB_OUTPUT"
+          echo "${QA_OUTPUT}" > /tmp/qa-output.txt
+          echo "::endgroup::"
 
       - name: Post APPROVED review
+        if: steps.install.outputs.installed != 'true' || steps.changed-files.outputs.count == 0 || (steps.qa-review.outputs.critical_count == '0' && steps.qa-review.outputs.major_count == '0')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
           PR_NUM: ${{ github.event.pull_request.number }}
@@ -26,10 +95,36 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         shell: bash
         run: |
-          echo "Auto-reviewing PR #$PR_NUM by $PR_AUTHOR: $PR_TITLE"
+          echo "Auto-reviewing PR #${PR_NUM} by ${PR_AUTHOR}: ${PR_TITLE}"
+          if [ "${{ steps.install.outputs.installed }}" != "true" ]; then
+            gh pr review "$PR_NUM" --repo "$REPO" --approve --body "Auto-approved by modulo-reviewbot (opencode CLI unavailable)."
+          elif [ "${{ steps.changed-files.outputs.count }}" -eq 0 ]; then
+            gh pr review "$PR_NUM" --repo "$REPO" --approve --body "Auto-approved by modulo-reviewbot (no files to review)."
+          else
+            gh pr review "$PR_NUM" --repo "$REPO" --approve --body "## AI Code Review — Approved
 
-          # Post an APPROVED review
-          gh pr review "$PR_NUM" \
-            --repo "$REPO" \
-            --approve \
-            --body "🤖 Auto-approved by modulo-reviewbot. CI will validate the change; merge queue picks up approved PRs."
+No critical or major findings detected."
+          fi
+
+      - name: Post CHANGES_REQUESTED review
+        if: steps.install.outputs.installed == 'true' && steps.changed-files.outputs.count > 0 && (steps.qa-review.outputs.critical_count != '0' || steps.qa-review.outputs.major_count != '0')
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          CRIT=${{ steps.qa-review.outputs.critical_count }}
+          MAJ=${{ steps.qa-review.outputs.major_count }}
+          BODY="## AI Code Review — Changes Requested
+
+**${CRIT} critical, ${MAJ} major** findings.
+
+<details>
+<summary>QA output</summary>
+
+\`\`\`
+$(cat /tmp/qa-output.txt 2>/dev/null | head -3000)
+\`\`\`
+</details>"
+          gh pr review "$PR_NUM" --repo "$REPO" --request-changes --body "${BODY}"
