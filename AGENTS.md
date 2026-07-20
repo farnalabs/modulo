@@ -1,18 +1,18 @@
-# Modulo — Agent & Developer Guidance
+# Modulo â€” Agent & Developer Guidance
 
-Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files → fix the conflict.
+Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files â†’ fix the conflict.
 
-## Diagnostic Order (MANDATORY — database/connection issues)
+## Diagnostic Order (MANDATORY â€” database/connection issues)
 
 When encountering ANY database connection error (`ConnectionResetError`, `ConnectionDoesNotExistError`, timeout, 503), follow this order BEFORE making code changes:
 
-1. **Check DB health** — `fly checks list --app modulo-app-db` (or the relevant DB app). If `pg` or `role` checks are critical/passing, the DB is fine. If critical, SSH in and restart: `fly ssh console --app <db-app> --machine <id> --command "su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'"`. The `check-db-health.ps1` watchdog runs every 5 minutes as a scheduled task — check its log first.
+1. **Check DB health** â€” `fly checks list --app modulo-app-db` (or the relevant DB app). If `pg` or `role` checks are critical/passing, the DB is fine. If critical, SSH in and restart: `fly ssh console --app <db-app> --machine <id> --command "su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'"`. The `check-db-health.ps1` watchdog runs every 5 minutes as a scheduled task â€” check its log first.
 
-2. **Check app health** — `fly status --app app-modulo`. Look at VERSION and CHECKS columns. Machines on the latest version with "passing" are healthy. Machines on old versions are stale and can be cleaned up.
+2. **Check app health** â€” `fly status --app app-modulo`. Look at VERSION and CHECKS columns. Machines on the latest version with "passing" are healthy. Machines on old versions are stale and can be cleaned up.
 
-3. **Check machine logs** — `fly logs --app app-modulo --no-tail | Select-Object -Last 20`. Look for the actual exception type — this determines the root cause.
+3. **Check machine logs** â€” `fly logs --app app-modulo --no-tail | Select-Object -Last 20`. Look for the actual exception type â€” this determines the root cause.
 
-4. **Check whether the handover framed the issue** — the previous handover may contain diagnostic bias. Always verify the DB is healthy before accepting "SSL issue" or "network issue" diagnoses.
+4. **Check whether the handover framed the issue** â€” the previous handover may contain diagnostic bias. Always verify the DB is healthy before accepting "SSL issue" or "network issue" diagnoses.
 
 The most common root cause (July 2026): Postgres process crashes silently, new connection pools can't form, but old pools keep serving. Health check passes on old machines, fails on new ones. Fix is always: restart Postgres + bluegreen deploy.
 
@@ -22,7 +22,7 @@ The following enforcement mechanisms are STRUCTURALLY PROTECTED. Any agent obser
 
 ### Gate rules (modify only with explicit human approval)
 1. **`continue-on-error: true` is FORBIDDEN** in all CI workflow files (`.github/workflows/*.yml`). Every job must fail CI when it fails. Legitimate uses require a post-step `if: failure()` aggregate that reports the collected failure.
-2. **`verify-main.ps1` must use `Fail` (not `Warn`) for all test, lint, type-check, and audit checks.** No check may log a warning and continue — every check must block with `$script:exitCode = 1`.
+2. **`verify-main.ps1` must use `Fail` (not `Warn`) for all test, lint, type-check, and audit checks.** No check may log a warning and continue â€” every check must block with `$script:exitCode = 1`.
 3. **`gate.ps1` must run Playwright @smoke E2E tests** after the merge, from the main worktree. No merge completes without browser-level verification.
 4. **`gate.ps1` integration tests must run by default** (no `-SkipIntegration` opt-out). Integration tests may only be skipped when Docker is unavailable, and the skip must be documented.
 5. **`-SkipTests` in `gate.ps1` may ONLY be used for frontend-only changes where node_modules is unavailable in a worktree.** The Conductor must verify post-merge via `gate.ps1` without `-SkipTests`.
@@ -36,13 +36,13 @@ The following enforcement mechanisms are STRUCTURALLY PROTECTED. Any agent obser
 
 ### How to verify gates are intact
 Run these checks before completing any session:
-- `Select-String -Pattern "continue-on-error: true" -Path ".github/workflows/*.yml"` — must not match product-map-validate or manifest-validate jobs
-- `Select-String -Pattern "Warn ""vue-tsc""" -Path "../devtools/harness/tools/verify-main.ps1"` — must not find it (should be `Fail`)
-- `Select-String -Pattern "playwright|@smoke" -Path "../devtools/harness/tools/gate.ps1"` — must find at least one match
+- `Select-String -Pattern "continue-on-error: true" -Path ".github/workflows/*.yml"` â€” must not match product-map-validate or manifest-validate jobs
+- `Select-String -Pattern "Warn ""vue-tsc""" -Path "../devtools/harness/tools/verify-main.ps1"` â€” must not find it (should be `Fail`)
+- `Select-String -Pattern "playwright|@smoke" -Path "../devtools/harness/tools/gate.ps1"` â€” must find at least one match
 
 ## Git Workflow
 
-**Always use `git worktree` when branching.** Never check out branches in the main working tree — it must stay on `main`. Worktrees live under `.agents/worktrees/<branch-name>/`.
+**Always use `git worktree` when branching.** Never check out branches in the main working tree â€” it must stay on `main`. Worktrees live under `.agents/worktrees/<branch-name>/`.
 
 ```powershell
 # From Product/
@@ -83,7 +83,7 @@ If you see a CI failure on main, fix it immediately - do not merge on top of it.
 
 ### Subagent pattern (mandatory)
 
-All code changes MUST be implemented by a subagent in a worktree branch — never directly by the parent session. The parent orchestrates, the subagent implements.
+All code changes MUST be implemented by a subagent in a worktree branch â€” never directly by the parent session. The parent orchestrates, the subagent implements.
 
 | Scenario | How |
 |---|---|
@@ -92,16 +92,16 @@ All code changes MUST be implemented by a subagent in a worktree branch — neve
 | Multi-task delivery sprint | Use the `deliver` skill (`.agents/skills/deliver/SKILL.md`) which orchestrates parallel subagents autonomously. |
 | QA fix | Spawn a subagent in its own worktree branch. Never apply a fix directly from the QA session. |
 
-The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: All Code Goes Through Subagents** — read it for the rationale and enforcement details.
+The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: All Code Goes Through Subagents** â€” read it for the rationale and enforcement details.
 
 ## Skills
 
-- **`qa`** — Multi-lens quality review. Invoke with `qa <target-path>`. Runs 7 lenses (correctness, bugs, maintainability, SOLID, DRY, simplification, deps) via parallel subagents, validates findings, and applies fixes. Auto-invokes `lessons-learned` on fixed findings. Path: `.agents/skills/qa/SKILL.md`.
-- **`lessons-learned`** — Extracts recurring patterns from QA findings and codifies them as AGENTS.md guidance at the most specific level of the hierarchy (auto-invoked by `qa` / `qa-iterate`). Standalone: `/lessons-learned <target> <findings>`. Path: `.agents/skills/lessons-learned/SKILL.md`.
+- **`qa`** â€” Multi-lens quality review. Invoke with `qa <target-path>`. Runs 7 lenses (correctness, bugs, maintainability, SOLID, DRY, simplification, deps) via parallel subagents, validates findings, and applies fixes. Auto-invokes `lessons-learned` on fixed findings. Path: `.agents/skills/qa/SKILL.md`.
+- **`lessons-learned`** â€” Extracts recurring patterns from QA findings and codifies them as AGENTS.md guidance at the most specific level of the hierarchy (auto-invoked by `qa` / `qa-iterate`). Standalone: `/lessons-learned <target> <findings>`. Path: `.agents/skills/lessons-learned/SKILL.md`.
 
 ## Delivery Workflow for QA
 
-1. Check `docs/delivery-tracker.md` — QA Reviews section.
+1. Check `docs/delivery-tracker.md` â€” QA Reviews section.
 2. Run each QA review using the `qa` skill.
 3. After finishing a review, toggle its checkbox and add the date + outcome.
 4. Do not start QA #N+1 until QA #N is complete.
@@ -111,13 +111,13 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 ## Definition of Done
 
 ### Manifest updated
-- [ ] **Manifest updated** — if the delivery adds or modifies a page route, the corresponding entry in `frontend/src/manifest.yaml` was created or updated
+- [ ] **Manifest updated** â€” if the delivery adds or modifies a page route, the corresponding entry in `frontend/src/manifest.yaml` was created or updated
 
 ---
 
 ## Task Tracker
 
-The authoritative task list lives at `../harness/delivery/delivery-plan.json`. Do not edit it directly — use the task script:
+The authoritative task list lives at `../harness/delivery/delivery-plan.json`. Do not edit it directly â€” use the task script:
 
 ```powershell
 ../devtools/harness/tools/task.ps1 list                          # show all tasks and current status
@@ -127,7 +127,7 @@ The authoritative task list lives at `../harness/delivery/delivery-plan.json`. D
 ../devtools/harness/tools/task.ps1 block <id> -Evidence "..."    # record a concrete external blocker
 ```
 
-The conductor picks the first `pending` task whose entire `dependsOn` array is `completed`. Tasks span phases 0–9 (alpha through v2). Run `/deliver` from the project root to start an autonomous delivery sprint — this invokes the `deliver` skill at `.agents/skills/deliver/SKILL.md`.
+The conductor picks the first `pending` task whose entire `dependsOn` array is `completed`. Tasks span phases 0â€“9 (alpha through v2). Run `/deliver` from the project root to start an autonomous delivery sprint â€” this invokes the `deliver` skill at `.agents/skills/deliver/SKILL.md`.
 
 ---
 
@@ -161,8 +161,8 @@ modulo/
       model_backends/base.py  # BaseChatModel-compatible ABC
       model_backends/anthropic/
       model_backends/openai/
-      model_backends/stub/    # StubModelBackend — test double
-      otel_bridge/            # LangGraph→OTel callback handler
+      model_backends/stub/    # StubModelBackend â€” test double
+      otel_bridge/            # LangGraphâ†’OTel callback handler
       auth/                   # JWT, Basic Auth, API key validation
       db/models/              # SQLAlchemy models (one file per entity)
       db/migrations/          # Alembic versions/
@@ -190,7 +190,7 @@ modulo/
 
 - **Backend**: Python 3.12, uv, FastAPI, LangGraph, SQLAlchemy 2 async + asyncpg/aiosqlite/aiomysql, Alembic
 - **Frontend**: Vue 3 (Composition API), Pinia, shadcn-vue + Radix Vue, Vue Flow, Tailwind, Playwright
-- **API types**: FastAPI OpenAPI → `openapi-typescript` → typed `openapi-fetch` client at `src/lib/api/schema.d.ts`
+- **API types**: FastAPI OpenAPI â†’ `openapi-typescript` â†’ typed `openapi-fetch` client at `src/lib/api/schema.d.ts`
 - **Lint**: ruff, mypy --strict, bandit, semgrep, import-linter, gitleaks
 - **Tests**: pytest + pytest-cov, pytest-bdd, testcontainers, factory-boy, pytest-xdist
 
@@ -199,7 +199,7 @@ modulo/
 ## Key Implementation Constraints (non-negotiable)
 
 ### Database
-- `SET LOCAL app.organisation_id = :org_id` **inside a transaction** — never bare `SET`. Semgrep-enforced.
+- `SET LOCAL app.organisation_id = :org_id` **inside a transaction** â€” never bare `SET`. Semgrep-enforced.
 - All async DB uses `asyncpg` (Postgres), `aiosqlite` (SQLite), or `aiomysql` (MariaDB/MySQL). No `psycopg2`/`sqlite3` in async path. Semgrep-enforced.
 - Alembic `upgrade head` runs before `AsyncPostgresSaver.setup()` on startup. Postgres advisory lock for multi-worker startup.
 
@@ -215,15 +215,15 @@ Modulo nominally supports three database backends, configurable via `MODULO_DB` 
 | MariaDB/MySQL | `mariadb` / `mysql` | `aiomysql` | `mysql+aiomysql://modulo:modulo@localhost:5435/modulo` |
 | SQLite | `sqlite` | `aiosqlite` | `sqlite+aiosqlite:///./modulo.db` |
 
-On non-Postgres backends, tenant isolation works via an auto-injected `WHERE organisation_id = :oid` clause instead of Postgres RLS (`set_config`). The `do_orm_execute` listener in `db/rls.py` handles this transparently — **zero changes** needed to CRUD functions or route handlers.
+On non-Postgres backends, tenant isolation works via an auto-injected `WHERE organisation_id = :oid` clause instead of Postgres RLS (`set_config`). The `do_orm_execute` listener in `db/rls.py` handles this transparently â€” **zero changes** needed to CRUD functions or route handlers.
 
 **Key differences between backends:**
 
 | Feature | Postgres | MariaDB | SQLite |
 |---|---|---|---|
-| RLS (`SET LOCAL`) | ✅ Native | ❌ (app-level filter) | ❌ (app-level filter) |
-| Advisory locks | ✅ `pg_advisory_lock` | ❌ (in-memory lock) | ❌ (in-memory lock) |
-| Alembic batch mode | ❌ | ❌ | ✅ |
+| RLS (`SET LOCAL`) | âœ… Native | âŒ (app-level filter) | âŒ (app-level filter) |
+| Advisory locks | âœ… `pg_advisory_lock` | âŒ (in-memory lock) | âŒ (in-memory lock) |
+| Alembic batch mode | âŒ | âŒ | âœ… |
 | Migration DDL | Native PG | Conditional DDL needed | `render_as_batch` |
 
 To run with MariaDB locally:
@@ -235,7 +235,7 @@ docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
 Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 
 ### LangGraph
-- State type is `dict[str, Any]` — no dynamic TypedDicts.
+- State type is `dict[str, Any]` â€” no dynamic TypedDicts.
 - `run_context` and `artifact` are sibling keys in state. Non-context-setter agents must not write to `run_context`.
 - `StateGraph` cached keyed by `(pipeline_id, snapshot_id)` with LRU eviction.
 
@@ -247,8 +247,8 @@ Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 ### Security
 - Jinja2: always `SandboxedEnvironment`. Semgrep-enforced.
 - YAML: always `yaml.safe_load()`. Semgrep-enforced.
-- Sensitive DOM values (API keys, secrets): never plaintext — `●●●●●` default, 30-second server-authenticated reveal.
-- JWT: `algorithms=["HS256"]` explicitly — `none` algorithm rejected.
+- Sensitive DOM values (API keys, secrets): never plaintext â€” `â—â—â—â—â—` default, 30-second server-authenticated reveal.
+- JWT: `algorithms=["HS256"]` explicitly â€” `none` algorithm rejected.
 
 ### Async
 - All DB access in async path uses async drivers. Sync DB calls block the event loop.
@@ -263,8 +263,8 @@ Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 
 - **rls_set_local**: bans bare `SET app.organisation_id` without `LOCAL`
 - **credential_in_state**: bans credential field names in LangGraph state assignments
-- **sandboxed_jinja2**: bans `jinja2.Environment(` — must use `SandboxedEnvironment`
-- **yaml_safe_load**: bans `yaml.load(` — must use `yaml.safe_load()`
+- **sandboxed_jinja2**: bans `jinja2.Environment(` â€” must use `SandboxedEnvironment`
+- **yaml_safe_load**: bans `yaml.load(` â€” must use `yaml.safe_load()`
 - **async_db_driver**: bans `import psycopg2` / `import sqlite3` in async code
 
 ---
@@ -273,7 +273,7 @@ Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 
 **Unit** (`tests/unit/`): no DB, no Docker, `StubModelBackend` for all LLM calls, run in < 30s.
 **Integration** (`tests/integration/`): real Postgres via testcontainers, Alembic migrations applied first, Factory Boy for entities. Cross-tenant isolation test is mandatory.
-**BDD/E2E** (`tests/bdd/features/`, `tests/bdd/steps/`): pytest-bdd + Playwright. All Playwright against `?theme=agent`. Use `waitForSelector('[data-loading="false"]')` — never `waitForTimeout()`. Every interactive element needs `data-testid`.
+**BDD/E2E** (`tests/bdd/features/`, `tests/bdd/steps/`): pytest-bdd + Playwright. All Playwright against `?theme=agent`. Use `waitForSelector('[data-loading="false"]')` â€” never `waitForTimeout()`. Every interactive element needs `data-testid`.
 
 Coverage minimums: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overall 80%.
 
@@ -290,45 +290,45 @@ Coverage minimums: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overa
 
 ## Implementation Order
 
-### Phase 0 — Foundation
-1. Alembic schema — all tables with `organisation_id`, `owner_team_id` (nullable), `visibility`, `evals JSON`, pipeline edges, `hitl_claims`, `org_api_keys`
-2. `db/rls.py` — `SET LOCAL` helper, SQLAlchemy event hook, isolation integration test
-3. `StubModelBackend` — implements `BaseChatModel` async interface, fixture map, `UnexpectedInputError`
+### Phase 0 â€” Foundation
+1. Alembic schema â€” all tables with `organisation_id`, `owner_team_id` (nullable), `visibility`, `evals JSON`, pipeline edges, `hitl_claims`, `org_api_keys`
+2. `db/rls.py` â€” `SET LOCAL` helper, SQLAlchemy event hook, isolation integration test
+3. `StubModelBackend` â€” implements `BaseChatModel` async interface, fixture map, `UnexpectedInputError`
 
-### Phase 1 — Core runtime
-4. **LangGraph→OTel bridge** — BLOCKING DEPENDENCY for all OTel span assertions
-5. Basic auth + `SECRET_KEY` enforcement — JWT `algorithms=["HS256"]`, startup check
-6. Core entity CRUD — Pipeline, Agent, Schema, ConnectorInstance, ModelBackend with RLS
+### Phase 1 â€” Core runtime
+4. **LangGraphâ†’OTel bridge** â€” BLOCKING DEPENDENCY for all OTel span assertions
+5. Basic auth + `SECRET_KEY` enforcement â€” JWT `algorithms=["HS256"]`, startup check
+6. Core entity CRUD â€” Pipeline, Agent, Schema, ConnectorInstance, ModelBackend with RLS
 
-### Phase 2 — Pipeline execution
-7. ConnectorHub — `FilesystemConnector` (base_path chroot), `GitHubConnector`
-8. ModelBackendHub — Anthropic + OpenAI + StubModelBackend, health check, rotation
-9. `@cancellable_node` — cancellation check, per-node timeout, run_context write guard
-10. Sequential pipeline execution — StateGraph compile + cache, AsyncPostgresSaver, manual trigger
-11. Graph validator — topology, schema compat, connector capability, model backend health
+### Phase 2 â€” Pipeline execution
+7. ConnectorHub â€” `FilesystemConnector` (base_path chroot), `GitHubConnector`
+8. ModelBackendHub â€” Anthropic + OpenAI + StubModelBackend, health check, rotation
+9. `@cancellable_node` â€” cancellation check, per-node timeout, run_context write guard
+10. Sequential pipeline execution â€” StateGraph compile + cache, AsyncPostgresSaver, manual trigger
+11. Graph validator â€” topology, schema compat, connector capability, model backend health
 
-### Phase 3 — HITL + events
-12. HITL mechanics — `interrupt()`, atomic claim, `claim_token` (15-min TTL), expiry, approve/reject
-13. WebSocket event broker — per-run broker, `astream_events()` fan-out, 100-event ring buffer
-14. Webhook trigger — HMAC-SHA256, `payload_mapping`, flood protection, deduplication, `TriggerEvent` log
+### Phase 3 â€” HITL + events
+12. HITL mechanics â€” `interrupt()`, atomic claim, `claim_token` (15-min TTL), expiry, approve/reject
+13. WebSocket event broker â€” per-run broker, `astream_events()` fan-out, 100-event ring buffer
+14. Webhook trigger â€” HMAC-SHA256, `payload_mapping`, flood protection, deduplication, `TriggerEvent` log
 
-### Phase 4 — API + MCP
-15. ViewModel REST API — full CRUD, paginated lists
-16. Remote MCP server — `/mcp` HTTP+SSE, API key bearer auth, dual-layer scope enforcement
+### Phase 4 â€” API + MCP
+15. ViewModel REST API â€” full CRUD, paginated lists
+16. Remote MCP server â€” `/mcp` HTTP+SSE, API key bearer auth, dual-layer scope enforcement
 
-### Phase 5 — Frontend
-17. shadcn-vue init — radix-vue, lucide-vue-next, cvа, baseline primitives in `src/components/ui/`
-18. Vue 3 + Pinia scaffold — org context, planStore, theme system (`data-theme`, standard + agent), sidebar
+### Phase 5 â€” Frontend
+17. shadcn-vue init â€” radix-vue, lucide-vue-next, cvÐ°, baseline primitives in `src/components/ui/`
+18. Vue 3 + Pinia scaffold â€” org context, planStore, theme system (`data-theme`, standard + agent), sidebar
 19. `/settings/license` page
-20. Pipeline canvas — Vue Flow, node/edge serialisation
-21. HITL review UI — claim, approve, reject, overdue badge
-22. Run inspection UI — per-node IO, sensitive masking, "Copy as test fixture"
-23. Stage board — search, filter, `awaiting_human` quick filter
-24. Library browser — list, preview, copy-to-adapt
-25. Demo pipeline + first-run walkthrough — `MODULO_DEMO_MODE`
+20. Pipeline canvas â€” Vue Flow, node/edge serialisation
+21. HITL review UI â€” claim, approve, reject, overdue badge
+22. Run inspection UI â€” per-node IO, sensitive masking, "Copy as test fixture"
+23. Stage board â€” search, filter, `awaiting_human` quick filter
+24. Library browser â€” list, preview, copy-to-adapt
+25. Demo pipeline + first-run walkthrough â€” `MODULO_DEMO_MODE`
 
-### Phase 6 — Alpha exit checklist
-All six criteria from PRD §10.3b must be met explicitly.
+### Phase 6 â€” Alpha exit checklist
+All six criteria from PRD Â§10.3b must be met explicitly.
 
 ---
 
@@ -407,18 +407,18 @@ Before merging any worktree branch to `main`, run the smoke test:
 ```
 
 This checks:
-1. **All route component files exist** on disk — catches missing `.vue` files that the router imports
+1. **All route component files exist** on disk â€” catches missing `.vue` files that the router imports
 2. **Vitest smoke tests pass** (`app-bootstrap.spec.ts` imports the router module and checks every import resolves)
-3. **Playwright @smoke E2E tests** — runs 5 critical tests (login error, login redirect, dashboard auth guard, sidebar, bootstrap) via `--grep "@smoke"`
+3. **Playwright @smoke E2E tests** â€” runs 5 critical tests (login error, login redirect, dashboard auth guard, sidebar, bootstrap) via `--grep "@smoke"`
 4. **Vue type-check** (`vue-tsc --noEmit` catches type errors)
 
 The `@smoke` tag is set per-test via `{ tag: '@smoke' }` in `frontend/tests/e2e/`. Add it to any critical test that should gate merges. Run just the smoke subset with `npm run test:e2e:smoke`.
 
-The history of this rule: `SchemaBuilderView.vue` existed as an untracked file, was deleted during cleanup, and the router still imported it — causing a 500 on every page load. The smoke test would have caught it.
+The history of this rule: `SchemaBuilderView.vue` existed as an untracked file, was deleted during cleanup, and the router still imported it â€” causing a 500 on every page load. The smoke test would have caught it.
 
 ### OpenAPI type generation
 
-`npm run dev` auto-generates TypeScript types from the backend's OpenAPI spec (`http://localhost:8000/openapi.json` → `frontend/src/lib/api/schema.d.ts`). The backend must be running for this to work.
+`npm run dev` auto-generates TypeScript types from the backend's OpenAPI spec (`http://localhost:8000/openapi.json` â†’ `frontend/src/lib/api/schema.d.ts`). The backend must be running for this to work.
 
 To generate types manually without starting the dev server:
 
@@ -430,7 +430,7 @@ npm run generate:api
 
 Two API access patterns coexist:
 
-**1. `useApi` composable** (legacy, 46 existing files — no migration needed)
+**1. `useApi` composable** (legacy, 46 existing files â€” no migration needed)
 ```typescript
 import { useApi } from '../composables/useApi'
 const { get, post } = useApi()
@@ -438,12 +438,12 @@ const data = await get<SomeType>('/api/v1/me')
 ```
 Throws on error. Same API surface, works unchanged.
 
-**2. `api` typed client** (NEW — preferred for new code)
+**2. `api` typed client** (NEW â€” preferred for new code)
 ```typescript
 import { api } from '../lib/api/client'
 import type { paths, components } from '../lib/api/client'
 
-// Fully typed — path, body, query, and response are all inferred
+// Fully typed â€” path, body, query, and response are all inferred
 const { data, error } = await api.GET('/api/v1/me')
 if (data) console.log(data.display_name)
 
@@ -457,7 +457,7 @@ type UserPrefs = components['schemas']['SettingsResponse']
 type Pipeline = components['schemas']['PipelineResponse']
 ```
 
-Returns `{ data, error }` — no throw. Guard with `if (data)` or `if (error)`.
+Returns `{ data, error }` â€” no throw. Guard with `if (data)` or `if (error)`.
 
 #### Commit policy
 
@@ -487,23 +487,23 @@ npm run generate:api
 This runs `scripts/generate-api-types.ps1` which imports the backend, dumps the OpenAPI
 schema as JSON, and feeds it to `openapi-typescript` to produce the typed client.
 
-There is no pre-commit hook for this — the pre-commit framework runs `generate-api-types` as a manual-stage hook only (`gate.ps1` Phase 1d). You must regenerate manually or run `pre-commit run generate-api-types` when the backend API changes. If CI fails because `schema.ts` is out of date, run `npm run generate:api`, commit the updated file, and retry.
+There is no pre-commit hook for this â€” the pre-commit framework runs `generate-api-types` as a manual-stage hook only (`gate.ps1` Phase 1d). You must regenerate manually or run `pre-commit run generate-api-types` when the backend API changes. If CI fails because `schema.ts` is out of date, run `npm run generate:api`, commit the updated file, and retry.
 
 ---
 
 ### Local frontend dev (fastest loop)
 
 Start the frontend-only dev server that proxies API calls to app.modulo.run.
-No local backend, DB, or Docker needed — just the frontend source code.
+No local backend, DB, or Docker needed â€” just the frontend source code.
 
-**Caveat — backend changes:** The local-frontend proxies `/api` and `/ws` to
+**Caveat â€” backend changes:** The local-frontend proxies `/api` and `/ws` to
 `https://app.modulo.run` (production). Backend code changes (Python, DB
-migrations, API routes, Pydantic models) are NOT picked up by this loop —
+migrations, API routes, Pydantic models) are NOT picked up by this loop â€”
 the proxy hits the deployed backend, not your local code.
 
 Two options when your change touches the backend:
-1. **Deploy to app.modulo.run** — merge to `main`, then run `/deploy` (canary rollout through staging). Fastest if you're confident.
-2. **Run full local stack** — `docker compose -f docker-compose.local.yml up -d` (Postgres + Redis), then start the backend locally (`uv run uvicorn modulo.api.main:app --reload --port 8000`), and point Vite at it (`VITE_API_URL=http://localhost:8000`).
+1. **Deploy to app.modulo.run** â€” merge to `main`, then run `/deploy` (canary rollout through staging). Fastest if you're confident.
+2. **Run full local stack** â€” `docker compose -f docker-compose.local.yml up -d` (Postgres + Redis), then start the backend locally (`uv run uvicorn modulo.api.main:app --reload --port 8000`), and point Vite at it (`VITE_API_URL=http://localhost:8000`).
 
 Rule of thumb: if you're only changing frontend code (`.vue`, `.ts`, CSS),
 use the local-frontend loop. If you're changing backend code, deploy to
@@ -515,11 +515,11 @@ $env:VITE_API_URL = "https://app.modulo.run"
 Start-Process -WindowStyle Hidden -FilePath "C:\nvm4w\nodejs\node.exe" -ArgumentList "node_modules\vite\bin\vite.js --port 5174 --host 0.0.0.0"
 ```
 
-Access at `http://local-frontend.modulo.run:5174` (add hosts entry first — see root AGENTS.md).
+Access at `http://local-frontend.modulo.run:5174` (add hosts entry first â€” see root AGENTS.md).
 
 **IMPORTANT:** Node.js is at `C:\nvm4w\nodejs\node.exe` (not `node` in PATH on Windows).
 Use the full path in `Start-Process` because the background service has a different PATH.
-`npx` / `npm run dev` don't work for backgrounding — always use `node.exe` with the full path to `vite/bin/vite.js`.
+`npx` / `npm run dev` don't work for backgrounding â€” always use `node.exe` with the full path to `vite/bin/vite.js`.
 
 **`vue-i18n` pre-bundling fix:** If the page fails to load with `ReferenceError: init_runtime_dom_esm_bundler is not defined`, Vite's dep optimizer is breaking `vue-i18n`. Add it to `optimizeDeps.exclude` in `vite.config.ts`:
 
@@ -554,28 +554,40 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 | Test | File/Command | What it catches |
 |---|---|---|
 | Unit | `tests/unit/app-bootstrap.spec.ts` | Missing route component files, module-level import errors |
-| Playwright @smoke | `--grep "@smoke"` across all `tests/e2e/` | Login, auth, navigation, golden path — critical browser flows |
+| Playwright @smoke | `--grep "@smoke"` across all `tests/e2e/` | Login, auth, navigation, golden path â€” critical browser flows |
 | Route file check | Part of `smoke-test.ps1` | Every `.vue` imported by the router exists on disk |
 
 ---
 
 ## What Agents Must NOT Do
 
-- `yaml.load()` → use `yaml.safe_load()`
-- `jinja2.Environment()` → use `jinja2.sandbox.SandboxedEnvironment()`
+- `yaml.load()` â†’ use `yaml.safe_load()`
+- `jinja2.Environment()` â†’ use `jinja2.sandbox.SandboxedEnvironment()`
 - Decrypted credentials in LangGraph state, logs, or OTel spans
 - `SET app.organisation_id` without `LOCAL` inside a transaction
 - `import psycopg2` or `import sqlite3` in async code
-- `page.waitForTimeout()` in Playwright → use `waitForSelector('[data-loading="false"]')`
-- Import LangGraph from `modulo.api` directly → go through `modulo.core.pipeline_engine`
+- `page.waitForTimeout()` in Playwright â†’ use `waitForSelector('[data-loading="false"]')`
+- Import LangGraph from `modulo.api` directly â†’ go through `modulo.core.pipeline_engine`
 - Import `modulo_cloud` from anywhere in core
 - `outline: none` on interactive elements without `--focus-ring` replacement
-- Dynamic TypedDicts for LangGraph state → use `dict[str, Any]`
+- Dynamic TypedDicts for LangGraph state â†’ use `dict[str, Any]`
 - Commit `.env` files or any file containing secrets
-- Implement admin API keys — only `operator` and `runner` roles
-- Treat a task as "blocked" because it needs both frontend + backend changes — fix both sides in the same session. The worktree + subagent workflow supports cross-cutting fixes. Agents are expected to be comfortable fixing Python and TypeScript/Vue in the same task.
+- Implement admin API keys â€” only `operator` and `runner` roles
+- Treat a task as "blocked" because it needs both frontend + backend changes â€” fix both sides in the same session. The worktree + subagent workflow supports cross-cutting fixes. Agents are expected to be comfortable fixing Python and TypeScript/Vue in the same task.
 
 ## Lessons Learned
+
+### Branch-fixer / opencode coder agent
+
+- **opencode auth step runs before fetch-ci** → `Configure opencode auth` references `steps.fetch-ci.outputs.ci_failures` but must run AFTER `Fetch CI failures`. GitHub Actions evaluates `if:` conditions at step execution time, and the referenced step's outputs are empty/false if it hasn't run yet. Always verify step ordering when a step's condition depends on another step's output.
+
+- **opencode version must be modern** → Installing opencode from GitHub releases (v0.0.55 from June 2025) gives an ancient version that doesn't support the coder agent's file-editing tools. Always install from npm: `npm install -g opencode-ai` (current: v1.18.4). The `opencode run --agent coder` command requires a version that supports tool-using agents.
+
+- **Use `repository_dispatch` instead of `workflow_dispatch` for triggering workflows** → GitHub has a known caching bug where `workflow_dispatch` triggers are not recognized for recently-modified workflow files, returning HTTP 422 "Workflow does not have 'workflow_dispatch' trigger". Use `repository_dispatch` via `gh api repos/.../dispatches` which is not affected by this bug. Both the sender (CI) and receiver (branch-fixer) need to support it.
+
+- **`gh run view --log-failed` returns only the last failed step's output** → For CI workflows that run scripts (coverage thresholds, post-processing) after the actual tests, `--log-failed` returns the post-processing step's output — not the test failures. Use `gh run view --log | grep "FAILED"` to extract actual test failure lines.
+
+- **GitHub Actions step ordering: `Configure opencode auth` must precede `Run opencode fix`** → The auth step writes the API key to `~/.local/share/opencode/auth.json`. Without it, opencode runs without credentials and cannot call the LLM, so it produces no file edits. Both steps need identical `if:` conditions referencing `steps.fetch-ci.outputs.ci_failures`.
 
 #
 ## Pre-commit hooks (appended from root AGENTS.md)
@@ -613,9 +625,9 @@ pre-commit (when migration files staged) and in gate.ps1 Phase 0 (even
 with `-SkipTests`). If blocked: renumber your migration to the next free
 sequential number and fix its `down_revision` to point at the current head.
 
-### Rebasing: only when another branch merged first � and how to resolve conflicts
+### Rebasing: only when another branch merged first — and how to resolve conflicts
 
-In general, **no pre-rebase is needed** � the worktree branch is based on
+In general, **no pre-rebase is needed** — the worktree branch is based on
 main and the PR flow handles merging. If another PR merged first (changing
 shared files), rebase to catch up.
 
@@ -623,7 +635,7 @@ If the rebase produces conflicts, resolve them inline:
 
 1. Read all three versions: base, main (ours), worktree (theirs)
 2. Understand the intent of each side's change
-3. Produce a merged version that satisfies both intents � never silently
+3. Produce a merged version that satisfies both intents — never silently
    discard either side
 4. `git add` the resolved file and `git rebase --continue`
 
@@ -639,11 +651,11 @@ After a successful rebase (all conflicts resolved), push and create a PR:
 
 ### Test suites
 
-**Backend** � from `Repos/modulo/backend/`:
+**Backend** — from `Repos/modulo/backend/`:
 ```
 pytest tests/unit/ --tb=short -q --timeout=120
 ```
-The backend suite takes ~35-40 min (14700+ tests). Frontend � from `Repos/modulo/frontend/`:
+The backend suite takes ~35-40 min (14700+ tests). Frontend — from `Repos/modulo/frontend/`:
 ```
 npm run test:unit
 ```
@@ -683,11 +695,11 @@ Fix: never strip query params from DATABASE_URL. `asyncpg.connect()` and `psycop
 
 ### Deployment: health check `finally` block `conn.close()` can override inner `return`
 
-In `_check_checkpointer()`, the inner `try/except` catches query failures and returns "degraded". But the `finally` block runs `conn.close()` before the return completes. If `conn.close()` raises, the exception propagates to the outer `except Exception`, overrides the "degraded" result, and produces "unavailable" with empty detail — even though the query failure was the real issue.
+In `_check_checkpointer()`, the inner `try/except` catches query failures and returns "degraded". But the `finally` block runs `conn.close()` before the return completes. If `conn.close()` raises, the exception propagates to the outer `except Exception`, overrides the "degraded" result, and produces "unavailable" with empty detail â€” even though the query failure was the real issue.
 
 Fix: wrap `conn.close()` in a nested `try/except` so a close() failure can never override the inner result.
 
-### Deployment: any unavailability blocks bluegreen — return "degraded" for non-critical checks
+### Deployment: any unavailability blocks bluegreen â€” return "degraded" for non-critical checks
 
 Fly.io's bluegreen strategy waits for ALL health checks to return non-"unavailable" before cutting over. A single non-critical check (like checkpointer tables missing) returning "unavailable" blocks the entire deployment. Change any check that the app can function without to return "degraded" instead of "unavailable".
 
@@ -701,96 +713,96 @@ Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-ms
 
 ### Database / Multi-backend
 
-- `GenericRepository.set_org_context` no-op (`pass`) on non-Postgres backends → must call `set_rls_org(session, org_id)` so that `session.info` is populated for the `do_orm_execute` tenant-filter listener
-- `_inject_tenant_filter` breaking after first entity in JOIN queries → iterate ALL entities with `organisation_id`, not just the first match
-- `column_descriptions` not available on ORM `UPDATE`/`DELETE` statements → use `execute_state.all_mapper_classes` to extract entities for tenant filtering on DML
-- `func.now()` with `DateTime(timezone=True)` on SQLite → use `func.current_timestamp()` instead (SQLite's `func.now()` returns naive datetime)
-- Backend type strings differ across sources: `dialect.name` returns `"postgresql"` but settings key returns `"postgres"` → always normalize with `.lower()` and compare against the settings canonical form; document the two sources
+- `GenericRepository.set_org_context` no-op (`pass`) on non-Postgres backends â†’ must call `set_rls_org(session, org_id)` so that `session.info` is populated for the `do_orm_execute` tenant-filter listener
+- `_inject_tenant_filter` breaking after first entity in JOIN queries â†’ iterate ALL entities with `organisation_id`, not just the first match
+- `column_descriptions` not available on ORM `UPDATE`/`DELETE` statements â†’ use `execute_state.all_mapper_classes` to extract entities for tenant filtering on DML
+- `func.now()` with `DateTime(timezone=True)` on SQLite â†’ use `func.current_timestamp()` instead (SQLite's `func.now()` returns naive datetime)
+- Backend type strings differ across sources: `dialect.name` returns `"postgresql"` but settings key returns `"postgres"` â†’ always normalize with `.lower()` and compare against the settings canonical form; document the two sources
 
 ### Locking
 
-- `pg_advisory_lock` with `asyncio.wait_for` creates a race between server-side lock acquisition and client timeout → use `pg_try_advisory_lock` in a polling loop for timeout-based acquisition
-- `asyncio.Lock` timeout via `wait_for` can trigger a caller's `finally` block that calls `release()` on another task's lock → always track lock ownership (e.g. by task ID) and guard `release_lock` with an ownership check
+- `pg_advisory_lock` with `asyncio.wait_for` creates a race between server-side lock acquisition and client timeout â†’ use `pg_try_advisory_lock` in a polling loop for timeout-based acquisition
+- `asyncio.Lock` timeout via `wait_for` can trigger a caller's `finally` block that calls `release()` on another task's lock â†’ always track lock ownership (e.g. by task ID) and guard `release_lock` with an ownership check
 - In-memory locks (`GenericLock`) must use module-level (shared) state so multiple `RepositoryHub` instances coordinate on the same lock namespace
 
 ### Frontend / Layout
 
-- Every list/table page must have an empty-state message when data is empty — never leave a blank content area. Use the existing pattern: a centered card with title + description.
-- Enterprise-gated pages (`FeatureGate` component) must never render infinite spinners — hide the sidebar link entirely on Free tier, or show a clear upgrade CTA with a link to `/settings/license`. A locked overlay with a permanent spinner beneath it is worse than showing nothing.
+- Every list/table page must have an empty-state message when data is empty â€” never leave a blank content area. Use the existing pattern: a centered card with title + description.
+- Enterprise-gated pages (`FeatureGate` component) must never render infinite spinners â€” hide the sidebar link entirely on Free tier, or show a clear upgrade CTA with a link to `/settings/license`. A locked overlay with a permanent spinner beneath it is worse than showing nothing.
 
 ### Frontend / API & Errors
 
-- `openapi-fetch` returns error objects (not strings) on non-2xx responses — never embed bare `${err}` in template literals. Always use `formatApiError(err)` (see `frontend/src/lib/api/formatError.ts`) to extract a readable `error.detail` or `error.message`.
-- API failures must not trigger full-page redirects — show an in-page `ErrorAlert` with retry button instead. This is especially critical for the feature-flags API called by `planStore.fetchPlan()`, which runs on every page mount.
-- The 401 interceptor in `client.ts` does a hard `window.location.href = '/login'` — ensure the auth token is still valid before the interceptor fires. A single expired-token or failed feature-flags call can cascade into an unusable redirect loop.
+- `openapi-fetch` returns error objects (not strings) on non-2xx responses â€” never embed bare `${err}` in template literals. Always use `formatApiError(err)` (see `frontend/src/lib/api/formatError.ts`) to extract a readable `error.detail` or `error.message`.
+- API failures must not trigger full-page redirects â€” show an in-page `ErrorAlert` with retry button instead. This is especially critical for the feature-flags API called by `planStore.fetchPlan()`, which runs on every page mount.
+- The 401 interceptor in `client.ts` does a hard `window.location.href = '/login'` â€” ensure the auth token is still valid before the interceptor fires. A single expired-token or failed feature-flags call can cascade into an unusable redirect loop.
 
 ### Frontend / Security
 
-- Runtime Config values matching sensitive key patterns (`SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|ENCRYPTION|SIGNING|PRIVATE`, case-insensitive) must be masked by default with `"********"` and a per-key "Reveal" toggle — never displayed in plaintext. Non-sensitive keys (e.g. `APP_NAME`, `LOG_LEVEL`) display normally.
-- Sidebar nav links for Enterprise-only features should be conditionally rendered based on the plan tier, not just visually dimmed — a visible-but-broken link is worse than no link.
+- Runtime Config values matching sensitive key patterns (`SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|ENCRYPTION|SIGNING|PRIVATE`, case-insensitive) must be masked by default with `"********"` and a per-key "Reveal" toggle â€” never displayed in plaintext. Non-sensitive keys (e.g. `APP_NAME`, `LOG_LEVEL`) display normally.
+- Sidebar nav links for Enterprise-only features should be conditionally rendered based on the plan tier, not just visually dimmed â€” a visible-but-broken link is worse than no link.
 
 ### Frontend / Layout (continued)
 
-- Mobile dropdown menus (`v-if="mobileOpen"`) inside a `flex` (row-direction) container get laid out as skinny horizontal columns instead of full-width panels below the header. Always position mobile dropdowns with `fixed top-14 left-0 right-0 z-40` to take them out of flex flow — never rely on the natural document flow inside a horizontal flex container for overlay-style elements.
-- `pt-14` (56px) is a fragile approximation of a fixed header's height. The header's actual height varies with padding (`py-3` = 24px vertical), content (20px SVG), and border (1px) — real height is ~63px. Use `sticky` positioning for the mobile header instead of `fixed` + `pt-14`, or measure the actual height precisely. The gap between `pt-14` and true header height causes content to peek behind or leave a visible strip.
-- The mobile layout has oscillated between `fixed` header + `pt-14` and in-flow/`sticky` header approaches multiple times (commits e3028c2, 8f36188, a080bfa, 393605d). Neither approach is inherently better — the choice depends on whether the dropdown/menu panel needs to push content down or overlay it. **Decide upfront:** overlay (fixed header, z-index stacking) vs. push (sticky header, content reflow). Don't flip-flop.
-- When both the mobile menu panel and main content need scrolling, avoid nesting `overflow-auto`/`overflow-hidden` on multiple flex layers — it creates scroll-snapping issues where one layer traps scroll. Use a single scroll container (`overflow-y-auto` on `main`) and let the menu panel scroll within itself if needed.
-- Commit `393605d` gutted the mobile layout (removed LogoMark, dynamic nav items with sections/icons, theme toggle, user profile, logout button) to work around a Vite 8 SFC parsing issue. If functionality needs to be restored, build it back incrementally rather than doing another full rewrite — the layout fundamentals are now stable.
-- Remy panel default position (`window.innerWidth - 460`) must be clamped to `Math.max(8, ...)` to prevent off-screen rendering on viewports < 460px wide. Default size (`440×600`) must also be clamped to `Math.min(440, window.innerWidth - 16)` and `Math.min(600, window.innerHeight - 120)` so the panel fits mobile viewports. **Always clamp absolute-positioned UI defaults against viewport dimensions.**
+- Mobile dropdown menus (`v-if="mobileOpen"`) inside a `flex` (row-direction) container get laid out as skinny horizontal columns instead of full-width panels below the header. Always position mobile dropdowns with `fixed top-14 left-0 right-0 z-40` to take them out of flex flow â€” never rely on the natural document flow inside a horizontal flex container for overlay-style elements.
+- `pt-14` (56px) is a fragile approximation of a fixed header's height. The header's actual height varies with padding (`py-3` = 24px vertical), content (20px SVG), and border (1px) â€” real height is ~63px. Use `sticky` positioning for the mobile header instead of `fixed` + `pt-14`, or measure the actual height precisely. The gap between `pt-14` and true header height causes content to peek behind or leave a visible strip.
+- The mobile layout has oscillated between `fixed` header + `pt-14` and in-flow/`sticky` header approaches multiple times (commits e3028c2, 8f36188, a080bfa, 393605d). Neither approach is inherently better â€” the choice depends on whether the dropdown/menu panel needs to push content down or overlay it. **Decide upfront:** overlay (fixed header, z-index stacking) vs. push (sticky header, content reflow). Don't flip-flop.
+- When both the mobile menu panel and main content need scrolling, avoid nesting `overflow-auto`/`overflow-hidden` on multiple flex layers â€” it creates scroll-snapping issues where one layer traps scroll. Use a single scroll container (`overflow-y-auto` on `main`) and let the menu panel scroll within itself if needed.
+- Commit `393605d` gutted the mobile layout (removed LogoMark, dynamic nav items with sections/icons, theme toggle, user profile, logout button) to work around a Vite 8 SFC parsing issue. If functionality needs to be restored, build it back incrementally rather than doing another full rewrite â€” the layout fundamentals are now stable.
+- Remy panel default position (`window.innerWidth - 460`) must be clamped to `Math.max(8, ...)` to prevent off-screen rendering on viewports < 460px wide. Default size (`440Ã—600`) must also be clamped to `Math.min(440, window.innerWidth - 16)` and `Math.min(600, window.innerHeight - 120)` so the panel fits mobile viewports. **Always clamp absolute-positioned UI defaults against viewport dimensions.**
 
 ### Product Map / improve-architecture
 
-- When running `improve-architecture` on a feature entry, always check that `bdd:` and `unit-tests:` frontmatter fields are populated — **especially `bdd:`** which is commonly missing even when feature files exist.
+- When running `improve-architecture` on a feature entry, always check that `bdd:` and `unit-tests:` frontmatter fields are populated â€” **especially `bdd:`** which is commonly missing even when feature files exist.
 - **Frontmatter YAML**: Never set `delivery-tasks: []` (flow empty list) on a line followed by orphaned indented list items. The `[]` terminates the value; subsequent `- item` lines become parse errors. Either keep `[]` empty with nothing after it, or use a block list without `[]` and add the proper parent key (e.g. `bdd:`).
 - **`bdd:` field**: Every connector product map entry must have a `bdd:` field listing its BDD feature files. File paths like `backend/tests/bdd/features/connectors/foo.feature` belong in `bdd:`, never in `delivery-tasks:` (which holds delivery-plan task IDs, not file paths).
 - **`depends-on` field**: Every connector file must declare `feat-connectors-hub` as a dependency. Features that use the connector hub's sampling/query interface (e.g. schema-inference) must also declare it. `graph-validate.ps1` will flag missing `depends-on` as orphaned refs.
 - **`delivery-tasks` contains task IDs, not file paths**: The `delivery-tasks` field links to delivery-plan task IDs (e.g. `task-connector-hub-01`), not file paths. File paths for BDD features, unit tests, and code paths belong in their respective frontmatter fields (`bdd:`, `unit-tests:`, `code:`).
-- **Known Gaps with `[x]` (checked) items**: The "Known Gaps" section must only list genuine gaps — items that are missing or incomplete. Do not list accomplished items (BDD scenarios that exist, unit tests that exist, working features) with `[x]` checkboxes in Known Gaps. Those belong in the Behaviours section or as plain prose notes.
+- **Known Gaps with `[x]` (checked) items**: The "Known Gaps" section must only list genuine gaps â€” items that are missing or incomplete. Do not list accomplished items (BDD scenarios that exist, unit tests that exist, working features) with `[x]` checkboxes in Known Gaps. Those belong in the Behaviours section or as plain prose notes.
 - **`status: gap` vs `status: partial`**: If a feature has zero implemented behaviours (all `[ ]`), no tests, and "No implementation exists" in Known Gaps, use `status: gap`, not `status: partial`. `partial` implies some work is done.
 - **Boilerplate deduplication**: Cross-cutting concerns that apply identically to all connectors (Credential Lifetime lifecycle, capability-based graph validation, token rotation, rate-limit handling, ConnectorHub pre-run health check) should be documented in `connector-hub.md` only, not duplicated across every individual connector file. Individual files should only document connector-specific behaviour.
-- The HTTPBearer FastAPI dependency with `auto_error=False` returns `None` for missing credentials (not 403). The handler must raise 401 explicitly. Product map entries commonly claim 403 for missing bearer — verify against the actual code.
+- The HTTPBearer FastAPI dependency with `auto_error=False` returns `None` for missing credentials (not 403). The handler must raise 401 explicitly. Product map entries commonly claim 403 for missing bearer â€” verify against the actual code.
 - SCIM CRUD functions (`scim_create_group`, `scim_create_user`) call Team/Account CRUD directly, bypassing REST API validation. Any validation gap in the underlying CRUD (e.g. duplicate name enforcement) is inherited by SCIM. Document this cross-module concern in the product map entry's Known Gaps.
-- When auditing behaviours in the product map, do NOT assume an unchecked `[ ]` means "not implemented" — it often means "not verified." Read the test files and run `grep` for each behaviour before deciding status.
-- The `prd:` frontmatter field must contain only the bare section number (e.g. `8.17`), never wrapped in quotes or prefixed with `§`. The `§` prefix or quotes cause `graph-validate.ps1` to fail section matching because `TrimStart('§')` cannot strip quotes, leaving a `"8.17"` string that doesn't match the PRD index.
+- When auditing behaviours in the product map, do NOT assume an unchecked `[ ]` means "not implemented" â€” it often means "not verified." Read the test files and run `grep` for each behaviour before deciding status.
+- The `prd:` frontmatter field must contain only the bare section number (e.g. `8.17`), never wrapped in quotes or prefixed with `Â§`. The `Â§` prefix or quotes cause `graph-validate.ps1` to fail section matching because `TrimStart('Â§')` cannot strip quotes, leaving a `"8.17"` string that doesn't match the PRD index.
 - **`graph-validate.ps1 -Fix` can corrupt `_index.md` with literal `\n` strings.** The `-Fix` flag's PowerShell string replacement can produce raw `\n` (backslash-n) text instead of actual newlines. If `_index.md` shows visible `\n` in the rendered file, re-run `graph-validate.ps1` without `-Fix` to regenerate a clean index. File a bug against `deploy/harness/tools/graph-validate.ps1` if `-Fix` remains broken.
 
 ### Backend / API Schema Migrations
 
-- When a DB column is renamed in a migration (e.g. `created_by` → `account_id`), every Pydantic response schema that references the old name must use `Field(validation_alias="account_id")` and add `"populate_by_name": True` to `model_config`. Without this, `model_validate(pipeline)` fails because the ORM model's attribute is `account_id` but the response schema expects `created_by`.
-- After a column rename migration, grep ALL response schemas in `backend/src/modulo/api/routes/` for the old column name — it's common to miss several files.
+- When a DB column is renamed in a migration (e.g. `created_by` â†’ `account_id`), every Pydantic response schema that references the old name must use `Field(validation_alias="account_id")` and add `"populate_by_name": True` to `model_config`. Without this, `model_validate(pipeline)` fails because the ORM model's attribute is `account_id` but the response schema expects `created_by`.
+- After a column rename migration, grep ALL response schemas in `backend/src/modulo/api/routes/` for the old column name â€” it's common to miss several files.
 
 ### Backend / Models
 
 - When a new column is added to a table via deployment schema patch (e.g. `ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS default_autonomy_level`), the SQLAlchemy ORM model MUST have the corresponding `mapped_column`. Without it, any CRUD function that passes the field to the model constructor raises `TypeError: 'default_autonomy_level' is an invalid keyword argument for Pipeline`.
 - Keep `__table_args__` check constraints and ORM mapped columns in sync: if a check constraint references a column, the ORM must map it.
-- For optional Pydantic fields in graph/JSON schemas (`PipelineGraphNode.agent_id`, etc.), always add `= None` default — otherwise dicts that omit the key entirely fail `model_validate` with `Field required`.
+- For optional Pydantic fields in graph/JSON schemas (`PipelineGraphNode.agent_id`, etc.), always add `= None` default â€” otherwise dicts that omit the key entirely fail `model_validate` with `Field required`.
 
 ### Ops / Deploy
 
 - `flyctl deploy` direct invocation without `--build-arg` flags leaves all git metadata fields (`git_sha`, `git_branch`, `git_commit_message`, `git_commit_timestamp`, `build_timestamp`) empty in the `/api/v1/deployment` endpoint. Always use `deploy.ps1` (which reads and passes build args automatically) instead of calling `flyctl deploy` directly.
-- The `/deployments` page on modulo.run reads this endpoint. If git metadata is missing, the page shows blank fields — not a backend model change.
+- The `/deployments` page on modulo.run reads this endpoint. If git metadata is missing, the page shows blank fields â€” not a backend model change.
 - `fly.toml` Python version hardcodes (e.g. `python3.12` in SSH commands) must match the project's actual Python version in `.python-version` and `pyproject.toml` `requires-python`. A mismatch causes the SSH command to fail silently. Search `fly.toml` for all hardcoded version strings when upgrading Python.
 
 ### Frontend / Resilient Rendering
 
-- When displaying API data that may be temporarily empty (e.g. between redeploys), use `{{ value || '—' }}` fallback instead of `v-if="value"` conditional rendering. Empty strings are falsy in JS — `v-if` hides the entire field, making it look like the model changed. Always show the field label with a fallback value.
+- When displaying API data that may be temporarily empty (e.g. between redeploys), use `{{ value || 'â€”' }}` fallback instead of `v-if="value"` conditional rendering. Empty strings are falsy in JS â€” `v-if` hides the entire field, making it look like the model changed. Always show the field label with a fallback value.
 
 ### Backend / Error Tracking & Observability
 
 - **Error tracking API endpoints that read from DB must fetch all data inside the `session.begin()` transaction block.** If a query like `get_error_group()` is made inside the transaction (for RLS context) but a subsequent `get_error_events_by_group()` call is made outside it, the second call runs without RLS context and can leak cross-org data or return stale results. Wrap all DB reads/writes in the same `async with session.begin():` block that contains the auth/RLS setup.
-- **Redis async calls from sync context: always `await` the coroutine.** `_get_last_fired` and `_set_last_fired` in alert evaluation were defined as `async def` but called without `await` — the coroutine object was silently discarded, the cooldown never persisted to Redis, and the method returned `True` (non-None coroutine) so cooldowns appeared perpetually active. Never discard an `async` coroutine without `await` unless intentionally fire-and-forget (and even then, `asyncio.create_task` is preferred).
+- **Redis async calls from sync context: always `await` the coroutine.** `_get_last_fired` and `_set_last_fired` in alert evaluation were defined as `async def` but called without `await` â€” the coroutine object was silently discarded, the cooldown never persisted to Redis, and the method returned `True` (non-None coroutine) so cooldowns appeared perpetually active. Never discard an `async` coroutine without `await` unless intentionally fire-and-forget (and even then, `asyncio.create_task` is preferred).
 - **Error forwarders must isolate failures per-forwarder.** A single forwarder's HTTP failure (network error, bad API key) must not prevent other forwarders from delivering, and must not crash the error ingestion pipeline. Wrap each `forward()` call in `try/except` and log the failure.
-- **Alert evaluation cooldown keys should include both rule_id and fingerprint.** Without the fingerprint in the cooldown key, all errors matching a rule share a single cooldown — the first error that fires an alert suppresses alerts for entirely different errors. The key format should be `alert_cooldown:{org_id}:{rule_id}:{fingerprint}`.
+- **Alert evaluation cooldown keys should include both rule_id and fingerprint.** Without the fingerprint in the cooldown key, all errors matching a rule share a single cooldown â€” the first error that fires an alert suppresses alerts for entirely different errors. The key format should be `alert_cooldown:{org_id}:{rule_id}:{fingerprint}`.
 
 ### Backend / CLI Tools
 
-- **Click decorators must decorate the command function directly.** Applying `@click.option()` to a wrapper function instead of the actual `@click.command()` function means the CLI never registers the options — the command accepts no arguments at runtime. The decorator chain must be: `@click.command()`, `@click.option(...)`, `def my_command(...)` — stacked in that order on the same function.
+- **Click decorators must decorate the command function directly.** Applying `@click.option()` to a wrapper function instead of the actual `@click.command()` function means the CLI never registers the options â€” the command accepts no arguments at runtime. The decorator chain must be: `@click.command()`, `@click.option(...)`, `def my_command(...)` â€” stacked in that order on the same function.
 
 ### Backend / Caching & Init Ordering
 
 - In-memory caches that store mutable dicts must return a defensive copy (`json.loads(json.dumps(data))` or `copy.deepcopy(data)`) rather than the original reference. Returning the raw reference allows concurrent callers to mutate the cached data, corrupting the cache for subsequent requests within the TTL window.
-- Initialization flags (`initialized = true`) must be set AFTER the init logic completes, not before. Setting `initialized = true` before `await loadLocaleMessages()` or `await setLocale()` means a failure in those async calls leaves the app in a half-initialized state where no retry is possible — the flag already blocks re-entry.
-- When DB migration errors need to be caught for 501 responses, use `except ProgrammingError` (not `except SQLAlchemyError`). `ProgrammingError` indicates a missing table/column (migration not yet applied), while `SQLAlchemyError` is the base class that also catches `IntegrityError`, `DataError`, etc. — real data errors should surface as 500, not as misleading "Run database migrations" messages.
+- Initialization flags (`initialized = true`) must be set AFTER the init logic completes, not before. Setting `initialized = true` before `await loadLocaleMessages()` or `await setLocale()` means a failure in those async calls leaves the app in a half-initialized state where no retry is possible â€” the flag already blocks re-entry.
+- When DB migration errors need to be caught for 501 responses, use `except ProgrammingError` (not `except SQLAlchemyError`). `ProgrammingError` indicates a missing table/column (migration not yet applied), while `SQLAlchemyError` is the base class that also catches `IntegrityError`, `DataError`, etc. â€” real data errors should surface as 500, not as misleading "Run database migrations" messages.
 
 ### Backend / Dashboard & Aggregations
 
@@ -800,7 +812,7 @@ Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-ms
 ### Frontend / Internationalization
 
 - `en-US.json` can accumulate non-user-facing artifacts (SVG path data, JS expressions with `??`/`||`, template literals, function calls) from the auto-extraction script. After extraction, verify all JSON values are human-readable text. Remove keys containing `??`, `${`, `||`, function calls, or SVG path data.
-- When adding locale sync between frontend and backend, verify the Pinia store's payload shape matches the API model. `PUT /api/v1/me/settings` expects `{ locale: "..." }` at top level (flat), not `{ preferences: { locale: "..." } }` (nested). Misaligned shapes silently fail — the locale is never persisted. Verify both the send direction (`syncToBackend`) and the read direction (`initLocale`) match the backend's `SettingsResponse`/`SettingsUpdate` Pydantic models.
+- When adding locale sync between frontend and backend, verify the Pinia store's payload shape matches the API model. `PUT /api/v1/me/settings` expects `{ locale: "..." }` at top level (flat), not `{ preferences: { locale: "..." } }` (nested). Misaligned shapes silently fail â€” the locale is never persisted. Verify both the send direction (`syncToBackend`) and the read direction (`initLocale`) match the backend's `SettingsResponse`/`SettingsUpdate` Pydantic models.
 
 ### Translation values must not contain newlines or HTML entities
 
@@ -816,39 +828,39 @@ If a UI element needs multi-line text (like a textarea placeholder with multiple
 ### Frontend / Store & View Patterns
 
 - Do not duplicate computed properties across a Pinia store and a Vue view. Define the computed once in the store and reference it from the view via `storeName.propertyName`.
-- Runtime validation of API responses from the app's own backend should be minimal (top-level null/type checks or Zod schema), not 100+ lines of per-field manual type-checking. TypeScript and tests catch shape mismatches at build/test time — full field-level validation is over-engineering for internal endpoints.
-- Keep store fetch methods consistent across the same store. Both `fetchSummary` and `fetchTrends` should follow the same error-handling pattern — no `console.warn` in production code, both should set `error.value` on failure.
+- Runtime validation of API responses from the app's own backend should be minimal (top-level null/type checks or Zod schema), not 100+ lines of per-field manual type-checking. TypeScript and tests catch shape mismatches at build/test time â€” full field-level validation is over-engineering for internal endpoints.
+- Keep store fetch methods consistent across the same store. Both `fetchSummary` and `fetchTrends` should follow the same error-handling pattern â€” no `console.warn` in production code, both should set `error.value` on failure.
 - Event handler type guards (`if (event.type !== 'run' && event.type !== 'pipeline') return;`) must precede state mutations (`syncingIds.add`). Adding an ID before the type check means unhandled event types permanently block future events with the same ID.
 - Inline markup duplicated between desktop and mobile variants (view mode toggles, brand headers) must be extracted to a shared component. If both sidebars render the same UI element, it belongs in a single `.vue` file.
 
 ### Backend / Async & Concurrency
 
-- `asyncio.create_task()` called from sync code (SQLAlchemy listeners, signal handlers) → guard with `try: asyncio.get_running_loop(); except RuntimeError: log_warning(...) else: create_task(...)`. Without this guard, calling sync code without a running event loop crashes with `RuntimeError: no running event loop`.
-- Monkey-patching stdlib types (`asyncio.Queue._user_id = ...`) → use a separate tracking structure (`dict[int, str]` keyed by `id(queue)`). Stdlib types are not guaranteed to have dunder-namespace stability and future CPython versions may add internal `_`-prefixed attributes that collide.
-- Lazy-init side effects in dual-channel classes (pub/sub, read/write) → each method should only create its own channel. `publish()` must not create subscription connections and `subscribe()` must not create publishing connections. Use the shared `connect()` method for full initialization.
+- `asyncio.create_task()` called from sync code (SQLAlchemy listeners, signal handlers) â†’ guard with `try: asyncio.get_running_loop(); except RuntimeError: log_warning(...) else: create_task(...)`. Without this guard, calling sync code without a running event loop crashes with `RuntimeError: no running event loop`.
+- Monkey-patching stdlib types (`asyncio.Queue._user_id = ...`) â†’ use a separate tracking structure (`dict[int, str]` keyed by `id(queue)`). Stdlib types are not guaranteed to have dunder-namespace stability and future CPython versions may add internal `_`-prefixed attributes that collide.
+- Lazy-init side effects in dual-channel classes (pub/sub, read/write) â†’ each method should only create its own channel. `publish()` must not create subscription connections and `subscribe()` must not create publishing connections. Use the shared `connect()` method for full initialization.
 
 ### Backend / BDD Feature Tests
 
-- **Feature file API paths are step-text matching keys, not just documentation.** Changing a path in a `.feature` file (e.g. `/api/pipelines` → `/api/v1/pipelines`) breaks the pytest-bdd step matching unless the corresponding step definition `parsers.parse` pattern is updated in the same change. Fixes must be coordinated between `tests/bdd/features/` and `tests/bdd/steps/` — never change one without the other.
-- **Background blocks reduce duplication without changing behavior.** When 6+ scenarios in a feature file start with the same `Given I am authenticated as an admin in org "acme"`, promote it to a `Background:` section. Scenarios needing different auth (e.g. viewer role) override the Background by repeating the same step text inline — pytest-bdd uses the scenario-level step, not the Background's.
+- **Feature file API paths are step-text matching keys, not just documentation.** Changing a path in a `.feature` file (e.g. `/api/pipelines` â†’ `/api/v1/pipelines`) breaks the pytest-bdd step matching unless the corresponding step definition `parsers.parse` pattern is updated in the same change. Fixes must be coordinated between `tests/bdd/features/` and `tests/bdd/steps/` â€” never change one without the other.
+- **Background blocks reduce duplication without changing behavior.** When 6+ scenarios in a feature file start with the same `Given I am authenticated as an admin in org "acme"`, promote it to a `Background:` section. Scenarios needing different auth (e.g. viewer role) override the Background by repeating the same step text inline â€” pytest-bdd uses the scenario-level step, not the Background's.
 - **Avoid module-level imports of `modulo.api.main` in conftest files.** Importing `modulo.api.main` at module level triggers MCP server startup and database connection pooling, which can hang the test suite. Use lazy imports inside the `client` fixture instead.
 - **No two test modules should call `scenarios()` for the same .feature file.** This causes duplicate test registration and `StepDefinitionAlreadyRegistered` errors. Each `.feature` file should have exactly one `scenarios()` caller. If steps need to be shared, define them in a helper module that the single scenarios()-owning module imports.
 - **Shared step text patterns must be defined only once.** The step `@given(parsers.parse('I am authenticated as an admin in org "{org}"'))` should live in `bdd/conftest.py` and not be duplicated in domain-specific conftests like `features/agents/conftest.py`. pytest-bdd silently uses whichever registration was last, making behavior non-deterministic.
-- **`BasicScenario` (Gherkin) status code expectations must match the actual FastAPI route mapping.** Before adding a `Then the response status is NNN` to a `.feature` file, verify the actual route handler's exception-to-status mapping. HITL approve status codes were wrong in 3 scenarios (403→422 for missing token, 403→410 for expired token, 409→403 for wrong user's token). Check the route's `except` blocks, not assumptions.
+- **`BasicScenario` (Gherkin) status code expectations must match the actual FastAPI route mapping.** Before adding a `Then the response status is NNN` to a `.feature` file, verify the actual route handler's exception-to-status mapping. HITL approve status codes were wrong in 3 scenarios (403â†’422 for missing token, 403â†’410 for expired token, 409â†’403 for wrong user's token). Check the route's `except` blocks, not assumptions.
 
 ### Ops / Deploy Workflow
 
 - **Deploy scripts must refuse to deploy with a dirty working tree.** The old auto-stash pattern (`git stash -u -m "auto-stash before deploy"` in `deploy.ps1` and `deploy-all.ps1`) caused stash collisions and data loss when multiple scripts or trap handlers popped stashes out of order. Both scripts now check `git status --porcelain` at the start and exit with an error if the working tree is dirty. The caller is responsible for committing, branching, or stashing before deploying.
 
-- **Use `deploy.ps1` or `deploy-all.ps1` — never `fly deploy` directly.** The scripts pass `--build-arg GIT_SHA`, `GIT_BRANCH`, `GIT_COMMIT_TIMESTAMP`, `GIT_COMMIT_MESSAGE`, and `BUILD_TIMESTAMP` automatically. Direct `fly deploy` invocations leave all metadata fields blank in `/api/v1/deployment`, causing the deployments page to show `?` for commit, branch, message, and dates. The branch guard (`main` or `deploy/*`) also prevents accidental deploys from worktree branches.
+- **Use `deploy.ps1` or `deploy-all.ps1` â€” never `fly deploy` directly.** The scripts pass `--build-arg GIT_SHA`, `GIT_BRANCH`, `GIT_COMMIT_TIMESTAMP`, `GIT_COMMIT_MESSAGE`, and `BUILD_TIMESTAMP` automatically. Direct `fly deploy` invocations leave all metadata fields blank in `/api/v1/deployment`, causing the deployments page to show `?` for commit, branch, message, and dates. The branch guard (`main` or `deploy/*`) also prevents accidental deploys from worktree branches.
 
-- **Lost git stashes can be recovered via `git reflog` + `git stash store`.** The `git stash drop` command (or a trap handler that pops the wrong stash) only removes the `refs/stash` reference — the commit object remains in `.git/objects/` until garbage collection. Find the stash commit SHA via `git reflog --all | Select-String "stash"`, verify with `git cat-file -t <SHA>`, then restore with `git stash store <SHA>`. The stash will reappear at `stash@{0}`.
+- **Lost git stashes can be recovered via `git reflog` + `git stash store`.** The `git stash drop` command (or a trap handler that pops the wrong stash) only removes the `refs/stash` reference â€” the commit object remains in `.git/objects/` until garbage collection. Find the stash commit SHA via `git reflog --all | Select-String "stash"`, verify with `git cat-file -t <SHA>`, then restore with `git stash store <SHA>`. The stash will reappear at `stash@{0}`.
 
-- **Wrap every lifespan seed/init call in try/except — no single boot-time failure should block the app from starting.** The FastAPI lifespan runs migrations, seeds default data, and initialises the checkpointer. Any of these can crash from transient DB issues (SSL param changes, connection timeouts, schema drift from parallel branch merges). A single failed seed function in the lifespan crashes uvicorn at startup, which makes bluegreen deployments fail health checks and keeps stale machines running. Each call that isn't a hard prerequisite for the app to function (user seeds, demo data, environment profiles, checkpointer init, SSO providers, runtime config store) must be wrapped in `try/except` with `exc_info=True` logging so it's debuggable without blocking the deploy. Found during the ADR 001 staging deploy where `_seed_environment_profiles()` crashed from a DATABASE_URL SSL param issue.
+- **Wrap every lifespan seed/init call in try/except â€” no single boot-time failure should block the app from starting.** The FastAPI lifespan runs migrations, seeds default data, and initialises the checkpointer. Any of these can crash from transient DB issues (SSL param changes, connection timeouts, schema drift from parallel branch merges). A single failed seed function in the lifespan crashes uvicorn at startup, which makes bluegreen deployments fail health checks and keeps stale machines running. Each call that isn't a hard prerequisite for the app to function (user seeds, demo data, environment profiles, checkpointer init, SSO providers, runtime config store) must be wrapped in `try/except` with `exc_info=True` logging so it's debuggable without blocking the deploy. Found during the ADR 001 staging deploy where `_seed_environment_profiles()` crashed from a DATABASE_URL SSL param issue.
 
 - **Before deploying, run `npm run build` locally to catch frontend build errors early.** The Docker build lacks interactivity and hides errors behind 10-minute retries. Common issues caught: Rolldown parser errors from Vue template syntax, missing dependencies imported but not in `package.json`, duplicate manifest.yaml keys from parallel distributed work. The local frontend build may fail due to a corrupted `lightningcss.win32-x64-msvc.node` binary (native module, Windows-specific). If that happens, delete `node_modules` and re-run `npm install` to regenerate the native binary.
 
-- **`package-lock.json` must be regenerated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions — it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `npm install <package> --save` and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports — this is a manual check. For CI, add a step that runs `node -e "require('./package.json').dependencies"` and cross-references against imports in `src/`.
+- **`package-lock.json` must be regenerated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions â€” it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `npm install <package> --save` and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports â€” this is a manual check. For CI, add a step that runs `node -e "require('./package.json').dependencies"` and cross-references against imports in `src/`.
 
 ### entrypoint.sh: migration revision IDs must match actual Alembic filenames
 
@@ -860,17 +872,17 @@ The fix/pipelines-copy Worker touched files that were already modified by other 
 
 ### Eval Engine / Error Handling Audit
 
-- **StrEnum validates at the Pydantic model level, not at the engine level.** `EvalType` is a `StrEnum`, so passing `"nonexistent_type"` to `EvalDefinition(eval_type="nonexistent_type")` raises `ValidationError` at construction, never reaching the `UnknownEvalTypeError` handler in the engine's `match/case` dispatch. The `UnknownEvalTypeError` is dead code for normal usage through the Pydantic model — it would only trigger if someone bypasses Pydantic (e.g. `object.__setattr__(eval_def, "eval_type", "bad")`). Tests for unknown-type dispatch must bypass Pydantic validation with `object.__setattr__`.
-- **ReDoS detection pattern only catches nested quantifiers with `+` or `*` INSIDE the group before the outer quantifier.** `(a|b)+` is NOT caught because there's no `+` or `*` between `(` and `)` — only an alternation `|`. The `_RE_NESTED_QUANTIFIER` regex (`\(\s*[^)]*[+*][^)]*\s*\)[+*]`) requires a quantifier character inside the group. `(a|b)+` is still a potential ReDoS vector in Python's `re` module, but the current detection is conservative (only catches clear nested quantifiers like `(a+)+`, `(a*)*`).
-- **Regex `None` field values are coerced to empty string `""`** via the `str(None)` → `"None"` issue. The code explicitly handles this: `value = "" if raw_value is None else str(raw_value)`. Always verify that `None` → empty string coercion is used in eval field extraction — `str(None)` produces `"None"` which falsely matches patterns like `r"^None$"`.
+- **StrEnum validates at the Pydantic model level, not at the engine level.** `EvalType` is a `StrEnum`, so passing `"nonexistent_type"` to `EvalDefinition(eval_type="nonexistent_type")` raises `ValidationError` at construction, never reaching the `UnknownEvalTypeError` handler in the engine's `match/case` dispatch. The `UnknownEvalTypeError` is dead code for normal usage through the Pydantic model â€” it would only trigger if someone bypasses Pydantic (e.g. `object.__setattr__(eval_def, "eval_type", "bad")`). Tests for unknown-type dispatch must bypass Pydantic validation with `object.__setattr__`.
+- **ReDoS detection pattern only catches nested quantifiers with `+` or `*` INSIDE the group before the outer quantifier.** `(a|b)+` is NOT caught because there's no `+` or `*` between `(` and `)` â€” only an alternation `|`. The `_RE_NESTED_QUANTIFIER` regex (`\(\s*[^)]*[+*][^)]*\s*\)[+*]`) requires a quantifier character inside the group. `(a|b)+` is still a potential ReDoS vector in Python's `re` module, but the current detection is conservative (only catches clear nested quantifiers like `(a+)+`, `(a*)*`).
+- **Regex `None` field values are coerced to empty string `""`** via the `str(None)` â†’ `"None"` issue. The code explicitly handles this: `value = "" if raw_value is None else str(raw_value)`. Always verify that `None` â†’ empty string coercion is used in eval field extraction â€” `str(None)` produces `"None"` which falsely matches patterns like `r"^None$"`.
 - **Custom function `functions` config must be validated as `dict`**, not assumed. The eval engine already handles this (`isinstance(fn_registry_raw, dict) else {}`) but it's untested. When audit-testing eval error paths, always check non-dict config values for optional dict-typed config keys.
-- **JSON Schema "field not in output" is a separate error path from "field not in output for scoped validation."** The code checks `field not in output` when a field is configured (non-empty) but absent from the output dict — this is distinct from an empty field (validates whole output) or a mismatched schema.
+- **JSON Schema "field not in output" is a separate error path from "field not in output for scoped validation."** The code checks `field not in output` when a field is configured (non-empty) but absent from the output dict â€” this is distinct from an empty field (validates whole output) or a mismatched schema.
 
 ### Ops / Database (Fly Postgres)
 
 - **Unmanaged Fly Postgres (`fly postgres create`) does NOT auto-restart on crash.** When PostgreSQL on a Flex Postgres machine crashes (e.g. OOM, disk full, segfault), the monitoring agent and `repmgrd` keep running but the `postgres` process stays down. There is no systemd unit to restart it. To recover: SSH into the DB machine (`fly ssh console --app <db-app>`) and run `su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'`. Consider adding a cron job or health check that restarts PostgreSQL if the process is missing. For production-critical DBs, migrate to Managed Postgres (`fly mpg create`).
 
-### ADR 003 supersedes ADR 001 — Modulo dispatches, it doesn't run agents
+### ADR 003 supersedes ADR 001 â€” Modulo dispatches, it doesn't run agents
 
 The original ADR 001 "Agent Execution Environment" assumed Modulo agents would
 run inside sandboxed environments (E2B, Docker) with shell access via
@@ -885,7 +897,7 @@ ADR 003 establishes the **Agent Dispatch Model**:
 - Modulo owns: dispatch, auth, audit, cost tracking, eval gates, HITL
 - The external agent runtime owns: the tool-using loop, file operations, git
 - Wall-clock time and exit code are captured natively on every dispatch
-- ShellConnector is deprecated — Modulo agents don't run inside sandboxes
+- ShellConnector is deprecated â€” Modulo agents don't run inside sandboxes
 - Post-hoc eval of agent output is a separate Modulo pipeline (code review, etc.)
 
 When creating new pipeline features, prefer the `sandbox_agent` node type for
@@ -902,7 +914,7 @@ valid for non-coding tasks (classification, summarization, analysis).
 - Individual restarts (\lyctl machine restart\, \lyctl apps restart\) do NOT fix it
 - The error message hints: "are you using the 'immediate' strategy?"
 
-**Fix � scale-to-zero then scale-up:**
+**Fix — scale-to-zero then scale-up:**
 \\\powershell
 flyctl scale count 0 --yes -a app-modulo
 flyctl scale count 2 --yes -a app-modulo
@@ -911,5 +923,5 @@ This destroys all machines and creates fresh ones that register correctly with t
 
 **Prevention:**
 - \[deploy] strategy = 'rolling'\ is set in \ly.toml\ and \ly.staging.toml\
-- Always use the deploy pipeline or \deploy.ps1\ � never \lyctl deploy\ directly
-- Never pass \--strategy immediate\ � rolling/canary/bluegreen are the safe options
+- Always use the deploy pipeline or \deploy.ps1\ — never \lyctl deploy\ directly
+- Never pass \--strategy immediate\ — rolling/canary/bluegreen are the safe options
