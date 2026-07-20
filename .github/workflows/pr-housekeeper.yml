@@ -138,9 +138,11 @@ jobs:
             fi
             mkdir -p ~/.local/share/opencode
             echo '{"opencode":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"},"opencode-go":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"}}' > ~/.local/share/opencode/auth.json
-            opencode run "Fix ALL failing CI checks. Files: ${CHANGED_FILES}. CI failures: ${FIX_FAILURES}. Fix every issue. Never disable checks." 2>&1 | tail -20 || true
+            opencode -p "Fix the failing CI checks in these files. Fix every issue. Never disable checks. Files: ${CHANGED_FILES}" 2>&1 || true
             if [ -d "backend" ]; then cd backend && uv run --no-sync ruff check --fix . 2>/dev/null || true; cd ..; fi
-            git add -A
+            git add -A .
+            git rm --cached -r .opencode 2>/dev/null || true
+            rm -rf .opencode 2>/dev/null || true
             if ! git diff --cached --quiet; then
               git config user.name "modulo-housekeeper" && git config user.email "bot@modulo.run"
               git commit -m "fix: automated fixes from PR Housekeeper" --no-verify 2>/dev/null || true
