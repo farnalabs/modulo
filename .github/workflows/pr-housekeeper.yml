@@ -23,6 +23,42 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install opencode CLI
+        id: install-opencode
+        shell: bash
+        run: |
+          OPENCODE_VERSION="v0.0.55"
+          TARBALL_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x86_64.tar.gz"
+          DEB_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-amd64.deb"
+          echo "::group::Download opencode ${OPENCODE_VERSION}"
+          if curl -sL "$TARBALL_URL" -o /tmp/opencode.tar.gz && [ -s /tmp/opencode.tar.gz ]; then
+            sudo tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin/ opencode 2>/dev/null
+            if command -v opencode &>/dev/null; then
+              echo "opencode_installed=true" >> "$GITHUB_OUTPUT"
+              opencode --version 2>/dev/null || true
+              echo "::endgroup::"
+              exit 0
+            fi
+          fi
+          echo "Tarball failed, trying .deb"
+          if curl -sL "$DEB_URL" -o /tmp/opencode.deb && [ -s /tmp/opencode.deb ]; then
+            sudo dpkg -i /tmp/opencode.deb 2>/dev/null || sudo apt-get install -f -y -qq 2>/dev/null
+            if command -v opencode &>/dev/null; then
+              echo "opencode_installed=true" >> "$GITHUB_OUTPUT"
+              opencode --version 2>/dev/null || true
+              echo "::endgroup::"
+              exit 0
+            fi
+          fi
+          echo "opencode_installed=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::opencode CLI could not be installed"
+          echo "::endgroup::"
+
       - name: List all open PRs
         id: list
         env:
