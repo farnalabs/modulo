@@ -50,6 +50,13 @@
         "build": {
             "temperature": 0.2,
             "steps": 500
+        },
+        "coder": {
+            "permission": {
+                "edit": "allow",
+                "write": "allow",
+                "bash": "allow"
+            }
         }
     },
     "watcher": {
