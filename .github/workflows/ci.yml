@@ -511,26 +511,23 @@ jobs:
           PR_NUM="${{ github.event.pull_request.number }}"
           BRANCH="${{ github.event.pull_request.head.ref }}"
 
-          # Count how many auto-fix commits the branch fixer has already pushed to this PR
+          # Count how many times the branch fixer has already pushed fix commits 
+          # to this PR. Each successful fix produces exactly one commit with 
+          # committer "modulo-branch-fixer".
           FIX_COUNT=$(gh api "/repos/${{ github.repository }}/pulls/${PR_NUM}/commits?per_page=100" \
-            --jq '[.[] | select(.commit.message | startswith("fix: automated branch fix agent patches"))] | length' 2>/dev/null || echo "0")
+            --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | length' 2>/dev/null || echo "0")
 
           echo "fix_attempts=$FIX_COUNT" >> "$GITHUB_OUTPUT"
-          echo "PR #${PR_NUM} on '${BRANCH}' — branch fixer has already attempted $FIX_COUNT fix(es)."
+          echo "PR #${PR_NUM} on '${BRANCH}' — branch fixer has pushed $FIX_COUNT fix commit(s)."
 
           if [ "$FIX_COUNT" -ge 3 ]; then
             echo "exhausted=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::Branch fixer exhausted after $FIX_COUNT attempts against PR #${PR_NUM} — no more auto-fixes will be attempted."
+            echo "::warning::Branch fixer exhausted after $FIX_COUNT attempts against PR #${PR_NUM}."
             gh pr comment "$PR_NUM" --body "## ⏹️ Branch Fixer Exhausted
 
             The automated branch fixer has attempted $FIX_COUNT fixes against this PR but CI is still failing. Manual intervention is required.
 
-            Possible causes:
-            - The CI failure needs a human to decide between conflicting approaches
-            - The issue is in an area the auto-fixer cannot modify
-            - Pre-existing failure unrelated to this PR's changes
-
-            The branch fixer will not retry again on this PR. A human should investigate and resolve the remaining CI issues before merging."
+            The branch fixer will not retry again on this PR."
           else
             echo "exhausted=false" >> "$GITHUB_OUTPUT"
           fi

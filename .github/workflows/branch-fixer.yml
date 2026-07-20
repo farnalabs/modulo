@@ -52,20 +52,20 @@ jobs:
           PR_NUM="${{ steps.info.outputs.pr_number }}"
 
           if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "" ]; then
-            echo "No PR number — can't check retry limit, proceeding."
+            echo "No PR number — can't check retry limit."
             echo "exhausted=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           FIX_COUNT=$(gh api "/repos/${{ github.repository }}/pulls/${PR_NUM}/commits?per_page=100" \
-            --jq '[.[] | select(.commit.message | startswith("fix: automated branch fix agent patches"))] | length' 2>/dev/null || echo "0")
+            --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | length' 2>/dev/null || echo "0")
 
           echo "fix_attempts=$FIX_COUNT" >> "$GITHUB_OUTPUT"
-          echo "PR #${PR_NUM} — branch fixer has already pushed $FIX_COUNT auto-fix commit(s)."
+          echo "PR #${PR_NUM} — branch fixer has pushed $FIX_COUNT fix commit(s)."
 
           if [ "$FIX_COUNT" -ge 3 ]; then
             echo "exhausted=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::Retry limit reached ($FIX_COUNT fixes already attempted). Skipping."
+            echo "::warning::Retry limit reached ($FIX_COUNT). Skipping."
             exit 0
           else
             echo "exhausted=false" >> "$GITHUB_OUTPUT"
@@ -175,7 +175,7 @@ jobs:
             echo "committed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git commit -m "fix: automated branch fix agent patches"
+          git commit -m "fix: automated branch fix by modulo-branch-fixer"
           BRANCH="${{ steps.info.outputs.branch }}"
           if git push origin HEAD:"$BRANCH" 2>&1; then
             echo "committed=true" >> "$GITHUB_OUTPUT"
