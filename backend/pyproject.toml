@@ -154,12 +154,12 @@ exclude = ["*.feature"]
 [tool.ruff.lint]
 select = [
     "E", "W",   # pycodestyle
-    "F",        # pyflakes (dead code, unused imports â€” F841 catches uncovered vars, F811 catches redefs)
+    "F",        # pyflakes (dead code, unused imports ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â F841 catches uncovered vars, F811 catches redefs)
     "I",        # isort
     "N",        # pep8-naming
     "UP",       # pyupgrade
-    "B",        # flake8-bugbear (real bugs â€” B006 mutating defaults, B023 loop var in closure)
-    "S",        # flake8-bandit (security â€” S608 detects raw f-string SQL injection)
+    "B",        # flake8-bugbear (real bugs ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â B006 mutating defaults, B023 loop var in closure)
+    "S",        # flake8-bandit (security ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â S608 detects raw f-string SQL injection)
     "ASYNC",    # flake8-async (ASYNC251 catches unclosed event loops, ASYNC109 sync in async)
     "RUF",      # ruff-specific rules (RUF012 mutable class defaults)
     "SIM",      # flake8-simplify (SIM115 `open()` without context manager, SIM222 bool expr)
@@ -167,7 +167,7 @@ select = [
     "T20",      # flake8-print (T201 bare print in production code)
     "RET",      # flake8-return (RET503 missing explicit return)
     "PYI",      # flake8-pyi (PYI041 redundant `Optional` on union)
-    "FURB",     # refurb (FURB125 `while` â†’ `for` loop, FURB163 unnecessary `None` check)
+    "FURB",     # refurb (FURB125 `while` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `for` loop, FURB163 unnecessary `None` check)
 ]
 ignore = [
     "S101",     # assert allowed in tests
@@ -176,21 +176,21 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"src/modulo/api/mcp_server.py" = ["RET503"]
-"tests/**" = ["S101", "S105", "S106", "S107", "S108", "S112", "S311", "B007", "B008"]
+# Stale â€” all RET503 violations fixed in PR #143.
+# B007/S108/S112/S311 are noisy-but-harmless in tests (unused vars, temp dirs, pass, random).
 
-"src/modulo/api/routes/scim.py" = ["N815", "N803"]
-"tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
+# SCIM protocol uses camelCase identifiers â€” naming convention is intentional.
+# Mirror of the SCIM module ignore above.
 
-"scripts/*" = ["T20"]
-"scripts/gen_seed_sql.py" = ["S608"]
+# Scripts need stdout output â€” print() is appropriate.
+# Code-gen script that outputs SQL â€” parameterized queries defeat the purpose.
 "scripts/generate_remy_primer.py" = ["ASYNC240"]
-"deploy/*" = ["T20"]
-"tests/bdd/check-bdd-coverage.py" = ["N999"]
-"pipeline-scripts/**" = ["S", "T201", "RET"]
-"tests/unit/runtime_provider/*" = ["E402"]
-"tests/unit/secrets_backend/*" = ["E402"]
-"src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
+# Deploy scripts need stdout/stderr â€” print() is appropriate.
+# Standalone script, not a module â€” naming convention not applicable.
+# Pipeline scripts: S (subprocess/requests patterns), T201 (print OK), RET (functional returns).
+# Test files with conditional imports for optional providers.
+# Test files with skip/import guards for optional backends.
+# Auto-generated migration files â€” not human-maintained.
 
 [tool.mypy]
 strict = true
@@ -237,7 +237,7 @@ markers = [
     "e2e: marks tests as end-to-end (require browser + running app)",
     "slow: marks tests as slow",
     "awaiting-implementation: marks scenarios that define desired behaviour not yet delivered",
-    "connector_conformance: connector contract conformance suite â€” every ConnectorType must pass",
+    "connector_conformance: connector contract conformance suite ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â every ConnectorType must pass",
 ]
 
 [tool.coverage.run]
