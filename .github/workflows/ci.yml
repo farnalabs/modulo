@@ -544,7 +544,12 @@ jobs:
         run: |
           TIMESTAMP=$(date +%s)
           BODY=$(cat << ENDJSON
-          {"branch_name": "${BRANCH}", "pr_number": ${PR_NUM}}
+          {
+            "branchName": "${BRANCH}",
+            "prNumber": ${PR_NUM},
+            "runUrl": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "failureDescription": "CI checks failed on PR #${PR_NUM} (branch: ${BRANCH})"
+          }
           ENDJSON
           )
           echo "PR #${PR_NUM} on branch '${BRANCH}' — CI checks failed."
@@ -556,11 +561,11 @@ jobs:
             -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
             -d "${BODY}")
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
+          BODY_RESP=$(echo "$RESPONSE" | sed '$d')
           if [ "$HTTP_CODE" = "202" ]; then
-            echo "Modulo Branch Fixer accepted (run: $(echo $BODY | jq -r '.run_id // "unknown"'))"
+            echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
           elif [ "$HTTP_CODE" = "429" ]; then
-            echo "::warning::Modulo Branch Fixer rate-limited — $(echo $BODY | jq -r '.detail // "too many requests"')"
+            echo "::warning::Modulo Branch Fixer rate-limited — $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
           else
-            echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY | jq -r '.detail // "unknown"')"
+            echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
           fi
