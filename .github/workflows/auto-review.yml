@@ -10,6 +10,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
+  check_suite:
+    types: [completed]
 
 jobs:
   review:
@@ -79,6 +81,10 @@ jobs:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
         run: |
           PR_NUM="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
+          if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
+            HEAD_BRANCH="${{ github.event.check_suite.head_branch }}"
+            PR_NUM=$(gh pr list --state open --head "$HEAD_BRANCH" --json number -q ".[0].number" 2>/dev/null || echo "")
+          fi
           FAILED=$(gh pr view "$PR_NUM" --json statusCheckRollup --jq "'.statusCheckRollup[] | select(.status == \"COMPLETED\") | .conclusion'" 2>/dev/null | grep -c "FAILURE" || true)
           echo "ci_failed=$([ "$FAILED" -gt 0 ] && echo "true" || echo "false")" >> "$GITHUB_OUTPUT"
 
