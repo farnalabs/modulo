@@ -34,7 +34,7 @@ async def get_current_tenant_user_optional(
             org_role=principal.org_role,
             is_system_admin=principal.is_system_admin,
         )
-    except Exception:
+    except JWTError:
         return None
 
 
@@ -96,6 +96,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
     """
     try:
         from sqlalchemy import text as _text
+        from sqlalchemy.exc import SQLAlchemyError
 
         from modulo.api.dependencies import (
             get_or_create_engine,
@@ -141,7 +142,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
                 )
     except HTTPException:
         raise
-    except Exception:
+    except SQLAlchemyError:
         _log.warning("auth.identity_verify_failed", exc_info=True)
 
 
