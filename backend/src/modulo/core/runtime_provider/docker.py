@@ -124,7 +124,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,
+        cmd_timeout: int | None = None,
     ) -> ExecResult:
         """Run a command inside the workspace container."""
         container_id = self._get_container_id(provider_ref)
@@ -151,8 +151,8 @@ class DockerRuntimeProvider(RuntimeProvider):
 
         start = time.monotonic()
         try:
-            if timeout is not None:
-                stdout_bytes, stderr_bytes, exit_code = await asyncio.wait_for(_run_exec(), timeout=timeout)
+            if cmd_timeout is not None:
+                stdout_bytes, stderr_bytes, exit_code = await asyncio.wait_for(_run_exec(), timeout=cmd_timeout)
             else:
                 stdout_bytes, stderr_bytes, exit_code = await _run_exec()
             duration = int((time.monotonic() - start) * 1000)

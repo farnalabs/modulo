@@ -181,8 +181,6 @@ ignore = [
 
 "src/modulo/api/routes/scim.py" = ["N815", "N803"]
 "tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
-"src/modulo/db/repositories/locks.py" = ["ASYNC109"]
-"src/modulo/core/runtime_provider/*.py" = ["ASYNC109"]
 
 "scripts/*" = ["T20"]
 "scripts/gen_seed_sql.py" = ["S608"]
