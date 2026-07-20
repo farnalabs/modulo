@@ -25,6 +25,8 @@ jobs:
 
       - name: List all open PRs
         id: list
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
         shell: bash
         run: |
           echo "Fetching open PRs..."
