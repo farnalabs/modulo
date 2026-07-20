@@ -62,7 +62,7 @@ jobs:
             echo "---"
             echo "PR #$NUM: $TITLE (age: ${AGE_HOURS}h, stale: ${STALE_HOURS}h, mergeable: $MERGEABLE, review: $REVIEW_STATE)"
 
-            if [ "$STALE_HOURS" -lt 1 ] && [ "$REVIEW_STATE" != "CHANGES_REQUESTED" ]; then
+            if [ "$STALE_HOURS" -lt 0 ] && [ "$REVIEW_STATE" != "CHANGES_REQUESTED" ]; then
               echo "  SKIP - updated recently (<1h)"
               continue
             fi
