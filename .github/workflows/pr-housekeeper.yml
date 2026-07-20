@@ -80,7 +80,7 @@ jobs:
             fi
 
             # Rule 2: CI stuck on pending checks
-            if [ "$STALE_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 1 ]; then
+            if [ "$FAILED_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 0 ]; then
               echo "  ACTION: ${STALE_CHECKS} check(s) stuck - re-dispatching CI"
               gh workflow run ci.yml --ref "$REF" 2>/dev/null && echo "  CI dispatched" || echo "  WARNING: Could not dispatch CI"
               ACTIONS="$ACTIONS ci-redispatch-$NUM"
@@ -88,7 +88,7 @@ jobs:
             fi
 
             # Rule 3: CI failed, no fix committed >1hr - dispatch branch-fixer
-            if [ "$FAILED_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 1 ]; then
+            if [ "$FAILED_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 0 ]; then
               echo "  ACTION: ${FAILED_CHECKS} check(s) failed - dispatching branch-fixer"
               gh workflow run branch-fixer.yml -f branch_name="$REF" -f pr_number="$NUM" 2>/dev/null && echo "  Branch fixer dispatched" || echo "  WARNING: Could not dispatch branch-fixer"
               ACTIONS="$ACTIONS branch-fix-$NUM"
