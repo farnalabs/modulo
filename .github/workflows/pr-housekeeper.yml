@@ -90,7 +90,32 @@ jobs:
             # Rule 3: CI failed, no fix committed >1hr - dispatch branch-fixer
             if [ "$FAILED_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 0 ]; then
               echo "  ACTION: ${FAILED_CHECKS} check(s) failed - dispatching branch-fixer"
-              gh api repos/${{ github.repository }}/dispatches --method POST -f event_type=branch-fix-request -f client_payload[branch_name]="$REF" -f client_payload[pr_number]="$NUM" 2>/dev/null && echo "  Branch fixer dispatched via repo_dispatch" || echo "  WARNING: Could not dispatch branch-fixer"
+              echo "  Running inline fix for $REF..."
+          git fetch origin "$REF" 2>/dev/null || true
+          git checkout "$REF" 2>/dev/null || true
+          CHANGED_FILES=$(git diff --name-only origin/main...HEAD --diff-filter=ACM 2>/dev/null | paste -sd ' ' -)
+          if [ -n "$CHANGED_FILES" ] && command -v opencode &>/dev/null; then
+            FIX_LOG=$(gh run list --branch "$REF" --workflow ci.yml --limit 1 --json databaseId -q ".[0].databaseId" 2>/dev/null || echo "")
+            FIX_FAILURES=""
+            if [ -n "$FIX_LOG" ] && [ "$FIX_LOG" != "null" ]; then
+              FIX_FAILURES=$(gh run view "$FIX_LOG" --log-failed 2>/dev/null | head -100 || true)
+            fi
+            mkdir -p ~/.local/share/opencode
+            echo '{"opencode":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"},"opencode-go":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"}}' > ~/.local/share/opencode/auth.json
+            opencode run "Fix ALL failing CI checks. Files: ${CHANGED_FILES}. CI failures: ${FIX_FAILURES}. Fix every issue. Never disable checks." 2>&1 | tail -20 || true
+            if [ -d "backend" ]; then cd backend && uv run --no-sync ruff check --fix . 2>/dev/null || true; cd ..; fi
+            git add -A
+            if ! git diff --cached --quiet; then
+              git config user.name "modulo-housekeeper" && git config user.email "bot@modulo.run"
+              git commit -m "fix: automated fixes from PR Housekeeper" --no-verify 2>/dev/null || true
+              git push origin HEAD:"$REF" 2>/dev/null && echo "  Fixes pushed to $REF" || echo "  WARNING: Could not push fixes"
+            else
+              echo "  No changes needed for $REF"
+            fi
+          else
+            echo "  Skipping fix for $REF (no changed files or opencode not available)"
+          fi
+          git checkout main 2>/dev/null || true
               ACTIONS="$ACTIONS branch-fix-$NUM"
               continue
             fi
