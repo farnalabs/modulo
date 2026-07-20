@@ -107,15 +107,15 @@ jobs:
 
           if [ -f "$FIX_PROMPT" ]; then
             PROMPT_TEXT=$(cat "$FIX_PROMPT")
-            FIX_OUTPUT=$(opencode run --agent coder "${PROMPT_TEXT}. Files: ${CHANGED_FILES}.
+            FIX_OUTPUT=$(opencode run "${PROMPT_TEXT}. Files: ${CHANGED_FILES}. You MUST edit files to fix the issues. Use the Write tool or Edit tool.
           CI failures log:
           ${{ steps.fetch-ci.outputs.ci_log }}" 2>&1) || true
           else
             echo "No fix prompt found, using inline instructions"
-            FIX_OUTPUT=$(opencode run --agent coder "Fix ALL failing CI checks. Files: ${CHANGED_FILES}.
+            FIX_OUTPUT=$(opencode run "Fix ALL failing CI checks. Files: ${CHANGED_FILES}.
 CI failures:
 ${{ steps.fetch-ci.outputs.ci_log }}
-Fix every issue. Never disable checks." 2>&1) || true
+Fix every issue. Never disable checks. You MUST edit files to fix them. Use your file editing tools." 2>&1) || true
           fi
           echo "${FIX_OUTPUT}" > /tmp/fix-output.txt
           echo "status=applied" >> "$GITHUB_OUTPUT"
