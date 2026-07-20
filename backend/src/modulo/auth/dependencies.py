@@ -34,7 +34,8 @@ async def get_current_tenant_user_optional(
             org_role=principal.org_role,
             is_system_admin=principal.is_system_admin,
         )
-    except JWTError:
+    except JWTError as exc:
+        _log.debug("auth.jwt_decode_optional_failed", extra={"error": str(exc)})
         return None
 
 
