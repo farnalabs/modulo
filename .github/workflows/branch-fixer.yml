@@ -52,7 +52,7 @@ jobs:
           PR_NUM="${{ steps.info.outputs.pr_number }}"
 
           if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "" ]; then
-            echo "No PR number — can't check retry limit."
+            echo "No PR number â€” can't check retry limit."
             echo "exhausted=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -61,7 +61,7 @@ jobs:
             --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | length' 2>/dev/null || echo "0")
 
           echo "fix_attempts=$FIX_COUNT" >> "$GITHUB_OUTPUT"
-          echo "PR #${PR_NUM} — branch fixer has pushed $FIX_COUNT fix commit(s)."
+          echo "PR #${PR_NUM} â€” branch fixer has pushed $FIX_COUNT fix commit(s)."
 
           if [ "$FIX_COUNT" -ge 3 ]; then
             echo "exhausted=true" >> "$GITHUB_OUTPUT"
@@ -102,15 +102,6 @@ jobs:
           echo "installed=false" >> "$GITHUB_OUTPUT"
           echo "::warning::opencode CLI could not be installed"
 
-      - name: Configure opencode auth
-        if: steps.install.outputs.installed == 'true' && steps.fetch-ci.outputs.ci_failures == 'true' && steps.retry-check.outputs.exhausted == 'false'
-        shell: bash
-        run: |
-          mkdir -p ~/.local/share/opencode
-          cat > ~/.local/share/opencode/auth.json << AUTHJSON
-          {"opencode":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"},"opencode-go":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"}}
-          AUTHJSON
-
       - name: Fetch CI failures
         id: fetch-ci
         shell: bash
@@ -128,6 +119,15 @@ jobs:
           else
             echo "ci_failures=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Configure opencode auth
+        if: steps.install.outputs.installed == 'true' && steps.fetch-ci.outputs.ci_failures == 'true' && steps.retry-check.outputs.exhausted == 'false'
+        shell: bash
+        run: |
+          mkdir -p ~/.local/share/opencode
+          cat > ~/.local/share/opencode/auth.json << AUTHJSON
+          {"opencode":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"},"opencode-go":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"}}
+          AUTHJSON
 
       - name: Run opencode fix
         id: fix
