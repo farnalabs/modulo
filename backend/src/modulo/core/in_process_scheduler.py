@@ -147,8 +147,8 @@ async def _fetch_due_cron_triggers(factory: async_sessionmaker[AsyncSession]) ->
                 try:
                     snapshot_id = uuid.UUID(snapshot_id_str)
                 except (ValueError, TypeError):
-                    _log.warning("Cron trigger %s has invalid snapshot_id in config — skipping", row.id)
-                    continue
+                    _log.warning("Cron trigger %s has invalid snapshot_id in config — will auto-create on fire", row.id)
+                    snapshot_id = None
             else:
                 # Look up the latest snapshot for this pipeline
                 snap_result = await session.execute(
@@ -162,9 +162,10 @@ async def _fetch_due_cron_triggers(factory: async_sessionmaker[AsyncSession]) ->
                 )
                 snap_row = snap_result.scalar_one_or_none()
                 if snap_row is None:
-                    _log.warning("Cron trigger %s has no snapshot_id and no snapshots for pipeline — skipping", row.id)
-                    continue
-                snapshot_id = snap_row
+                    _log.info("Cron trigger %s has no snapshots — will auto-create on fire", row.id)
+                    snapshot_id = None
+                else:
+                    snapshot_id = snap_row
             triggers.append(
                 {
                     "id": row.id,
@@ -235,7 +236,7 @@ async def _fire_cron_wrapper(factory: async_sessionmaker[AsyncSession], info: di
             trigger_id=info["id"],
             org_id=info["org_id"],
             pipeline_id=info["pipeline_id"],
-            snapshot_id=info["snapshot_id"],
+            snapshot_id=info.get("snapshot_id"),
             cron_expression=info["cron_expression"],
             factory=factory,
         )
