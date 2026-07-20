@@ -72,6 +72,16 @@ jobs:
           echo "files=${FILES}" >> "$GITHUB_OUTPUT"
           echo "count=$(echo "${FILES}" | wc -w)" >> "$GITHUB_OUTPUT"
 
+      - name: Check CI status
+        id: ci-check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        run: |
+          PR_NUM="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
+          FAILED=$(gh pr view "$PR_NUM" --json statusCheckRollup --jq "'.statusCheckRollup[] | select(.status == \"COMPLETED\") | .conclusion'" 2>/dev/null | grep -c "FAILURE" || true)
+          echo "ci_failed=$([ "$FAILED" -gt 0 ] && echo "true" || echo "false")" >> "$GITHUB_OUTPUT"
+
       - name: Run opencode review
         id: review
         if: steps.install.outputs.installed == 'true' && steps.changed-files.outputs.count > 0 && steps.ci-check.outputs.ci_failed == 'false'
