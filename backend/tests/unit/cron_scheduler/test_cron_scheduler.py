@@ -224,7 +224,7 @@ class TestDatabaseCronEntry:
         assert entry.name.startswith("cron-")
         assert entry.task == "modulo.cron.fire_trigger"
         assert len(entry.args) == 5
-        assert entry.args[4] == "*/5 * * * *"
+        assert entry.args[3] == "*/5 * * * *"
         assert isinstance(entry.schedule, DatabaseCronEntry)
 
     @pytest.mark.parametrize(
