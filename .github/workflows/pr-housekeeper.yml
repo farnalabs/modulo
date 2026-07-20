@@ -90,7 +90,7 @@ jobs:
             # Rule 3: CI failed, no fix committed >1hr - dispatch branch-fixer
             if [ "$FAILED_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 0 ]; then
               echo "  ACTION: ${FAILED_CHECKS} check(s) failed - dispatching branch-fixer"
-              gh workflow run branch-fixer-v2.yml -f branch_name="$REF" -f pr_number="$NUM" 2>/dev/null && echo "  Branch fixer dispatched" || echo "  WARNING: Could not dispatch branch-fixer"
+              gh api repos/${{ github.repository }}/dispatches --method POST -f event_type=branch-fix-request -f client_payload[branch_name]="$REF" -f client_payload[pr_number]="$NUM" 2>/dev/null && echo "  Branch fixer dispatched via repo_dispatch" || echo "  WARNING: Could not dispatch branch-fixer"
               ACTIONS="$ACTIONS branch-fix-$NUM"
               continue
             fi
