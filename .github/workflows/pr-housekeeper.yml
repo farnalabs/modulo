@@ -88,7 +88,7 @@ jobs:
             fi
 
             # Rule 3: CI failed, no fix committed >1hr - dispatch branch-fixer
-            if [ "$STALE_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 0 ]; then
+            if [ "$FAILED_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 0 ]; then
               echo "  ACTION: ${FAILED_CHECKS} check(s) failed - dispatching branch-fixer"
               echo "  Running inline fix for $REF..."
           git fetch origin "$REF" 2>/dev/null || true
