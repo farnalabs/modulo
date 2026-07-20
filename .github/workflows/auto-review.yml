@@ -74,7 +74,7 @@ jobs:
 
       - name: Run opencode review
         id: review
-        if: steps.install.outputs.installed == 'true' && steps.changed-files.outputs.count > 0
+        if: steps.install.outputs.installed == 'true' && steps.changed-files.outputs.count > 0 && steps.ci-check.outputs.ci_failed == 'false'
         shell: bash
         run: |
           FILES="${{ steps.changed-files.outputs.files }}"
@@ -92,7 +92,7 @@ jobs:
           echo "major_count=${MAJ_CNT:-0}" >> "$GITHUB_OUTPUT"
 
       - name: Post review
-        if: always()
+        if: steps.ci-check.outputs.ci_failed == 'false'
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
           PR_NUM: ${{ github.event.inputs.pr_number || github.event.pull_request.number }}
