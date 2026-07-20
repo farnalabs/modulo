@@ -84,7 +84,7 @@ def get_branch_name(repo_path):
     return r.stdout.strip()
 
 
-def commit_and_push_fixes(repo_path, local_ref, repo_full_name, token):
+def commit_and_push_fixes(repo_path, local_ref, repo_full_name, token, failure_description=""):
     run_git(["add", "-A"], cwd=repo_path)
     r = run_git(["diff", "--cached", "--quiet"], cwd=repo_path)
     if r.returncode == 0:
@@ -98,10 +98,10 @@ def commit_and_push_fixes(repo_path, local_ref, repo_full_name, token):
     run_git(["remote", "set-url", "origin", get_git_url(token, owner, repo)], cwd=repo_path)
     run_git(["push", "origin", f"{local_ref}:{local_ref}"], cwd=repo_path, timeout=120)
 
-    # If this is a merge-queue failed branch, also push fixes to main
-    # so the next merge queue run starts from a clean base.
-    if local_ref.startswith("merge-queue/"):
-        _push_fixes_to_main(repo_path, commit_sha, local_ref, repo_full_name, token)
+    # Only push fixes to main when failure is from pre-existing main issues.
+    # With main green, queue failures are almost always from new PRs.
+    # if local_ref.startswith("merge-queue/") and failure_description:
+    #     _push_fixes_to_main(repo_path, commit_sha, local_ref, repo_full_name, token)
 
     return commit_sha
 
@@ -198,7 +198,8 @@ def main():
                 },
             )
 
-        commit_sha = commit_and_push_fixes(repo_path, branch_name, github_repo, token)
+        failure_description = os.environ.get("FAILURE_DESCRIPTION", "")
+        commit_sha = commit_and_push_fixes(repo_path, branch_name, github_repo, token, failure_description)
 
         if not commit_sha:
             exit_completed(
