@@ -532,18 +532,35 @@ jobs:
             echo "exhausted=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Dispatch branch fixer workflow
+      - name: Trigger Modulo Branch Fixer
         if: steps.retry-check.outputs.exhausted == 'false'
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           PR_NUM: ${{ github.event.pull_request.number }}
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
         shell: bash
         run: |
-          echo "PR #${PR_NUM} on branch '${BRANCH}' â€” CI checks failed."
-          echo "Triggering Branch Fixer workflow..."
-          gh api repos/${{ github.repository }}/dispatches \
-            --input - << EOF || echo "::warning::Branch Fixer could not be triggered"
-          {"event_type":"branch-fix-request","client_payload":{"branch_name":"${BRANCH}","pr_number":${PR_NUM}}}
-          EOF
-          echo "Branch Fixer notified via repository_dispatch for PR #${PR_NUM} on branch '${BRANCH}'"
+          TIMESTAMP=$(date +%s)
+          BODY=$(cat << ENDJSON
+          {"branch_name": "${BRANCH}", "pr_number": ${PR_NUM}}
+          ENDJSON
+          )
+          echo "PR #${PR_NUM} on branch '${BRANCH}' — CI checks failed."
+          echo "Sending to Modulo Branch Fixer pipeline..."
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "${BODY}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          if [ "$HTTP_CODE" = "202" ]; then
+            echo "Modulo Branch Fixer accepted (run: $(echo $BODY | jq -r '.run_id // "unknown"'))"
+          elif [ "$HTTP_CODE" = "429" ]; then
+            echo "::warning::Modulo Branch Fixer rate-limited — $(echo $BODY | jq -r '.detail // "too many requests"')"
+          else
+            echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY | jq -r '.detail // "unknown"')"
+          fi
