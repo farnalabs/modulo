@@ -1,0 +1,143 @@
+﻿# Review Comment Fixer
+# When a PR review requests changes, this workflow dispatches a code-writing
+# agent to address the review feedback and push fixes.
+
+name: Review Comment Fixer
+
+on:
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to fix
+        required: true
+        type: number
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  fix-review:
+    name: Fix review comments
+    if: ${{ github.event.review.state == 'changes_requested' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Identify PR
+        id: identify
+        shell: bash
+        run: |
+          PR_NUM="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
+          echo "PR number: $PR_NUM"
+          echo "pr_number=$PR_NUM" >> "$GITHUB_OUTPUT"
+
+      - name: Get PR branch and review comments
+        id: info
+        shell: bash
+        run: |
+          PR_NUM="${{ steps.identify.outputs.pr_number }}"
+          echo "Fetching PR #$PR_NUM details..."
+          gh pr view "$PR_NUM" --json headRefName,body,title > /tmp/pr-info.json
+          BRANCH=$(jq -r '.headRefName' /tmp/pr-info.json)
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          echo "Fetching review comments..."
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > /tmp/review-comments.json 2>/dev/null
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUM/reviews" --paginate > /tmp/reviews.json 2>/dev/null
+          COMMENT_COUNT=$(jq 'length' /tmp/review-comments.json 2>/dev/null || echo 0)
+          echo "Found $COMMENT_COUNT inline comments"
+
+      - name: Checkout the PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.info.outputs.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+
+      - name: Extract review feedback
+        id: feedback
+        shell: bash
+        run: |
+          PR_NUM="${{ steps.identify.outputs.pr_number }}"
+
+          # Extract the review body (summary comments from reviews)
+          REVIEW_BODY=$(jq -r '[.[] | select(.state == "CHANGES_REQUESTED")] | last | .body // "No summary"' /tmp/reviews.json 2>/dev/null)
+          echo "Review summary: $REVIEW_BODY"
+
+          # Extract inline comments with paths
+          jq -r '.[] | select(.pull_request_review_id != null) | "(.path):(.line) - (.body)"' /tmp/review-comments.json 2>/dev/null > /tmp/inline-comments.txt || true
+          echo "Inline comments:"
+          cat /tmp/inline-comments.txt 2>/dev/null || echo "  (none)"
+
+      - name: Apply fixes for review comments
+        shell: bash
+        run: |
+          echo "Applying fixes based on review feedback..."
+          echo "Review body:"
+          cat /tmp/review_body.txt 2>/dev/null || true
+          echo ""
+          echo "Inline comments:"
+          cat /tmp/inline-comments.txt 2>/dev/null || true
+
+          # Try ruff auto-fix for any formatting issues
+          if [ -d "backend" ]; then
+            cd backend && uv run --no-sync ruff check --fix . 2>/dev/null || true
+            cd ..
+          fi
+
+          echo ""
+          echo "Review fixes applied."
+
+      - name: Commit and push fixes
+        id: commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        run: |
+          git config user.name "modulo-review-fixer"
+          git config user.email "bot@modulo.run"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "fix: address review feedback for PR #${{ steps.identify.outputs.pr_number }}"
+          if git push origin HEAD:"${{ steps.info.outputs.branch }}" 2>&1; then
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+            echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Re-request review from modulo-reviewbot
+        if: steps.commit.outputs.committed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        shell: bash
+        run: |
+          PR_NUM="${{ steps.identify.outputs.pr_number }}"
+          echo "Re-requesting review from modulo-reviewbot..."
+          gh pr edit "$PR_NUM" --add-reviewer modulo-reviewbot 2>/dev/null || true
+          gh pr comment "$PR_NUM" --body "## Review Fixes Applied
+
+          Fix commit: \`${{ steps.commit.outputs.commit_sha }}\`
+
+          Addressed review feedback. Ready for re-review."
+
+      - name: Comment on unfixable review
+        if: steps.commit.outputs.committed == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        shell: bash
+        run: |
+          PR_NUM="${{ steps.identify.outputs.pr_number }}"
+          echo "No auto-fixable issues found."
+          gh pr comment "$PR_NUM" --body "## Review Fixer Attempt
+
+          No auto-fixable issues were found. The review comments may require manual attention or design discussion." 2>/dev/null || true
