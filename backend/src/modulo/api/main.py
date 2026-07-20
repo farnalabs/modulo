@@ -613,9 +613,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             "REDIS_URL is required. Modulo uses Redis for event coordination, rate limiting, "
             "caching, and session state. Provision Upstash Redis and set REDIS_URL in fly.toml."
         )
-    logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
-    _scheduler_tasks = await start_schedulers(engine=db_engine)
-
     setup_otel(
         service_name=settings.modulo_otel_service_name,
         telemetry_enabled=settings.modulo_telemetry_enabled,
@@ -700,6 +697,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     get_runtime_config_store()
 
     # Start the background pipeline worker (after migrations and checkpointer init).
+    _scheduler_tasks: list[asyncio.Task] = []
     try:
         from modulo.api.mcp_server import set_background_worker as set_mcp_bg_worker
         from modulo.api.routes.runs import set_background_worker as set_runs_bg_worker
@@ -718,6 +716,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         from modulo.core.in_process_scheduler import set_bg_worker as set_scheduler_bg_worker
 
         set_scheduler_bg_worker(_bg_worker)
+
+        logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
+        _scheduler_tasks = await start_schedulers(engine=db_engine)
     except Exception:
         logger.warning("startup.background_worker_init_failed", exc_info=True)
 
