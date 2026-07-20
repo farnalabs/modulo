@@ -1,4 +1,4 @@
-# v2 — workflow_dispatch trigger fix
+# v2 â€” workflow_dispatch trigger fix
 name: Branch Fixer
 
 on:
@@ -17,6 +17,7 @@ on:
     types: [branch-fix-request]
 
 permissions:
+  actions: read
   contents: write
   pull-requests: write
 
