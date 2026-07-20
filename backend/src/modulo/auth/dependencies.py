@@ -34,7 +34,8 @@ async def get_current_tenant_user_optional(
             org_role=principal.org_role,
             is_system_admin=principal.is_system_admin,
         )
-    except JWTError:
+    except JWTError as exc:
+        _log.warning("auth.jwt_decode_failed_optional", extra={"error": str(exc)})
         return None
 
 
@@ -47,7 +48,8 @@ async def get_current_user(
         principal = decode_principal(credentials.credentials, settings.secret_key)
     except JWTError as exc:
         _log.warning(
-            "auth.jwt_decode_failed", extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)}
+            "auth.jwt_decode_failed",
+            extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)},
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -96,7 +98,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
     """
     try:
         from sqlalchemy import text as _text
-        from sqlalchemy.exc import SQLAlchemyError
+        from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
         from modulo.api.dependencies import (
             get_or_create_engine,
@@ -142,7 +144,9 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
                 )
     except HTTPException:
         raise
-    except SQLAlchemyError:
+    except OperationalError as exc:
+        _log.warning("auth.identity_verify_db_unreachable", exc_info=True)
+    except SQLAlchemyError as exc:
         _log.warning("auth.identity_verify_failed", exc_info=True)
 
 
