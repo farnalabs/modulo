@@ -8,18 +8,22 @@ any tenant's checkpoints.
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
 from cryptography.fernet import Fernet, InvalidToken
-from langgraph.checkpoint.base import (
+from langgraph.checkpoint.base import (  # type: ignore[attr-defined]
+    ChannelVersions,
     Checkpoint,
     CheckpointMetadata,
     CheckpointTuple,
+    RunnableConfig,
+    SerializerProtocol,
     get_checkpoint_id,
 )
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -283,9 +287,9 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     # Override: aget_tuple — filter by org_id
     # ------------------------------------------------------------------
 
-    async def aget_tuple(self, config: dict[str, Any]) -> CheckpointTuple | None:  # type: ignore[override]
+    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         thread_id = config["configurable"]["thread_id"]
-        checkpoint_id = get_checkpoint_id(config)  # type: ignore[arg-type]
+        checkpoint_id = get_checkpoint_id(config)
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
 
         if checkpoint_id:
@@ -336,18 +340,19 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     # Override: alist — filter by org_id
     # ------------------------------------------------------------------
 
-    async def alist(  # type: ignore[override]
+    async def alist(
         self,
-        config: dict[str, Any],
+        config: RunnableConfig | None,
         *,
         filter: dict[str, Any] | None = None,
-        before: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:
         del filter
+        assert config is not None
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
-        before_id = get_checkpoint_id(before) if before else None  # type: ignore[arg-type]
+        before_id = get_checkpoint_id(before) if before else None
 
         where = "WHERE organisation_id = %s AND thread_id = %s AND checkpoint_ns = %s"
         args: list[Any] = [self._org_id, thread_id, checkpoint_ns]
@@ -393,13 +398,13 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     # Override: aput — encrypt and write with org_id
     # ------------------------------------------------------------------
 
-    async def aput(  # type: ignore[override]
+    async def aput(
         self,
-        config: dict[str, Any],
+        config: RunnableConfig,
         checkpoint: Checkpoint,
         metadata: CheckpointMetadata,
-        new_versions: dict[str, str | int | float | bool] | None = None,
-    ) -> dict[str, Any]:
+        new_versions: ChannelVersions | None = None,
+    ) -> RunnableConfig:
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = config["configurable"].get("checkpoint_id")
@@ -411,9 +416,8 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
 
         if not checkpoint_id:
             nv = new_versions or {}
-            channel = next(iter(nv.keys())) if nv else ""
-            current = nv.get(channel) if nv else None
-            checkpoint_id = self.get_next_version(current, channel)  # type: ignore[arg-type]
+            current = cast("str | None", nv.get(next(iter(nv.keys()))) if nv else None)
+            checkpoint_id = self.get_next_version(current, None)
 
         encrypted_checkpoint = self._encrypt_checkpoint(checkpoint)
 
@@ -443,12 +447,14 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     # Override: aput_writes — write with org_id
     # ------------------------------------------------------------------
 
-    async def aput_writes(  # type: ignore[override]
+    async def aput_writes(
         self,
-        config: dict[str, Any],
-        writes: list[tuple[str, Any]],
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
         task_id: str,
+        task_path: str = "",
     ) -> None:
+        del task_path
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = config["configurable"]["checkpoint_id"]
@@ -485,9 +491,11 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         organisation_id: uuid.UUID,
         fernet_key: str | None = None,
         fernet_key_old: str | None = None,
+        pipeline: bool = True,
+        serde: SerializerProtocol | None = None,
     ) -> AsyncIterator[ModuloPostgresSaver]:
         """Create a ModuloPostgresSaver from a connection string."""
-        async with AsyncPostgresSaver.from_conn_string(conn_string) as base:
+        async with AsyncPostgresSaver.from_conn_string(conn_string, pipeline=pipeline, serde=serde) as base:
             yield cls(
                 base.conn,
                 organisation_id=organisation_id,
@@ -499,50 +507,52 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     # Sync overrides (delegate to async with org_id enforcement)
     # ------------------------------------------------------------------
 
-    def get_tuple(self, config: dict[str, Any]) -> CheckpointTuple | None:  # type: ignore[override]
+    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         return cast(CheckpointTuple | None, self._run_sync(self.aget_tuple(config)))
 
-    def list(  # type: ignore[override]
+    def list(
         self,
-        config: dict[str, Any],
+        config: RunnableConfig | None,
         *,
         filter: dict[str, Any] | None = None,
-        before: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
         limit: int | None = None,
-    ) -> Sequence[CheckpointTuple]:
+    ) -> Iterator[CheckpointTuple]:
         return cast(
-            Sequence[CheckpointTuple],
+            Iterator[CheckpointTuple],
             self._run_sync(self._alist_sync(config, filter=filter, before=before, limit=limit)),
         )
 
     async def _alist_sync(
         self,
-        config: dict[str, Any],
+        config: RunnableConfig | None,
         *,
         filter: dict[str, Any] | None = None,
-        before: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
         limit: int | None = None,
-    ) -> list[CheckpointTuple]:  # type: ignore[valid-type]
+    ) -> builtins.list[CheckpointTuple]:
         results: list[CheckpointTuple] = []
         async for item in self.alist(config, filter=filter, before=before, limit=limit):
             results.append(item)
         return results
 
-    def put(  # type: ignore[override]
+    def put(
         self,
-        config: dict[str, Any],
+        config: RunnableConfig,
         checkpoint: Checkpoint,
         metadata: CheckpointMetadata,
-        new_versions: dict[str, str | int | float | bool] | None = None,
-    ) -> dict[str, Any]:
-        return cast(dict[str, Any], self._run_sync(self.aput(config, checkpoint, metadata, new_versions=new_versions)))
+        new_versions: ChannelVersions | None = None,
+    ) -> RunnableConfig:
+        return cast(RunnableConfig, self._run_sync(self.aput(config, checkpoint, metadata, new_versions=new_versions)))
 
-    def put_writes(  # type: ignore[override]
+    def put_writes(
         self,
-        config: dict[str, Any],
-        writes: list[tuple[str, Any]],  # type: ignore[valid-type]
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
         task_id: str,
+        task_path: str = "",
     ) -> None:
+        del task_path
         self._run_sync(self.aput_writes(config, writes, task_id))
 
     @staticmethod
@@ -558,8 +568,13 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             "Use the async variants (aget_tuple, aput, etc.) instead."
         )
 
-    def _load_blobs(self, blobs: Any) -> dict[str, Any] | None:  # type: ignore[override]
-        return self._decrypt_blobs(blobs)
+    def _load_blobs(self, blobs: builtins.list[tuple[bytes, bytes, bytes]]) -> dict[str, Any]:
+        result = self._decrypt_blobs(blobs)
+        return result if result is not None else {}
 
-    def _load_writes(self, writes: Any) -> list[tuple[str, str, bytes]] | None:  # type: ignore[override, valid-type]
-        return self._decrypt_writes(writes)
+    def _load_writes(
+        self,
+        writes: builtins.list[tuple[bytes, bytes, bytes, bytes]],
+    ) -> builtins.list[tuple[str, str, Any]]:
+        result = self._decrypt_writes(writes)
+        return result if result is not None else []
