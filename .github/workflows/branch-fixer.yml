@@ -85,7 +85,7 @@ jobs:
         shell: bash
         run: |
           echo "Fetching CI failure logs for branch..."
-          FIX_LOG=$(gh run list --branch "$BRANCH" --workflow ci.yml --limit 1 --json databaseId -q ".[0].databaseId" 2>/dev/null || echo "")
+          FIX_LOG=$(gh run list --branch "${{ steps.info.outputs.branch }}" --workflow ci.yml --limit 1 --json databaseId -q ".[0].databaseId" 2>/dev/null || echo "")
           if [ -n "$FIX_LOG" ] && [ "$FIX_LOG" != "null" ]; then
             gh run view "$FIX_LOG" --log-failed 2>/dev/null | head -200 > /tmp/ci-failures.txt || true
             echo "ci_failures=true" >> "$GITHUB_OUTPUT"
