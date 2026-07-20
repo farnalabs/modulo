@@ -96,6 +96,18 @@ jobs:
             fi
 
             # Rule 4: CI passed but CHANGES_REQUESTED >2hrs - post reminder
+
+            # Rule 7: Too many failed fix attempts - close as unfixable
+            if [ "$FAILED_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 4 ]; then
+              echo "  ACTION: ${FAILED_CHECKS} check(s) failed for ${STALE_HOURS}h - closing as unfixable by auto-fixer"
+              echo "## PR Housekeeper" > /tmp/pr-msg.txt
+              echo "" >> /tmp/pr-msg.txt
+              echo "This PR has had failing CI checks for over 4 hours. The Branch Fixer was dispatched but could not resolve the issues. Closing as cannot be auto-fixed. Please reopen with a manual fix." >> /tmp/pr-msg.txt
+              gh pr close "$NUM" --comment-file /tmp/pr-msg.txt 2>/dev/null || echo "  WARNING: Could not close PR"
+              ACTIONS="$ACTIONS closed-unfixable-$NUM"
+              continue
+            fi
+
             if [ "$REVIEW_STATE" = "CHANGES_REQUESTED" ] && [ "$STALE_HOURS" -ge 2 ]; then
               echo "  ACTION: CHANGES_REQUESTED for ${STALE_HOURS}h - posting reminder"
               echo "## PR Housekeeper Reminder" > /tmp/pr-msg.txt
