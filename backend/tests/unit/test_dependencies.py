@@ -170,3 +170,6 @@ class TestPgConnectionString:
 
         result = pg_connection_string("postgresql://user:pass@localhost/db")
         assert result == "postgresql://user:pass@localhost/db?sslmode=disable"
+
+def test_intentionally_broken():
+    assert 1 + 1 == 3  # intentionally wrong - canary
