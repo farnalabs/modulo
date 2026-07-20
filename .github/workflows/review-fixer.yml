@@ -36,7 +36,34 @@ jobs:
           echo "PR number: $PR_NUM"
           echo "pr_number=$PR_NUM" >> "$GITHUB_OUTPUT"
 
+      - name: Check retry limit
+        id: retry-check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        run: |
+          PR_NUM="${{ steps.identify.outputs.pr_number }}"
+
+          FIX_COUNT=$(gh api "/repos/${{ github.repository }}/pulls/${PR_NUM}/commits?per_page=100" \
+            --jq '[.[] | select(.commit.committer.name == "modulo-review-fixer")] | length' 2>/dev/null || echo "0")
+
+          echo "fix_attempts=$FIX_COUNT" >> "$GITHUB_OUTPUT"
+          echo "PR #${PR_NUM} — review-fixer has pushed $FIX_COUNT fix commit(s)."
+
+          if [ "$FIX_COUNT" -ge 3 ]; then
+            echo "exhausted=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Review fixer exhausted after $FIX_COUNT attempts against PR #${PR_NUM}."
+            gh pr comment "$PR_NUM" --body "## ⏹️ Review Fixer Exhausted
+
+            The automated review fixer has attempted $FIX_COUNT fixes against this PR but CI is still failing or review comments persist. Manual intervention is required.
+
+            The review fixer will not retry again on this PR."
+          else
+            echo "exhausted=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Get PR branch and review comments
+        if: steps.retry-check.outputs.exhausted == 'false'
         id: info
         shell: bash
         run: |
@@ -53,6 +80,7 @@ jobs:
           echo "Found $COMMENT_COUNT inline comments"
 
       - name: Checkout the PR branch
+        if: steps.retry-check.outputs.exhausted == 'false'
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.info.outputs.branch }}
@@ -60,6 +88,7 @@ jobs:
           token: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
 
       - name: Extract review feedback
+        if: steps.retry-check.outputs.exhausted == 'false'
         id: feedback
         shell: bash
         run: |
@@ -75,6 +104,7 @@ jobs:
           cat /tmp/inline-comments.txt 2>/dev/null || echo "  (none)"
 
       - name: Apply fixes for review comments
+        if: steps.retry-check.outputs.exhausted == 'false'
         shell: bash
         run: |
           echo "Applying fixes based on review feedback..."
@@ -94,6 +124,7 @@ jobs:
           echo "Review fixes applied."
 
       - name: Commit and push fixes
+        if: steps.retry-check.outputs.exhausted == 'false'
         id: commit
         shell: bash
         env:
@@ -116,7 +147,7 @@ jobs:
           fi
 
       - name: Re-request review from modulo-reviewbot
-        if: steps.commit.outputs.committed == 'true'
+        if: steps.retry-check.outputs.exhausted == 'false' && steps.commit.outputs.committed == 'true'
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
         shell: bash
@@ -131,7 +162,7 @@ jobs:
           Addressed review feedback. Ready for re-review."
 
       - name: Comment on unfixable review
-        if: steps.commit.outputs.committed == 'false'
+        if: steps.retry-check.outputs.exhausted == 'false' && steps.commit.outputs.committed == 'false'
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
         shell: bash
