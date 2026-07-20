@@ -40,6 +40,7 @@ async def create_run(
     trigger_id: uuid.UUID | None = None,
     owner_team_id: uuid.UUID | None = None,
     parent_run_id: uuid.UUID | None = None,
+    rate_limit_key: str | None = None,
 ) -> Run:
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"
@@ -61,6 +62,7 @@ async def create_run(
         langgraph_thread_id=thread_id,
         parent_run_id=parent_run_id,
         run_number=next_run_number,
+        rate_limit_key=rate_limit_key,
     )
     session.add(run)
     await session.flush()

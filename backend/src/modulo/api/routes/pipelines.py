@@ -85,6 +85,12 @@ class PipelineCreate(BaseModel):
     default_autonomy_level: str = "manual_approval"
     max_duration_seconds: int | None = Field(None, ge=1)
     folder_id: uuid.UUID | None = None
+    rate_limit_config: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Rate limit: {max_triggers: int, window_seconds: int, key_fields: [str], match_mode: 'exact'|'presence'}"
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> "PipelineCreate":
@@ -104,6 +110,10 @@ class PipelineUpdate(BaseModel):
     run_context_defaults: dict[str, Any] | None = None
     default_autonomy_level: str | None = None
     max_duration_seconds: int | None = Field(None, ge=1)
+    rate_limit_config: dict[str, Any] | None = Field(
+        None,
+        description="Rate limit config. Set to {} to clear.",
+    )
 
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> "PipelineUpdate":
@@ -124,6 +134,7 @@ class PipelineResponse(BaseModel):
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
     max_duration_seconds: int | None = None
+    rate_limit_config: dict[str, Any] | None = None
     snapshot_count: int = 0
     archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None

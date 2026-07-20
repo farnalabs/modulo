@@ -79,6 +79,17 @@ class ConcurrentRunLimitError(RuntimeError):
         self.limit = limit
 
 
+class PipelineRateLimitError(RuntimeError):
+    def __init__(self, pipeline_id: uuid.UUID, key: str, max_triggers: int, window_seconds: int) -> None:
+        super().__init__(
+            f"Pipeline {pipeline_id} rate limit exceeded: {max_triggers} triggers per {window_seconds}s for key {key}"
+        )
+        self.pipeline_id = pipeline_id
+        self.key = key
+        self.max_triggers = max_triggers
+        self.window_seconds = window_seconds
+
+
 class ReplayNotFoundError(KeyError):
     def __init__(self, event_id: uuid.UUID) -> None:
         super().__init__(str(event_id))
@@ -280,6 +291,42 @@ class TriggerEngine:
         mapping: dict[str, str] = cfg.get("payload_mapping", {})
         input_payload = _apply_payload_mapping(raw_payload, mapping)
 
+        # Rate limit check
+        pipeline_rate_limit = cfg.get("rate_limit")
+        if pipeline_rate_limit is None:
+            from modulo.db.models.pipeline import Pipeline
+
+            pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
+            pipeline = pipe_result.scalar_one_or_none()
+            if pipeline is not None:
+                pipeline_rate_limit = pipeline.rate_limit_config
+
+        if pipeline_rate_limit and pipeline_rate_limit.get("max_triggers"):
+            max_triggers = int(pipeline_rate_limit["max_triggers"])
+            window_seconds = int(pipeline_rate_limit.get("window_seconds", 3600))
+            rate_limit_key = self._compute_rate_limit_key(input_payload, pipeline_rate_limit)
+            recent_count = await self._count_recent_rate_limited(
+                session, trigger.pipeline_id, rate_limit_key, window_seconds
+            )
+            if recent_count >= max_triggers:
+                _log.warning(
+                    "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
+                    trigger.pipeline_id,
+                    recent_count,
+                    max_triggers,
+                    rate_limit_key,
+                )
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=payload_hash,
+                    result="rate_limited",
+                )
+                raise PipelineRateLimitError(trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
+        else:
+            rate_limit_key = None
+
         # Create run
         run = await create_run(
             session,
@@ -289,6 +336,7 @@ class TriggerEngine:
             trigger_type="webhook",
             input_payload=input_payload,
             trigger_id=trigger_id,
+            rate_limit_key=rate_limit_key,
         )
 
         # Audit log — success
@@ -389,6 +437,42 @@ class TriggerEngine:
         mapping: dict[str, str] = cfg.get("payload_mapping", {})
         input_payload = _apply_payload_mapping(raw_payload, mapping)
 
+        # Rate limit check
+        pipeline_rate_limit = cfg.get("rate_limit")
+        if pipeline_rate_limit is None:
+            from modulo.db.models.pipeline import Pipeline
+
+            pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
+            pipeline = pipe_result.scalar_one_or_none()
+            if pipeline is not None:
+                pipeline_rate_limit = pipeline.rate_limit_config
+
+        if pipeline_rate_limit and pipeline_rate_limit.get("max_triggers"):
+            max_triggers = int(pipeline_rate_limit["max_triggers"])
+            window_seconds = int(pipeline_rate_limit.get("window_seconds", 3600))
+            rate_limit_key = self._compute_rate_limit_key(input_payload, pipeline_rate_limit)
+            recent_count = await self._count_recent_rate_limited(
+                session, trigger.pipeline_id, rate_limit_key, window_seconds
+            )
+            if recent_count >= max_triggers:
+                _log.warning(
+                    "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
+                    trigger.pipeline_id,
+                    recent_count,
+                    max_triggers,
+                    rate_limit_key,
+                )
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=payload_hash,
+                    result="rate_limited",
+                )
+                raise PipelineRateLimitError(trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
+        else:
+            rate_limit_key = None
+
         # Create run
         run = await create_run(
             session,
@@ -398,6 +482,7 @@ class TriggerEngine:
             trigger_type="webhook",
             input_payload=input_payload,
             trigger_id=trigger.id,
+            rate_limit_key=rate_limit_key,
         )
 
         trigger_event = await self._log_event(
@@ -568,6 +653,41 @@ class TriggerEngine:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_rate_limit_key(input_payload: dict[str, Any], config: dict[str, Any]) -> str:
+        """Extract key_fields from input_payload and serialize as sorted JSON.
+
+        With match_mode="exact", the values of each field become part of the key.
+        With match_mode="presence", only the presence (non-null) of each field matters.
+        """
+        key_fields: list[str] = config.get("key_fields", [])
+        match_mode: str = config.get("match_mode", "exact")
+        extracted: dict[str, Any] = {}
+        for field_path in key_fields:
+            value = _extract_field(input_payload, field_path)
+            if match_mode == "presence":
+                extracted[field_path] = "__present__" if value is not None else None
+            else:
+                extracted[field_path] = value
+        return json.dumps(extracted, sort_keys=True)
+
+    @staticmethod
+    async def _count_recent_rate_limited(
+        session: AsyncSession,
+        pipeline_id: uuid.UUID,
+        key: str,
+        window_seconds: int,
+    ) -> int:
+        cutoff = datetime.now(UTC) - timedelta(seconds=window_seconds)
+        result = await session.execute(
+            select(func.count()).where(
+                Run.pipeline_id == pipeline_id,
+                Run.rate_limit_key == key,
+                Run.created_at > cutoff,
+            )
+        )
+        return int(result.scalar_one() or 0)
 
     async def _load_trigger(
         self,

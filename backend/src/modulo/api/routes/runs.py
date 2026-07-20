@@ -35,6 +35,7 @@ from modulo.core.pipeline_engine.recovery import (
     RecoveryNotAllowedError,
     recover_node,
 )
+from modulo.core.trigger_engine import TriggerEngine
 from modulo.db.crud.node_observation import observe_node
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -346,6 +347,24 @@ async def trigger_run(
                     detail=f"Pipeline {req.pipeline_id} not found",
                 )
             await _validate_run_input_basics(session, snapshot.graph_json, snapshot, req.input_payload)
+
+            # Pipeline-level rate limit check
+            rl = pipeline.rate_limit_config
+            if rl and rl.get("max_triggers"):
+                key = TriggerEngine._compute_rate_limit_key(req.input_payload, rl)
+                recent_count = await TriggerEngine._count_recent_rate_limited(
+                    session, pipeline.id, key, int(rl.get("window_seconds", 3600))
+                )
+                if recent_count >= int(rl["max_triggers"]):
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail=(
+                            f"Rate limit exceeded: {rl['max_triggers']} triggers per {rl.get('window_seconds', 3600)}s"
+                        ),
+                    )
+            else:
+                key = None
+
             run = await create_run(
                 session,
                 org_id=org_id,
@@ -353,6 +372,7 @@ async def trigger_run(
                 snapshot_id=snapshot.id,
                 trigger_type="manual",
                 input_payload=req.input_payload,
+                rate_limit_key=key,
             )
             run_id = run.id
     except IntegrityError:
