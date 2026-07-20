@@ -22,7 +22,7 @@ on:
 jobs:
   trigger-modulo-review:
     name: Trigger Modulo PR Review
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     steps:
       - name: Set PR details
         id: pr-details

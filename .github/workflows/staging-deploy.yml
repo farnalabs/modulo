@@ -18,7 +18,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to staging
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,7 +56,7 @@ jobs:
   consistency:
     name: Verify staging SHA
     needs: deploy
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
         with:

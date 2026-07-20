@@ -43,11 +43,8 @@ jobs:
       - run: uv run --no-sync pip-audit
 
   backend-test:
-    name: Test (Backend) - ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    name: Test (Backend)
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: backend
@@ -66,7 +63,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-report-${{ matrix.os }}
+          name: coverage-report
           path: backend/coverage.xml
 
   frontend:
