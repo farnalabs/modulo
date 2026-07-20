@@ -238,6 +238,7 @@ class TestFireCronWrapper:
             pipeline_id=info["pipeline_id"],
             snapshot_id=info["snapshot_id"],
             cron_expression=info["cron_expression"],
+            factory=factory,
         )
 
     async def test_logs_on_error(self):

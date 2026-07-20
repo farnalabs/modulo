@@ -78,7 +78,7 @@ async def test_execute_command_preserves_dictionary_result(canonical_provider: M
     canonical_provider.exec_command.assert_awaited_once_with(
         "workspace-ref",
         ["sh", "-c", "cd /workspace && env CI=true python -m pytest"],
-        timeout=12,
+        cmd_timeout=12,
     )
 
 
