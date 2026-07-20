@@ -1,4 +1,4 @@
-name: Auto Review
+﻿name: Auto Review
 
 on:
   workflow_dispatch:
@@ -67,7 +67,8 @@ jobs:
         id: changed-files
         shell: bash
         run: |
-          FILES=$(git diff --name-only origin/main...HEAD --diff-filter=ACM 2>/dev/null | paste -sd '"'"' '"'"' -)
+          FILES=$(git diff --name-only origin/main...HEAD --diff-filter=ACM 2>/dev/null || true)
+          FILES=$(echo "$FILES" | tr '\n' ' ')
           echo "files=${FILES}" >> "$GITHUB_OUTPUT"
           echo "count=$(echo "${FILES}" | wc -w)" >> "$GITHUB_OUTPUT"
 
