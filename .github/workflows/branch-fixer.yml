@@ -107,17 +107,17 @@ jobs:
 
           if [ -f "$FIX_PROMPT" ]; then
             PROMPT_TEXT=$(cat "$FIX_PROMPT")
-            echo "Starting opencode fix..."\n          FIX_OUTPUT=$(opencode run --agent coder "${PROMPT_TEXT}. Files: ${CHANGED_FILES}.
+            FIX_OUTPUT=$(opencode run --agent coder "${PROMPT_TEXT}. Files: ${CHANGED_FILES}.
           CI failures log:
           ${{ steps.fetch-ci.outputs.ci_log }}" 2>&1) || true
           else
             echo "No fix prompt found, using inline instructions"
-            echo "Starting opencode fix..."\n          FIX_OUTPUT=$(opencode run --agent coder "Fix ALL failing CI checks. Files: ${CHANGED_FILES}.
+            FIX_OUTPUT=$(opencode run --agent coder "Fix ALL failing CI checks. Files: ${CHANGED_FILES}.
 CI failures:
 ${{ steps.fetch-ci.outputs.ci_log }}
 Fix every issue. Never disable checks." 2>&1) || true
           fi
-          echo "opencode output:"\n          echo "${FIX_OUTPUT}" | head -20\n          echo "${FIX_OUTPUT}" > /tmp/fix-output.txt
+          echo "${FIX_OUTPUT}" > /tmp/fix-output.txt
           echo "status=applied" >> "$GITHUB_OUTPUT"
 
       - name: Run lint autofix (fallback)
