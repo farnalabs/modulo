@@ -62,7 +62,7 @@ class RuntimeProvider(ABC):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,
+        cmd_timeout: int | None = None,
     ) -> ExecResult:
         """Run a command inside an existing workspace."""
         ...

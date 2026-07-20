@@ -415,7 +415,7 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
         await asyncio.sleep(0.3)
 
         yield _sse_event("command_start", 'Executing: echo "Hello from Modulo sandbox"')
-        result = await provider.exec_command(provider_ref, ["echo", "Hello from Modulo sandbox"], timeout=30)
+        result = await provider.exec_command(provider_ref, ["echo", "Hello from Modulo sandbox"], cmd_timeout=30)
         yield _sse_event(
             "command_complete",
             json.dumps(

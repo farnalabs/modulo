@@ -100,7 +100,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,
+        cmd_timeout: int | None = None,
     ) -> ExecResult:
         """Execute a shell command inside the sandbox.
 
@@ -108,7 +108,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         """
         sandbox = self._get_sandbox(provider_ref)
         cmd_str = " ".join(shlex.quote(c) for c in command)
-        effective_timeout = timeout if timeout is not None else _DEFAULT_CMD_TIMEOUT
+        effective_timeout = cmd_timeout if cmd_timeout is not None else _DEFAULT_CMD_TIMEOUT
 
         start = time.monotonic()
         try:

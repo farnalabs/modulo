@@ -147,7 +147,7 @@ class TestLocalRuntimeProvider:
         result = await provider.exec_command(
             ref,
             [sys.executable, "-c", "import time; time.sleep(10)"],
-            timeout=1,
+            cmd_timeout=1,
         )
         assert result.exit_code == -1
         assert "timed out" in result.stderr

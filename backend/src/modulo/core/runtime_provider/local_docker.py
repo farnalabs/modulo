@@ -69,7 +69,7 @@ class LocalDockerRuntimeProvider:
         result = await self._provider.exec_command(
             self._resolve_ref(workspace),
             ["sh", "-c", " && ".join(shell_parts)],
-            timeout=timeout_seconds,
+            cmd_timeout=timeout_seconds,
         )
         return {
             "stdout": result.stdout,
