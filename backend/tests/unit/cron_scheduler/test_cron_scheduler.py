@@ -23,6 +23,7 @@ def _make_mock_settings() -> MagicMock:
     """Return a mock Settings instance with valid DB URL and secrets."""
     return MagicMock(
         spec=Settings,
+        modulo_db="postgres",
         database_url="postgresql+asyncpg://localhost/test",
         secret_key="a" * 32,
         fernet_key="a" * 32,
