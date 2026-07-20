@@ -147,8 +147,8 @@ class CronFireTask(Task):  # type: ignore[misc]
         trigger_id: str,
         org_id: str,
         pipeline_id: str,
-        snapshot_id: str,
         cron_expression: str,
+        snapshot_id: str = "",
     ) -> dict[str, Any]:
         """Fire a cron trigger — creates a run in the database.
 
@@ -158,6 +158,8 @@ class CronFireTask(Task):  # type: ignore[misc]
         """
         import asyncio
 
+        _snap = uuid.UUID(snapshot_id) if snapshot_id else None
+
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -166,7 +168,7 @@ class CronFireTask(Task):  # type: ignore[misc]
                     trigger_id=uuid.UUID(trigger_id),
                     org_id=uuid.UUID(org_id),
                     pipeline_id=uuid.UUID(pipeline_id),
-                    snapshot_id=uuid.UUID(snapshot_id),
+                    snapshot_id=_snap,
                     cron_expression=cron_expression,
                 )
             )
@@ -174,7 +176,7 @@ class CronFireTask(Task):  # type: ignore[misc]
             trigger_id=uuid.UUID(trigger_id),
             org_id=uuid.UUID(org_id),
             pipeline_id=uuid.UUID(pipeline_id),
-            snapshot_id=uuid.UUID(snapshot_id),
+            snapshot_id=_snap,
             cron_expression=cron_expression,
         )
         future = asyncio.run_coroutine_threadsafe(coro, loop)
@@ -186,7 +188,7 @@ async def fire_cron_trigger(
     trigger_id: uuid.UUID,
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
-    snapshot_id: uuid.UUID,
+    snapshot_id: uuid.UUID | None = None,
     cron_expression: str,
     factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> dict[str, Any]:
@@ -248,6 +250,27 @@ async def fire_cron_trigger(
                     "daily_spend_limit": str(spend_limit),
                     "today_cost": str(today_cost),
                 }
+
+        # Resolve snapshot_id — auto-create from live graph if not provided
+        if snapshot_id is None:
+            from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+
+            new_snapshot = await create_snapshot_from_live_graph(
+                session,
+                pipeline_id=pipeline_id,
+                account_id=None,
+            )
+            if new_snapshot is None:
+                await _log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    result="no_pipeline",
+                    error_detail="Pipeline not found when trying to auto-create snapshot",
+                )
+                return {"status": "skipped", "reason": "pipeline_not_found"}
+            snapshot_id = new_snapshot.id
+            _log.info("Auto-created snapshot %s for cron trigger %s", snapshot_id, trigger_id)
 
         # Build input payload from config
         config = trigger.config_json or {}
@@ -313,7 +336,7 @@ class DatabaseCronEntry(ScheduleEntry):  # type: ignore[misc]
         trigger_id: uuid.UUID,
         org_id: uuid.UUID,
         pipeline_id: uuid.UUID,
-        snapshot_id: uuid.UUID,
+        snapshot_id: uuid.UUID | None,
         cron_expression: str,
         next_fire_at: datetime.datetime,
     ) -> None:
@@ -342,8 +365,8 @@ class DatabaseCronEntry(ScheduleEntry):  # type: ignore[misc]
             str(self._trigger_id),
             str(self._org_id),
             str(self._pipeline_id),
-            str(self._snapshot_id),
             self._cron_expression,
+            str(self._snapshot_id) if self._snapshot_id is not None else "",
         ]
 
     @property
@@ -453,8 +476,10 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
                         try:
                             snapshot_id = uuid.UUID(snapshot_id_str)
                         except (ValueError, TypeError):
-                            _log.warning("Cron trigger %s has invalid snapshot_id in config - skipping", row.id)
-                            continue
+                            _log.warning(
+                                "Cron trigger %s has invalid snapshot_id in config — will auto-create on fire", row.id
+                            )
+                            snapshot_id = None
                     else:
                         snap_result = await session.execute(
                             select(PipelineSnapshot.id)
@@ -467,11 +492,10 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
                         )
                         snap_row = snap_result.scalar_one_or_none()
                         if snap_row is None:
-                            _log.warning(
-                                "Cron trigger %s has no snapshot_id and no snapshots for pipeline - skipping", row.id
-                            )
-                            continue
-                        snapshot_id = snap_row
+                            _log.info("Cron trigger %s has no snapshots — will auto-create on fire", row.id)
+                            snapshot_id = None
+                        else:
+                            snapshot_id = snap_row
 
                     triggers.append(
                         {
