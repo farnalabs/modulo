@@ -1,0 +1,149 @@
+name: Branch Fixer
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: Branch to fix (defaults to current PR head)
+        required: true
+        type: string
+      pr_number:
+        description: PR number (for posting fix comment)
+        required: false
+        type: number
+
+  repository_dispatch:
+    types: [branch-fix-request]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  fix:
+    name: Fix branch issues
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch_name || github.event.client_payload.branch_name || github.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+
+      - name: Setup branch info
+        id: info
+        shell: bash
+        run: |
+          BRANCH="${{ inputs.branch_name || github.event.client_payload.branch_name || github.ref_name }}"
+          PR_NUM="${{ inputs.pr_number || github.event.client_payload.pr_number || '' }}"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUM" >> "$GITHUB_OUTPUT"
+          echo "Working on branch: $BRANCH PR: ${PR_NUM:-none}"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install opencode CLI
+        id: install
+        shell: bash
+        run: |
+          OPENCODE_VERSION="v0.0.55"
+          TARBALL_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x86_64.tar.gz"
+          DEB_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-amd64.deb"
+          if curl -sL "$TARBALL_URL" -o /tmp/opencode.tar.gz && [ -s /tmp/opencode.tar.gz ]; then
+            sudo tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin/ opencode 2>/dev/null
+            if command -v opencode &>/dev/null; then
+              echo "installed=true" >> "$GITHUB_OUTPUT"
+              opencode --version 2>/dev/null || true
+              exit 0
+            fi
+          fi
+          if curl -sL "$DEB_URL" -o /tmp/opencode.deb && [ -s /tmp/opencode.deb ]; then
+            sudo dpkg -i /tmp/opencode.deb 2>/dev/null || sudo apt-get install -f -y -qq 2>/dev/null
+            if command -v opencode &>/dev/null; then
+              echo "installed=true" >> "$GITHUB_OUTPUT"
+              opencode --version 2>/dev/null || true
+              exit 0
+            fi
+          fi
+          echo "installed=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::opencode CLI could not be installed"
+
+      - name: Configure opencode auth
+        if: steps.install.outputs.installed == 'true'
+        shell: bash
+        run: |
+          mkdir -p ~/.local/share/opencode
+          cat > ~/.local/share/opencode/auth.json << AUTHJSON
+          {"opencode":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"},"opencode-go":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"}}
+          AUTHJSON
+
+      - name: Run opencode fix
+        id: fix
+        if: steps.install.outputs.installed == 'true'
+        shell: bash
+        run: |
+          FIX_PROMPT=".github/prompts/branch-fixer.md"
+          CHANGED_FILES=$(git diff --name-only origin/main...HEAD --diff-filter=ACM 2>/dev/null | paste -sd ' ' -)
+          echo "Changed files: $CHANGED_FILES"
+
+          if [ -f "$FIX_PROMPT" ]; then
+            PROMPT_TEXT=$(cat "$FIX_PROMPT")
+            FIX_OUTPUT=$(opencode run --agent coder "${PROMPT_TEXT}. Files: ${CHANGED_FILES}" 2>&1) || true
+          else
+            echo "No fix prompt found, using inline instructions"
+            FIX_OUTPUT=$(opencode run --agent coder "Fix all lint, type, and test issues in these files: ${CHANGED_FILES}. Fix in order: syntax > lint > types > tests. Never change behaviour. Never disable checks." 2>&1) || true
+          fi
+          echo "${FIX_OUTPUT}" > /tmp/fix-output.txt
+          echo "status=applied" >> "$GITHUB_OUTPUT"
+
+      - name: Run lint autofix (fallback)
+        shell: bash
+        run: |
+          echo "Running ruff autofix..."
+          cd backend && uv run --no-sync ruff check --fix . 2>/dev/null || true
+          cd ..
+          echo "Running ruff format..."
+          cd backend && uv run --no-sync ruff format . 2>/dev/null || true
+          cd ..
+
+      - name: Commit and push fixes
+        id: commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        run: |
+          git config user.name "modulo-branch-fixer"
+          git config user.email "bot@modulo.run"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "fix: automated branch fix agent patches"
+          BRANCH="${{ steps.info.outputs.branch }}"
+          if git push origin HEAD:"$BRANCH" 2>&1; then
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+            echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "Pushed fixes to $BRANCH"
+          else
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Failed to push to $BRANCH"
+          fi
+
+      - name: Post fix comment on PR
+        if: steps.commit.outputs.committed == 'true' && steps.info.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        shell: bash
+        run: |
+          PR_NUM="${{ steps.info.outputs.pr_number }}"
+          SHA="${{ steps.commit.outputs.commit_sha }}"
+          gh pr comment "$PR_NUM" --body "## Automated Fixes Applied
+          Fix commit: \`${SHA}\`
+
+          These fixes were applied automatically by the Branch Fixer.
+          CI will re-run to verify. Please review before merging."

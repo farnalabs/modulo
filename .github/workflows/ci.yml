@@ -497,43 +497,27 @@ jobs:
           echo "Modulo fixer notified"
 
   notify-pr-failure:
-    name: Notify Modulo fixer
+    name: Trigger Branch Fixer
     if: github.event_name == 'pull_request' && (failure() || cancelled())
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
+    permissions:
+      actions: write
+      pull-requests: write
     steps:
-      - name: Send webhook to Modulo fixer
-        shell: bash
+      - name: Dispatch branch fixer workflow
         env:
-          WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        shell: bash
         run: |
-          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured"; exit 0; fi
-          TIMESTAMP=$(date +%s)
-          BODY=$(cat <<ENDJSON
-          {
-            "action": "check_run",
-            "repository": {"full_name": "${{ github.repository }}"},
-            "run_id": "${{ github.run_id }}",
-            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-            "pull_request": {
-              "number": ${{ github.event.pull_request.number }},
-              "head": {
-                "sha": "${{ github.event.pull_request.head.sha }}",
-                "ref": "${{ github.event.pull_request.head.ref }}"
-              },
-              "base": {
-                "ref": "${{ github.event.pull_request.base.ref }}"
-              }
-            }
-          }
-          ENDJSON
-          )
-          PAYLOAD="${TIMESTAMP}.${BODY}"
-          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
-          curl -s -X POST "$WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-            -d "$BODY"
-          echo "Modulo fixer notified of PR failure"
+          echo "PR #${PR_NUM} on branch '${BRANCH}' - CI checks failed."
+          echo "Triggering Branch Fixer workflow..."
+          gh workflow run branch-fixer.yml \
+            --repo "${{ github.repository }}" \
+            --ref main \
+            --field branch_name="${BRANCH}" \
+            --field pr_number="${PR_NUM}" \
+            2>&1 || echo "::warning::Branch Fixer could not be triggered"
+          echo "Branch Fixer notified of PR #${PR_NUM} failure on branch '${BRANCH}'"
