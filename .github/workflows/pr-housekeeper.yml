@@ -96,6 +96,15 @@ jobs:
             STALE_HOURS=$(( (NOW - UPDATED_TS) / 3600 ))
 
             echo "---"
+
+            # Check retry limit: skip if housekeeper has already pushed 3+ commits to this PR
+            HK_COUNT=$(gh api "/repos/${{ github.repository }}/pulls/${NUM}/commits?per_page=100" \
+              --jq '[.[] | select(.commit.committer.name == "modulo-housekeeper")] | length' 2>/dev/null || echo "0")
+            if [ "$HK_COUNT" -ge 3 ]; then
+              echo "  SKIP - housekeeper already pushed $HK_COUNT commits to PR #$NUM (limit 3)"
+              continue
+            fi
+
             echo "PR #$NUM: $TITLE (age: ${AGE_HOURS}h, stale: ${STALE_HOURS}h, mergeable: $MERGEABLE, review: $REVIEW_STATE)"
 
             if [ "$STALE_HOURS" -lt 0 ] && [ "$REVIEW_STATE" != "CHANGES_REQUESTED" ]; then

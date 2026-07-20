@@ -511,8 +511,8 @@ jobs:
           PR_NUM="${{ github.event.pull_request.number }}"
           BRANCH="${{ github.event.pull_request.head.ref }}"
 
-          # Count how many times the branch fixer has already pushed fix commits 
-          # to this PR. Each successful fix produces exactly one commit with 
+          # Count how many times the branch fixer has already pushed fix commits
+          # to this PR. Each successful fix produces exactly one commit with
           # committer "modulo-branch-fixer".
           FIX_COUNT=$(gh api "/repos/${{ github.repository }}/pulls/${PR_NUM}/commits?per_page=100" \
             --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | length' 2>/dev/null || echo "0")

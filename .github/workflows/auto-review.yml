@@ -25,7 +25,36 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check retry limit
+        id: retry-check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        run: |
+          PR_NUM="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
+
+          if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
+            echo "No PR number — can't check retry limit."
+            echo "exhausted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Count how many reviews modulo-reviewbot has already submitted on this PR
+          REVIEW_COUNT=$(gh api "/repos/${{ github.repository }}/pulls/${PR_NUM}/reviews?per_page=100" \
+            --jq '[.[] | select(.user.login == "modulo-reviewbot")] | length' 2>/dev/null || echo "0")
+
+          echo "review_count=$REVIEW_COUNT" >> "$GITHUB_OUTPUT"
+          echo "PR #${PR_NUM} — modulo-reviewbot has submitted $REVIEW_COUNT review(s)."
+
+          if [ "$REVIEW_COUNT" -ge 3 ]; then
+            echo "exhausted=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Auto-review exhausted after $REVIEW_COUNT reviews against PR #${PR_NUM}."
+          else
+            echo "exhausted=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install opencode CLI
+        if: steps.retry-check.outputs.exhausted == 'false'
         id: install
         shell: bash
         run: |
@@ -57,7 +86,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Configure opencode auth
-        if: steps.install.outputs.installed == 'true'
+        if: steps.retry-check.outputs.exhausted == 'false' && steps.install.outputs.installed == 'true'
         shell: bash
         run: |
           mkdir -p ~/.local/share/opencode
@@ -66,6 +95,7 @@ jobs:
           AUTHJSON
 
       - name: Get changed files
+        if: steps.retry-check.outputs.exhausted == 'false'
         id: changed-files
         shell: bash
         run: |
@@ -75,6 +105,7 @@ jobs:
           echo "count=$(echo "${FILES}" | wc -w)" >> "$GITHUB_OUTPUT"
 
       - name: Check CI status
+        if: steps.retry-check.outputs.exhausted == 'false'
         id: ci-check
         shell: bash
         env:
@@ -90,7 +121,7 @@ jobs:
 
       - name: Run opencode review
         id: review
-        if: steps.install.outputs.installed == 'true' && steps.changed-files.outputs.count > 0 && steps.ci-check.outputs.ci_failed == 'false'
+        if: steps.retry-check.outputs.exhausted == 'false' && steps.install.outputs.installed == 'true' && steps.changed-files.outputs.count > 0 && steps.ci-check.outputs.ci_failed == 'false'
         shell: bash
         run: |
           FILES="${{ steps.changed-files.outputs.files }}"
@@ -108,7 +139,7 @@ jobs:
           echo "major_count=${MAJ_CNT:-0}" >> "$GITHUB_OUTPUT"
 
       - name: Post review
-        if: steps.ci-check.outputs.ci_failed == 'false'
+        if: steps.retry-check.outputs.exhausted == 'false' && steps.ci-check.outputs.ci_failed == 'false'
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
           PR_NUM: ${{ github.event.inputs.pr_number || github.event.pull_request.number }}
