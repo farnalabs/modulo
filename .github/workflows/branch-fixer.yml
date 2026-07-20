@@ -1,4 +1,4 @@
-# v2 - workflow_dispatch trigger fix
+﻿# v2 - workflow_dispatch trigger fix
 name: Branch Fixer
 
 on:
@@ -93,9 +93,9 @@ jobs:
           if [ -n "$FIX_LOG" ] && [ "$FIX_LOG" != "null" ]; then
             gh run view "$FIX_LOG" --log-failed 2>/dev/null | head -200 > /tmp/ci-failures.txt || true
             echo "ci_failures=true" >> "$GITHUB_OUTPUT"
-          echo "ci_log<<EOF" >> "$GITHUB_OUTPUT"
-          cat /tmp/ci-failures.txt >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "ci_log<<EOF" >> "$GITHUB_OUTPUT"
+            cat /tmp/ci-failures.txt >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
           else
             echo "ci_failures=false" >> "$GITHUB_OUTPUT"
           fi
