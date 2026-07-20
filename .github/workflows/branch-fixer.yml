@@ -1,4 +1,4 @@
-name: Branch Fixer
+﻿name: Branch Fixer
 
 on:
   workflow_dispatch:
@@ -80,6 +80,19 @@ jobs:
           {"opencode":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"},"opencode-go":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"}}
           AUTHJSON
 
+      - name: Fetch CI failures
+        id: fetch-ci
+        shell: bash
+        run: |
+          echo "Fetching CI failure logs for branch..."
+          FIX_LOG=$(gh run list --branch "$BRANCH" --workflow ci.yml --limit 1 --json databaseId -q ".[0].databaseId" 2>/dev/null || echo "")
+          if [ -n "$FIX_LOG" ] && [ "$FIX_LOG" != "null" ]; then
+            gh run view "$FIX_LOG" --log-failed 2>/dev/null | head -200 > /tmp/ci-failures.txt || true
+            echo "ci_failures=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ci_failures=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run opencode fix
         id: fix
         if: steps.install.outputs.installed == 'true'
@@ -91,10 +104,10 @@ jobs:
 
           if [ -f "$FIX_PROMPT" ]; then
             PROMPT_TEXT=$(cat "$FIX_PROMPT")
-            FIX_OUTPUT=$(opencode run --agent coder "${PROMPT_TEXT}. Files: ${CHANGED_FILES}" 2>&1) || true
+            FIX_OUTPUT=$(opencode run --agent coder "${PROMPT_TEXT}. Files: ${CHANGED_FILES}. CI failures: $(cat /tmp/ci-failures.txt 2>/dev/null || echo "none")" 2>&1) || true
           else
             echo "No fix prompt found, using inline instructions"
-            FIX_OUTPUT=$(opencode run --agent coder "Fix all lint, type, and test issues in these files: ${CHANGED_FILES}. Fix in order: syntax > lint > types > tests. Never change behaviour. Never disable checks." 2>&1) || true
+            FIX_OUTPUT=$(opencode run --agent coder "Fix ALL failing CI checks in these files: ${CHANGED_FILES}. CI failures: $(cat /tmp/ci-failures.txt 2>/dev/null || echo "none"). Fix every issue - do not skip anything. Fix in order: syntax > lint > types > tests > logic. Never disable checks." 2>&1) || true
           fi
           echo "${FIX_OUTPUT}" > /tmp/fix-output.txt
           echo "status=applied" >> "$GITHUB_OUTPUT"
