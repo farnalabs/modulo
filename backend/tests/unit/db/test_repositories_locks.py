@@ -104,7 +104,7 @@ class TestPostgresLock:
 
         lock = PostgresLock()
         with pytest.raises(LockAcquireError, match="Could not acquire lock"):
-            await lock.acquire_lock(session, self._KEY, timeout=0.05)
+            await lock.acquire_lock(session, self._KEY, lock_timeout=0.05)
 
     async def test_acquire_retries_on_contention(self) -> None:
         session = AsyncMock(spec=AsyncSession)
@@ -116,7 +116,7 @@ class TestPostgresLock:
         session.execute.side_effect = [fail_result, ok_result]
 
         lock = PostgresLock()
-        await lock.acquire_lock(session, self._KEY, timeout=5.0)
+        await lock.acquire_lock(session, self._KEY, lock_timeout=5.0)
         assert session.execute.await_count == 2
 
     async def test_release_uses_same_key_hash_as_acquire(self, lock: PostgresLock, session: AsyncMock) -> None:
@@ -154,7 +154,7 @@ class TestGenericLock:
         await lock.release_lock(session, "non-existent-key")
 
     async def test_acquire_with_timeout(self, lock: GenericLock, session: AsyncMock) -> None:
-        await lock.acquire_lock(session, self._KEY, timeout=5.0)
+        await lock.acquire_lock(session, self._KEY, lock_timeout=5.0)
         assert _generic_locks[self._KEY].locked()
 
     async def test_acquire_raises_on_timeout_when_lock_held(self, lock: GenericLock, session: AsyncMock) -> None:
@@ -163,7 +163,7 @@ class TestGenericLock:
         _generic_owners[self._KEY] = 999999
 
         with pytest.raises(LockAcquireError, match="Could not acquire lock"):
-            await lock.acquire_lock(session, self._KEY, timeout=0.05)
+            await lock.acquire_lock(session, self._KEY, lock_timeout=0.05)
 
     async def test_ownership_prevents_cross_task_release(self, lock: GenericLock, session: AsyncMock) -> None:
         await lock.acquire_lock(session, self._KEY)
@@ -203,7 +203,7 @@ class TestGenericLock:
         async def _try_acquire() -> None:
             nonlocal second_acquired
             other_session = AsyncMock(spec=AsyncSession)
-            await lock.acquire_lock(other_session, self._KEY, timeout=5.0)
+            await lock.acquire_lock(other_session, self._KEY, lock_timeout=5.0)
             second_acquired = True
 
         task = asyncio.create_task(_try_acquire())

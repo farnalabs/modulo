@@ -92,12 +92,12 @@ class LocalRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,
+        cmd_timeout: int | None = None,
     ) -> ExecResult:
         cwd = self._workspaces.get(provider_ref)
         if cwd is None:
             raise ValueError(f"Unknown workspace: {provider_ref}")
-        return await self._run_command(command, cwd=cwd, timeout=timeout)
+        return await self._run_command(command, cwd=cwd, timeout=cmd_timeout)
 
     async def destroy_workspace(self, provider_ref: str) -> None:
         """Remove the workspace temp directory."""
@@ -118,10 +118,10 @@ class LocalRuntimeProvider(RuntimeProvider):
         self,
         command: list[str],
         cwd: str,
-        timeout: int | None = None,
+        cmd_timeout: int | None = None,
     ) -> ExecResult:
         """Run a command, respecting the concurrency semaphore."""
-        effective_timeout = timeout if timeout is not None else _DEFAULT_CMD_TIMEOUT
+        effective_timeout = cmd_timeout if cmd_timeout is not None else _DEFAULT_CMD_TIMEOUT
 
         async with self._semaphore:
             start = time.monotonic()

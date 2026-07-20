@@ -250,7 +250,7 @@ async def test_exec_command_passes_timeout(
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
-    await provider.exec_command(ref, ["sleep", "1"], timeout=30)
+    await provider.exec_command(ref, ["sleep", "1"], cmd_timeout=30)
 
     mock_sandbox.commands.run.assert_called_once()
     _args, kwargs = mock_sandbox.commands.run.call_args
@@ -305,7 +305,7 @@ async def test_exec_command_default_timeout_when_none(
 
     provider = E2BRuntimeProvider(api_key="sk-test")
     ref = await provider.create_workspace(workspace_spec)
-    await provider.exec_command(ref, ["echo", "hi"], timeout=None)
+    await provider.exec_command(ref, ["echo", "hi"], cmd_timeout=None)
 
     mock_sandbox.commands.run.assert_called_once()
     _args, kwargs = mock_sandbox.commands.run.call_args
