@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -114,7 +114,7 @@ from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
 
-# Uptime tracking — set at module import time, read by health endpoints.
+# Uptime tracking â€” set at module import time, read by health endpoints.
 logger = logging.getLogger(__name__)
 
 
@@ -126,7 +126,7 @@ class _TaskGroupSessionManager(Protocol):
 
 _START_TIME = datetime.now(UTC)
 
-# Graceful shutdown manager — resources registered during lifespan startup.
+# Graceful shutdown manager â€” resources registered during lifespan startup.
 _shutdown_manager = ShutdownManager()
 
 
@@ -148,7 +148,7 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
     logger.error("startup.db_unreachable")
-    logger.warning("startup.continuing_without_db — app will retry connections at runtime")
+    logger.warning("startup.continuing_without_db â€” app will retry connections at runtime")
 
 
 async def _run_migrations(settings: Settings) -> None:
@@ -583,7 +583,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Configure structured JSON logging first so all startup logs are structured.
     configure_logging()
 
-    # Calling get_settings() at startup triggers pydantic validation — if
+    # Calling get_settings() at startup triggers pydantic validation â€” if
     # SECRET_KEY or FERNET_KEY are missing, too short, or a known placeholder,
     # the validator raises and the process exits before accepting requests.
     settings = get_settings()
@@ -697,7 +697,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     get_runtime_config_store()
 
     # Start the background pipeline worker (after migrations and checkpointer init).
-    _scheduler_tasks: list[asyncio.Task] = []
+    _scheduler_tasks: list[asyncio.Task[Any]] = []
     try:
         from modulo.api.mcp_server import set_background_worker as set_mcp_bg_worker
         from modulo.api.routes.runs import set_background_worker as set_runs_bg_worker
@@ -717,7 +717,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         set_scheduler_bg_worker(_bg_worker)
 
-        logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
+        logger.info("startup.redis_configured â€” Celery beat available for distributed scheduling")
         _scheduler_tasks = await start_schedulers(engine=db_engine)
     except Exception:
         logger.warning("startup.background_worker_init_failed", exc_info=True)
@@ -727,7 +727,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   - modulo.db.session    (module-level, used by entrypoint.sh + ClaimExpiryJob)
     #   - modulo.api.dependencies  (DI-injected, used by all route handlers)
     # Both point to the same DB URL but have separate connection pools.  They
-    # are intentionally decoupled — the entrypoint runs before FastAPI is
+    # are intentionally decoupled â€” the entrypoint runs before FastAPI is
     # initialised and can't use DI.  Dispose both so no connections leak.
     try:
         _di_engine = get_or_create_engine(settings)
@@ -927,13 +927,13 @@ app.include_router(remy_router)
 app.include_router(manifest_router)
 app.include_router(metrics_router)
 
-# Strip router lifespan contexts — none of the 68+ routers register
+# Strip router lifespan contexts â€” none of the 68+ routers register
 # on_startup/on_shutdown handlers, so every _DefaultLifespan is a no-op.
 # Keeping the deeply nested _merge_lifespan_context chain causes infinite
 # recursion in Docker builds (FastAPI 0.139.0, Python 3.12, Linux).
 app.router.lifespan_context = _lifespan
 
-# Remote MCP server — mounted as a Starlette sub-app at /mcp.
+# Remote MCP server â€” mounted as a Starlette sub-app at /mcp.
 # Auth is enforced by McpAuthMiddleware inside the sub-app.
 app.mount("/mcp", build_mcp_asgi_app())
 
