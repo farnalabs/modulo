@@ -1,7 +1,7 @@
-"""LocalRuntimeProvider — in-process agent execution with a concurrency cap.
+﻿"""LocalRuntimeProvider â€” in-process agent execution with a concurrency cap.
 
 This provider runs commands as subprocesses on the host machine. It is **not
-sandboxed** — agents have full access to the filesystem, network, and
+sandboxed** â€” agents have full access to the filesystem, network, and
 environment of the host process. Suitable for:
   - Solo dev / demo deployments (Fly.io, Railway, single VPS)
   - Proving out pipelines before investing in scaled infra
@@ -11,7 +11,7 @@ Concurrency is capped by a module-level ``asyncio.Semaphore`` (default 2)
 configurable via ``MODULO_MAX_LOCAL_CONCURRENCY``.
 
 **When you outgrow it:** add an E2B API key (or any other RuntimeProvider)
-and your pipelines continue to work unchanged — the RuntimeProvider ABC
+and your pipelines continue to work unchanged â€” the RuntimeProvider ABC
 hides the backend.
 """
 
@@ -39,7 +39,7 @@ class LocalRuntimeProvider(RuntimeProvider):
 
     Workspaces are temp directories on the host filesystem. The concurrency
     semaphore limits how many ``exec_command`` calls may run simultaneously
-    across all workspaces — agents waiting on the semaphore are queued.
+    across all workspaces â€” agents waiting on the semaphore are queued.
     """
 
     provider_id = "local"
@@ -75,7 +75,7 @@ class LocalRuntimeProvider(RuntimeProvider):
                 await self._run_command(
                     ["git", "clone", repo_url, "."],
                     cwd=workspace_dir,
-                    timeout=spec.timeout_seconds,
+                    cmd_timeout=spec.timeout_seconds,
                 )
         except asyncio.CancelledError:
             await asyncio.to_thread(shutil.rmtree, workspace_dir, ignore_errors=True)
@@ -97,7 +97,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         cwd = self._workspaces.get(provider_ref)
         if cwd is None:
             raise ValueError(f"Unknown workspace: {provider_ref}")
-        return await self._run_command(command, cwd=cwd, timeout=cmd_timeout)
+        return await self._run_command(command, cwd=cwd, cmd_timeout=cmd_timeout)
 
     async def destroy_workspace(self, provider_ref: str) -> None:
         """Remove the workspace temp directory."""
