@@ -3,7 +3,7 @@
 Usage:
     lock_svc = _build_lock_service("postgres")
     async with session.begin():
-        await lock_svc.acquire_lock(session, "pipeline:42", timeout=10.0)
+        await lock_svc.acquire_lock(session, "pipeline:42", lock_timeout=10.0)
         try:
             ...
         finally:
@@ -43,7 +43,7 @@ class BaseLockService(ABC):
         self,
         session: AsyncSession,
         key: str,
-        timeout: float | None = None,
+        lock_timeout: float | None = None,
     ) -> None: ...
 
     @abstractmethod
@@ -65,10 +65,10 @@ class PostgresLock(BaseLockService):
         self,
         session: AsyncSession,
         key: str,
-        timeout: float | None = None,
+        lock_timeout: float | None = None,
     ) -> None:
         key1, key2 = _str_to_lock_keys(key)
-        actual_timeout = timeout if timeout is not None else _DEFAULT_LOCK_TIMEOUT
+        actual_timeout = lock_timeout if lock_timeout is not None else _DEFAULT_LOCK_TIMEOUT
         deadline = asyncio.get_running_loop().time() + actual_timeout
 
         while True:
@@ -121,14 +121,14 @@ class GenericLock(BaseLockService):
         self,
         session: AsyncSession,
         key: str,
-        timeout: float | None = None,
+        lock_timeout: float | None = None,
     ) -> None:
         async with _generic_dict_lock:
             if key not in _generic_locks:
                 _generic_locks[key] = asyncio.Lock()
             lock = _generic_locks[key]
 
-        actual_timeout = timeout if timeout is not None else _DEFAULT_LOCK_TIMEOUT
+        actual_timeout = lock_timeout if lock_timeout is not None else _DEFAULT_LOCK_TIMEOUT
         try:
             await asyncio.wait_for(lock.acquire(), timeout=actual_timeout)
         except TimeoutError as exc:

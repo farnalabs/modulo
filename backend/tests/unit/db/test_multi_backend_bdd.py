@@ -400,7 +400,7 @@ class TestAdvisoryLockAbstraction:
         async def _contend() -> None:
             nonlocal acquired_during
             other = AsyncMock(spec=AsyncSession)
-            await lock.acquire_lock(other, "contended-key", timeout=5.0)
+            await lock.acquire_lock(other, "contended-key", lock_timeout=5.0)
             acquired_during = True
 
         task = asyncio.create_task(_contend())
@@ -421,7 +421,7 @@ class TestAdvisoryLockAbstraction:
         from modulo.db.repositories.locks import LockAcquireError
 
         with pytest.raises(LockAcquireError, match="Could not acquire lock"):
-            await lock.acquire_lock(session, "timeout-key", timeout=0.05)
+            await lock.acquire_lock(session, "timeout-key", lock_timeout=0.05)
 
     async def test_postgres_lock_key_hash_consistent(self) -> None:
         lock = PostgresLock()
