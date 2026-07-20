@@ -28,6 +28,7 @@ from modulo.core.trigger_engine import (
     ConcurrentRunLimitError,
     DuplicateWebhookError,
     HmacValidationError,
+    PipelineRateLimitError,
     ReplayNotFoundError,
     TimestampExpiredError,
     TriggerEngine,
@@ -140,6 +141,11 @@ async def receive_webhook(
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
+        ) from exc
+    except PipelineRateLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
         ) from exc
     except ProgrammingError:
         raise HTTPException(
