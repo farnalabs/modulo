@@ -85,9 +85,11 @@ jobs:
           else
             QA_OUTPUT=$(opencode run --agent coder "Review changed files for bugs, security, and quality issues. Label each finding [critical], [major], [minor], or [nit]. Files: ${FILES}" 2>&1) || true
           fi
-          echo "${QA_OUTPUT}" > /tmp/qa-output.txt
-          echo "critical_count=$(echo "${QA_OUTPUT}" | grep -ciF '"'"'[critical]'"'"' || echo 0)" >> "$GITHUB_OUTPUT"
-          echo "major_count=$(echo "${QA_OUTPUT}" | grep -ciF '"'"'[major]'"'"' || echo 0)" >> "$GITHUB_OUTPUT"
+          echo "${QA_OUTPUT}" > /tmp/qa-output.txt || true
+          CRIT_CNT=$(echo "${QA_OUTPUT}" | grep -ciF "[critical]" || true)
+          echo "critical_count=${CRIT_CNT:-0}" >> "$GITHUB_OUTPUT"
+          MAJ_CNT=$(echo "${QA_OUTPUT}" | grep -ciF "[major]" || true)
+          echo "major_count=${MAJ_CNT:-0}" >> "$GITHUB_OUTPUT"
 
       - name: Post review
         if: always()
