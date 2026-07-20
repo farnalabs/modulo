@@ -1,4 +1,4 @@
-﻿"""LocalRuntimeProvider â€” in-process agent execution with a concurrency cap.
+"""LocalRuntimeProvider â€” in-process agent execution with a concurrency cap.
 
 This provider runs commands as subprocesses on the host machine. It is **not
 sandboxed** â€” agents have full access to the filesystem, network, and
