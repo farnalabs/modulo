@@ -117,9 +117,9 @@ jobs:
         run: |
           echo "Posting review for PR #${PR_NUM}"
           if [ "${{ steps.install.outputs.installed }}" != "true" ]; then
-            gh pr review "$PR_NUM" --repo "$REPO" --approve --body "## AI Code Review - Approved (opencode unavailable)"
+            gh pr review "$PR_NUM" --repo "$REPO" --comment --body "## AI Code Review - Unavailable\n\nThe automated code reviewer could not run. A human review is required."
           elif [ "${{ steps.changed-files.outputs.count }}" -eq 0 ]; then
-            gh pr review "$PR_NUM" --repo "$REPO" --approve --body "## AI Code Review - Approved (no files)"
+            gh pr review "$PR_NUM" --repo "$REPO" --comment --body "## AI Code Review - No Changes\n\nNo reviewable changes found. A human should verify this PR."
           else
             CRIT=${{ steps.review.outputs.critical_count }}
             MAJ=${{ steps.review.outputs.major_count }}
