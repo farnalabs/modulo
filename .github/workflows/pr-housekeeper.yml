@@ -1,0 +1,140 @@
+﻿# PR Housekeeper
+# Scans all open PRs and handles stale/abandoned PRs automatically.
+# Runs every 30 minutes alongside the merge queue.
+
+name: PR Housekeeper
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
+jobs:
+  housekeep:
+    name: PR Housekeeper
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: List all open PRs
+        id: list
+        shell: bash
+        run: |
+          echo "Fetching open PRs..."
+          gh pr list --state open --json number,title,headRefName,createdAt,updatedAt,mergeable,reviews,statusCheckRollup --limit 50 > /tmp/prs.json
+          COUNT=$(jq 'length' /tmp/prs.json)
+          echo "Found $COUNT open PR(s)"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Process each PR
+        if: steps.list.outputs.count > 0
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        run: |
+          NOW=$(date +%s)
+          ACTIONS=""
+
+          jq -c '.[]' /tmp/prs.json | while IFS= read -r pr; do
+            NUM=$(echo "$pr" | jq -r '.number')
+            TITLE=$(echo "$pr" | jq -r '.title')
+            REF=$(echo "$pr" | jq -r '.headRefName')
+            CREATED=$(echo "$pr" | jq -r '.createdAt')
+            UPDATED=$(echo "$pr" | jq -r '.updatedAt')
+            MERGEABLE=$(echo "$pr" | jq -r '.mergeable')
+            REVIEW_STATE=$(echo "$pr" | jq -r '.reviews[-1].state // "none"')
+            CHECKS=$(echo "$pr" | jq -r '.statusCheckRollup // []')
+
+            CREATED_TS=$(date -d "$CREATED" +%s 2>/dev/null || echo 0)
+            UPDATED_TS=$(date -d "$UPDATED" +%s 2>/dev/null || echo 0)
+            AGE_HOURS=$(( (NOW - CREATED_TS) / 3600 ))
+            STALE_HOURS=$(( (NOW - UPDATED_TS) / 3600 ))
+
+            echo "---"
+            echo "PR #$NUM: $TITLE (age: ${AGE_HOURS}h, stale: ${STALE_HOURS}h, mergeable: $MERGEABLE, review: $REVIEW_STATE)"
+
+            if [ "$STALE_HOURS" -lt 1 ] && [ "$REVIEW_STATE" != "CHANGES_REQUESTED" ]; then
+              echo "  SKIP - updated recently (<1h)"
+              continue
+            fi
+
+            CHECKS_COUNT=$(echo "$CHECKS" | jq 'length')
+            STALE_CHECKS=$(echo "$CHECKS" | jq '[.[] | select(.status == "QUEUED" or .status == "PENDING" or .status == "EXPECTED")] | length')
+            FAILED_CHECKS=$(echo "$CHECKS" | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "ACTION_REQUIRED")] | length')
+
+            # Rule 1: No CI checks at all - webhook may have failed
+            if [ "$CHECKS_COUNT" -eq 0 ]; then
+              echo "  ACTION: No CI checks - re-dispatching CI"
+              gh workflow run ci.yml --ref "$REF" 2>/dev/null && echo "  CI dispatched" || echo "  WARNING: Could not dispatch CI"
+              ACTIONS="$ACTIONS ci-dispatch-$NUM"
+              continue
+            fi
+
+            # Rule 2: CI stuck on pending checks
+            if [ "$STALE_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 1 ]; then
+              echo "  ACTION: ${STALE_CHECKS} check(s) stuck - re-dispatching CI"
+              gh workflow run ci.yml --ref "$REF" 2>/dev/null && echo "  CI dispatched" || echo "  WARNING: Could not dispatch CI"
+              ACTIONS="$ACTIONS ci-redispatch-$NUM"
+              continue
+            fi
+
+            # Rule 3: CI failed, no fix committed >1hr - dispatch branch-fixer
+            if [ "$FAILED_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 1 ]; then
+              echo "  ACTION: ${FAILED_CHECKS} check(s) failed - dispatching branch-fixer"
+              gh workflow run branch-fixer.yml -f branch_name="$REF" -f pr_number="$NUM" 2>/dev/null && echo "  Branch fixer dispatched" || echo "  WARNING: Could not dispatch branch-fixer"
+              ACTIONS="$ACTIONS branch-fix-$NUM"
+              continue
+            fi
+
+            # Rule 4: CI passed but CHANGES_REQUESTED >2hrs - post reminder
+            if [ "$REVIEW_STATE" = "CHANGES_REQUESTED" ] && [ "$STALE_HOURS" -ge 2 ]; then
+              echo "  ACTION: CHANGES_REQUESTED for ${STALE_HOURS}h - posting reminder"
+              echo "## PR Housekeeper Reminder" > /tmp/pr-msg.txt
+
+              echo "" >> /tmp/pr-msg.txt
+              echo "This PR has a CHANGES_REQUESTED review that has been pending for over 2 hours with no response." >> /tmp/pr-msg.txt
+              gh pr comment "$NUM" --body-file /tmp/pr-msg.txt 2>/dev/null || echo "  WARNING: Could not post comment"
+              ACTIONS="$ACTIONS reminder-$NUM"
+              continue
+            fi
+
+            # Rule 5: Approved but has merge conflicts
+            if [ "$REVIEW_STATE" = "APPROVED" ] && [ "$MERGEABLE" = "CONFLICTING" ]; then
+              echo "  ACTION: Approved but has merge conflicts - posting rebase reminder"
+              echo "## PR Housekeeper Notice" > /tmp/pr-msg.txt
+
+              echo "" >> /tmp/pr-msg.txt
+              echo "This PR is approved but has merge conflicts with main. Please rebase." >> /tmp/pr-msg.txt
+              gh pr comment "$NUM" --body-file /tmp/pr-msg.txt 2>/dev/null || echo "  WARNING: Could not post comment"
+              ACTIONS="$ACTIONS conflict-notify-$NUM"
+              continue
+            fi
+
+            # Rule 6: Stale >24h with no progress - close
+            if [ "$AGE_HOURS" -ge 24 ] && [ "$CHECKS_COUNT" -eq 0 ] && [ "$REVIEW_STATE" = "none" ]; then
+              echo "  ACTION: PR stale >24h - closing"
+              echo "## PR Housekeeper" > /tmp/pr-msg.txt
+
+              echo "" >> /tmp/pr-msg.txt
+              echo "This PR has been open for over 24 hours with no activity. Closing as stale." >> /tmp/pr-msg.txt
+              gh pr close "$NUM" --comment-file /tmp/pr-msg.txt 2>/dev/null || echo "  WARNING: Could not close PR"
+              ACTIONS="$ACTIONS closed-$NUM"
+              continue
+            fi
+
+            echo "  No action needed"
+          done
+
+          echo ""
+          if [ -n "$ACTIONS" ]; then
+            echo "=== Actions taken: $ACTIONS ==="
+          else
+            echo "=== No actions needed ==="
+          fi
