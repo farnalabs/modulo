@@ -1,4 +1,5 @@
-﻿name: Branch Fixer
+# v2 — workflow_dispatch trigger fix
+name: Branch Fixer
 
 on:
   workflow_dispatch:
@@ -108,14 +109,14 @@ jobs:
           if [ -f "$FIX_PROMPT" ]; then
             PROMPT_TEXT=$(cat "$FIX_PROMPT")
             FIX_OUTPUT=$(opencode run --agent coder "${PROMPT_TEXT}. Files: ${CHANGED_FILES}.
-          CI failures log:
-          ${{ steps.fetch-ci.outputs.ci_log }}" 2>&1) || true
+            CI failures log:
+            ${{ steps.fetch-ci.outputs.ci_log }}" 2>&1) || true
           else
             echo "No fix prompt found, using inline instructions"
             FIX_OUTPUT=$(opencode run --agent coder "Fix ALL failing CI checks. Files: ${CHANGED_FILES}.
-CI failures:
-${{ steps.fetch-ci.outputs.ci_log }}
-Fix every issue. Never disable checks." 2>&1) || true
+            CI failures:
+            ${{ steps.fetch-ci.outputs.ci_log }}
+            Fix every issue. Never disable checks." 2>&1) || true
           fi
           echo "${FIX_OUTPUT}" > /tmp/fix-output.txt
           echo "status=applied" >> "$GITHUB_OUTPUT"
