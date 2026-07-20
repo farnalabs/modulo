@@ -4,6 +4,7 @@ import base64
 import json
 import uuid
 from collections.abc import Iterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -587,7 +588,7 @@ async def test_copy_to_adapt_bumps_version():
 
     captured: dict = {}
 
-    async def _capture(*args, **kwargs):  # type: ignore[misc]
+    async def _capture(*args: Any, **kwargs: Any) -> Any:
         captured.update(kwargs)
         return copied
 
