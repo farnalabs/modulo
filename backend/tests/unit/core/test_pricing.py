@@ -21,7 +21,7 @@ class TestPricingConfig:
     def test_frozen(self) -> None:
         cfg = PricingConfig("test", "*", 1.0, 2.0)
         with pytest.raises(AttributeError):
-            cfg.input_price_per_1k = 5.0  # type: ignore[misc]
+            object.__setattr__(cfg, "input_price_per_1k", 5.0)
 
 
 class TestGetPricing:
