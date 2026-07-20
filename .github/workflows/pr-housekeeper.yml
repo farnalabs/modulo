@@ -138,7 +138,7 @@ jobs:
             fi
             mkdir -p ~/.local/share/opencode
             echo '{"opencode":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"},"opencode-go":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"}}' > ~/.local/share/opencode/auth.json
-            opencode -p "Fix the failing CI checks in these files. Fix every issue. Never disable checks. Files: ${CHANGED_FILES}" 2>&1 || true
+            opencode run --agent coder --quiet "Fix the failing CI checks in these files. Fix every issue. Never disable checks. Files: ${CHANGED_FILES}" 2>&1 || true
             if [ -d "backend" ]; then cd backend && uv run --no-sync ruff check --fix . 2>/dev/null || true; cd ..; fi
             git add -A .
             git rm --cached -r .opencode 2>/dev/null || true
