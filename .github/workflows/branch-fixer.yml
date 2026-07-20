@@ -102,12 +102,10 @@ jobs:
       - name: Run lint autofix (fallback)
         shell: bash
         run: |
-          echo "Running ruff autofix..."
-          cd backend && uv run --no-sync ruff check --fix . 2>/dev/null || true
-          cd ..
-          echo "Running ruff format..."
-          cd backend && uv run --no-sync ruff format . 2>/dev/null || true
-          cd ..
+          echo "Running full auto-fix suite..."
+          if [ -d "backend" ]; then cd backend && uv run --no-sync ruff check --fix . 2>/dev/null || true; cd ..; fi
+          if [ -d "frontend" ]; then cd frontend && npm install 2>/dev/null || true; cd ..; fi
+          echo "Auto-fix complete."
 
       - name: Commit and push fixes
         id: commit
