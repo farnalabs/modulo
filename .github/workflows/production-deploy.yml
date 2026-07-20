@@ -20,7 +20,7 @@ jobs:
   deploy:
     name: Deploy ${{ matrix.env.name }}
     environment: ${{ matrix.env.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     strategy:
       matrix:
         env:
@@ -69,7 +69,7 @@ jobs:
   consistency:
     name: Cross-environment check
     needs: deploy
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
         with:
