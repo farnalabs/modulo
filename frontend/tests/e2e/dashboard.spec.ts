@@ -1,6 +1,6 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Dashboard', { tag: '@staging-regression' }, () => {
+test.describe('Dashboard', () => {
   test('redirects to login when unauthenticated', { tag: '@smoke' }, async ({ page }) => {
     await page.goto('/')
 

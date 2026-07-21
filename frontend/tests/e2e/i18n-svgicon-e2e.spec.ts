@@ -1,6 +1,6 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('i18n Keys & SvgIcon Regression', { tag: '@staging-regression' }, () => {
+test.describe('i18n Keys & SvgIcon Regression', () => {
   test('sidebar shows "Environment Profiles" not raw key', { tag: '@e2e-regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/environments')

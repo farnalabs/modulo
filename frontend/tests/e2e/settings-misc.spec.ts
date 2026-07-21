@@ -1,6 +1,6 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Settings HITL Review', { tag: '@staging-regression' }, () => {
+test.describe('Settings HITL Review', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/hitl-review')
@@ -9,7 +9,7 @@ test.describe('Settings HITL Review', { tag: '@staging-regression' }, () => {
   })
 })
 
-test.describe('Settings Browser Monitoring', { tag: '@staging-regression' }, () => {
+test.describe('Settings Browser Monitoring', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/monitoring')
@@ -18,7 +18,7 @@ test.describe('Settings Browser Monitoring', { tag: '@staging-regression' }, () 
   })
 })
 
-test.describe('Settings Rate Limits', { tag: '@staging-regression' }, () => {
+test.describe('Settings Rate Limits', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/rate-limits')
@@ -27,7 +27,7 @@ test.describe('Settings Rate Limits', { tag: '@staging-regression' }, () => {
   })
 })
 
-test.describe('Settings Remy Skills', { tag: '@staging-regression' }, () => {
+test.describe('Settings Remy Skills', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/remy')
@@ -36,7 +36,7 @@ test.describe('Settings Remy Skills', { tag: '@staging-regression' }, () => {
   })
 })
 
-test.describe('Settings Runtime Config', { tag: '@staging-regression' }, () => {
+test.describe('Settings Runtime Config', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/runtime-config')

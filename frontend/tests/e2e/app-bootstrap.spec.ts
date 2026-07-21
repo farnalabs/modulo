@@ -1,6 +1,6 @@
-﻿import { test, expect } from './setup/fixtures'
+import { test, expect } from './setup/fixtures'
 
-test.describe('App Bootstrap', { tag: '@staging-regression' }, () => {
+test.describe('App Bootstrap', () => {
   test('page loads without console errors', { tag: '@smoke' }, async ({ page }) => {
     const logs: any[] = []
     page.on('console', (msg) => {
