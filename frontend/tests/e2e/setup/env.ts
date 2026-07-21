@@ -26,7 +26,7 @@ const ENVS: Record<string, TestEnv> = {
   staging: {
     name: 'staging',
     credentials: {
-      admin: { email: 'admin@demo.modulo', password: 'admin123' },
+      admin: { email: process.env.E2E_ADMIN_EMAIL || 'admin@demo.modulo', password: process.env.E2E_ADMIN_PASSWORD || 'admin123' },
       demo: { email: 'demo', password: 'demo' },
       loginFormEmailSelector: FORM_SELECTORS.email,
       loginFormPasswordSelector: FORM_SELECTORS.password,
