@@ -48,6 +48,8 @@ jobs:
         uses: ./.github/actions/capture-git-metadata
 
       - id: deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         name: Deploy to ${{ matrix.env.name }}.modulo.run
         shell: pwsh
         run: |
