@@ -78,7 +78,11 @@ const props = withDefaults(defineProps<{
 
 const planStore = usePlanStore();
 
-const enabled = computed(() => planStore.featureEnabled(props.featureName));
+const enabled = computed(() => {
+  if (planStore.featureEnabled(props.featureName)) return true;
+  if (props.requiredTier && planStore.isAtMinimumTier(props.requiredTier)) return true;
+  return false;
+});
 
 const tooltipText = computed(() => {
   if (props.requiredTier) {
