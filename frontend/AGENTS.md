@@ -130,3 +130,61 @@ Rules:
 - Stagger list entries 30-80ms apart instead of animating all at once
 - Prefer CSS transitions over keyframes for interruptible UI (toasts, toggles)
 - Avoid `transition: all` — always specify exact properties
+
+### Playwright: never use `waitForLoadState('networkidle')` on staging
+
+`page.waitForLoadState('networkidle')` never fires on staging because the app has ongoing polling (WebSocket connections, feature flag checks, price checks, etc.). The `networkidle` event waits for zero network activity for 500ms, which never happens on a live app.
+
+Replace with targeted selector waits:
+```
+// Instead of:
+await page.goto('/pipelines')
+await page.waitForLoadState('networkidle')
+await expect(page.locator('h1')).toContainText('Pipelines')
+
+// Use:
+await page.goto('/pipelines')
+await expect(page.locator('h1')).toContainText('Pipelines')
+await expect(page.locator('[data-loading="false"]')).toBeVisible()
+```
+
+The `expect().toContainText()`, `expect().toBeVisible()`, and `page.waitForURL()` all have built-in retry/timeout — they implicitly wait for the condition to be met. Adding `waitForLoadState('networkidle')` before them is always redundant and often harmful on staging.
+
+### TypeScript files must be UTF-8 without BOM
+
+Editors on Windows can save files with UTF-16 LE BOM (`FF FE`). Playwright/Node's TypeScript parser chokes on these with cryptic syntax errors. Always verify files are UTF-8 without BOM. Check with PowerShell:
+```powershell
+# Check for BOM (returns nothing if clean)
+Format-Hex file.ts | Select-String "FF FE"
+# Convert if needed
+Get-Content file.ts | Set-Content file.ts -Encoding UTF8
+```
+
+### Playwright config uses `//` not `#` for comments
+
+TypeScript does not support `#` as a comment character. Using `#` causes BABEL_PARSE_ERROR. Only `//` and `/* */` are valid. This is a common mistake when porting config from Python/INI files.
+
+### Staging E2E credentials must match server config
+
+The staging test env had hardcoded `admin@demo.modulo` / `admin123` which didn't match the server's `MODULO_USERS` env var. Use GitHub secrets + `process.env` overrides for staging credentials so they stay in sync with the actual deployment:
+```typescript
+const email = process.env.E2E_STAGING_EMAIL || fallback
+const password = process.env.E2E_STAGING_PASSWORD || fallback
+```
+
+Never hardcode staging credentials in test files — they drift from the deployment's `MODULO_USERS` env var.
+
+### `storageState` causes login page redirects — avoid global storageState
+
+When `storageState` is loaded from `playwright.config.ts`, navigating to `/login` redirects to `/` (dashboard) because the persisted session is still valid. Tests that expect to see login page elements (error messages, password fields, etc.) fail because they're immediately redirected.
+
+Each test should handle its own auth — don't rely on global `storageState` for tests that exercise the login flow. For authenticated-only tests, use `storageState` (it saves 70+ independent auth calls). For tests that need the login page visible, explicitly clear the session first or skip storageState:
+```
+// Test that needs login page:
+await page.goto('/login')
+await page.waitForURL('/login')  // confirm not redirected
+// ... test login elements ...
+
+// Test that needs authenticated state:
+// This test works fine with storageState
+```

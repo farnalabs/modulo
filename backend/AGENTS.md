@@ -18,9 +18,10 @@
 
 - Prefer `savepoint = await session.begin_nested()` for local rollback scopes. The outer `session.rollback()` discards ALL uncommitted writes, including those from other concurrent operations on the same session — not just the failed one.
 
-### Python 3.13: `Mapped["Type | None"]` forward reference syntax is broken
+### Python 3.13: `Mapped["Type | None"]` forward reference syntax is broken; bare annotations without `Mapped[]` also rejected
 
 - Python 3.13 changed PEP 604 union parsing in annotations. `Mapped["Type | None"]` raises `TypeError` at class body execution. Use `Mapped[Optional["Type"]]` or `Mapped[Union["Type", None]]` instead.
+- SQLAlchemy's Annotated Declarative Table form also rejects bare annotations without the `Mapped[]` wrapper. A field like `rate_limit_config: dict[str, Any] | None` must be `Mapped[Optional[dict[str, Any]]]`. Every mapped column must use `Mapped[...]` — bare type annotations are silently ignored or cause `TypeError` at class body execution.
 
 ### Test login: payload must use `email` field, not `username`
 
