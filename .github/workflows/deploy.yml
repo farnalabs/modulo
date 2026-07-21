@@ -122,7 +122,6 @@ jobs:
     name: Staging E2E (smoke + WCAG + regression)
     needs: [check-context, deploy-staging]
     timeout-minutes: 45
-    needs: [check-context, deploy-staging]
     if: needs.check-context.outputs.ci_passed == 'true'
     runs-on: ubicloud-standard-2
     defaults:
@@ -193,7 +192,6 @@ jobs:
 
   deploy-production:
     name: Deploy to app.modulo.run
-    needs: [check-context, deploy-staging, staging-e2e]
     if: needs.check-context.outputs.is_main == 'true' && needs.check-context.outputs.ci_passed == 'true'
     runs-on: ubicloud-standard-2
     steps:
