@@ -93,4 +93,13 @@ class StubModelBackend(BaseChatModel):
             response = self.fixture_map[normalized_input]
         except KeyError as error:
             raise UnexpectedInputError(normalized_input) from error
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=response))])
+        return ChatResult(
+            generations=[
+                ChatGeneration(
+                    message=AIMessage(
+                        content=response,
+                        usage_metadata={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                    )
+                )
+            ]
+        )
