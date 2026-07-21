@@ -25,7 +25,7 @@
         "@datadog/browser-logs": "^7.5.0",
         "@datadog/browser-rum": "^7.5.0",
         "@grafana/faro-web-sdk": "^2.8.2",
-        "@sentry/vue": "^8.0.0"
+        "@sentry/vue": "^10.65.0"
     },
     "dependencies": {
         "@lucide/vue": "^1.21.0",
