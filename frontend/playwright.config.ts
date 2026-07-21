@@ -10,6 +10,7 @@ const baseURL = getBaseUrl(target)
 export default defineConfig({
   testDir: './tests/e2e',
   retries: target !== 'local' ? 2 : 0,
+  timeout: target !== 'local' ? 120_000 : 30_000,
   use: {
     baseURL,
   },
