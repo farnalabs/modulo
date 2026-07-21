@@ -46,6 +46,7 @@
       <!-- Folder sidebar -->
       <FolderTree
         :selected-folder-id="selectedFolderId"
+        :pipeline-counts="folderPipelineCounts"
         @select-folder="onSelectFolder"
         @folders-changed="loadPipelines"
       />
@@ -128,6 +129,7 @@
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" class="w-40">
+                    <DropdownMenuItem @click.stop="router.push({ name: 'runs-list', query: { pipeline_id: p.id } })">{{ $t('views.PipelineListView.runs') }}</DropdownMenuItem>
                     <DropdownMenuItem @click="openRename(p)">Rename</DropdownMenuItem>
                     <DropdownMenuItem v-if="!p.archived_at" @click="handleArchive(p)">Archive</DropdownMenuItem>
                     <DropdownMenuItem v-else @click="handleUnarchive(p)">Unarchive</DropdownMenuItem>
@@ -178,6 +180,7 @@
                 <th class="px-4 py-3">Name</th>
                 <th class="px-4 py-3">Description</th>
                 <th class="px-4 py-3">Visibility</th>
+                <th class="px-4 py-3">{{ $t('views.PipelineListView.trigger') }}</th>
                 <th class="px-4 py-3">Created</th>
                 <th class="px-4 py-3 text-right">Actions</th>
               </tr>
@@ -185,7 +188,7 @@
             <tbody class="divide-y">
               <template v-for="(row, i) in treeRows" :key="i">
                 <tr v-if="row.type === 'folder'" class="bg-muted/20 hover:bg-muted/30 transition-colors" data-testid="pipeline-tree-folder-row">
-                  <td colspan="5" class="px-4 py-2">
+                  <td colspan="6" class="px-4 py-2">
                     <button
                       class="flex w-full items-center gap-2 text-sm font-medium text-foreground text-left"
                       @click="toggleFolder((row.data as FolderItem).id)"
@@ -215,7 +218,7 @@
                 </tr>
 
                 <tr v-else-if="row.type === 'uncategorised-header'" class="bg-muted/20">
-                  <td colspan="5" class="px-4 py-2">
+                  <td colspan="6" class="px-4 py-2">
                     <span class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                       {{ $t('views.PipelineListView.uncategorised') }}
@@ -242,10 +245,21 @@
                     </span>
                   </td>
                   <td class="px-4 py-3">
+                    <span class="text-xs text-muted-foreground">{{ getPipelineTrigger((row.data as PipelineItem).id) || '\u2014' }}</span>
+                  </td>
+                  <td class="px-4 py-3">
                     <span class="text-muted-foreground">{{ formatDate((row.data as PipelineItem).created_at) }}</span>
                   </td>
                   <td class="px-4 py-3">
-                    <div class="flex justify-end">
+                    <div class="flex justify-end items-center gap-1">
+                      <router-link
+                        :to="{ name: 'runs-list', query: { pipeline_id: (row.data as PipelineItem).id } }"
+                        class="rounded px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                        @click.stop
+                        data-testid="pipeline-list-runs-link"
+                      >
+                        {{ $t('views.PipelineListView.runs') }}
+                      </router-link>
                       <DropdownMenu>
                         <DropdownMenuTrigger as-child>
                           <button class="rounded p-1 hover:bg-accent" data-testid="pipeline-list-action-menu" @click.stop>
@@ -253,6 +267,7 @@
                           </button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" class="w-40">
+                          <DropdownMenuItem @click.prevent.stop="router.push({ name: 'runs-list', query: { pipeline_id: (row.data as PipelineItem).id } })">{{ $t('views.PipelineListView.runs') }}</DropdownMenuItem>
                           <DropdownMenuItem @click.prevent.stop="openRename(row.data as PipelineItem)">Rename</DropdownMenuItem>
                           <DropdownMenuItem v-if="!(row.data as PipelineItem).archived_at" @click.prevent.stop="handleArchive(row.data as PipelineItem)">Archive</DropdownMenuItem>
                           <DropdownMenuItem v-else @click.prevent.stop="handleUnarchive(row.data as PipelineItem)">Unarchive</DropdownMenuItem>
@@ -508,7 +523,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
@@ -534,6 +549,14 @@ interface PipelineItem {
   updated_at: string
   archived_at: string | null
   folder_id?: string | null
+  trigger_type?: string
+}
+
+interface TriggerItem {
+  id: string
+  pipeline_id: string
+  trigger_type: string
+  active: boolean
 }
 
 interface FolderItem {
@@ -573,6 +596,47 @@ const allPipelines = computed(() => pipelinesResp.value?.items ?? [])
 
 const foldersList = ref<FolderItem[]>([])
 const folderError = ref<string | null>(null)
+
+const triggerTypes = ref<Record<string, string>>({})
+
+async function loadTriggers() {
+  try {
+    const response = await api.GET('/api/v1/triggers', { params: { query: { page_size: 500 } } })
+    if (response.data) {
+      const items = (response.data as any).items as TriggerItem[]
+      const map: Record<string, string> = {}
+      for (const t of items) {
+        if (!map[t.pipeline_id]) {
+          map[t.pipeline_id] = t.trigger_type
+        }
+      }
+      triggerTypes.value = map
+    }
+  } catch {
+    // triggers are optional — column shows '—' if unavailable
+  }
+}
+
+function getPipelineTrigger(pipelineId: string): string | undefined {
+  return triggerTypes.value[pipelineId]
+}
+
+watch(allPipelines, () => {
+  loadTriggers()
+}, { immediate: false })
+
+const folderPipelineCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  let total = 0
+  for (const p of allPipelines.value) {
+    total++
+    if (p.folder_id) {
+      counts[p.folder_id] = (counts[p.folder_id] || 0) + 1
+    }
+  }
+  counts.__all__ = total
+  return counts
+})
 
 async function loadFolders() {
   folderError.value = null

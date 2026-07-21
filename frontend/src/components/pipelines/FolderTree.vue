@@ -20,7 +20,8 @@
         @click="$emit('select-folder', null)"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        {{ $t('views.PipelineListView.all_pipelines') }}
+        <span class="truncate">{{ $t('views.PipelineListView.all_pipelines') }}</span>
+        <span v-if="props.pipelineCounts?.['__all__'] !== undefined" class="ml-auto text-xs text-muted-foreground">{{ props.pipelineCounts['__all__'] }}</span>
       </button>
 
       <div v-if="loading" class="px-3 py-2 space-y-2">
@@ -64,6 +65,7 @@
 
             <!-- Folder name -->
             <span class="truncate">{{ element.folder.name }}</span>
+            <span v-if="props.pipelineCounts?.[element.folder.id] !== undefined" class="ml-1 text-xs text-muted-foreground shrink-0">{{ props.pipelineCounts[element.folder.id] }}</span>
 
             <!-- Action buttons (rename, delete) -->
             <div class="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
@@ -151,7 +153,7 @@
       <DialogContent>
         <DialogHeader>
           <DialogTitle class="text-destructive">{{ $t('views.PipelineListView.delete_folder') }}</DialogTitle>
-          <DialogDescription>{{ $t('views.PipelineListView.delete_folder_confirm') }}</DialogDescription>
+          <DialogDescription>{{ deleteConfirmMessage }}</DialogDescription>
         </DialogHeader>
         <div v-if="deleteError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
           {{ deleteError }}
@@ -190,6 +192,7 @@ interface FlatTreeItem {
 
 const props = defineProps<{
   selectedFolderId: string | null
+  pipelineCounts?: Record<string, number>
 }>()
 
 const emit = defineEmits<{
@@ -247,6 +250,15 @@ const flatTree = computed(() => {
   }
   walk(folderRoots.value, 0)
   return result
+})
+
+const deleteConfirmMessage = computed(() => {
+  if (!deleteTarget.value) return ''
+  const count = props.pipelineCounts?.[deleteTarget.value.id]
+  if (count && count > 0) {
+    return 'Are you sure you want to delete this folder? Pipelines will be moved to Uncategorised.'
+  }
+  return 'Are you sure you want to delete this folder?'
 })
 
 async function loadFolders() {
