@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Admin Connectors', () => {
   test('page loads with correct heading and add connector button', async ({ page, env }) => {
@@ -8,7 +8,6 @@ test.describe('Admin Connectors', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/connectors')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Connectors')
     await expect(page.getByTestId('admin-connectors-add')).toBeVisible()
@@ -21,7 +20,6 @@ test.describe('Admin Connectors', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/connectors')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('admin-connectors-add')).toContainText('Add Connector')
   })

@@ -1,10 +1,9 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Stages Board', () => {
-  test('stages board page loads', async ({ page, env }) => {
+  test('stages board page loads', { tag: '@staging-regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/stages')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText(/Stage|Board/i)
   })
@@ -27,7 +26,6 @@ test.describe('Stages Board', () => {
     })
 
     await page.goto('/stages')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('stage-board-column-s1')).toBeVisible()
     await expect(page.getByTestId('stage-board-column-s2')).toBeVisible()

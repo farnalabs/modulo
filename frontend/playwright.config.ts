@@ -11,8 +11,10 @@ export default defineConfig({
   testDir: './tests/e2e',
   retries: target !== 'local' ? 2 : 0,
   timeout: target !== 'local' ? 180_000 : 30_000,
+  workers: target === 'staging' ? 1 : undefined,
   use: {
     baseURL,
+    storageState: target !== 'local' ? 'storageState-staging.json' : undefined,
     trace: 'on-first-retry',  // capture trace on first retry for debugging
     screenshot: 'only-on-failure',
   },

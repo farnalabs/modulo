@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 const sampleCostData = {
   totalSpend: 1234.56,
@@ -19,7 +19,6 @@ test.describe('Admin Cost Breakdown', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/costs')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Cost Breakdown')
   })
@@ -31,7 +30,6 @@ test.describe('Admin Cost Breakdown', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/costs')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('cost-total-spend')).toBeVisible()
     await expect(page.getByTestId('cost-avg-per-run')).toBeVisible()

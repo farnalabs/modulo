@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Settings MCP', () => {
   test('page loads with correct heading', async ({ page, env }) => {
@@ -8,7 +8,6 @@ test.describe('Settings MCP', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/settings/mcp')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('MCP Configuration')
   })
@@ -20,7 +19,6 @@ test.describe('Settings MCP', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/settings/mcp')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('settings-mcp-create-key')).toBeVisible()
     await expect(page.getByTestId('settings-mcp-copy-url')).toBeVisible()

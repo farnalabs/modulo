@@ -1,11 +1,10 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Sidebar Navigation', () => {
+test.describe('Sidebar Navigation', { tag: '@staging-regression' }, () => {
   test('displays Core, Settings, and Remy groups in simple mode', { tag: '@smoke' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
     await page.goto('/')
-    await page.waitForLoadState('networkidle')
 
     const sidebar = page.locator('nav[aria-label="Main navigation"]').first()
     await expect(sidebar).toBeVisible()
@@ -19,12 +18,10 @@ test.describe('Sidebar Navigation', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/')
-    await page.waitForLoadState('networkidle')
 
     const libraryLink = page.locator('a.sidebar-link', { hasText: 'Library' }).first()
     await expect(libraryLink).toBeVisible()
     await libraryLink.click()
-    await page.waitForLoadState('networkidle')
 
     await expect(page).toHaveURL(/\/library/)
   })
@@ -33,7 +30,6 @@ test.describe('Sidebar Navigation', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/')
-    await page.waitForLoadState('networkidle')
 
     const sidebar = page.locator('nav[aria-label="Main navigation"]').first()
     const sidebarLinks = sidebar.locator('a.sidebar-link')

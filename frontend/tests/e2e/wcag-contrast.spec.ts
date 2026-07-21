@@ -1,4 +1,4 @@
-import { test, expect } from './setup/fixtures'
+﻿import { test, expect } from './setup/fixtures'
 import AxeBuilder from '@axe-core/playwright'
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
@@ -9,16 +9,15 @@ function filterViolations(violations: { id: string }[]) {
   return violations.filter(v => !ACCEPTABLE_VIOLATIONS.includes(v.id))
 }
 
-test.describe('WCAG AA audit (CI — Vite dev server)', () => {
+test.describe('WCAG AA audit (CI â€” Vite dev server)', () => {
   const pages = [
     { path: '/login', name: 'login page' },
     { path: '/', name: 'root page' },
   ]
 
   for (const { path, name } of pages) {
-    test(`${name} — light mode has no unexpected WCAG AA violations`, async ({ page }) => {
+    test(`${name} â€” light mode has no unexpected WCAG AA violations`, async ({ page }) => {
       await page.goto(path)
-      await page.waitForLoadState('networkidle')
 
       await page.evaluate(() => {
         document.documentElement.classList.add('light')
@@ -42,9 +41,8 @@ test.describe('WCAG AA audit (CI — Vite dev server)', () => {
       expect(violations).toEqual([])
     })
 
-    test(`${name} — dark mode has no unexpected WCAG AA violations`, async ({ page }) => {
+    test(`${name} â€” dark mode has no unexpected WCAG AA violations`, async ({ page }) => {
       await page.goto(path)
-      await page.waitForLoadState('networkidle')
 
       await page.evaluate(() => {
         document.documentElement.classList.remove('light')

@@ -1,9 +1,8 @@
-import { test, expect } from './setup/fixtures'
+﻿import { test, expect } from './setup/fixtures'
 
-test.describe('Login Flow', () => {
+test.describe('Login Flow', { tag: '@staging-regression' }, () => {
   test('shows login form fields', async ({ page }) => {
     await page.goto('/login', { timeout: 60000 })
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Modulo')
 
@@ -25,7 +24,6 @@ test.describe('Login Flow', () => {
     }
 
     await page.goto('/login')
-    await page.waitForLoadState('networkidle')
 
     await page.fill(env.credentials.loginFormEmailSelector, 'wrong@example.com')
     await page.fill(env.credentials.loginFormPasswordSelector, 'thisiswrong')
@@ -53,7 +51,6 @@ test.describe('Login Flow', () => {
     }
 
     await page.goto('/login')
-    await page.waitForLoadState('networkidle')
 
     await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
     await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)

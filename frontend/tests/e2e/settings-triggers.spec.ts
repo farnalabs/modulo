@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Settings Triggers', () => {
   test('page loads with correct heading', async ({ page, env }) => {
@@ -8,7 +8,6 @@ test.describe('Settings Triggers', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/settings/triggers')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Triggers')
   })
@@ -20,7 +19,6 @@ test.describe('Settings Triggers', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/settings/triggers')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('settings-triggers-create')).toBeVisible()
   })

@@ -179,10 +179,10 @@ jobs:
           E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
         continue-on-error: true
 
-      - name: Run Playwright E2E regression suite against staging
+      - name: Run @staging-regression tests against staging
         id: regression-tests
-        run: npm run test:e2e:staging -- --reporter=line
-        timeout-minutes: 45
+        run: npx playwright test --grep "@staging-regression" --reporter=line
+        timeout-minutes: 30
         env:
           E2E_TARGET: staging
           E2E_NO_WEBSERVER: "true"

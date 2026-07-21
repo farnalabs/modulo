@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Settings Teams', () => {
   test('page loads with correct heading and create button', async ({ page, env }) => {
@@ -8,7 +8,6 @@ test.describe('Settings Teams', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/settings/teams')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Teams')
     await expect(page.getByTestId('settings-teams-create-team')).toBeVisible()
@@ -22,7 +21,6 @@ test.describe('Settings Teams', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/settings/teams')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('settings-teams-create-team')).toBeVisible()
   })

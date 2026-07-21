@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Evals', () => {
   test('eval editor page loads', async ({ page, env }) => {
@@ -7,7 +7,6 @@ test.describe('Evals', () => {
     })
     await loginAsAdmin(page, env)
     await page.goto('/evals/editor')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText(/Eval|Editor/i)
   })
@@ -18,7 +17,6 @@ test.describe('Evals', () => {
     })
     await loginAsAdmin(page, env)
     await page.goto('/evals/proposals')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText(/Proposal/i)
   })
@@ -29,7 +27,6 @@ test.describe('Evals', () => {
     })
     await loginAsAdmin(page, env)
     await page.goto('/variants/compare')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText(/Variant|Compare/i)
   })

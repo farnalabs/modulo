@@ -1,16 +1,14 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Navigation Flow', () => {
+test.describe('Navigation Flow', { tag: '@staging-regression' }, () => {
   test('navigates from Dashboard to Pipelines', async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
     await page.goto('/')
-    await page.waitForLoadState('networkidle')
 
     const pipelinesLink = page.locator('a.sidebar-link', { hasText: 'My Pipelines' }).first()
     await expect(pipelinesLink).toBeVisible()
     await pipelinesLink.click()
-    await page.waitForLoadState('networkidle')
 
     await expect(page).toHaveURL(/\/pipelines/)
     await expect(page.locator('h1')).toContainText('Pipelines')
@@ -20,7 +18,6 @@ test.describe('Navigation Flow', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/')
-    await page.waitForLoadState('networkidle')
 
     const dashboardLink = page.locator('a.sidebar-link.active').first()
     await expect(dashboardLink).toHaveCount(1)
@@ -31,14 +28,11 @@ test.describe('Navigation Flow', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/')
-    await page.waitForLoadState('networkidle')
 
     await page.goto('/library')
-    await page.waitForLoadState('networkidle')
     await expect(page).toHaveURL(/\/library/)
 
     await page.goBack()
-    await page.waitForLoadState('networkidle')
     await expect(page).toHaveURL(/\/$|^[^\/]+$/)
   })
 })
