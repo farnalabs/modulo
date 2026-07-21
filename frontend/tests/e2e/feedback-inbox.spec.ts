@@ -1,6 +1,6 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Feedback Inbox', { tag: '@staging-regression' }, () => {
+test.describe('Feedback Inbox', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/feedback/inbox')

@@ -1,4 +1,4 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Settings Email', () => {
   test('page loads with correct heading', async ({ page, env }) => {
@@ -12,7 +12,7 @@ test.describe('Settings Email', () => {
   })
 })
 
-test.describe('Settings Error Forwarders', { tag: '@staging-regression' }, () => {
+test.describe('Settings Error Forwarders', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/error-forwarders')
@@ -21,7 +21,7 @@ test.describe('Settings Error Forwarders', { tag: '@staging-regression' }, () =>
   })
 })
 
-test.describe('Settings Observability', { tag: '@staging-regression' }, () => {
+test.describe('Settings Observability', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/observability')

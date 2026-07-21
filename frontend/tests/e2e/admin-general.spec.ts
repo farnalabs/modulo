@@ -1,6 +1,6 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Admin API Changelog', { tag: '@staging-regression' }, () => {
+test.describe('Admin API Changelog', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/api-changelog')
@@ -9,7 +9,7 @@ test.describe('Admin API Changelog', { tag: '@staging-regression' }, () => {
   })
 })
 
-test.describe('Admin Audit Log', { tag: '@staging-regression' }, () => {
+test.describe('Admin Audit Log', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/audit')
@@ -18,7 +18,7 @@ test.describe('Admin Audit Log', { tag: '@staging-regression' }, () => {
   })
 })
 
-test.describe('Admin My Profile', { tag: '@staging-regression' }, () => {
+test.describe('Admin My Profile', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/my-profile')
@@ -27,7 +27,7 @@ test.describe('Admin My Profile', { tag: '@staging-regression' }, () => {
   })
 })
 
-test.describe('Admin Notification Delivery', { tag: '@staging-regression' }, () => {
+test.describe('Admin Notification Delivery', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/notification-delivery')
@@ -51,7 +51,7 @@ test.describe('Admin Org Settings', () => {
   })
 })
 
-test.describe('Admin Pipelines', { tag: '@staging-regression' }, () => {
+test.describe('Admin Pipelines', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/pipelines')
@@ -75,7 +75,7 @@ test.describe('Admin Plugins', () => {
   })
 })
 
-test.describe('Admin Team Comparison', { tag: '@staging-regression' }, () => {
+test.describe('Admin Team Comparison', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/teams/comparison')
@@ -84,7 +84,7 @@ test.describe('Admin Team Comparison', { tag: '@staging-regression' }, () => {
   })
 })
 
-test.describe('Admin Triggers', { tag: '@staging-regression' }, () => {
+test.describe('Admin Triggers', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/triggers')

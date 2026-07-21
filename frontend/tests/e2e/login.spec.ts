@@ -1,6 +1,6 @@
-﻿import { test, expect } from './setup/fixtures'
+import { test, expect } from './setup/fixtures'
 
-test.describe('Login Flow', { tag: '@staging-regression' }, () => {
+test.describe('Login Flow', () => {
   test('shows login form fields', async ({ page }) => {
     await page.goto('/login', { timeout: 60000 })
 

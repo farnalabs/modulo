@@ -1,6 +1,6 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Sidebar Navigation', { tag: '@staging-regression' }, () => {
+test.describe('Sidebar Navigation', () => {
   test('displays Core, Settings, and Remy groups in simple mode', { tag: '@smoke' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 

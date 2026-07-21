@@ -1,6 +1,6 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Navigation Flow', { tag: '@staging-regression' }, () => {
+test.describe('Navigation Flow', () => {
   test('navigates from Dashboard to Pipelines', async ({ page, env }) => {
     await loginAsAdmin(page, env)
 

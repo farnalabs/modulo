@@ -1,7 +1,7 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Error Tracking', () => {
-  test('error dashboard page loads', { tag: '@staging-regression' }, async ({ page, env }) => {
+  test('error dashboard page loads', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/errors')
 
