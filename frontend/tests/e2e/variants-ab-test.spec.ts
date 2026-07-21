@@ -1,10 +1,9 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('AB Test Models', () => {
+test.describe('AB Test Models', { tag: '@staging-regression' }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/variants/ab-test')
-    await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('A/B Test Models')
     await expect(page.getByTestId('ab-test-models-pipeline-select')).toBeVisible()
   })

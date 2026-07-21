@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
@@ -8,7 +8,6 @@ test.describe('WCAG AA audit (local)', () => {
   test('login page has no WCAG AA violations', async ({ page }) => {
     test.setTimeout(30000)
     await page.goto('/login')
-    await page.waitForLoadState('networkidle')
 
     const AxeBuilder = (await import('@axe-core/playwright')).default
     const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
@@ -22,7 +21,7 @@ test.describe('WCAG AA audit (local)', () => {
     expect(results.violations.filter(v => !knownViolations.has(v.id))).toEqual([])
   })
 
-  // Core authenticated pages — sampled to avoid full-suite timeout cascades
+  // Core authenticated pages â€” sampled to avoid full-suite timeout cascades
   const authedPages = [
     '/pipelines', '/stages', '/schemas',
     '/admin/connectors', '/admin/model-backends',
@@ -34,7 +33,6 @@ test.describe('WCAG AA audit (local)', () => {
       await loginAsAdmin(page, env)
 
       await page.goto(pagePath)
-      await page.waitForLoadState('networkidle')
 
       const AxeBuilder = (await import('@axe-core/playwright')).default
       const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()

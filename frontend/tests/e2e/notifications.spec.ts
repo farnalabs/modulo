@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Notifications', () => {
   test('notifications page loads', async ({ page, env }) => {
@@ -7,7 +7,6 @@ test.describe('Notifications', () => {
     })
     await loginAsAdmin(page, env)
     await page.goto('/notifications')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText(/Notification/i)
   })
@@ -57,7 +56,6 @@ test.describe('Notifications', () => {
     })
 
     await page.goto('/notifications')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('text=Pipeline run completed')).toBeVisible()
     await expect(page.locator('text=HITL review requested')).toBeVisible()

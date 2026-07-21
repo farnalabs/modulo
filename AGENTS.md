@@ -925,3 +925,43 @@ This destroys all machines and creates fresh ones that register correctly with t
 - \[deploy] strategy = 'rolling'\ is set in \ly.toml\ and \ly.staging.toml\
 - Always use the deploy pipeline or \deploy.ps1\ — never \lyctl deploy\ directly
 - Never pass \--strategy immediate\ — rolling/canary/bluegreen are the safe options
+
+### Playwright E2E: never use `waitForLoadState('networkidle')`
+
+`page.waitForLoadState('networkidle')` is unreliable — it waits until no network
+requests have been made for 500ms, but on staging (with real API latency), the
+page may still be rendering or the assertion may already be satisfied before
+the idle timeout. This causes flaky test failures.
+
+**Correct pattern:** Use targeted selector waits on the element the test needs:
+
+```
+// Instead of:
+await page.goto('/pipelines')
+await page.waitForLoadState('networkidle')
+await expect(page.locator('h1')).toContainText('Pipelines')
+
+// Use:
+await page.goto('/pipelines')
+await expect(page.locator('h1')).toContainText('Pipelines')  // expect() already retries
+```
+
+The `expect().toContainText()`, `expect().toBeVisible()`, and
+`page.waitForURL()` all have built-in retry/timeout — they implicitly wait
+for the condition to be met. Adding `waitForLoadState('networkidle')` before
+them is always redundant and often harmful (adds 500ms+ per call).
+
+### Playwright E2E: use `storageState` for shared login on staging
+
+Authenticating 70+ test workers independently against staging.modulo.run
+wastes time and risks rate-limiting. Use a `globalSetup` that logs in once,
+saves the authenticated session via `page.context().storageState(...)`, and
+lets all workers reuse it via `storageState` in `playwright.config.ts`.
+
+Pattern:
+- `globalSetup.ts` launches Chromium, navigates to `/login`, fills credentials,
+  submits, waits for redirect, calls `storageState({ path: 'storageState-staging.json' })`
+- `playwright.config.ts` sets `use: { storageState: 'storageState-staging.json' }` for
+  non-local targets
+- Individual tests skip the login step because `loginAsAdmin` detects the
+  existing session via `localStorage.getItem('modulo_access_token')`

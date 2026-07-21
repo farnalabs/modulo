@@ -1,15 +1,13 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('i18n Keys & SvgIcon Regression', () => {
+test.describe('i18n Keys & SvgIcon Regression', { tag: '@staging-regression' }, () => {
   test('sidebar shows "Environment Profiles" not raw key', { tag: '@e2e-regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/environments')
-    await page.waitForLoadState('networkidle')
 
     // System group button - click to expand if collapsed
     const systemGroup = page.locator('button.sidebar-group-header', { hasText: 'System' }).first()
     await systemGroup.click()
-    await page.waitForLoadState('networkidle')
 
     // Check that the sidebar link is "Environment Profiles" not "nav.environment-profiles"
     const envProfileLink = page.locator('a.sidebar-link', { hasText: 'Environment Profiles' }).first()
@@ -30,10 +28,8 @@ test.describe('i18n Keys & SvgIcon Regression', () => {
     await loginAsAdmin(page, env)
     // Visit settings-email (uses Mail icon) and dashboard (uses File as fallback)
     await page.goto('/settings/email')
-    await page.waitForLoadState('networkidle')
 
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
 
     expect(warnings.filter(w => w.includes('"Mail"') || w.includes('"File"'))).toEqual([])
   })

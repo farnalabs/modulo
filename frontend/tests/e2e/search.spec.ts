@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 const samplePipelines = {
   items: [
@@ -17,7 +17,6 @@ test.describe('Search', () => {
     })
 
     await page.goto('/pipelines')
-    await page.waitForLoadState('networkidle')
 
     const searchInput = page.locator('input[type="text"][placeholder*="earch" i], input[placeholder*="ilter" i], input[placeholder*="ind" i]')
     if (await searchInput.count() > 0) {
@@ -41,7 +40,6 @@ test.describe('Search', () => {
     })
 
     await page.goto('/library')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('text=Code Review Agent')).toBeVisible()
     await expect(page.locator('text=Deploy Workflow')).toBeVisible()

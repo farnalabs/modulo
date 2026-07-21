@@ -1,12 +1,12 @@
-import { test, expect, setupLocalMockApi, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, setupLocalMockApi, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Admin Create User', { tag: ['@e2e-regression'] }, () => {
   test('opens create user dialog and submits user creation', async ({ page, env }) => {
+    test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
     await setupLocalMockApi(page)
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/users')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('admin-users-add-user')).toBeVisible()
 
@@ -32,14 +32,13 @@ test.describe('Admin Create User', { tag: ['@e2e-regression'] }, () => {
   })
 
   test('shows validation error for invalid email', async ({ page, env }) => {
+    test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
     await setupLocalMockApi(page)
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/users')
-    await page.waitForLoadState('networkidle')
 
     await page.getByTestId('admin-users-add-user').click()
-    await page.waitForLoadState('networkidle')
 
     await page.getByTestId('admin-users-create-email').fill('bad-email')
     await page.getByTestId('admin-users-create-display-name').fill('New User')
@@ -52,14 +51,13 @@ test.describe('Admin Create User', { tag: ['@e2e-regression'] }, () => {
   })
 
   test('fills create user form via keyboard Enter', async ({ page, env }) => {
+    test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
     await setupLocalMockApi(page)
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/users')
-    await page.waitForLoadState('networkidle')
 
     await page.getByTestId('admin-users-add-user').click()
-    await page.waitForLoadState('networkidle')
 
     await page.getByTestId('admin-users-create-email').fill('enter@example.com')
     await page.getByTestId('admin-users-create-display-name').fill('Enter User')

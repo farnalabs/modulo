@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 const sampleViews = {
   items: [
@@ -35,7 +35,6 @@ test.describe('View Modes Admin CRUD', () => {
     })
 
     await page.goto('/admin/views', { timeout: 120000 })
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Saved Views')
     await expect(page.getByTestId('admin-views-add')).toBeVisible()
@@ -62,7 +61,6 @@ test.describe('View Modes Admin CRUD', () => {
     })
 
     await page.goto('/admin/views', { timeout: 120000 })
-    await page.waitForLoadState('networkidle')
 
     await expect(page.getByText('Server error')).toBeVisible({ timeout: 5000 })
     await expect(page.getByTestId('admin-views-error')).toBeVisible({ timeout: 5000 })
@@ -75,7 +73,6 @@ test.describe('View Modes Admin CRUD', () => {
     })
 
     await page.goto('/admin/views', { timeout: 120000 })
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('text=No saved views yet')).toBeVisible()
     await expect(page.locator('text=Learn about saved views')).toBeVisible()
@@ -96,7 +93,6 @@ test.describe('View Modes Admin CRUD', () => {
     })
 
     await page.goto('/admin/views', { timeout: 120000 })
-    await page.waitForLoadState('networkidle')
 
     await page.getByTestId('admin-views-add').click()
     await expect(page.locator('text=New View')).toBeVisible()
@@ -109,7 +105,6 @@ test.describe('View Modes Admin CRUD', () => {
     await page.getByTestId('admin-views-sort-order-select').selectOption('asc')
 
     await page.getByTestId('admin-views-save').click()
-    await page.waitForLoadState('networkidle')
 
     expect(createdPayload).toEqual({
       name: 'My Test View',
@@ -128,7 +123,6 @@ test.describe('View Modes Admin CRUD', () => {
     })
 
     await page.goto('/admin/views', { timeout: 120000 })
-    await page.waitForLoadState('networkidle')
 
     await page.getByTestId('admin-views-add').click()
     await page.getByTestId('admin-views-name-input').fill('')
@@ -145,7 +139,6 @@ test.describe('View Modes Admin CRUD', () => {
     })
 
     await page.goto('/admin/views', { timeout: 120000 })
-    await page.waitForLoadState('networkidle')
 
     await page.getByTestId('admin-views-add').click()
     await expect(page.locator('text=New View')).toBeVisible()
@@ -164,7 +157,6 @@ test.describe('View Modes Admin CRUD', () => {
     })
 
     await page.goto('/admin/views', { timeout: 120000 })
-    await page.waitForLoadState('networkidle')
 
     const editButtons = page.getByTestId('admin-views-edit')
     await expect(editButtons).toHaveCount(2)
@@ -192,7 +184,6 @@ test.describe('View Modes Admin CRUD', () => {
     })
 
     await page.goto('/admin/views', { timeout: 120000 })
-    await page.waitForLoadState('networkidle')
 
     const deleteButtons = page.getByTestId('admin-views-delete')
     await expect(deleteButtons).toHaveCount(2)
@@ -207,7 +198,6 @@ test.describe('View Modes Admin CRUD', () => {
 
     await deleteButtons.first().evaluate((el: HTMLElement) => el.click())
     await page.getByTestId('admin-views-delete-confirm').evaluate((el: HTMLElement) => el.click())
-    await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('admin-views-delete-confirm')).not.toBeVisible({ timeout: 3000 })
   })
@@ -219,7 +209,6 @@ test.describe('View Modes Admin CRUD', () => {
     })
 
     await page.goto('/admin/views', { timeout: 120000 })
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('text=Active Runs')).toBeVisible()
     await expect(page.locator('text=Kanban Board')).toBeVisible()

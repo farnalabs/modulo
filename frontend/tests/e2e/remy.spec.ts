@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Remy Admin Configuration', () => {
   test('page loads with remy configuration sections', async ({ page, env }) => {
@@ -26,7 +26,6 @@ test.describe('Remy Admin Configuration', () => {
     })
 
     await page.goto('/admin/remy')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Remy Configuration')
   })

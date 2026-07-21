@@ -1,6 +1,6 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('MonitorBackendRegistry typeof gating', () => {
+test.describe('MonitorBackendRegistry typeof gating', { tag: '@staging-regression' }, () => {
   test('no TypeError from missing captureError/captureMessage on backends', { tag: '@e2e-regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
@@ -12,7 +12,6 @@ test.describe('MonitorBackendRegistry typeof gating', () => {
     })
 
     await page.goto('/')
-    await page.waitForLoadState('networkidle')
 
     for (const err of consoleErrors) {
       expect(err).not.toContain('captureError is not a function')

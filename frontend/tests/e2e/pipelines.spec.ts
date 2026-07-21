@@ -1,11 +1,10 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 import { getTestEnv } from './setup/env'
 
-test.describe('Pipelines Page', () => {
+test.describe('Pipelines Page', { tag: '@staging-regression' }, () => {
   test('displays page title and search input', async ({ page }) => {
     await loginAsAdmin(page, getTestEnv())
     await page.goto('/pipelines')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Pipelines')
     await expect(page.getByTestId('pipeline-list-search')).toBeVisible()
@@ -14,7 +13,6 @@ test.describe('Pipelines Page', () => {
   test('shows New Pipeline CTA button', async ({ page }) => {
     await loginAsAdmin(page, getTestEnv())
     await page.goto('/pipelines')
-    await page.waitForLoadState('networkidle')
 
     const newPipelineBtn = page.getByTestId('pipeline-list-new-pipeline')
     await expect(newPipelineBtn).toBeVisible()
@@ -24,7 +22,6 @@ test.describe('Pipelines Page', () => {
   test('search input filters pipelines', async ({ page }) => {
     await loginAsAdmin(page, getTestEnv())
     await page.goto('/pipelines')
-    await page.waitForLoadState('networkidle')
 
     const searchInput = page.getByTestId('pipeline-list-search')
     await expect(searchInput).toBeVisible()

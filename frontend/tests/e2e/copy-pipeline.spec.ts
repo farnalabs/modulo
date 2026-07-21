@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Copy Pipeline - regression', () => {
   test('navigates to /pipelines/copy and does not redirect to /pipelines', { tag: '@e2e-regression' }, async ({ page, env }) => {
@@ -7,7 +7,6 @@ test.describe('Copy Pipeline - regression', () => {
     })
     await loginAsAdmin(page, env)
     await page.goto('/pipelines/copy')
-    await page.waitForLoadState('networkidle')
     await expect(page).toHaveURL('/pipelines/copy')
     await expect(page.locator('h1')).toContainText('Copy Pipeline')
   })
@@ -18,7 +17,6 @@ test.describe('Copy Pipeline - regression', () => {
     })
     await loginAsAdmin(page, env)
     await page.goto('/pipelines/copy')
-    await page.waitForLoadState('networkidle')
     await expect(page).toHaveURL('/pipelines/copy')
     await expect(page.getByText('no pipelines available', { ignoreCase: true }).or(page.getByText('create one', { ignoreCase: true }))).toBeVisible()
   })

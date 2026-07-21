@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 const sampleBackends = {
   items: [
@@ -25,7 +25,6 @@ test.describe('Admin Model Backends', () => {
     })
 
     await page.goto('/admin/model-backends')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Model Backends')
     await expect(page.getByTestId('admin-model-backends-add')).toBeVisible()
@@ -38,7 +37,6 @@ test.describe('Admin Model Backends', () => {
     })
 
     await page.goto('/admin/model-backends')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('text=GPT-4').first()).toBeVisible()
     await expect(page.getByTestId('admin-model-backends-edit').first()).toBeVisible()

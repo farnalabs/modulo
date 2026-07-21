@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Admin Users', () => {
   test('page loads with correct heading and add user button', async ({ page, env }) => {
@@ -8,7 +8,6 @@ test.describe('Admin Users', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/users')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Users')
     await expect(page.getByTestId('admin-users-add-user')).toBeVisible()
@@ -21,7 +20,6 @@ test.describe('Admin Users', () => {
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/users')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('admin-users-add-user')).toBeVisible()
   })

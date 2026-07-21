@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 import { getTestEnv } from './setup/env'
 
 test.describe('Library Page', () => {
@@ -9,7 +9,6 @@ test.describe('Library Page', () => {
     await loginAsAdmin(page, getTestEnv())
 
     await page.goto('/library')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Library')
   })
@@ -21,7 +20,6 @@ test.describe('Library Page', () => {
     await loginAsAdmin(page, getTestEnv())
 
     await page.goto('/library')
-    await page.waitForLoadState('networkidle')
 
     const filter = page.getByTestId('library-type-filter')
     await expect(filter).toBeVisible()
@@ -42,7 +40,6 @@ test.describe('Library Page', () => {
     await loginAsAdmin(page, getTestEnv())
 
     await page.goto('/library')
-    await page.waitForLoadState('networkidle')
 
     const errors = logs.filter(l => l.type() === 'error').map(l => l.text())
     const refErrors = errors.filter(e => e.includes('ReferenceError'))
@@ -57,7 +54,6 @@ test.describe('Library Page', () => {
     await loginAsAdmin(page, getTestEnv())
 
     await page.goto('/library')
-    await page.waitForLoadState('networkidle')
 
     const createBtn = page.getByTestId('library-create-pipeline-header')
     await expect(createBtn).toBeVisible()

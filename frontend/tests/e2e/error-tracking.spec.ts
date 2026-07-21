@@ -1,10 +1,9 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Error Tracking', () => {
-  test('error dashboard page loads', async ({ page, env }) => {
+  test('error dashboard page loads', { tag: '@staging-regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/errors')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText(/Error/i)
   })
@@ -33,7 +32,6 @@ test.describe('Error Tracking', () => {
     })
 
     await page.goto('/admin/errors')
-    await page.waitForLoadState('networkidle')
 
     await expect(page.locator('text=Connection timeout')).toBeVisible()
   })
