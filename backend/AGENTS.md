@@ -252,3 +252,78 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 ### Route auth: admin-only routes must use `get_current_user`, not `get_current_tenant_user`
 
 - When a route checks admin permissions internally (via `_require_admin` or `is_system_admin`), use `Depends(get_current_user)` for the auth dependency — NOT `Depends(get_current_tenant_user)`. The tenant user dependency requires `organisation_id` and `org_role` to be non-None, which system admins may not have (they can be admin without org membership). Using `get_current_tenant_user` causes a 403 "Organisation membership required" before the admin check even runs. The `_require_admin` guard is the sole gate needed for system-admin routes. Found in the feature-flag org-override endpoints.
+## Remaining Suppressions — Must Stay
+
+The following suppressions are intentional and must NOT be removed. Future agents should not waste time trying to fix these.
+
+### Mypy: mcp_server.py `disable_error_code = ["return"]`
+- File: backend/pyproject.toml (lines 216-220)
+- Rationale: 25 MCP tool functions use for/retry/try/except loops. mypy CFG cannot prove the loop always returns.
+- Do not remove unless mypy CFG analysis improves to handle this pattern.
+
+### Mypy: ignore_missing_imports (langgraph, langchain, etc.)
+- File: backend/pyproject.toml (lines 202-204)
+- Rationale: These libraries do not publish type stubs.
+- Do not remove unless upstream libraries add type stubs.
+
+### Mypy: BDD test weakening (6 flags)
+- File: backend/pyproject.toml (lines 206-213)
+- Rationale: pytest-bdd uses decorator-based step registration mypy cannot track.
+- Do not remove unless pytest-bdd publishes type stubs.
+
+### Ruff: SCIM naming convention (N815, N803)
+- Files: src/modulo/api/routes/scim.py, tests/unit/scim/test_scim_provisioning.py
+- Rationale: SCIM protocol uses camelCase identifiers — external standard, not codebase convention.
+- Do not remove.
+
+### Ruff: Test file E402 (conditional imports)
+- Files: tests/unit/runtime_provider/*, tests/unit/secrets_backend/*
+- Rationale: Import guards for optional deps must run before class definitions.
+- Do not remove unless optional deps become required dependencies.
+
+### Ruff: Migration file style (RUF002, RUF003, E501)
+- File: src/modulo/db/migrations/**
+- Rationale: Alembic auto-generates these files. Not human-maintained.
+- Do not remove.
+
+### Ruff: pipeline-scripts blanket (S, T201, RET)
+- File: pipeline-scripts/**
+- Rationale: Scripts need subprocess, print(), and functional return patterns.
+- Acceptable as-is. Can be narrowed if individual scripts are migrated.
+
+### Ruff: scripts/deploy print() (T20)
+- Files: scripts/*, deploy/*
+- Rationale: CLI and deploy scripts need stdout/stderr output.
+- Do not remove.
+
+### Ruff: gen_seed_sql.py S608 (SQL injection false positive)
+- File: scripts/gen_seed_sql.py
+- Rationale: Code-gen script that outputs SQL text. Values are manually escaped.
+- This is a false positive for a code-gen script.
+
+### pytest: 2 permanently skipped test files
+- Files: test_fernet_backend.py, test_factory.py
+- Reason: Flaky under xdist / unawaited coroutine warnings.
+- Can be re-enabled if the flakiness root cause is diagnosed and fixed.
+
+### pytest: 3 DeprecationWarning filters
+- Files: test_local_docker_compatibility.py, test_connector_hub.py, test_shell.py
+- Rationale: Suppress DeprecationWarnings from third-party dependencies (outside our control).
+- Can be removed when upstream dependencies fix their warnings.
+
+### ~100 remaining `# type: ignore` annotations
+- ~14 import-untyped: jsonschema, asyncpg, e2b, boto3, hvac, tqdm, sentry_sdk
+- ~10 misc: Celery Task subclassing (untyped base classes)
+- ~34 arg-type: Starlette middleware patterns + test mock patterns
+- ~19 attr-defined: SQLAlchemy dynamic access + test mocks
+- ~8 no-any-return: ASGI middleware call_next() patterns
+- ~4 no-untyped-call: redis-py untyped methods
+- ~11 override: LangGraph BaseCheckpointSaver generic params (complex API)
+- ~50 test annotations: Mock/spy patterns, test pragmas
+- Most must stay. Only override (modulo_saver.py) and no-any-return (csrf.py) have potential for future cleanup, both require significant refactoring.
+- Do not remove import-untyped, misc (Celery), no-untyped-call (redis-py), or test annotations.
+
+### skipLibCheck: true in tsconfig.json
+- File: frontend/tsconfig.json
+- Rationale: Standard industry practice for Vue+TS projects.
+- Do not change.
