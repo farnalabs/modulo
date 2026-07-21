@@ -12,7 +12,7 @@ import json
 import logging
 import threading
 import uuid
-from typing import Any
+from typing import Any, cast
 
 import jmespath
 import jmespath.exceptions
@@ -509,7 +509,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
     def tick(self) -> float:
         """Called periodically by Celery beat. Syncs with DB."""
         self._sync_with_db()
-        return super().tick()  # type: ignore[no-any-return]
+        return cast(float, super().tick())
 
     def _sync_with_db(self) -> None:
         """Query the database and update the in-memory schedule."""
