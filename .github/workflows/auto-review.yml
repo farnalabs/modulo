@@ -60,7 +60,7 @@ jobs:
         run: |
           npm install -g opencode-ai 2>&1 || npm install -g @opencode-ai/cli 2>&1 || true
           if command -v opencode &>/dev/null; then
-            echo "opencode_installed=true" >> "$GITHUB_OUTPUT"
+            echo "installed=true" >> "$GITHUB_OUTPUT"
             opencode --version 2>/dev/null || true
           else
             OPENCODE_VERSION="v0.0.55"
