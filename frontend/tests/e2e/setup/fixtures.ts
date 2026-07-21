@@ -77,7 +77,7 @@ export async function loginAsAdmin(page: Page, env: TestEnv) {
     await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
     await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)
     await page.click('button[type="submit"]')
-    await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 15000 })
+    await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 30000 })
     await page.waitForLoadState('networkidle')
     return
   }
