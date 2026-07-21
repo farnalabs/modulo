@@ -1096,11 +1096,15 @@ class PipelineExecutor:
                     if node_name:
                         data = lg_event.get("data", {})
                         output = data.get("output", {}) if isinstance(data, dict) else {}
-                        if isinstance(output, BaseMessage) and output.usage_metadata is not None:
+                        if isinstance(output, BaseMessage):
+                            usage_metadata = getattr(output, "usage_metadata", None)
+                        else:
+                            usage_metadata = None
+                        if usage_metadata is not None:
                             token_usage = {
-                                "input_tokens": output.usage_metadata.get("input_tokens", 0) or 0,
-                                "output_tokens": output.usage_metadata.get("output_tokens", 0) or 0,
-                                "total_tokens": output.usage_metadata.get("total_tokens", 0) or 0,
+                                "input_tokens": usage_metadata.get("input_tokens", 0) or 0,
+                                "output_tokens": usage_metadata.get("output_tokens", 0) or 0,
+                                "total_tokens": usage_metadata.get("total_tokens", 0) or 0,
                             }
                         elif isinstance(output, dict):
                             # Legacy fallback: llm_output.token_usage

@@ -2,7 +2,7 @@
   <OverlayScrollbarsComponent
     defer
     :options="osOptions"
-    class="flex-1 min-h-0 relative"
+    class="flex-1 min-h-0 relative pr-3"
     element="nav"
     :aria-label="$t('components.SidebarNav.main_navigation')"
   >
