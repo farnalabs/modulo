@@ -165,7 +165,10 @@ export default {
       "move_to_folder": "Move to Folder",
       "no_folder": "No folder",
       "folder_name": "Folder name",
-      "delete_folder_confirm": "Delete this folder? Pipelines in it will not be deleted.",
+      "delete_folder_confirm_empty": "Are you sure you want to delete this folder?",
+      "delete_folder_confirm_with_pipelines": "Are you sure you want to delete this folder? Pipelines will be moved to Uncategorised.",
+      "runs": "Runs",
+      "trigger": "Trigger",
       "uncategorised": "Uncategorised",
       "pipelines": "pipelines"
     },
