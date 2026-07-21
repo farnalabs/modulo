@@ -7,7 +7,7 @@ async function globalSetup(_config: FullConfig) {
 
   if (target === 'local') return
 
-  const healthUrl = `${baseURL.replace(/\/+$/, '')}/healthz/ready`
+  const healthUrl = `${baseURL.replace(/\/+$/, '')}/healthz`
 
   try {
     const response = await fetch(healthUrl, { signal: AbortSignal.timeout(10000) })

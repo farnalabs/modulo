@@ -72,10 +72,9 @@ export async function setupLocalMockApi(page: Page) {
 
 export async function loginAsAdmin(page: Page, env: TestEnv) {
   if (env.name !== 'local') {
-    const isLoggedIn = await page.evaluate(() => !!localStorage.getItem('modulo_access_token')).catch(() => false)
-    if (isLoggedIn) return
 
     await page.goto('/login')
+    await page.waitForSelector(env.credentials.loginFormEmailSelector, { timeout: 15000 })
     await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
     await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)
     await page.click('button[type="submit"]')
