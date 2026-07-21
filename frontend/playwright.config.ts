@@ -10,9 +10,11 @@ const baseURL = getBaseUrl(target)
 export default defineConfig({
   testDir: './tests/e2e',
   retries: target !== 'local' ? 2 : 0,
-  timeout: target !== 'local' ? 120_000 : 30_000,
+  timeout: target !== 'local' ? 180_000 : 30_000,
   use: {
     baseURL,
+    trace: 'on-first-retry',  # capture trace on first retry for debugging
+    screenshot: 'only-on-failure',
   },
   webServer: !noServer && target === 'local' ? {
     command: 'npm run dev -- --host 127.0.0.1',

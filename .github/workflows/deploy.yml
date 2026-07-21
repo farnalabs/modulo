@@ -166,6 +166,14 @@ jobs:
           E2E_NO_WEBSERVER: "true"
         continue-on-error: true
 
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-${{ github.run_id }}
+          path: frontend/test-results/
+          if-no-files-found: ignore
+
       - name: Run WCAG audit on staging
         id: wcag-tests
         run: npx playwright test staging-wcag --output=test-results/wcag
