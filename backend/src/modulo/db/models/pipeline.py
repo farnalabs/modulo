@@ -54,7 +54,7 @@ class Pipeline(OrgScoped):
         server_default=text("'[]'"),
     )
     default_feedback_handler: Mapped[str | None] = mapped_column(String(50))
-    rate_limit_config: dict[str, Any] | None = mapped_column(JSON, nullable=True)
+    rate_limit_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
