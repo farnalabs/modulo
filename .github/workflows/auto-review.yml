@@ -66,30 +66,24 @@ jobs:
             OPENCODE_VERSION="v0.0.55"
             TARBALL_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x86_64.tar.gz"
             DEB_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-amd64.deb"
-            echo "::group::Download opencode ${OPENCODE_VERSION}"
             if curl -sL "$TARBALL_URL" -o /tmp/opencode.tar.gz && [ -s /tmp/opencode.tar.gz ]; then
-            sudo tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin/ opencode 2>/dev/null
-            if command -v opencode &>/dev/null; then
-              echo "installed=true" >> "$GITHUB_OUTPUT"
-              echo "::endgroup::"
-              opencode --version 2>/dev/null || echo "opencode installed"
-              exit 0
+              sudo tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin/ opencode 2>/dev/null
+              if command -v opencode &>/dev/null; then
+                echo "installed=true" >> "$GITHUB_OUTPUT"
+                opencode --version 2>/dev/null || true
+                exit 0
+              fi
             fi
-          fi
+            if curl -sL "$DEB_URL" -o /tmp/opencode.deb && [ -s /tmp/opencode.deb ]; then
+              sudo dpkg -i /tmp/opencode.deb 2>/dev/null || sudo apt-get install -f -y -qq 2>/dev/null
+              if command -v opencode &>/dev/null; then
+                echo "installed=true" >> "$GITHUB_OUTPUT"
+                opencode --version 2>/dev/null || true
+                exit 0
+              fi
             fi
-          if curl -sL "$DEB_URL" -o /tmp/opencode.deb && [ -s /tmp/opencode.deb ]; then
-            sudo dpkg -i /tmp/opencode.deb 2>/dev/null || sudo apt-get install -f -y -qq 2>/dev/null
-            if command -v opencode &>/dev/null; then
-              echo "installed=true" >> "$GITHUB_OUTPUT"
-              echo "::endgroup::"
-              opencode --version 2>/dev/null || echo "opencode installed"
-              exit 0
-            fi
-          fi
-          echo "installed=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::opencode CLI could not be installed"
-          echo "::endgroup::"
-
+            echo "installed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::opencode CLI could not be installed"
           fi
       - name: Configure opencode auth
         if: steps.retry-check.outputs.exhausted == 'false' && steps.install.outputs.installed == 'true'
@@ -166,3 +160,4 @@ jobs:
               gh pr review "$PR_NUM" --repo "$REPO" --approve --body "## AI Code Review - Approved (clean)"
             fi
           fi
+
