@@ -153,6 +153,7 @@ const FILTER_STORAGE_KEY = 'runs-list-filters'
 const filterStatus = ref(route.query.status as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.status`) || '')
 const filterTriggerType = ref(route.query.trigger_type as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.trigger_type`) || '')
 const filterSearch = ref(route.query.search as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.search`) || '')
+const filterPipelineId = ref(route.query.pipeline_id as string || '')
 
 watch([filterStatus, filterTriggerType, filterSearch], ([status, triggerType, search]) => {
   localStorage.setItem(`${FILTER_STORAGE_KEY}.status`, status)
@@ -172,6 +173,7 @@ function buildParams(): FetchRunsParams {
   if (filterStatus.value) params.status = filterStatus.value
   if (filterTriggerType.value) params.trigger_type = filterTriggerType.value
   if (filterSearch.value) params.search = filterSearch.value
+  if (filterPipelineId.value) params.pipeline_id = filterPipelineId.value
   return params
 }
 
