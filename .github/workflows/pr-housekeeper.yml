@@ -1,4 +1,4 @@
-﻿# PR Housekeeper
+# PR Housekeeper
 # Scans all open PRs and handles stale/abandoned PRs automatically.
 # Runs every 30 minutes alongside the merge queue.
 
@@ -32,11 +32,16 @@ jobs:
         id: install-opencode
         shell: bash
         run: |
-          OPENCODE_VERSION="v0.0.55"
-          TARBALL_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x86_64.tar.gz"
-          DEB_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-amd64.deb"
-          echo "::group::Download opencode ${OPENCODE_VERSION}"
-          if curl -sL "$TARBALL_URL" -o /tmp/opencode.tar.gz && [ -s /tmp/opencode.tar.gz ]; then
+          npm install -g opencode-ai 2>&1 || npm install -g @opencode-ai/cli 2>&1 || true
+          if command -v opencode &>/dev/null; then
+            echo "opencode_installed=true" >> "$GITHUB_OUTPUT"
+            opencode --version 2>/dev/null || true
+          else
+            OPENCODE_VERSION="v0.0.55"
+            TARBALL_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x86_64.tar.gz"
+            DEB_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-amd64.deb"
+            echo "::group::Download opencode ${OPENCODE_VERSION}"
+            if curl -sL "$TARBALL_URL" -o /tmp/opencode.tar.gz && [ -s /tmp/opencode.tar.gz ]; then
             sudo tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin/ opencode 2>/dev/null
             if command -v opencode &>/dev/null; then
               echo "opencode_installed=true" >> "$GITHUB_OUTPUT"
