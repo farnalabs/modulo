@@ -878,6 +878,10 @@ The fix/pipelines-copy Worker touched files that were already modified by other 
 - **Custom function `functions` config must be validated as `dict`**, not assumed. The eval engine already handles this (`isinstance(fn_registry_raw, dict) else {}`) but it's untested. When audit-testing eval error paths, always check non-dict config values for optional dict-typed config keys.
 - **JSON Schema "field not in output" is a separate error path from "field not in output for scoped validation."** The code checks `field not in output` when a field is configured (non-empty) but absent from the output dict â€” this is distinct from an empty field (validates whole output) or a mismatched schema.
 
+### Ops / Staging Environment
+
+- **Fly.io staging machine size:** `shared-cpu-1x:1024MB` is too small for E2E test load — returns 504 Gateway Timeout under concurrent test workers. Scale staging to `shared-cpu-2x:2048MB` minimum when running E2E tests against it. In `fly.staging.toml`, set `[vm] size = "shared-cpu-2x:2048MB"` and scale with `flyctl scale vm shared-cpu-2x:2048MB --app modulo-staging`.
+
 ### Ops / Database (Fly Postgres)
 
 - **Unmanaged Fly Postgres (`fly postgres create`) does NOT auto-restart on crash.** When PostgreSQL on a Flex Postgres machine crashes (e.g. OOM, disk full, segfault), the monitoring agent and `repmgrd` keep running but the `postgres` process stays down. There is no systemd unit to restart it. To recover: SSH into the DB machine (`fly ssh console --app <db-app>`) and run `su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'`. Consider adding a cron job or health check that restarts PostgreSQL if the process is missing. For production-critical DBs, migrate to Managed Postgres (`fly mpg create`).
@@ -928,10 +932,10 @@ This destroys all machines and creates fresh ones that register correctly with t
 
 ### Playwright E2E: never use `waitForLoadState('networkidle')`
 
-`page.waitForLoadState('networkidle')` is unreliable — it waits until no network
-requests have been made for 500ms, but on staging (with real API latency), the
-page may still be rendering or the assertion may already be satisfied before
-the idle timeout. This causes flaky test failures.
+`page.waitForLoadState('networkidle')` never fires on staging because the app
+has ongoing polling (WebSocket connections, feature flag checks, price checks).
+`networkidle` waits for zero network activity for 500ms, which never happens
+on a live deployment with persistent connections.
 
 **Correct pattern:** Use targeted selector waits on the element the test needs:
 
@@ -965,3 +969,13 @@ Pattern:
   non-local targets
 - Individual tests skip the login step because `loginAsAdmin` detects the
   existing session via `localStorage.getItem('modulo_access_token')`
+
+**Caveat — login page tests:** When `storageState` is loaded, navigating to
+`/login` redirects to `/` (dashboard) because the persisted session is still
+valid. Tests that expect login page elements (error messages, password fields)
+will fail because they're redirected before assertions run.
+
+For tests that need the login page visible:
+- Skip `storageState` for those tests (use a separate config or override)
+- Or explicitly clear the session in the test before navigating to login
+- Or check for redirect: `await page.waitForURL('/login')` before testing elements
