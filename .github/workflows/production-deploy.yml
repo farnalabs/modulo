@@ -88,7 +88,7 @@ jobs:
           $expectedSha7 = $expectedSha.Substring(0, 7)
           $allOk = $true
           foreach ($url in @("https://app.modulo.run")) {
-            $info = curl.exe -s -m 10 "$url/api/v1/deployment" 2>$null
+            $info = curl -s -m 10 "$url/api/v1/deployment" 2>$null
             if ($info) {
               $deployInfo = $info | ConvertFrom-Json
               $deployedSha = if ($deployInfo.git_sha -and $deployInfo.git_sha.Length -ge 7) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
