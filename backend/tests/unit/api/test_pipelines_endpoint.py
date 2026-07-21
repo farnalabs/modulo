@@ -33,6 +33,7 @@ def _make_settings() -> Settings:
     )
 
 
+def _make_pipeline() -> MagicMock:
     p = MagicMock()
     p.rate_limit_config = None
     p.max_duration_seconds = None
