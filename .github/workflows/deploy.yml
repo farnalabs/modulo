@@ -166,13 +166,6 @@ jobs:
           E2E_NO_WEBSERVER: "true"
         continue-on-error: true
 
-      - name: Upload test artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-traces-${{ github.run_id }}
-          path: frontend/test-results/
-          if-no-files-found: ignore
 
       - name: Run WCAG audit on staging
         id: wcag-tests
@@ -191,6 +184,13 @@ jobs:
           E2E_NO_WEBSERVER: "true"
         continue-on-error: true
 
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-${{ github.run_id }}
+          path: frontend/test-results/
+          if-no-files-found: ignore
       - name: Fail on test failure
         if: steps.smoke-tests.outcome == 'failure' || steps.wcag-tests.outcome == 'failure' || steps.regression-tests.outcome == 'failure'
         shell: pwsh
