@@ -90,6 +90,8 @@ def test_pipeline_create_valid_minimal(client: TestClient) -> None:
     pipeline.node_timeout_seconds = 300
     pipeline.run_context_defaults = {}
     pipeline.default_autonomy_level = "manual_approval"
+    pipeline.rate_limit_config = None
+    pipeline.max_duration_seconds = None
     pipeline.snapshot_count = 0
     pipeline.archived_at = None
     pipeline.created_by = uuid.uuid4()

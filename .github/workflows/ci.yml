@@ -96,7 +96,7 @@ jobs:
     name: Product map validation
     runs-on: ubicloud-standard-2
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
@@ -115,7 +115,7 @@ jobs:
     name: Manifest validation
     runs-on: ubicloud-standard-2
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
@@ -139,7 +139,7 @@ jobs:
       pull-requests: write
       security-events: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Run gitleaks
@@ -525,7 +525,7 @@ jobs:
           if [ "$FIX_COUNT" -ge 3 ]; then
             echo "exhausted=true" >> "$GITHUB_OUTPUT"
             echo "::warning::Branch fixer exhausted after $FIX_COUNT attempts against PR #${PR_NUM}."
-            gh pr comment "$PR_NUM" --body "## â¹ï¸ Branch Fixer Exhausted
+            gh pr comment "$PR_NUM" --body "## â¹ï¸ Branch Fixer Exhausted
 
             The automated branch fixer has attempted $FIX_COUNT fixes against this PR but CI is still failing. Manual intervention is required.
 

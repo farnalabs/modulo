@@ -161,6 +161,9 @@ class TestPipelinesEndpointCursor:
         pipeline.node_timeout_seconds = 300
         pipeline.run_context_defaults = {}
         pipeline.default_autonomy_level = "manual_approval"
+        pipeline.rate_limit_config = None
+        pipeline.max_duration_seconds = None
+        pipeline.archived_at = None
         pipeline.snapshot_count = 0
         pipeline.created_by = uuid.uuid4()
         pipeline.account_id = uuid.uuid4()
@@ -207,6 +210,9 @@ class TestPipelinesEndpointCursor:
         pipeline.node_timeout_seconds = 300
         pipeline.run_context_defaults = {}
         pipeline.default_autonomy_level = "manual_approval"
+        pipeline.rate_limit_config = None
+        pipeline.max_duration_seconds = None
+        pipeline.archived_at = None
         pipeline.snapshot_count = 0
         pipeline.created_by = uuid.uuid4()
         pipeline.account_id = uuid.uuid4()
