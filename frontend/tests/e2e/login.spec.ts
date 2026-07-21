@@ -29,7 +29,7 @@ test.describe('Login Flow', () => {
     await page.fill(env.credentials.loginFormPasswordSelector, 'thisiswrong')
     await page.click('button[type="submit"]')
 
-    await expect(page.locator('text=Invalid credentials, text=Incorrect email or password')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(/Invalid credentials|Incorrect email or password/)).toBeVisible({ timeout: 15000 })
   })
 
   test('redirects away from login on successful login', { tag: '@smoke' }, async ({ page, env }) => {
