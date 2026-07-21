@@ -70,7 +70,7 @@ class Run(OrgScoped):
     error_code: Mapped[str | None] = mapped_column(String(255))
     langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    rate_limit_key: str | None = mapped_column(String(512), nullable=True, index=True)
+    rate_limit_key: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
     outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
