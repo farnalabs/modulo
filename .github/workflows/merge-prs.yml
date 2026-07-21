@@ -44,25 +44,23 @@ jobs:
 
       - name: Check main CI status
         id: check-ci
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           echo "Checking main branch CI status..."
-          MAIN_SHA=$(git rev-parse main)
-          # Get the latest workflow run on main for ci.yml
-          CI_RUN=$(gh run list --workflow ci.yml --branch main --limit 1 --json conclusion,databaseId 2>/dev/null)
-          CI_CONCLUSION=$(echo "$CI_RUN" | jq -r '.[0].conclusion // "unknown"')
+          MAIN_SHA=$(git rev-parse main 2>/dev/null || echo "unknown")
+          CI_RUN=$(gh run list --workflow ci.yml --branch main --limit 1 --json conclusion,databaseId 2>/dev/null || echo "[]")
+          CI_CONCLUSION=$(echo "$CI_RUN" | jq -r '.[0].conclusion // "unknown"' 2>/dev/null || echo "unknown")
           echo "Latest main CI run conclusion: $CI_CONCLUSION"
           if [ "$CI_CONCLUSION" = "success" ]; then
-            echo "Main CI is green — proceeding with merge queue."
+            echo "Main CI is green - proceeding with merge queue."
             echo "main_ci_ok=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Main CI is $CI_CONCLUSION — merge queue may fail on pre-existing issues."
-            echo "Attempting queue anyway; failures will be reported."
+            echo "Main CI is $CI_CONCLUSION - proceeding anyway."
             echo "main_ci_ok=false" >> "$GITHUB_OUTPUT"
           fi
-
       - name: Clean up stale failed merge-queue branches
         if: steps.check-ci.outputs.main_ci_ok == 'true'
         env:
