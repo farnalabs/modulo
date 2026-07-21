@@ -1876,6 +1876,51 @@ async def delete_pipeline(
         return _tool_error("Unreachable")
 
 
+@mcp.tool(description="Delete a connector instance by ID.")
+async def delete_connector(
+    connector_id: str,
+) -> dict[str, Any]:
+    for attempt in range(3):
+        try:
+            if not await validate_current_auth():
+                return _tool_auth_error("Token revoked or expired - re-authenticate")
+            check_tool_scope(_ctx_role_val(), "delete_connector")
+
+            org_id = _ctx_org_id_val()
+            try:
+                cid = uuid.UUID(connector_id)
+            except ValueError:
+                return {
+                    "error": "invalid_id",
+                    "field": "connector_id",
+                    "detail": f"Invalid UUID format: {connector_id}",
+                }
+
+            from modulo.db.crud.connector_instance import delete_connector_instance as db_delete_connector
+
+            async with _session(org_id) as s:
+                deleted = await db_delete_connector(s, cid)
+
+            if not deleted:
+                return {"error": "connector_not_found", "connector_id": connector_id}
+            return {"status": "deleted", "connector_id": connector_id}
+
+        except OperationalError as exc:
+            if attempt == 2:
+                raise
+            _log.warning("Transient DB error in delete_connector, retrying (%d/3): %s", attempt + 1, exc)
+            await asyncio.sleep(0.5 * (2**attempt))
+        except MCPAuthorizationError as exc:
+            return {"error": "insufficient_scope", "detail": str(exc)}
+        except ProgrammingError:
+            _log.exception("delete_connector failed")
+            return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+        except Exception:
+            _log.exception("delete_connector failed")
+            return _tool_error("Failed to delete connector")
+    return _tool_error("Unreachable")
+
+
 @mcp.tool(description="Create a new agent. Returns the created agent details.")
 async def create_agent(
     name: str,
@@ -2602,6 +2647,69 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
     return "\n".join(parts)
 
 
+@mcp.resource("modulo://pipelines/{pipeline_id}/snapshots")
+async def resource_pipeline_snapshots(pipeline_id: str) -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired - re-authenticate"
+    from modulo.db.crud.pipeline_snapshot_versioning import list_snapshots
+
+    org_id = _ctx_org_id_val()
+    try:
+        pid = uuid.UUID(pipeline_id)
+    except ValueError:
+        return f"error: Invalid pipeline_id UUID: {pipeline_id}"
+
+    async with _session(org_id) as s:
+        snapshots, _ = await list_snapshots(s, pid, page=1, page_size=50)
+
+    lines = [
+        f"- snapshot {s.snapshot_version} (id={s.id}, tag={s.tag or ''}, created={s.created_at.isoformat()})"
+        for s in snapshots
+    ]
+    return f"Snapshots for pipeline {pipeline_id} ({len(snapshots)}):\n" + "\n".join(lines)
+
+
+@mcp.resource("modulo://pipelines/{pipeline_id}/snapshots/{snapshot_id}")
+async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) -> str:
+    if not await validate_current_auth():
+        return "error: Token revoked or expired - re-authenticate"
+    import json
+
+    from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_detail
+
+    org_id = _ctx_org_id_val()
+    try:
+        uuid.UUID(pipeline_id)
+        sid = uuid.UUID(snapshot_id)
+    except ValueError:
+        return "error: Invalid UUID format"
+
+    async with _session(org_id) as s:
+        snap = await get_snapshot_detail(s, sid)
+
+    if snap is None:
+        return f"error: Snapshot {snapshot_id} not found"
+
+    nodes = snap.graph_json.get("nodes", [])
+    edges = snap.graph_json.get("edges", [])
+    result = f"Snapshot {snapshot_id} (v{snap.snapshot_version}) for pipeline {pipeline_id}\n"
+    result += f"Nodes ({len(nodes)}):\n"
+    for n in nodes:
+        nid = n.get("id", "?")
+        ntype = n.get("node_type", "?")
+        agent_id = n.get("agent_id", "")
+        agent_cmd = n.get("agent_command", "(default: claude)")
+        prompt_preview = (n.get("prompt_template", "") or "")[:80].replace("\n", " ")
+        result += f"  - {nid} (type={ntype}, agent={agent_id}, command={agent_cmd})\n"
+        if prompt_preview:
+            result += f"    prompt: {prompt_preview}...\n"
+    result += f"Edges ({len(edges)}):\n"
+    for e in edges:
+        result += f"  - {e.get('id', '?')}: {e.get('source', '?')} -> {e.get('target', '?')} ({e.get('type', '?')})\n"
+    result += f"Connector bindings: {json.dumps(snap.connector_bindings_json, indent=2)}\n"
+    return result
+
+
 @mcp.resource("modulo://runs/{run_id}")
 async def resource_run(run_id: str) -> str:
     if not await validate_current_auth():
@@ -2781,7 +2889,7 @@ async def resource_connectors() -> str:
             .order_by(ConnectorInstance.name)
         )
         connectors = list(result.scalars())
-    lines = [f"- {c.name} (type={c.connector_type_id})" for c in connectors]
+    lines = [f"- {c.name} (id={c.id}, type={c.connector_type_id})" for c in connectors]
     return f"Connectors ({len(connectors)}):\n" + "\n".join(lines)
 
 
@@ -2799,7 +2907,7 @@ async def resource_model_backends() -> str:
             select(ModelBackend).where(ModelBackend.organisation_id == org_id).order_by(ModelBackend.name)
         )
         backends = list(result.scalars())
-    lines = [f"- {b.name} ({b.provider}/{b.model_id})" for b in backends]
+    lines = [f"- {b.name} (id={b.id}, {b.provider}/{b.model_id})" for b in backends]
     return f"Model Backends ({len(backends)}):\n" + "\n".join(lines)
 
 
