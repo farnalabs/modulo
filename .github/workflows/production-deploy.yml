@@ -37,6 +37,10 @@ jobs:
         shell: bash
         run: |
           curl -fsSL https://fly.io/install.sh | sh
+          echo "/home/runner/.fly/bin" >> $GITHUB_PATH
+        shell: bash
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
           echo 'FLYCTL_INSTALL=/home/runner/.fly' >> \
           echo '/home/runner/.fly/bin' >> \
 
