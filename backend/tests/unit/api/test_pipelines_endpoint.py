@@ -1,4 +1,4 @@
-﻿"""Unit tests for /api/v1/pipelines endpoints."""
+"""Unit tests for /api/v1/pipelines endpoints."""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
