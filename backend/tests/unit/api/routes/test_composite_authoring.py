@@ -91,6 +91,10 @@ def _make_pipeline_mock(**overrides: object) -> MagicMock:
         ],
     )
     p.version = overrides.get("version", "1.0.0")
+    p.rate_limit_config = overrides.get("rate_limit_config")
+    p.max_duration_seconds = overrides.get("max_duration_seconds")
+    p.archived_at = overrides.get("archived_at")
+    p.snapshot_count = overrides.get("snapshot_count", 0)
     return p
 
 
