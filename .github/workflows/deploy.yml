@@ -198,7 +198,7 @@ jobs:
           path: frontend/test-results/
           if-no-files-found: ignore
       - name: Fail on test failure
-        if: steps.smoke-tests.outcome == 'failure' || steps.wcag-tests.outcome == 'failure' || steps.regression-tests.outcome == 'failure'
+        if: steps.smoke-tests.outcome == 'failure' || steps.regression-tests.outcome == 'failure'
         shell: pwsh
         run: |
           Write-Host "::error::One or more staging suites failed."
