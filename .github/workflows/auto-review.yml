@@ -76,7 +76,7 @@ jobs:
               exit 0
             fi
           fi
-          echo "Tarball failed, trying .deb"
+            fi
           if curl -sL "$DEB_URL" -o /tmp/opencode.deb && [ -s /tmp/opencode.deb ]; then
             sudo dpkg -i /tmp/opencode.deb 2>/dev/null || sudo apt-get install -f -y -qq 2>/dev/null
             if command -v opencode &>/dev/null; then
@@ -90,6 +90,7 @@ jobs:
           echo "::warning::opencode CLI could not be installed"
           echo "::endgroup::"
 
+          fi
       - name: Configure opencode auth
         if: steps.retry-check.outputs.exhausted == 'false' && steps.install.outputs.installed == 'true'
         shell: bash
