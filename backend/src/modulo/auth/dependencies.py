@@ -34,7 +34,8 @@ async def get_current_tenant_user_optional(
             org_role=principal.org_role,
             is_system_admin=principal.is_system_admin,
         )
-    except JWTError:
+    except JWTError as exc:
+        _log.debug("auth.jwt_decode_failed", extra={"error": str(exc)}, exc_info=True)
         return None
 
 
@@ -121,7 +122,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
                 )
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Account not found. Please log in again.",
+                    detail="Account not found. Please log again.",
                 )
 
             result = await session.execute(
@@ -138,7 +139,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
                 )
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Organisation not found. Please log in again.",
+                    detail="Organisation not found. Please log again.",
                 )
     except HTTPException:
         raise
