@@ -1235,7 +1235,7 @@ async def admin_list_teams(
             result = await list_teams(session, org_id=org_id, page=page, page_size=page_size)
 
             # Enrich with member counts via ORM (avoids raw SQL type binding issues)
-            team_ids = [t.id for t in result.items]
+            team_ids = [t.id for t in result.items if t is not None]
             member_counts: dict[uuid.UUID, int] = {}
             if team_ids:
                 count_rows = (
@@ -1246,7 +1246,8 @@ async def admin_list_teams(
                     )
                 ).all()
                 for row in count_rows:
-                    member_counts[row.team_id] = row.cnt
+                    if row.team_id is not None:
+                        member_counts[row.team_id] = row.cnt
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1258,7 +1259,7 @@ async def admin_list_teams(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.warning("admin_list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        logger.exception("admin_list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
