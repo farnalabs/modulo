@@ -289,6 +289,10 @@ def test_seed_examples(client: TestClient, mock_session: AsyncMock) -> None:
 
     mock_pipeline = MagicMock()
     mock_pipeline.id = uuid.uuid4()
+    mock_pipeline.rate_limit_config = None
+    mock_pipeline.max_duration_seconds = None
+    mock_pipeline.archived_at = None
+    mock_pipeline.snapshot_count = 0
 
     mock_model_backend = MagicMock()
     mock_model_backend.id = uuid.uuid4()
@@ -327,6 +331,10 @@ def test_seed_examples_no_model_backend(client: TestClient, mock_session: AsyncM
 
     mock_pipeline = MagicMock()
     mock_pipeline.id = uuid.uuid4()
+    mock_pipeline.rate_limit_config = None
+    mock_pipeline.max_duration_seconds = None
+    mock_pipeline.archived_at = None
+    mock_pipeline.snapshot_count = 0
 
     with (
         patch("modulo.api.routes.onboarding.create_schema", return_value=mock_schema),
@@ -364,6 +372,10 @@ def test_create_starter_pipeline(client: TestClient, mock_session: AsyncMock) ->
     mock_pipeline = MagicMock()
     mock_pipeline.id = uuid.uuid4()
     mock_pipeline.name = "SDLC Starter Pipeline"
+    mock_pipeline.rate_limit_config = None
+    mock_pipeline.max_duration_seconds = None
+    mock_pipeline.archived_at = None
+    mock_pipeline.snapshot_count = 0
 
     with (
         patch("modulo.api.routes.onboarding.create_schema", return_value=mock_schema),

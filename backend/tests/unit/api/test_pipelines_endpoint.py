@@ -47,6 +47,10 @@ def _make_pipeline() -> MagicMock:
     p.node_timeout_seconds = 300
     p.run_context_defaults = {}
     p.default_autonomy_level = "manual_approval"
+    p.rate_limit_config = None
+    p.max_duration_seconds = None
+    p.archived_at = None
+    p.snapshot_count = 0
     p.created_by = uuid.uuid4()
     p.account_id = p.created_by
     p.created_at = _NOW

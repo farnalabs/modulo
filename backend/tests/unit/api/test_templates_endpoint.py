@@ -236,6 +236,10 @@ def test_create_from_template_returns_201(client: TestClient) -> None:
     mock_pipeline = MagicMock()
     mock_pipeline.id = uuid.uuid4()
     mock_pipeline.name = "PR Review Pipeline (from template)"
+    mock_pipeline.rate_limit_config = None
+    mock_pipeline.max_duration_seconds = None
+    mock_pipeline.archived_at = None
+    mock_pipeline.snapshot_count = 0
 
     with (
         patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
@@ -315,6 +319,10 @@ def test_create_from_template_with_hitl_gate(client: TestClient) -> None:
     mock_pipeline = MagicMock()
     mock_pipeline.id = uuid.uuid4()
     mock_pipeline.name = "Test (from template)"
+    mock_pipeline.rate_limit_config = None
+    mock_pipeline.max_duration_seconds = None
+    mock_pipeline.archived_at = None
+    mock_pipeline.snapshot_count = 0
 
     with (
         patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,

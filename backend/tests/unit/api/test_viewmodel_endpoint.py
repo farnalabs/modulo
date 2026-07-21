@@ -37,6 +37,10 @@ def _make_pipeline() -> MagicMock:
     p.visibility = "org"
     p.owner_team_id = None
     p.created_at = _NOW
+    p.rate_limit_config = None
+    p.max_duration_seconds = None
+    p.archived_at = None
+    p.snapshot_count = 0
     return p
 
 
