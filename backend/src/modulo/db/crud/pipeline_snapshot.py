@@ -57,7 +57,7 @@ async def create_snapshot_from_live_graph(
         agents = list((await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars())
         agents_by_id = {a.id: a for a in agents}
 
-    # Enrich node_defs with agent data — token_budget, prompt_template, model_backend_id.
+    # Enrich node_defs with agent data — token_budget, prompt_template, model_backend_id, agent_command.
     parameter_schema_ids: set[uuid.UUID] = set()
     for node in nodes:
         agent_id = node.get("agent_id")
@@ -71,6 +71,8 @@ async def create_snapshot_from_live_graph(
                 node["prompt_template"] = agent.prompt_template
             if agent.model_backend_id is not None:
                 node["model_backend_id"] = str(agent.model_backend_id)
+            if agent.agent_command is not None:
+                node["agent_command"] = agent.agent_command
             if agent.parameter_schema_id is not None:
                 node["parameter_schema_id"] = str(agent.parameter_schema_id)
                 parameter_schema_ids.add(agent.parameter_schema_id)
