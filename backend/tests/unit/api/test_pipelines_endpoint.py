@@ -1,4 +1,4 @@
-"""Unit tests for /api/v1/pipelines endpoints."""
+﻿"""Unit tests for /api/v1/pipelines endpoints."""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -35,6 +35,10 @@ def _make_settings() -> Settings:
 
 def _make_pipeline() -> MagicMock:
     p = MagicMock()
+    p.rate_limit_config = None
+    p.max_duration_seconds = None
+    p.archived_at = None
+    p.snapshot_count = 0
     p.id = _PIPELINE_ID
     p.organisation_id = _ORG_ID
     p.name = "Test Pipeline"
@@ -316,7 +320,7 @@ def test_replace_pipeline_graph_rejects_duplicate_paths(client: TestClient) -> N
     assert resp.status_code == 422
 
 
-@pytest.mark.xfail(reason="pre-existing rot — 422 validation mismatch needs investigation")
+@pytest.mark.xfail(reason="pre-existing rot â€” 422 validation mismatch needs investigation")
 def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient) -> None:
     node_id = uuid.uuid4()
     output_schema_id = uuid.uuid4()

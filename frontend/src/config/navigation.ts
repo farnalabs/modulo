@@ -77,6 +77,8 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'admin-plugins': { icon: 'Puzzle', labelKey: 'components.SidebarNav.item_plugins' },
   'environment-profiles': { icon: 'Container', labelKey: 'components.SidebarNav.item_environment_profiles' },
   'feedback-inbox': { icon: 'MessageSquare', labelKey: 'components.SidebarNav.item_feedback_inbox' },
+  'admin-housekeeping': { icon: 'Settings', labelKey: 'components.SidebarNav.item_housekeeping' },
+  'admin-parameter-schemas': { icon: 'FileText', labelKey: 'components.SidebarNav.item_parameter_schemas' },
 }
 
 const groupLabelKeyMap: Record<string, string> = {
