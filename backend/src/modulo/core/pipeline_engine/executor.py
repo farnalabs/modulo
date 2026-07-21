@@ -24,11 +24,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.cost_controller import check_and_record_spend
 from modulo.core.eval_engine import (
     EvalBlockedError,
     EvalSuiteBlockedError,
@@ -425,7 +427,7 @@ class PipelineExecutor:
         output_rate: Decimal,
     ) -> tuple[int | None, Decimal | None, dict[str, Any] | None]:
         """Compute total tokens, total cost, and per-node cost from node token usage."""
-        if not node_token_usage:
+        if node_token_usage is None:
             return None, None, None
 
         total_tokens = sum(n.get("total_tokens") or 0 for n in node_token_usage.values())
@@ -591,7 +593,7 @@ class PipelineExecutor:
                 except Exception:
                     _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
 
-        total_tokens, total_cost, _ = self._compute_token_costs(
+        total_tokens, total_cost_usd_val, _ = self._compute_token_costs(
             node_token_usage,
             self._INPUT_TOKEN_RATE,
             self._OUTPUT_TOKEN_RATE,
@@ -606,9 +608,14 @@ class PipelineExecutor:
                 error_code=error_code,
                 error_detail=error_detail,
                 total_tokens=total_tokens,
-                total_cost_usd=total_cost if node_token_usage else None,
+                total_cost_usd=total_cost_usd_val,
                 node_token_usage=node_token_usage,
             )
+
+        if total_cost_usd_val is not None:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await check_and_record_spend(session, org_id=org_id, cost_usd=total_cost_usd_val)
 
         if final_run is None:
             raise RunNotFoundError(run_id)
@@ -884,6 +891,11 @@ class PipelineExecutor:
                 outputs_json=completed_node_outputs,
             )
 
+        if total_cost_usd_val is not None:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await check_and_record_spend(session, org_id=org_id, cost_usd=total_cost_usd_val)
+
         if final_run is None:
             raise RunNotFoundError(run_id)
         return final_run
@@ -1078,7 +1090,48 @@ class PipelineExecutor:
                             if output is not None:
                                 completed_node_outputs[name] = output
 
-                if event_kind in ("on_chat_model_end", "on_llm_end"):
+                if event_kind == "on_chat_model_end":
+                    metadata = lg_event.get("metadata") or {}
+                    node_name = metadata.get("langgraph_node")
+                    if node_name:
+                        data = lg_event.get("data", {})
+                        output = data.get("output", {}) if isinstance(data, dict) else {}
+                        if isinstance(output, BaseMessage) and output.usage_metadata is not None:
+                            token_usage = {
+                                "input_tokens": output.usage_metadata.get("input_tokens", 0) or 0,
+                                "output_tokens": output.usage_metadata.get("output_tokens", 0) or 0,
+                                "total_tokens": output.usage_metadata.get("total_tokens", 0) or 0,
+                            }
+                        elif isinstance(output, dict):
+                            # Legacy fallback: llm_output.token_usage
+                            llm_output = output.get("llm_output", {})
+                            token_usage = llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
+                        else:
+                            token_usage = {}
+                        if isinstance(token_usage, dict):
+                            node_data = node_token_usage.setdefault(
+                                node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+                            )
+                            pt = token_usage.get("input_tokens", token_usage.get("prompt_tokens", 0)) or 0
+                            ct = token_usage.get("output_tokens", token_usage.get("completion_tokens", 0)) or 0
+                            tt = token_usage.get("total_tokens", 0) or 0
+                            node_data["input_tokens"] += pt
+                            node_data["output_tokens"] += ct
+                            node_data["total_tokens"] += tt
+                            if guard is not None:
+                                guard.record_tokens(tt)
+                            # Per-node token budget check
+                            if node_token_budgets is not None:
+                                node_budget = node_token_budgets.get(node_name)
+                                if node_budget is not None and node_data["total_tokens"] > node_budget:
+                                    raise RunawayRunError(
+                                        "token_budget",
+                                        node_data["total_tokens"],
+                                        node_budget,
+                                    )
+
+                elif event_kind == "on_llm_end":
+                    # Legacy LLM interface — output is a dict with llm_output.
                     metadata = lg_event.get("metadata") or {}
                     node_name = metadata.get("langgraph_node")
                     if node_name:
@@ -1098,7 +1151,6 @@ class PipelineExecutor:
                             node_data["total_tokens"] += tt
                             if guard is not None:
                                 guard.record_tokens(tt)
-                            # Per-node token budget check
                             if node_token_budgets is not None:
                                 node_budget = node_token_budgets.get(node_name)
                                 if node_budget is not None and node_data["total_tokens"] > node_budget:
