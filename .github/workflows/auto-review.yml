@@ -1,4 +1,4 @@
-ï»¿name: Auto Review
+name: Auto Review
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ jobs:
           PR_NUM="${{ github.event.inputs.pr_number || github.event.pull_request.number }}"
 
           if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
-            echo "No PR number â€” can't check retry limit."
+            echo "No PR number — can't check retry limit."
             echo "exhausted=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -44,7 +44,7 @@ jobs:
             --jq '[.[] | select(.user.login == "modulo-reviewbot")] | length' 2>/dev/null || echo "0")
 
           echo "review_count=$REVIEW_COUNT" >> "$GITHUB_OUTPUT"
-          echo "PR #${PR_NUM} â€” modulo-reviewbot has submitted $REVIEW_COUNT review(s)."
+          echo "PR #${PR_NUM} — modulo-reviewbot has submitted $REVIEW_COUNT review(s)."
 
           if [ "$REVIEW_COUNT" -ge 3 ]; then
             echo "exhausted=true" >> "$GITHUB_OUTPUT"
@@ -58,32 +58,23 @@ jobs:
         id: install
         shell: bash
         run: |
-          OPENCODE_VERSION="v0.0.55"
-          TARBALL_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x86_64.tar.gz"
-          DEB_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-amd64.deb"
-          echo "::group::Download opencode ${OPENCODE_VERSION}"
-          if curl -sL "$TARBALL_URL" -o /tmp/opencode.tar.gz && [ -s /tmp/opencode.tar.gz ]; then
-            sudo tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin/ opencode 2>/dev/null
+          npm install -g opencode-ai 2>&1 || npm install -g @opencode-ai/cli 2>&1 || true
+          if command -v opencode &>/dev/null; then
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+            opencode --version 2>/dev/null || true
+          else
+            OPENCODE_VERSION="v0.0.55"
+            TARBALL_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x86_64.tar.gz"
+            if curl -sL "$TARBALL_URL" -o /tmp/opencode.tar.gz && [ -s /tmp/opencode.tar.gz ]; then
+              sudo tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin/ opencode 2>/dev/null
+            fi
             if command -v opencode &>/dev/null; then
               echo "installed=true" >> "$GITHUB_OUTPUT"
-              echo "::endgroup::"
-              opencode --version 2>/dev/null || echo "opencode installed"
-              exit 0
+            else
+              echo "installed=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::opencode CLI could not be installed"
             fi
           fi
-          echo "Tarball failed, trying .deb"
-          if curl -sL "$DEB_URL" -o /tmp/opencode.deb && [ -s /tmp/opencode.deb ]; then
-            sudo dpkg -i /tmp/opencode.deb 2>/dev/null || sudo apt-get install -f -y -qq 2>/dev/null
-            if command -v opencode &>/dev/null; then
-              echo "installed=true" >> "$GITHUB_OUTPUT"
-              echo "::endgroup::"
-              opencode --version 2>/dev/null || echo "opencode installed"
-              exit 0
-            fi
-          fi
-          echo "installed=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::opencode CLI could not be installed"
-          echo "::endgroup::"
 
       - name: Configure opencode auth
         if: steps.retry-check.outputs.exhausted == 'false' && steps.install.outputs.installed == 'true'
