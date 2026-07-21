@@ -13,7 +13,7 @@ export default defineConfig({
   timeout: target !== 'local' ? 180_000 : 30_000,
   use: {
     baseURL,
-    trace: 'on-first-retry',  # capture trace on first retry for debugging
+    trace: 'on-first-retry',  // capture trace on first retry for debugging
     screenshot: 'only-on-failure',
   },
   webServer: !noServer && target === 'local' ? {
