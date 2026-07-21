@@ -12,7 +12,7 @@ Exempt paths (configurable): no CSRF check.
 import fnmatch
 import logging
 import secrets
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
@@ -46,18 +46,18 @@ class CsrfMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         if not self._enabled:
-            return await call_next(request)  # type: ignore[no-any-return]
+            return cast(Response, await call_next(request))
 
         if request.method in SAFE_METHODS:
-            return await call_next(request)  # type: ignore[no-any-return]
+            return cast(Response, await call_next(request))
 
         path = request.url.path
         if self._is_exempt(path):
-            return await call_next(request)  # type: ignore[no-any-return]
+            return cast(Response, await call_next(request))
 
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
-            return await call_next(request)  # type: ignore[no-any-return]
+            return cast(Response, await call_next(request))
 
         csrf_cookie = request.cookies.get(self.CSRF_COOKIE)
         csrf_header = request.headers.get(self.CSRF_HEADER)
@@ -82,7 +82,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
                 content={"error": "csrf_token_mismatch", "detail": "CSRF token mismatch"},
             )
 
-        return await call_next(request)  # type: ignore[no-any-return]
+        return cast(Response, await call_next(request))
 
     def _is_exempt(self, path: str) -> bool:
         for pattern in self._exempt_paths:
