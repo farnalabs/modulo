@@ -33,7 +33,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -41,6 +41,45 @@ jobs:
         run: |
           git config user.name "modulo-merge-bot"
           git config user.email "bot@modulo.run"
+
+      - name: Check main CI status
+        id: check-ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Checking main branch CI status..."
+          MAIN_SHA=$(git rev-parse main)
+          # Get the latest workflow run on main for ci.yml
+          CI_RUN=$(gh run list --workflow ci.yml --branch main --limit 1 --json conclusion,databaseId 2>/dev/null)
+          CI_CONCLUSION=$(echo "$CI_RUN" | jq -r '.[0].conclusion // "unknown"')
+          echo "Latest main CI run conclusion: $CI_CONCLUSION"
+          if [ "$CI_CONCLUSION" = "success" ]; then
+            echo "Main CI is green — proceeding with merge queue."
+            echo "main_ci_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Main CI is $CI_CONCLUSION — merge queue may fail on pre-existing issues."
+            echo "Attempting queue anyway; failures will be reported."
+            echo "main_ci_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clean up stale failed merge-queue branches
+        if: steps.check-ci.outputs.main_ci_ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Cleaning up stale merge-queue/failed branches (older than 7 days)..."
+          CUTOFF=$(date -d '7 days ago' +%s)
+          gh api repos/farnalabs/modulo/branches --paginate --jq '.[].name' | grep '^merge-queue/failed-' | while IFS= read -r branch; do
+            # Extract timestamp from branch name: merge-queue/failed-<timestamp>
+            BRANCH_TS=$(echo "$branch" | sed 's/^merge-queue\/failed-//')
+            if [ "$BRANCH_TS" -lt "$CUTOFF" ] 2>/dev/null; then
+              echo "  Deleting stale branch: $branch"
+              git push origin --delete "refs/heads/$branch" 2>/dev/null || true
+            fi
+          done
+          echo "Cleanup complete."
 
       - name: Create merge-queue branch from main
         run: |
