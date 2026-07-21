@@ -697,27 +697,27 @@ async def get_anomalies(
             )
 
             counts_result = await session.execute(counts_q)
-            daily_spends: list[tuple[object, object]] = [(r.run_date, r.daily_spend) for r in counts_result.all()]
+            raw_rows = counts_result.all()
+            daily_spends = [(r.run_date, float(str(r.daily_spend))) for r in raw_rows if r.daily_spend is not None]
 
             anomalies: list[dict[str, Any]] = []
             for i, (run_date, spend) in enumerate(daily_spends):
                 if i < 7:
                     continue
-                window = [s for _, s in daily_spends[max(0, i - 7) : i] if s is not None]
+                window = [s for _, s in daily_spends[max(0, i - 7) : i]]
                 if not window:
                     continue
-                avg = sum(float(str(w)) for w in window) / len(window)
+                avg = sum(window) / len(window)
                 if avg == 0:
                     continue
-                spend_val = float(str(spend)) if spend else 0.0
-                ratio = spend_val / avg
+                ratio = spend / avg
                 if ratio > 2.0:
                     anomalies.append(
                         {
                             "id": "",
                             "anomaly_date": str(run_date),
                             "pipeline_id": None,
-                            "amount": spend_val,
+                            "amount": spend,
                             "baseline": avg,
                             "percent_above": round((ratio - 1.0) * 100, 2),
                             "dismissed": False,

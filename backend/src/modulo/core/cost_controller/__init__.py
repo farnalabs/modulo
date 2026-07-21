@@ -210,16 +210,20 @@ async def get_cost_report(
         rows = result.all()
 
         team_ids = [row.team_id for row in rows if row.team_id is not None]
-        teams_result = await session.execute(select(Team).where(Team.id.in_(team_ids)))
-        teams_map = {t.id: t for t in teams_result.scalars().all()}
+        teams_map: dict[uuid.UUID, Team] = {}
+        if team_ids:
+            teams_result = await session.execute(select(Team).where(Team.id.in_(team_ids)))
+            teams_map = {t.id: t for t in teams_result.scalars().all()}
 
         report = []
         for row in rows:
+            if row.team_id is None:
+                continue
             team = teams_map.get(row.team_id)
             report.append(
                 {
                     "entity_id": str(row.team_id),
-                    "entity_name": team.name or "Unknown" if team else "Unknown",
+                    "entity_name": team.name if team else "Unknown",
                     "total_spend_usd": _safe_float(row.total_spend_usd),
                     "total_runs": _safe_int(row.total_runs),
                 }
