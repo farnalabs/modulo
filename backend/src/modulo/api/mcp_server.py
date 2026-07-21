@@ -2706,6 +2706,22 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
     result += f"Edges ({len(edges)}):\n"
     for e in edges:
         result += f"  - {e.get('id', '?')}: {e.get('source', '?')} -> {e.get('target', '?')} ({e.get('type', '?')})\n"
+    result += "  Full node JSON:\n"
+    for n in nodes:
+        safe = {k:v for k,v in n.items() if k not in ("agent_prompt","agent_command")}
+        result += json.dumps(safe, indent=2, default=str)[:2000] + "\n"
+        ap = n.get("agent_prompt","") or ""
+        if ap:
+            result += f"    agent_prompt: {ap[:200].replace(chr(10),' ')}...\n"
+        ac = n.get("agent_command","") or ""
+        if ac:
+            result += f"    agent_command: {ac[:200].replace(chr(10),' ')}...\n"
+        cf = n.get("context_files",{}) or {}
+        for cfp, cfc in cf.items():
+            result += f"    context_file {cfp}: {len(str(cfc))} bytes\n"
+        tid = n.get("template_id","")
+        if tid:
+            result += f"    template_id: {tid}\n"
     result += f"Connector bindings: {json.dumps(snap.connector_bindings_json, indent=2)}\n"
     return result
 
@@ -3371,3 +3387,4 @@ def build_mcp_asgi_app() -> Starlette:
         # Note: lifespan is managed by the parent FastAPI app's _lifespan
         # to ensure it is called â€” Starlette does not invoke sub-app lifespans.
     )
+
