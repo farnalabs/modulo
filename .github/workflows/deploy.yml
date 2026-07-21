@@ -121,6 +121,8 @@ jobs:
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
     needs: [check-context, deploy-staging]
+    timeout-minutes: 45
+    needs: [check-context, deploy-staging]
     if: needs.check-context.outputs.ci_passed == 'true'
     runs-on: ubicloud-standard-2
     defaults:
