@@ -164,6 +164,8 @@ jobs:
         env:
           E2E_TARGET: staging
           E2E_NO_WEBSERVER: "true"
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
         continue-on-error: true
 
 
@@ -173,6 +175,8 @@ jobs:
         env:
           E2E_TARGET: staging
           E2E_NO_WEBSERVER: "true"
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
         continue-on-error: true
 
       - name: Run Playwright E2E regression suite against staging
@@ -182,6 +186,8 @@ jobs:
         env:
           E2E_TARGET: staging
           E2E_NO_WEBSERVER: "true"
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
         continue-on-error: true
 
       - name: Upload test artifacts
