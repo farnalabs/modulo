@@ -73,12 +73,31 @@ jobs:
           curl -fsSL https://fly.io/install.sh | sh
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
-          fly deploy --app staging-modulo --config fly.staging.toml \
-            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
-            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
-            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
-            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
-            --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"
+
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app staging-modulo --config fly.staging.toml \
+              --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
+              --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
+              --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
+              --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
+              --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
+              echo "Deploy succeeded on attempt $attempt"
+              exit 0
+            else
+              EXIT_CODE=$?
+              if [ $attempt -lt $MAX_RETRIES ]; then
+                DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
+                echo "Deploy failed (exit $EXIT_CODE) — retrying in ${DELAY}s..."
+                sleep $DELAY
+              else
+                echo "Deploy failed after $MAX_RETRIES attempts"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
 
       - name: Verify deployment
         uses: ./.github/actions/verify-deployment
@@ -193,12 +212,31 @@ jobs:
           curl -fsSL https://fly.io/install.sh | sh
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
-          fly deploy --app app-modulo --config fly.toml \
-            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
-            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
-            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
-            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
-            --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"
+
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "--- Deploy attempt $attempt of $MAX_RETRIES ---"
+            if fly deploy --app app-modulo --config fly.toml \
+              --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" \
+              --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
+              --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
+              --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
+              --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
+              echo "Deploy succeeded on attempt $attempt"
+              exit 0
+            else
+              EXIT_CODE=$?
+              if [ $attempt -lt $MAX_RETRIES ]; then
+                DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
+                echo "Deploy failed (exit $EXIT_CODE) — retrying in ${DELAY}s..."
+                sleep $DELAY
+              else
+                echo "Deploy failed after $MAX_RETRIES attempts"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
 
       - name: Verify deployment
         uses: ./.github/actions/verify-deployment
@@ -218,32 +256,3 @@ jobs:
             exit 1
           }
           Write-Host "app.modulo.run SHA match: $deployedSha"
-
-  notify-deploy-failure:
-    name: Notify Modulo fixer on deploy failure
-    if: always() && (needs.deploy-staging.result == 'failure' || needs.staging-e2e.result == 'failure' || needs.deploy-production.result == 'failure')
-    needs: [check-context, deploy-staging, staging-e2e, deploy-production]
-    runs-on: ubicloud-standard-2
-    steps:
-      - name: Send webhook
-        shell: pwsh
-        env:
-          WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
-        run: |
-          if (-not $env:WEBHOOK_URL) { Write-Host "No webhook URL configured"; exit 0 }
-          $body = @{
-            repository = "${{ github.repository }}"
-            run_id = "${{ github.run_id }}"
-            phase = "deploy"
-            branch = "${{ needs.check-context.outputs.branch }}"
-            run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          } | ConvertTo-Json -Compress
-          $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-          $payload = "$ts.$body"
-          $hmac = [System.Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($env:HMAC_SECRET))
-          $hash = $hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))
-          $sig = "sha256=" + ($hash | ForEach-Object { $_.ToString("x2") }) -join ''
-          $headers = @{ "Content-Type" = "application/json"; "X-Modulo-Webhook-Secret" = $sig; "X-Modulo-Timestamp" = "$ts" }
-          Invoke-RestMethod -Uri $env:WEBHOOK_URL -Method Post -Body $body -Headers $headers -ContentType "application/json"
-          Write-Host "Modulo fixer notified of deploy failure"
