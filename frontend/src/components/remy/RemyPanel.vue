@@ -5,7 +5,7 @@
     :class="panelClasses"
     :style="panelStyle"
   >
-    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="remy-titlebar" @mousedown="startDrag">
+    <div class="remy-titlebar" @mousedown="startDrag">
       <div class="flex items-center gap-2 flex-1 min-w-0">
         <template v-if="editingName && store.activeSession">
           <input
@@ -249,7 +249,7 @@
       </div>
     </div>
 
-    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+    <div
       v-if="store.panelState === 'floating' || store.panelState === 'docked'"
       class="remy-resize-handle"
       @mousedown="startResize"
@@ -649,8 +649,8 @@ onUnmounted(() => {
   position: absolute;
   bottom: 0;
   right: 0;
-  width: 12px;
-  height: 12px;
+  width: 24px;
+  height: 24px;
   cursor: nwse-resize;
   background: linear-gradient(135deg, transparent 50%, hsl(var(--border)) 50%);
 }
