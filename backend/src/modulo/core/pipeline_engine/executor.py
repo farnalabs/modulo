@@ -20,7 +20,6 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -201,29 +200,27 @@ class PipelineExecutor:
     _INPUT_TOKEN_RATE = Decimal("0.00001")
     _OUTPUT_TOKEN_RATE = Decimal("0.00003")
 
-    async def _wait_for_capacity_or_fail(
+    async def _check_capacity(
         self,
         *,
         run_id: uuid.UUID,
         org_id: uuid.UUID,
         pipeline_id: uuid.UUID,
         max_concurrent: int,
-        lock_wait_seconds: int,
     ) -> Run:
-        """Poll until capacity is available or timeout/cancelled.
+        """Non-blocking capacity check using count-based comparison.
 
-        Serialises capacity checks via SELECT FOR UPDATE on the pipeline row
-        to prevent TOCTOU races between the count check and status update.
+        Avoids FOR UPDATE on the pipeline row — the advisory lock on snapshot
+        creation is the primary serialisation mechanism. If the pipeline has
+        reached its max_concurrent_runs limit, the run stays ``pending`` and
+        will be picked up by a background retry loop.
+
+        When *max_concurrent* is 0 or negative, capacity is unlimited and the
+        run transitions directly to ``running``.
         """
-        deadline = datetime.now(UTC).timestamp() + lock_wait_seconds
-        poll_interval = self._capacity_poll_interval
-
-        while datetime.now(UTC).timestamp() < deadline:
+        if max_concurrent <= 0:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
-                # Serialise on the pipeline row — only one executor at a time
-                # passes this check for a given pipeline.
-                await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
                 run = await get_run(session, run_id)
                 if run is None:
                     raise RunNotFoundError(run_id)
@@ -233,25 +230,33 @@ class PipelineExecutor:
                     if cancelled_run is None:
                         raise RunNotFoundError(run_id)
                     return cancelled_run
-
-                active_count = await count_active_runs_for_pipeline(session, pipeline_id)
-                if active_count < max_concurrent:
-                    await update_run_status(session, run_id, "running")
-                    running_run = await get_run(session, run_id)
-                    if running_run is None:
-                        raise RunNotFoundError(run_id)
-                    return running_run
-
-            await asyncio.sleep(poll_interval)
+                await update_run_status(session, run_id, "running")
+                running_run = await get_run(session, run_id)
+                if running_run is None:
+                    raise RunNotFoundError(run_id)
+                return running_run
 
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
-            await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
-            await update_run_status(session, run_id, "failed", error_code="lock_timeout")
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
-            return run
+            if run.cancellation_requested:
+                await update_run_status(session, run_id, "cancelled")
+                cancelled_run = await get_run(session, run_id)
+                if cancelled_run is None:
+                    raise RunNotFoundError(run_id)
+                return cancelled_run
+
+            active_count = await count_active_runs_for_pipeline(session, pipeline_id)
+            if active_count < max_concurrent:
+                await update_run_status(session, run_id, "running")
+                running_run = await get_run(session, run_id)
+                if running_run is None:
+                    raise RunNotFoundError(run_id)
+                return running_run
+
+        return run
 
     async def _load_eval_defs_for_pipeline(
         self,
@@ -652,7 +657,6 @@ class PipelineExecutor:
         # Capture scalar attributes before the session closes.
         pipeline_id = run.pipeline_id
         max_concurrent = pipeline.max_concurrent_runs
-        lock_wait_seconds = pipeline.lock_wait_timeout_seconds
         guard = RunawayGuard(
             max_duration_seconds=pipeline.max_duration_seconds,
             max_steps=pipeline.max_steps,
@@ -669,13 +673,12 @@ class PipelineExecutor:
             eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
         eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, pipeline_id)
 
-        # Wait for capacity slot (or return cancelled/timed out).
-        capacity_run = await self._wait_for_capacity_or_fail(
+        # Non-blocking capacity check — if at limit the run stays pending.
+        capacity_run = await self._check_capacity(
             run_id=run_id,
             org_id=org_id,
             pipeline_id=pipeline_id,
             max_concurrent=max_concurrent,
-            lock_wait_seconds=lock_wait_seconds,
         )
         if capacity_run.status != "running":
             return capacity_run
