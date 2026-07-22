@@ -4,15 +4,18 @@ All functions require RLS org context to be set by the caller.
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.connector_instance import ConnectorInstance
+
+_log = __import__("logging").getLogger(__name__)
 
 
 async def create_connector_instance(
@@ -63,7 +66,7 @@ async def list_connector_instances(
         excluded_tiers = ["in_dev"]
 
     if cursor is not None:
-        stmt = select(ConnectorInstance)
+        stmt = select(ConnectorInstance).where(ConnectorInstance.deleted_at.is_(None))
         if excluded_tiers:
             stmt = stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))
         paginator = CursorPaginator()
@@ -85,7 +88,7 @@ async def list_connector_instances(
         )
 
     offset = (page - 1) * page_size
-    total_query = select(func.count()).select_from(ConnectorInstance)
+    total_query = select(func.count()).select_from(ConnectorInstance).where(ConnectorInstance.deleted_at.is_(None))
     if excluded_tiers:
         total_query = total_query.where(~ConnectorInstance.tier.in_(excluded_tiers))
     try:
@@ -94,7 +97,11 @@ async def list_connector_instances(
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     try:
         items_stmt = (
-            select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
+            select(ConnectorInstance)
+            .where(ConnectorInstance.deleted_at.is_(None))
+            .order_by(ConnectorInstance.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
         )
         if excluded_tiers:
             items_stmt = items_stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))
@@ -117,7 +124,30 @@ async def update_connector_instance(
     return ci
 
 
+async def soft_delete_connector_instance(session: AsyncSession, connector_id: uuid.UUID) -> bool:
+    """Mark a connector as deleted (soft delete). Returns False if not found."""
+    ci = await get_connector_instance(session, connector_id)
+    if ci is None:
+        return False
+    ci.deleted_at = datetime.now(UTC)
+    await session.flush()
+    return True
+
+
+async def restore_connector_instance(session: AsyncSession, connector_id: uuid.UUID) -> ConnectorInstance | None:
+    """Restore a soft-deleted connector. Returns None if not found."""
+    result = await session.execute(
+        update(ConnectorInstance)
+        .where(ConnectorInstance.id == connector_id, ConnectorInstance.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(ConnectorInstance)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
 async def delete_connector_instance(session: AsyncSession, connector_id: uuid.UUID) -> bool:
+    """Hard-delete a connector. Only call from admin cleanup, not from user-facing API."""
     ci = await get_connector_instance(session, connector_id)
     if ci is None:
         return False

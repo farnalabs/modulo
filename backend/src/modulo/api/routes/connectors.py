@@ -26,9 +26,10 @@ from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
 from modulo.connectors.github import GitHubConnector
 from modulo.db.crud.connector_instance import (
     create_connector_instance,
-    delete_connector_instance,
     get_connector_instance,
     list_connector_instances,
+    restore_connector_instance,
+    soft_delete_connector_instance,
     update_connector_instance,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -378,7 +379,7 @@ async def delete_connector_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_connector_instance(session, connector_id)
+            deleted = await soft_delete_connector_instance(session, connector_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -404,3 +405,34 @@ async def delete_connector_endpoint(
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+
+
+@handle_db_errors("connectors.restore_connector_endpoint")
+@router.post("/{connector_id}/restore", response_model=ConnectorResponse)
+async def restore_connector_endpoint(
+    connector_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> ConnectorResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            ci = await restore_connector_instance(session, connector_id)
+    except ProgrammingError:
+        logger.exception("routes.connectors")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Connectors are not available. Run database migrations to enable this feature.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error restoring connector: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while restoring connector.",
+        ) from None
+    if ci is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found or not deleted")
+    return _to_response(ci)

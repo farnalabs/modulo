@@ -6,13 +6,13 @@ from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary,
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.enums import ModelBackendProvider
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 _PROVIDER_VALUES = sorted(m.value for m in ModelBackendProvider)
 _PROVIDER_SQL = f"provider IN ({', '.join(repr(v) for v in _PROVIDER_VALUES)})"
 
 
-class ModelBackend(OrgScoped):
+class ModelBackend(OrgScoped, SoftDeleteMixin):
     __tablename__ = "model_backends"
     __table_args__ = (
         CheckConstraint(_PROVIDER_SQL, name="ck_model_backends_provider"),

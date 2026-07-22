@@ -23,9 +23,10 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.db.crud.model_backend import (
     create_model_backend,
-    delete_model_backend,
     get_model_backend,
     list_model_backends,
+    restore_model_backend,
+    soft_delete_model_backend,
     update_model_backend,
 )
 from modulo.db.models.model_backend import ModelBackend
@@ -419,7 +420,7 @@ async def delete_model_backend_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_model_backend(session, backend_id)
+            deleted = await soft_delete_model_backend(session, backend_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -445,3 +446,34 @@ async def delete_model_backend_endpoint(
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+
+
+@handle_db_errors("model_backends.restore_model_backend_endpoint")
+@router.post("/{backend_id}/restore", response_model=ModelBackendResponse)
+async def restore_model_backend_endpoint(
+    backend_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> ModelBackendResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            mb = await restore_model_backend(session, backend_id)
+    except ProgrammingError:
+        logger.exception("routes.model_backends")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Model backends are not available. Run database migrations to enable this feature.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error restoring model backend: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while restoring model backend.",
+        ) from None
+    if mb is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found or not deleted")
+    return _to_response(mb)

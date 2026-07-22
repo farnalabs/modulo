@@ -1904,10 +1904,10 @@ async def delete_connector(
                     "detail": f"Invalid UUID format: {connector_id}",
                 }
 
-            from modulo.db.crud.connector_instance import delete_connector_instance as db_delete_connector
+            from modulo.db.crud.connector_instance import soft_delete_connector_instance
 
             async with _session(org_id) as s:
-                deleted = await db_delete_connector(s, cid)
+                deleted = await soft_delete_connector_instance(s, cid)
 
             if not deleted:
                 return {"error": "connector_not_found", "connector_id": connector_id}

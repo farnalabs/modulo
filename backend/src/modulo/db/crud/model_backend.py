@@ -4,14 +4,17 @@ All functions require RLS org context to be set by the caller.
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.model_backend import ModelBackend
+
+_log = __import__("logging").getLogger(__name__)
 
 
 async def create_model_backend(
@@ -66,7 +69,11 @@ async def list_model_backends(
         excluded_tiers = ["in_dev"]
     offset = (page - 1) * page_size
     try:
-        total_query = select(func.count()).select_from(ModelBackend).where(ModelBackend.organisation_id == org_id)
+        total_query = (
+            select(func.count())
+            .select_from(ModelBackend)
+            .where(ModelBackend.organisation_id == org_id, ModelBackend.deleted_at.is_(None))
+        )
         if excluded_tiers:
             total_query = total_query.where(~ModelBackend.tier.in_(excluded_tiers))
         total = (await session.execute(total_query)).scalar_one()
@@ -75,7 +82,7 @@ async def list_model_backends(
     try:
         items_stmt = (
             select(ModelBackend)
-            .where(ModelBackend.organisation_id == org_id)
+            .where(ModelBackend.organisation_id == org_id, ModelBackend.deleted_at.is_(None))
             .order_by(ModelBackend.created_at.desc())
             .offset(offset)
             .limit(page_size)
@@ -101,7 +108,30 @@ async def update_model_backend(
     return mb
 
 
+async def soft_delete_model_backend(session: AsyncSession, model_backend_id: uuid.UUID) -> bool:
+    """Mark a model backend as deleted (soft delete). Returns False if not found."""
+    mb = await get_model_backend(session, model_backend_id)
+    if mb is None:
+        return False
+    mb.deleted_at = datetime.now(UTC)
+    await session.flush()
+    return True
+
+
+async def restore_model_backend(session: AsyncSession, model_backend_id: uuid.UUID) -> ModelBackend | None:
+    """Restore a soft-deleted model backend. Returns None if not found."""
+    result = await session.execute(
+        update(ModelBackend)
+        .where(ModelBackend.id == model_backend_id, ModelBackend.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(ModelBackend)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
 async def delete_model_backend(session: AsyncSession, model_backend_id: uuid.UUID) -> bool:
+    """Hard-delete a model backend. Only call from admin cleanup, not from user-facing API."""
     mb = await get_model_backend(session, model_backend_id)
     if mb is None:
         return False

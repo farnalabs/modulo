@@ -5,10 +5,10 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class ConnectorInstance(OrgScoped):
+class ConnectorInstance(OrgScoped, SoftDeleteMixin):
     __tablename__ = "connector_instances"
     __table_args__ = (
         CheckConstraint("visibility IN ('org', 'team')", name="ck_connector_instances_visibility"),
