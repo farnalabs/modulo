@@ -206,7 +206,8 @@ jobs:
 
   deploy-production:
     name: Deploy to app.modulo.run
-    needs: [check-context]\n    if: needs.check-context.outputs.is_main == 'true' && needs.check-context.outputs.ci_passed == 'true'
+    needs: [check-context]
+    if: needs.check-context.outputs.is_main == 'true' && needs.check-context.outputs.ci_passed == 'true'
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
