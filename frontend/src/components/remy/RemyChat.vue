@@ -104,6 +104,7 @@
                 class="remy-copy-btn"
                 @click="copyMessage(msg.content ?? '')"
                 title="Copy"
+                :aria-label="'Copy message'"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"

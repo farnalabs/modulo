@@ -71,7 +71,7 @@ function onBooleanChange(event: Event) {
       @change="onStringChange"
     />
 
-    <input aria-label="port.default_value != null ? String(port.default_value) : "
+    <input :aria-label="port.label"
       v-else-if="port.type === 'number'"
       :value="localValue as number"
       type="number"

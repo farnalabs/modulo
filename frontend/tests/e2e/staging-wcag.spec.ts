@@ -2,7 +2,7 @@
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
-const knownViolations = new Set(['color-contrast', 'aria-valid-attr-value', 'button-name'])
+const knownViolations = new Set(['color-contrast'])
 
 test.describe('WCAG AA audit (local)', () => {
   test('login page has no WCAG AA violations', async ({ page }) => {
