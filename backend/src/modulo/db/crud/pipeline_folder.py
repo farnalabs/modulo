@@ -8,7 +8,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import apply_updates
@@ -57,7 +57,11 @@ async def create_folder(
 
 
 async def list_folders(session: AsyncSession) -> list[PipelineFolder]:
-    result = await session.execute(select(PipelineFolder).order_by(PipelineFolder.sort_order, PipelineFolder.name))
+    result = await session.execute(
+        select(PipelineFolder)
+        .where(PipelineFolder.deleted_at.is_(None))
+        .order_by(PipelineFolder.sort_order, PipelineFolder.name)
+    )
     return list(result.scalars().all())
 
 
@@ -65,7 +69,9 @@ async def get_folder(
     session: AsyncSession,
     folder_id: uuid.UUID,
 ) -> PipelineFolder | None:
-    result = await session.execute(select(PipelineFolder).where(PipelineFolder.id == folder_id))
+    result = await session.execute(
+        select(PipelineFolder).where(PipelineFolder.id == folder_id, PipelineFolder.deleted_at.is_(None))
+    )
     return result.scalar_one_or_none()
 
 
@@ -82,23 +88,32 @@ async def update_folder(
     return folder
 
 
-async def delete_folder(
+async def soft_delete_folder(
     session: AsyncSession,
     folder_id: uuid.UUID,
-) -> bool:
-    folder = await get_folder(session, folder_id)
-    if folder is None:
-        return False
-
-    # SET NULL on pipelines in this folder
-    await session.execute(update(Pipeline).where(Pipeline.folder_id == folder_id).values(folder_id=None))
-
-    # SET NULL on children's parent_id
-    await session.execute(update(PipelineFolder).where(PipelineFolder.parent_id == folder_id).values(parent_id=None))
-
-    await session.delete(folder)
+) -> PipelineFolder | None:
+    result = await session.execute(
+        update(PipelineFolder)
+        .where(PipelineFolder.id == folder_id, PipelineFolder.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(PipelineFolder)
+    )
     await session.flush()
-    return True
+    return result.scalar_one_or_none()
+
+
+async def restore_pipeline_folder(
+    session: AsyncSession,
+    folder_id: uuid.UUID,
+) -> PipelineFolder | None:
+    result = await session.execute(
+        update(PipelineFolder)
+        .where(PipelineFolder.id == folder_id, PipelineFolder.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(PipelineFolder)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
 
 
 async def move_pipeline_to_folder(

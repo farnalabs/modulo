@@ -7,7 +7,7 @@ before calling. The session must be within an active transaction.
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +41,7 @@ async def create_stage(
 
 
 async def get_stage(session: AsyncSession, stage_id: uuid.UUID) -> Stage | None:
-    result = await session.execute(select(Stage).where(Stage.id == stage_id))
+    result = await session.execute(select(Stage).where(Stage.id == stage_id, Stage.deleted_at.is_(None)))
     return result.scalar_one_or_none()
 
 
@@ -53,8 +53,8 @@ async def list_stages(
     owner_team_id: uuid.UUID | None = None,
 ) -> PageResult[Stage]:
     offset = (page - 1) * page_size
-    query = select(Stage)
-    count_query = select(func.count()).select_from(Stage)
+    query = select(Stage).where(Stage.deleted_at.is_(None))
+    count_query = select(func.count()).select_from(Stage).where(Stage.deleted_at.is_(None))
     if owner_team_id is not None:
         query = query.where(Stage.owner_team_id == owner_team_id)
         count_query = count_query.where(Stage.owner_team_id == owner_team_id)
@@ -81,10 +81,29 @@ async def update_stage(
     return stage
 
 
-async def delete_stage(session: AsyncSession, stage_id: uuid.UUID) -> bool:
-    stage = await get_stage(session, stage_id)
-    if stage is None:
-        return False
-    await session.delete(stage)
+async def soft_delete_stage(
+    session: AsyncSession,
+    stage_id: uuid.UUID,
+) -> Stage | None:
+    result = await session.execute(
+        update(Stage)
+        .where(Stage.id == stage_id, Stage.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(Stage)
+    )
     await session.flush()
-    return True
+    return result.scalar_one_or_none()
+
+
+async def restore_stage(
+    session: AsyncSession,
+    stage_id: uuid.UUID,
+) -> Stage | None:
+    result = await session.execute(
+        update(Stage)
+        .where(Stage.id == stage_id, Stage.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(Stage)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()

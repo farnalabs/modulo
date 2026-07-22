@@ -4,13 +4,13 @@ from typing import TYPE_CHECKING, Optional
 from sqlalchemy import ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 if TYPE_CHECKING:
     from modulo.db.models.account import Account
 
 
-class PipelineFolder(OrgScoped):
+class PipelineFolder(OrgScoped, SoftDeleteMixin):
     __tablename__ = "pipeline_folders"
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -15,9 +15,10 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.stage import (
     create_stage,
-    delete_stage,
     get_stage,
     list_stages,
+    restore_stage,
+    soft_delete_stage,
     update_stage,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -219,18 +220,18 @@ async def update_stage_endpoint(
     return StageResponse.model_validate(stage)
 
 
-@handle_db_errors("stages.delete_stage_endpoint")
-@router.delete("/{stage_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("stages.soft_delete_stage_endpoint")
+@router.delete("/{stage_id}", response_model=StageResponse)
 async def delete_stage_endpoint(
     stage_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
-) -> None:
+) -> StageResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_stage(session, stage_id)
+            stage = await soft_delete_stage(session, stage_id)
     except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -249,5 +250,41 @@ async def delete_stage_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    if not deleted:
+    if stage is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stage not found")
+    return StageResponse.model_validate(stage)
+
+
+@handle_db_errors("stages.restore_stage_endpoint")
+@router.post("/{stage_id}/restore", response_model=StageResponse)
+async def restore_stage_endpoint(
+    stage_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> StageResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            stage = await restore_stage(session, stage_id)
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    if stage is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stage not found")
+    return StageResponse.model_validate(stage)

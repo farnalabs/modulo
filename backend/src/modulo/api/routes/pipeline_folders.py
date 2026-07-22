@@ -15,8 +15,9 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.pipeline_folder import (
     create_folder,
-    delete_folder,
     list_folders,
+    restore_pipeline_folder,
+    soft_delete_folder,
     update_folder,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -127,26 +128,50 @@ async def update_folder_endpoint(
     return FolderResponse.model_validate(folder)
 
 
-@router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{folder_id}", response_model=FolderResponse)
 @handle_db_errors("pipeline_folders.delete")
 async def delete_folder_endpoint(
     folder_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
-) -> None:
+) -> FolderResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_folder(session, folder_id)
+            folder = await soft_delete_folder(session, folder_id)
     except ProgrammingError:
         logger.exception("pipeline_folders.delete(%s)", folder_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
         ) from None
-    if not deleted:
+    if folder is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+    return FolderResponse.model_validate(folder)
+
+
+@router.post("/{folder_id}/restore", response_model=FolderResponse)
+@handle_db_errors("pipeline_folders.restore")
+async def restore_folder_endpoint(
+    folder_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> FolderResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            folder = await restore_pipeline_folder(session, folder_id)
+    except ProgrammingError:
+        logger.exception("pipeline_folders.restore(%s)", folder_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    if folder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+    return FolderResponse.model_validate(folder)
 
 
 @router.patch("/{folder_id}/move", response_model=FolderResponse)

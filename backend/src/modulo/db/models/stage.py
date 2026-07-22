@@ -3,10 +3,10 @@ import uuid
 from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class Stage(OrgScoped):
+class Stage(OrgScoped, SoftDeleteMixin):
     __tablename__ = "stages"
     __table_args__ = (
         CheckConstraint("visibility IN ('org', 'team')", name="ck_stages_visibility"),
