@@ -54,7 +54,7 @@
         Failed to load folders: {{ folderError }}
       </p>
 
-      <main role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="flex-1 page-wide">
+      <main class="flex-1 page-wide">
       <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
           <div class="h-5 w-3/4 bg-muted rounded mb-2" />
