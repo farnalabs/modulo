@@ -25,10 +25,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.12"
-          enable-cache: true
 
       - name: List all open PRs
         id: list
@@ -119,11 +115,24 @@ jobs:
           ENDJSON
                 )
                 HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
-                curl -s -X POST "${BF_WEBHOOK_URL}" \
-                  -H "Content-Type: application/json" \
-                  -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-                  -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-                  -d "${BODY}" && echo "  Branch Fixer pipeline notified" || echo "  WARNING: Could not notify Branch Fixer"
+                for attempt in 1 2 4 8; do
+                  RESP=$(curl -s -w "\n%{http_code}" -X POST "${BF_WEBHOOK_URL}" \
+                    -H "Content-Type: application/json" \
+                    -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+                    -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+                    -d "${BODY}")
+                  HTTP=$(echo "$RESP" | tail -1)
+                  if [ "$HTTP" = "202" ] || [ "$HTTP" = "200" ]; then
+                    echo "  Branch Fixer pipeline accepted (attempt $attempt)"
+                    break
+                  elif [ "$HTTP" = "429" ]; then
+                    echo "  Rate limited (attempt $attempt) - retrying in ${attempt}s"
+                    sleep "$attempt"
+                  else
+                    echo "  WARNING: Branch Fixer returned HTTP $HTTP (attempt $attempt)"
+                    sleep "$attempt"
+                  fi
+                done
               else
                 echo "  WARNING: No Branch Fixer webhook URL configured - cannot dispatch fix"
               fi
@@ -145,7 +154,24 @@ jobs:
           ENDJSON
                 )
                 HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
-                curl -s -X POST "${BF_WEBHOOK_URL}"                   -H "Content-Type: application/json"                   -H "X-Modulo-Timestamp: ${TIMESTAMP}"                   -H "X-Modulo-Webhook-Secret: sha256=${HMAC}"                   -d "${BODY}" && echo "  Branch Fixer pipeline notified" || echo "  WARNING: Could not notify Branch Fixer"
+                for attempt in 1 2 4 8; do
+                  RESP=$(curl -s -w "\n%{http_code}" -X POST "${BF_WEBHOOK_URL}" \
+                    -H "Content-Type: application/json" \
+                    -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+                    -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+                    -d "${BODY}")
+                  HTTP=$(echo "$RESP" | tail -1)
+                  if [ "$HTTP" = "202" ] || [ "$HTTP" = "200" ]; then
+                    echo "  Branch Fixer pipeline accepted (attempt $attempt)"
+                    break
+                  elif [ "$HTTP" = "429" ]; then
+                    echo "  Rate limited (attempt $attempt) - retrying in ${attempt}s"
+                    sleep "$attempt"
+                  else
+                    echo "  WARNING: Branch Fixer returned HTTP $HTTP (attempt $attempt)"
+                    sleep "$attempt"
+                  fi
+                done
               else
                 echo "  WARNING: No Branch Fixer webhook URL configured - cannot dispatch fix"
               fi
