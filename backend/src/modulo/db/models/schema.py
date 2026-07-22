@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -20,6 +20,7 @@ class Schema(OrgScoped):
     )
     deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     deprecated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    system: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
 
 class SchemaVersion(OrgScoped):

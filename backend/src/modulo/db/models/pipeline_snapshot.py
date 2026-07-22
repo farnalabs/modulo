@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from modulo.db.models.environment_profile import EnvironmentProfile
     from modulo.db.models.organisation import Organisation
     from modulo.db.models.pipeline import Pipeline
+    from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 
 
 class PipelineSnapshot(OrgScoped):
@@ -45,3 +46,4 @@ class PipelineSnapshot(OrgScoped):
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
     environment_profile: Mapped[Optional["EnvironmentProfile"]] = relationship()
+    schema_pins: Mapped[list["SnapshotSchemaPin"]] = relationship(back_populates="snapshot")

@@ -481,6 +481,43 @@ async def _seed_sso_providers(settings: Settings) -> None:
             )
 
 
+async def _seed_system_schemas(settings: Settings) -> None:
+    """Seed system schemas for all existing organisations."""
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.db.models.account import Account
+    from modulo.db.models.organisation import Organisation
+    from modulo.db.seed import seed_system_schemas
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+
+    async with factory() as session, session.begin():
+        orgs = (await session.execute(select(Organisation).order_by(Organisation.created_at))).scalars().all()
+
+        admin = (
+            await session.execute(select(Account).where(Account.email == "admin").order_by(Account.created_at).limit(1))
+        ).scalar_one_or_none()
+
+        system_account_id: _uuid.UUID | None = None
+        if admin is not None:
+            system_account_id = admin.id
+        else:
+            first = (await session.execute(select(Account).order_by(Account.created_at).limit(1))).scalar_one_or_none()
+            if first is not None:
+                system_account_id = first.id
+
+        if system_account_id is None:
+            logger.warning("startup.no_account_for_system_schemas")
+            return
+
+        for org in orgs:
+            await seed_system_schemas(session, org.id, system_account_id)
+
+
 async def _seed_environment_profiles(settings: Settings) -> None:
     """Seed a default modulo-dev EnvironmentProfile for the default org.
 
@@ -668,6 +705,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         await _seed_sso_providers(settings)
     except Exception:
         logger.warning("startup.sso_providers_seed_failed", exc_info=True)
+
+    # Seed system schemas for all existing organisations (idempotent).
+    try:
+        await _seed_system_schemas(settings)
+    except Exception:
+        logger.warning("startup.system_schemas_seed_failed", exc_info=True)
 
     # Seed the default modulo-dev EnvironmentProfile for the dogfood pipeline.
     try:

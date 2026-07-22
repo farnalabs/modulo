@@ -47,6 +47,7 @@ from modulo.db.models.run import Run
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.secret import Secret
+from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 from modulo.db.models.spend_anomaly import SpendAnomaly
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.models.stage import Stage
@@ -120,6 +121,7 @@ __all__ = [
     "Schema",
     "SchemaVersion",
     "Secret",
+    "SnapshotSchemaPin",
     "SpendAnomaly",
     "SsoProvider",
     "Stage",

@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -165,6 +165,20 @@ class ConnectorBinding(BaseModel):
     instance_id: uuid.UUID
 
 
+class SchemaPin(BaseModel):
+    """A pinned schema version reference for a pipeline node."""
+
+    schema_id: uuid.UUID
+    schema_version: str
+
+    @field_validator("schema_version")
+    @classmethod
+    def version_must_be_concrete(cls, v: str) -> str:
+        if v in ("latest", "*", "") or len(v) > 50:
+            raise ValueError(f"schema_version must be a concrete version, got '{v}'")
+        return v
+
+
 class PipelineGraphNode(BaseModel):
     id: uuid.UUID
     node_type: Literal["agent", "manual", "composite", "sandbox_agent"] = "agent"
@@ -172,6 +186,8 @@ class PipelineGraphNode(BaseModel):
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
     output_schema_id: uuid.UUID | None = None
+    input_schema_pin: SchemaPin | None = None
+    output_schema_pin: SchemaPin | None = None
     label: str | None = Field(default=None, max_length=255)
     role: str | None = None
     autonomy_recommendation: str | None = None
@@ -194,7 +210,8 @@ class PipelineGraphNode(BaseModel):
                 raise ValueError("Manual nodes cannot reference an agent")
             if self.connector_binding is not None:
                 raise ValueError("Manual nodes cannot have connector bindings")
-            if self.output_schema_id is None:
+            has_output = self.output_schema_pin is not None or self.output_schema_id is not None
+            if not has_output:
                 raise ValueError("Manual nodes require an output schema")
             if self.label is None:
                 raise ValueError("Manual nodes require a label")
@@ -210,6 +227,15 @@ class PipelineGraphNode(BaseModel):
                 raise ValueError("Agent nodes require an agent")
         if self.node_type != "agent" and self.parameter_set_id is not None:
             raise ValueError("Only agent nodes can have parameter_set_id")
+        if (
+            self.output_schema_pin is not None
+            and self.output_schema_id is not None
+            and self.output_schema_pin.schema_id != self.output_schema_id
+        ):
+            raise ValueError(
+                f"output_schema_pin.schema_id ({self.output_schema_pin.schema_id}) "
+                f"does not match output_schema_id ({self.output_schema_id})"
+            )
         return self
 
 
@@ -354,28 +380,37 @@ async def _resolve_graph_references(
             detail=f"Unknown agent IDs for this organisation: {missing_agent_ids}",
         )
 
-    manual_schema_ids = {
-        node.output_schema_id for node in nodes if node.node_type == "manual" and node.output_schema_id is not None
-    }
+    schema_ids_to_check: set[uuid.UUID] = set()
+    for node in nodes:
+        if node.node_type == "manual":
+            if node.output_schema_id is not None:
+                schema_ids_to_check.add(node.output_schema_id)
+            if node.output_schema_pin is not None:
+                schema_ids_to_check.add(node.output_schema_pin.schema_id)
+        if node.input_schema_pin is not None:
+            schema_ids_to_check.add(node.input_schema_pin.schema_id)
+        if node.output_schema_pin is not None:
+            schema_ids_to_check.add(node.output_schema_pin.schema_id)
+
     existing_schema_ids = (
         set(
             (
                 await session.execute(
                     select(Schema.id).where(
                         Schema.organisation_id == org_id,
-                        Schema.id.in_(manual_schema_ids),
+                        Schema.id.in_(schema_ids_to_check),
                     )
                 )
             ).scalars()
         )
-        if manual_schema_ids
+        if schema_ids_to_check
         else set()
     )
-    missing_schema_ids = sorted(manual_schema_ids - existing_schema_ids, key=str)
+    missing_schema_ids = sorted(schema_ids_to_check - existing_schema_ids, key=str)
     if missing_schema_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Unknown manual output schema IDs for this organisation: {missing_schema_ids}",
+            detail=f"Unknown schema IDs for this organisation: {missing_schema_ids}",
         )
 
     schema_pins: list[dict[str, Any]] = []
@@ -403,14 +438,33 @@ async def _resolve_graph_references(
                     "model_backend_id": str(agent.model_backend_id),
                 }
             )
-        elif node.output_schema_id is not None:
-            schema_pins.append(
-                {
-                    "node_id": str(node.id),
-                    "direction": "output",
-                    "schema_id": str(node.output_schema_id),
-                }
-            )
+        else:
+            if node.input_schema_pin is not None:
+                schema_pins.append(
+                    {
+                        "node_id": str(node.id),
+                        "direction": "input",
+                        "schema_id": str(node.input_schema_pin.schema_id),
+                        "schema_version": node.input_schema_pin.schema_version,
+                    }
+                )
+            if node.output_schema_pin is not None:
+                schema_pins.append(
+                    {
+                        "node_id": str(node.id),
+                        "direction": "output",
+                        "schema_id": str(node.output_schema_pin.schema_id),
+                        "schema_version": node.output_schema_pin.schema_version,
+                    }
+                )
+            elif node.output_schema_id is not None:
+                schema_pins.append(
+                    {
+                        "node_id": str(node.id),
+                        "direction": "output",
+                        "schema_id": str(node.output_schema_id),
+                    }
+                )
     return schema_pins, model_backend_pins
 
 
