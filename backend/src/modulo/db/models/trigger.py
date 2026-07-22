@@ -16,10 +16,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class Trigger(OrgScoped):
+class Trigger(SoftDeleteMixin, OrgScoped):
     __tablename__ = "triggers"
     __table_args__ = (
         CheckConstraint(

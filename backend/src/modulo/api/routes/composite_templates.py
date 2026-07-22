@@ -16,9 +16,10 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.composite_template import (
     create_composite_template,
-    delete_composite_template,
     get_composite_template,
     list_composite_templates,
+    restore_composite_template,
+    soft_delete_composite_template,
     update_composite_template,
 )
 from modulo.db.rls import set_rls_org
@@ -273,7 +274,7 @@ async def delete_composite_template_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            deleted = await delete_composite_template(session, template_id)
+            deleted = await soft_delete_composite_template(session, template_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -294,6 +295,40 @@ async def delete_composite_template_endpoint(
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+
+
+@handle_db_errors("composite_templates.restore_composite_template_endpoint")
+@router.post("/{template_id}/restore", response_model=CompositeTemplateResponse)
+async def restore_composite_template_endpoint(
+    template_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> CompositeTemplateResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            template = await restore_composite_template(session, template_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in restore_composite_template_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
+    if template is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+    return CompositeTemplateResponse.model_validate(template)
 
 
 # ---------------------------------------------------------------------------
