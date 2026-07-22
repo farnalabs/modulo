@@ -131,16 +131,28 @@ jobs:
               continue
             fi
 
-            # Rule 4: CI passed but CHANGES_REQUESTED >2hrs — post reminder
-            if [ "$REVIEW_STATE" = "CHANGES_REQUESTED" ] && [ "$STALE_HOURS" -ge 2 ]; then
-              echo "  ACTION: CHANGES_REQUESTED for ${STALE_HOURS}h — posting reminder"
-              echo "## PR Housekeeper Reminder" > /tmp/pr-msg.txt
-              echo "" >> /tmp/pr-msg.txt
-              echo "This PR has a CHANGES_REQUESTED review that has been pending for over 2 hours with no response." >> /tmp/pr-msg.txt
-              gh pr comment "$NUM" --body-file /tmp/pr-msg.txt 2>/dev/null || echo "  WARNING: Could not post comment"
-              ACTIONS="$ACTIONS reminder-$NUM"
+            # Rule 4: CHANGES_REQUESTED - dispatch to Modulo Branch Fixer
+            if [ "$REVIEW_STATE" = "CHANGES_REQUESTED" ] && [ "$STALE_HOURS" -ge 0 ]; then
+              echo "  ACTION: CHANGES_REQUESTED for ${STALE_HOURS}h - dispatching to Modulo Branch Fixer"
+              if [ -n "$BF_WEBHOOK_URL" ]; then
+                TIMESTAMP=$(date +%s)
+                BODY=$(cat << ENDJSON
+                {
+                  "branchName": "${REF}",
+                  "prNumber": ${NUM},
+                  "failureDescription": "PR Housekeeper: modulo-reviewbot requested changes on PR #${NUM} (branch: ${REF})"
+                }
+                ENDJSON
+                )
+                HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
+                curl -s -X POST "${BF_WEBHOOK_URL}"                   -H "Content-Type: application/json"                   -H "X-Modulo-Timestamp: ${TIMESTAMP}"                   -H "X-Modulo-Webhook-Secret: sha256=${HMAC}"                   -d "${BODY}" && echo "  Branch Fixer pipeline notified" || echo "  WARNING: Could not notify Branch Fixer"
+              else
+                echo "  WARNING: No Branch Fixer webhook URL configured - cannot dispatch fix"
+              fi
+              ACTIONS="$ACTIONS bf-review-fix-$NUM"
               continue
             fi
+
 
             # Rule 5: Approved but has merge conflicts
             if [ "$REVIEW_STATE" = "APPROVED" ] && [ "$MERGEABLE" = "CONFLICTING" ]; then
