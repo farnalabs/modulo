@@ -219,12 +219,17 @@ async def test_schema_compatible_edge_no_issue():
 
 
 async def test_schema_incompatible_edge_is_error():
+    sid_a = str(uuid.uuid4())
+    sid_b = str(uuid.uuid4())
     snap = _snapshot(
-        graph_json=_SIMPLE_GRAPH,
-        schema_pins=[
-            {"node_id": "a", "direction": "output", "schema_id": str(uuid.uuid4())},
-            {"node_id": "b", "direction": "input", "schema_id": str(uuid.uuid4())},
-        ],
+        graph_json={
+            "nodes": [
+                {"id": "a", "output_schema_pin": {"schema_id": sid_a, "schema_version": "1.0"}},
+                {"id": "b", "input_schema_pin": {"schema_id": sid_b, "schema_version": "1.0"}},
+            ],
+            "edges": [{"source": "a", "target": "b", "type": "normal"}],
+        },
+        schema_pins=[],
     )
     session = _session_returning([])
     result = await GraphValidator().validate(snap, session)
@@ -612,13 +617,40 @@ def _schema_version_row(
 
 
 def _session_returning_schema_versions(rows: list[MagicMock]) -> AsyncMock:
-    """Mock session whose execute returns SchemaVersion-like rows."""
+    """Mock session whose execute returns SchemaVersion-like rows via scalars().all()
+    AND scalar_one_or_none() (both used by different code paths)."""
     session = AsyncMock()
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = rows
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
+    if not rows:
+        exc_result = MagicMock()
+        scalars_result = MagicMock()
+        scalars_result.all.return_value = []
+        exc_result.scalars.return_value = scalars_result
+        exc_result.scalar_one_or_none.return_value = None
+        exc_result.scalar_one.return_value = None
+        session.execute = AsyncMock(return_value=exc_result)
+        return session
+    if len(rows) == 1:
+        exc_result = MagicMock()
+        scalars_result = MagicMock()
+        scalars_result.all.return_value = rows
+        exc_result.scalars.return_value = scalars_result
+        exc_result.scalar_one_or_none.return_value = rows[0]
+        exc_result.scalar_one.return_value = rows[0]
+        session.execute = AsyncMock(return_value=exc_result)
+    else:
+        _rows = list(rows)
+
+        def _execute_side(*_a, **_kw):
+            r = MagicMock()
+            row = _rows.pop(0) if _rows else None
+            r.scalar_one_or_none.return_value = row
+            r.scalar_one.return_value = row
+            s = MagicMock()
+            s.all.return_value = [row] if row else []
+            r.scalars.return_value = s
+            return r
+
+        session.execute = AsyncMock(side_effect=_execute_side)
     return session
 
 
@@ -626,11 +658,14 @@ async def test_schema_field_presence_valid():
     """Output schema fields are all present in input schema."""
     shared_id = str(uuid.uuid4())
     snap = _snapshot(
-        graph_json=_SIMPLE_GRAPH,
-        schema_pins=[
-            {"node_id": "a", "direction": "output", "schema_id": shared_id},
-            {"node_id": "b", "direction": "input", "schema_id": shared_id},
-        ],
+        graph_json={
+            "nodes": [
+                {"id": "a", "output_schema_pin": {"schema_id": shared_id, "schema_version": "1.0"}},
+                {"id": "b", "input_schema_pin": {"schema_id": shared_id, "schema_version": "1.0"}},
+            ],
+            "edges": [{"source": "a", "target": "b", "type": "normal"}],
+        },
+        schema_pins=[],
     )
     session = _session_returning_schema_versions(
         [
@@ -648,16 +683,19 @@ async def test_schema_field_presence_valid():
     assert not any(i.code.startswith("SCHEMA_") for i in result.issues)
 
 
-async def test_schema_missing_field_is_error():
-    """Output schema field not present in input schema is an error."""
+async def test_schema_extra_field_triggers_incompatible_with_addl_props_false():
+    """Extra output field + input with additionalProperties: false → error."""
     out_id = str(uuid.uuid4())
     in_id = str(uuid.uuid4())
     snap = _snapshot(
-        graph_json=_SIMPLE_GRAPH,
-        schema_pins=[
-            {"node_id": "a", "direction": "output", "schema_id": out_id},
-            {"node_id": "b", "direction": "input", "schema_id": in_id},
-        ],
+        graph_json={
+            "nodes": [
+                {"id": "a", "output_schema_pin": {"schema_id": out_id, "schema_version": "1.0"}},
+                {"id": "b", "input_schema_pin": {"schema_id": in_id, "schema_version": "1.0"}},
+            ],
+            "edges": [{"source": "a", "target": "b", "type": "normal"}],
+        },
+        schema_pins=[],
     )
     session = _session_returning_schema_versions(
         [
@@ -667,13 +705,17 @@ async def test_schema_missing_field_is_error():
             ),
             _schema_version_row(
                 uuid.UUID(in_id),
-                {"type": "object", "properties": {"name": {"type": "string"}}},
+                {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "additionalProperties": False,
+                },
             ),
         ]
     )
     result = await GraphValidator().validate_for_run(snap, {}, session)
     assert not result.is_valid
-    assert any(i.code == "SCHEMA_MISSING_FIELD" for i in result.issues)
+    assert any(i.code == "SCHEMA_FIELD_INCOMPATIBLE" for i in result.issues)
 
 
 async def test_schema_field_type_mismatch_is_error():
@@ -681,11 +723,14 @@ async def test_schema_field_type_mismatch_is_error():
     out_id = str(uuid.uuid4())
     in_id = str(uuid.uuid4())
     snap = _snapshot(
-        graph_json=_SIMPLE_GRAPH,
-        schema_pins=[
-            {"node_id": "a", "direction": "output", "schema_id": out_id},
-            {"node_id": "b", "direction": "input", "schema_id": in_id},
-        ],
+        graph_json={
+            "nodes": [
+                {"id": "a", "output_schema_pin": {"schema_id": out_id, "schema_version": "1.0"}},
+                {"id": "b", "input_schema_pin": {"schema_id": in_id, "schema_version": "1.0"}},
+            ],
+            "edges": [{"source": "a", "target": "b", "type": "normal"}],
+        },
+        schema_pins=[],
     )
     session = _session_returning_schema_versions(
         [
@@ -701,7 +746,7 @@ async def test_schema_field_type_mismatch_is_error():
     )
     result = await GraphValidator().validate_for_run(snap, {}, session)
     assert not result.is_valid
-    assert any(i.code == "SCHEMA_FIELD_TYPE_MISMATCH" for i in result.issues)
+    assert any(i.code == "SCHEMA_FIELD_INCOMPATIBLE" for i in result.issues)
 
 
 # ---------------------------------------------------------------------------
@@ -713,10 +758,14 @@ async def test_input_payload_matches_entry_schema():
     """Valid input payload against entry node schema is ok."""
     schema_id = str(uuid.uuid4())
     snap = _snapshot(
-        graph_json=_SIMPLE_GRAPH,
-        schema_pins=[
-            {"node_id": "a", "direction": "input", "schema_id": schema_id},
-        ],
+        graph_json={
+            "nodes": [
+                {"id": "a", "input_schema_pin": {"schema_id": schema_id, "schema_version": "1.0"}},
+                {"id": "b"},
+            ],
+            "edges": [{"source": "a", "target": "b", "type": "normal"}],
+        },
+        schema_pins=[],
     )
     session = _session_returning_schema_versions(
         [
@@ -734,10 +783,14 @@ async def test_input_payload_missing_field_is_error():
     """Missing required field in input payload is an error."""
     schema_id = str(uuid.uuid4())
     snap = _snapshot(
-        graph_json=_SIMPLE_GRAPH,
-        schema_pins=[
-            {"node_id": "a", "direction": "input", "schema_id": schema_id},
-        ],
+        graph_json={
+            "nodes": [
+                {"id": "a", "input_schema_pin": {"schema_id": schema_id, "schema_version": "1.0"}},
+                {"id": "b"},
+            ],
+            "edges": [{"source": "a", "target": "b", "type": "normal"}],
+        },
+        schema_pins=[],
     )
     session = _session_returning_schema_versions(
         [
@@ -749,17 +802,21 @@ async def test_input_payload_missing_field_is_error():
     )
     result = await GraphValidator().validate_for_run(snap, {}, session)
     assert not result.is_valid
-    assert any(i.code == "INPUT_MISSING_FIELD" for i in result.issues)
+    assert any(i.code == "INPUT_SCHEMA_MISMATCH" for i in result.issues)
 
 
 async def test_input_payload_type_mismatch_is_error():
     """Wrong type for input payload field is an error."""
     schema_id = str(uuid.uuid4())
     snap = _snapshot(
-        graph_json=_SIMPLE_GRAPH,
-        schema_pins=[
-            {"node_id": "a", "direction": "input", "schema_id": schema_id},
-        ],
+        graph_json={
+            "nodes": [
+                {"id": "a", "input_schema_pin": {"schema_id": schema_id, "schema_version": "1.0"}},
+                {"id": "b"},
+            ],
+            "edges": [{"source": "a", "target": "b", "type": "normal"}],
+        },
+        schema_pins=[],
     )
     session = _session_returning_schema_versions(
         [
@@ -771,7 +828,7 @@ async def test_input_payload_type_mismatch_is_error():
     )
     result = await GraphValidator().validate_for_run(snap, {"count": "not_an_int"}, session)
     assert not result.is_valid
-    assert any(i.code == "INPUT_FIELD_TYPE_MISMATCH" for i in result.issues)
+    assert any(i.code == "INPUT_SCHEMA_MISMATCH" for i in result.issues)
 
 
 async def test_input_payload_no_schema_pins_skipped():

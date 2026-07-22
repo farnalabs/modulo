@@ -704,6 +704,18 @@ class GraphValidator:
                     errors.append(f"{path}: output type '{out_type}' not in input types {in_type}")
             return errors
 
+        if isinstance(out_type, list):
+            has_null = "null" in out_type
+            accepts_null = isinstance(in_type, list) and "null" in in_type
+            for ot in out_type:
+                if ot == "null":
+                    continue
+                if ot != in_type:
+                    errors.append(f"{path}: type mismatch '{ot}' -> '{in_type}'")
+            if has_null and not accepts_null:
+                errors.append(f"{path}: output allows null but input does not")
+            return errors
+
         if out_type and in_type and out_type != in_type:
             promotable = {"integer": ["number"]}
             if in_type in promotable.get(out_type, []):

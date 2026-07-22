@@ -303,7 +303,6 @@ def test_replace_pipeline_graph_returns_soft_validation_issues(client: TestClien
     assert resp.status_code == 200
     assert resp.json()["validation_issues"][0]["code"] == "TOPOLOGY_UNREACHABLE"
     validate.assert_awaited_once()
-    assert validate.await_args.kwargs["schema_pins"] == schema_pins
     assert validate.await_args.kwargs["model_backend_pins"] == backend_pins
 
 
