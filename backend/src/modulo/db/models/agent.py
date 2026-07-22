@@ -4,10 +4,10 @@ from typing import Any
 from sqlalchemy import JSON, Boolean, ForeignKey, ForeignKeyConstraint, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class Agent(OrgScoped):
+class Agent(OrgScoped, SoftDeleteMixin):
     __tablename__ = "agents"
     __table_args__ = (
         ForeignKeyConstraint(
