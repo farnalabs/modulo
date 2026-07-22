@@ -5,10 +5,10 @@ from typing import Any
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class Schema(OrgScoped):
+class Schema(OrgScoped, SoftDeleteMixin):
     __tablename__ = "schemas"
     __table_args__ = (UniqueConstraint("organisation_id", "name", name="uq_schemas_organisation_name"),)
 
