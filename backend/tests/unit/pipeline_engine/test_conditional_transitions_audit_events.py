@@ -161,7 +161,7 @@ async def test_eval_blocked_records_audit_event(mock_append: AsyncMock):
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -193,7 +193,7 @@ async def test_eval_suite_blocked_records_audit_event(mock_append: AsyncMock):
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch.object(PipelineExecutor, "_check_eval_suites", AsyncMock(side_effect=suite_blocked)),
     ):
         executor = PipelineExecutor(MagicMock())

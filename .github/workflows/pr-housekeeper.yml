@@ -1,6 +1,8 @@
 # PR Housekeeper
 # Scans all open PRs and handles stale/abandoned PRs automatically.
 # Runs every 30 minutes alongside the merge queue.
+# NON-AI tasks only: CI re-dispatch, reminders, conflict notices, stale closing.
+# AI fix work is dispatched to the Modulo Branch Fixer pipeline via webhook.
 
 name: PR Housekeeper
 
@@ -28,42 +30,6 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
-      - name: Install opencode CLI
-        id: install-opencode
-        shell: bash
-        run: |
-          npm install -g opencode-ai 2>&1 || npm install -g @opencode-ai/cli 2>&1 || true
-          if command -v opencode &>/dev/null; then
-            echo "opencode_installed=true" >> "$GITHUB_OUTPUT"
-            opencode --version 2>/dev/null || true
-          else
-            OPENCODE_VERSION="v0.0.55"
-            TARBALL_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x86_64.tar.gz"
-            DEB_URL="https://github.com/opencode-ai/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-amd64.deb"
-            echo "::group::Download opencode ${OPENCODE_VERSION}"
-            if curl -sL "$TARBALL_URL" -o /tmp/opencode.tar.gz && [ -s /tmp/opencode.tar.gz ]; then
-            sudo tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin/ opencode 2>/dev/null
-            if command -v opencode &>/dev/null; then
-              echo "opencode_installed=true" >> "$GITHUB_OUTPUT"
-              opencode --version 2>/dev/null || true
-              echo "::endgroup::"
-              exit 0
-            fi
-          fi
-          echo "Tarball failed, trying .deb"
-          if curl -sL "$DEB_URL" -o /tmp/opencode.deb && [ -s /tmp/opencode.deb ]; then
-            sudo dpkg -i /tmp/opencode.deb 2>/dev/null || sudo apt-get install -f -y -qq 2>/dev/null
-            if command -v opencode &>/dev/null; then
-              echo "opencode_installed=true" >> "$GITHUB_OUTPUT"
-              opencode --version 2>/dev/null || true
-              echo "::endgroup::"
-              exit 0
-            fi
-          fi
-          echo "opencode_installed=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::opencode CLI could not be installed"
-          echo "::endgroup::"
-
       - name: List all open PRs
         id: list
         env:
@@ -81,6 +47,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          BF_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          BF_HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
         run: |
           NOW=$(date +%s)
           ACTIONS=""
@@ -121,9 +89,9 @@ jobs:
             STALE_CHECKS=$(echo "$CHECKS" | jq '[.[] | select(.status == "QUEUED" or .status == "PENDING" or .status == "EXPECTED")] | length')
             FAILED_CHECKS=$(echo "$CHECKS" | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "ACTION_REQUIRED")] | length')
 
-            # Rule 1: No CI checks at all - webhook may have failed
+            # Rule 1: No CI checks at all — webhook may have failed
             if [ "$CHECKS_COUNT" -eq 0 ]; then
-              echo "  ACTION: No CI checks - re-dispatching CI"
+              echo "  ACTION: No CI checks — re-dispatching CI"
               gh workflow run ci.yml --ref "$REF" 2>/dev/null && echo "  CI dispatched" || echo "  WARNING: Could not dispatch CI"
               ACTIONS="$ACTIONS ci-dispatch-$NUM"
               continue
@@ -131,54 +99,42 @@ jobs:
 
             # Rule 2: CI stuck on pending checks
             if [ "$STALE_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 0 ]; then
-              echo "  ACTION: ${STALE_CHECKS} check(s) stuck - re-dispatching CI"
+              echo "  ACTION: ${STALE_CHECKS} check(s) stuck — re-dispatching CI"
               gh workflow run ci.yml --ref "$REF" 2>/dev/null && echo "  CI dispatched" || echo "  WARNING: Could not dispatch CI"
               ACTIONS="$ACTIONS ci-redispatch-$NUM"
               continue
             fi
 
-            # Rule 3: CI failed, no fix committed >1hr - dispatch branch-fixer
+            # Rule 3: CI failed — dispatch to Modulo Branch Fixer pipeline
             if [ "$FAILED_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 0 ]; then
-              echo "  ACTION: ${FAILED_CHECKS} check(s) failed - dispatching branch-fixer"
-              echo "  Running inline fix for $REF..."
-          git fetch origin "$REF" 2>/dev/null || true
-          git checkout "$REF" 2>/dev/null || true
-          CHANGED_FILES=$(git diff --name-only origin/main...HEAD --diff-filter=ACM 2>/dev/null | paste -sd ' ' -)
-          if [ -n "$CHANGED_FILES" ] && command -v opencode &>/dev/null; then
-            FIX_LOG=$(gh run list --branch "$REF" --workflow ci.yml --limit 1 --json databaseId -q ".[0].databaseId" 2>/dev/null || echo "")
-            FIX_FAILURES=""
-            if [ -n "$FIX_LOG" ] && [ "$FIX_LOG" != "null" ]; then
-              FIX_FAILURES=$(gh run view "$FIX_LOG" --log-failed 2>/dev/null | head -100 || true)
-            fi
-            mkdir -p ~/.local/share/opencode
-            echo '{"opencode":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"},"opencode-go":{"type":"api","key":"${{ secrets.APP_MODULO_OPENCODE_API_KEY }}"}}' > ~/.local/share/opencode/auth.json
-            opencode run --agent coder --quiet "Fix the failing CI checks in these files. Fix every issue. Never disable checks. Files: ${CHANGED_FILES}" 2>&1 || true
-            if [ -d "backend" ]; then cd backend && uv run --no-sync ruff check --fix . 2>/dev/null || true; cd ..; fi
-            git add -A .
-            git rm --cached -r .opencode 2>/dev/null || true
-            rm -rf .opencode 2>/dev/null || true
-            if ! git diff --cached --quiet; then
-              git config user.name "modulo-housekeeper" && git config user.email "bot@modulo.run"
-              git commit -m "fix: automated fixes from PR Housekeeper" --no-verify 2>/dev/null || true
-              git push origin HEAD:"$REF" 2>/dev/null && echo "  Fixes pushed to $REF" || echo "  WARNING: Could not push fixes"
-            else
-              echo "  No changes needed for $REF"
-            fi
-          else
-            echo "  Skipping fix for $REF (no changed files or opencode not available)"
-          fi
-          git checkout main 2>/dev/null || true
-              ACTIONS="$ACTIONS branch-fix-$NUM"
+              echo "  ACTION: ${FAILED_CHECKS} check(s) failed — dispatching to Modulo Branch Fixer"
+              if [ -n "$BF_WEBHOOK_URL" ]; then
+                TIMESTAMP=$(date +%s)
+                BODY=$(cat << ENDJSON
+                {
+                  "branchName": "${REF}",
+                  "prNumber": ${NUM},
+                  "failureDescription": "PR Housekeeper detected ${FAILED_CHECKS} failed CI check(s) on PR #${NUM} (branch: ${REF})"
+                }
+                ENDJSON
+                )
+                HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
+                curl -s -X POST "${BF_WEBHOOK_URL}" \
+                  -H "Content-Type: application/json" \
+                  -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+                  -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+                  -d "${BODY}" && echo "  Branch Fixer pipeline notified" || echo "  WARNING: Could not notify Branch Fixer"
+              else
+                echo "  WARNING: No Branch Fixer webhook URL configured - cannot dispatch fix"
+              fi
+              ACTIONS="$ACTIONS branch-fix-notified-$NUM"
               continue
             fi
 
-            # Rule 4: CI passed but CHANGES_REQUESTED >2hrs - post reminder
-
-
+            # Rule 4: CI passed but CHANGES_REQUESTED >2hrs — post reminder
             if [ "$REVIEW_STATE" = "CHANGES_REQUESTED" ] && [ "$STALE_HOURS" -ge 2 ]; then
-              echo "  ACTION: CHANGES_REQUESTED for ${STALE_HOURS}h - posting reminder"
+              echo "  ACTION: CHANGES_REQUESTED for ${STALE_HOURS}h — posting reminder"
               echo "## PR Housekeeper Reminder" > /tmp/pr-msg.txt
-
               echo "" >> /tmp/pr-msg.txt
               echo "This PR has a CHANGES_REQUESTED review that has been pending for over 2 hours with no response." >> /tmp/pr-msg.txt
               gh pr comment "$NUM" --body-file /tmp/pr-msg.txt 2>/dev/null || echo "  WARNING: Could not post comment"
@@ -188,9 +144,8 @@ jobs:
 
             # Rule 5: Approved but has merge conflicts
             if [ "$REVIEW_STATE" = "APPROVED" ] && [ "$MERGEABLE" = "CONFLICTING" ]; then
-              echo "  ACTION: Approved but has merge conflicts - posting rebase reminder"
+              echo "  ACTION: Approved but has merge conflicts — posting rebase reminder"
               echo "## PR Housekeeper Notice" > /tmp/pr-msg.txt
-
               echo "" >> /tmp/pr-msg.txt
               echo "This PR is approved but has merge conflicts with main. Please rebase." >> /tmp/pr-msg.txt
               gh pr comment "$NUM" --body-file /tmp/pr-msg.txt 2>/dev/null || echo "  WARNING: Could not post comment"
@@ -198,11 +153,10 @@ jobs:
               continue
             fi
 
-            # Rule 6: Stale >24h with no progress - close
+            # Rule 6: Stale >24h with no progress — close
             if [ "$AGE_HOURS" -ge 24 ] && [ "$CHECKS_COUNT" -eq 0 ] && [ "$REVIEW_STATE" = "none" ]; then
-              echo "  ACTION: PR stale >24h - closing"
+              echo "  ACTION: PR stale >24h — closing"
               echo "## PR Housekeeper" > /tmp/pr-msg.txt
-
               echo "" >> /tmp/pr-msg.txt
               echo "This PR has been open for over 24 hours with no activity. Closing as stale." >> /tmp/pr-msg.txt
               gh pr close "$NUM" --comment-file /tmp/pr-msg.txt 2>/dev/null || echo "  WARNING: Could not close PR"

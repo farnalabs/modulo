@@ -73,6 +73,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     agent.token_budget = None
     agent.max_input_length = None
     agent.parameter_schema_id = None
+    agent.agent_command = None
 
     connector = MagicMock()
     connector.id = connector_id
@@ -93,7 +94,11 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     backend.credentials_ciphertext = b"must-not-be-copied"
 
     session = AsyncMock(spec=AsyncSession)
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = True
+    unlock_result = MagicMock()
     session.execute.side_effect = [
+        lock_result,
         _scalar_result(pipeline),
         _scalars_result([edge]),
         _scalars_result([agent]),
@@ -101,6 +106,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
         _scalars_result([input_schema, output_schema]),
         _scalars_result([backend]),
         _scalar_result(4),
+        unlock_result,
     ]
 
     snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
