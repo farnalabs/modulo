@@ -979,3 +979,15 @@ For tests that need the login page visible:
 - Skip `storageState` for those tests (use a separate config or override)
 - Or explicitly clear the session in the test before navigating to login
 - Or check for redirect: `await page.waitForURL('/login')` before testing elements
+
+### Never merge PRs directly unless explicitly authorised
+
+The --admin flag on \gh pr merge\ bypasses the merge queue, CI checks, and all SDLC gates. This must NEVER be used unless the user explicitly says "merge it manually" or "use --admin".
+
+Default merge path: let the merge queue pick up approved PRs. If a PR needs expediting, ask the user first. Direct merges skip:
+- CI validation (lint, tests, security scans)
+- Integration/BDD/Docker checks in the merge queue
+- Auto-review re-triggering on the merge commit
+- Audit trail in the merge queue
+
+Exception: trivial documentation-only changes (typos, formatting) may be merged directly without asking.
