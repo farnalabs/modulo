@@ -144,13 +144,7 @@ async def list_pipelines(
             count_where.append(Pipeline.deleted_at.is_(None))
         if not include_archived:
             count_where.append(Pipeline.archived_at.is_(None))
-        total = (
-            await session.execute(
-                select(func.count())
-                .select_from(Pipeline)
-                .where(*count_where)
-            )
-        ).scalar_one()
+        total = (await session.execute(select(func.count()).select_from(Pipeline).where(*count_where))).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(
