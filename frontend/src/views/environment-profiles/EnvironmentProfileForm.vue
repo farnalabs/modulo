@@ -4,6 +4,7 @@
       <button
         class="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         data-testid="envprofile-form-back"
+        :aria-label="'Back to environment profiles'"
         @click="$router.push('/environment-profiles')"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

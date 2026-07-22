@@ -139,6 +139,7 @@
                   <div v-if="reorderMode" class="flex flex-col gap-0.5">
                     <button
                       :data-testid="'stage-board-move-up-' + stage.id"
+                      :aria-label="'Move ' + stage.name + ' up'"
                       class="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
                       :disabled="updatingStages[stage.id] || isFirstStage(stage)"
                       @click.stop="moveStage(stage, -1)"
@@ -147,6 +148,7 @@
                     </button>
                     <button
                       :data-testid="'stage-board-move-down-' + stage.id"
+                      :aria-label="'Move ' + stage.name + ' down'"
                       class="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
                       :disabled="updatingStages[stage.id] || isLastStage(stage)"
                       @click.stop="moveStage(stage, 1)"
@@ -224,6 +226,7 @@
         <h2 class="text-base font-semibold">Stage Details</h2>
         <button
           data-testid="stage-board-detail-close"
+          :aria-label="'Close stage details'"
           class="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           @click="selectedStageId = null"
         >
