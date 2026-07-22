@@ -77,12 +77,17 @@ def _make_session(
     """Build a mocked session that returns the given trigger and run count."""
     session = AsyncMock()
 
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = True
+
     trigger_result = MagicMock()
     trigger_result.scalar_one_or_none.return_value = trigger
     trigger_result.scalar_one.return_value = trigger
 
     dedup_result = MagicMock()
     dedup_result.scalar_one_or_none.return_value = MagicMock() if dedup_exists else None
+
+    generic_result = MagicMock()
 
     count_result = MagicMock()
     count_result.scalar_one.return_value = active_run_count
@@ -92,12 +97,16 @@ def _make_session(
     async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_count
         call_count += 1
-        # Order: 1=trigger (FOR UPDATE), 2=dedup check, 3=count active runs
+        # Order: 1=advisory lock, 2=trigger lookup, 3=dedup SELECT, 4=dedup DELETE, 5=count active runs
         if call_count == 1:
-            return trigger_result
+            return lock_result
         if call_count == 2:
-            return dedup_result
+            return trigger_result
         if call_count == 3:
+            return dedup_result
+        if call_count == 4:
+            return generic_result
+        if call_count == 5:
             return count_result
         return count_result
 

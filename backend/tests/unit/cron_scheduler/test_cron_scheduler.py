@@ -122,13 +122,18 @@ class TestFireCronTrigger:
         trigger_mock.daily_spend_limit = Decimal("100.00")
         trigger_mock.config_json = {}
 
+        lock_result = MagicMock()
+        lock_result.scalar_one.return_value = True
+
         first_result = MagicMock()
         first_result.scalar_one_or_none.return_value = trigger_mock
 
         second_result = MagicMock()
         second_result.scalar_one.return_value = Decimal("150.00")
 
-        session = _MockSession(execute_side_effect=[first_result, second_result])
+        unlock_result = MagicMock()
+
+        session = _MockSession(execute_side_effect=[lock_result, first_result, second_result, unlock_result])
 
         with (
             patch("modulo.core.cron_scheduler._get_engine"),
@@ -165,13 +170,18 @@ class TestFireCronTrigger:
         trigger_mock.daily_spend_limit = Decimal("100.00")
         trigger_mock.config_json = {}
 
+        lock_result = MagicMock()
+        lock_result.scalar_one.return_value = True
+
         first_result = MagicMock()
         first_result.scalar_one_or_none.return_value = trigger_mock
 
         second_result = MagicMock()
         second_result.scalar_one.return_value = Decimal("150.00")
 
-        session = _MockSession(execute_side_effect=[first_result, second_result])
+        unlock_result = MagicMock()
+
+        session = _MockSession(execute_side_effect=[lock_result, first_result, second_result, unlock_result])
 
         with (
             patch("modulo.core.cron_scheduler._get_engine"),

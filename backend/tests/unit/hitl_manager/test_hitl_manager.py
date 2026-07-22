@@ -784,9 +784,7 @@ def _mock_graph_validator() -> MagicMock:
     return mock_cls
 
 
-async def _bypass_capacity(
-    mock_self: Any, *, run_id: Any, org_id: Any, pipeline_id: Any, max_concurrent: Any, lock_wait_seconds: Any
-) -> Any:
+async def _bypass_capacity(mock_self: Any, *, run_id: Any, org_id: Any, pipeline_id: Any, max_concurrent: Any) -> Any:
     run = MagicMock()
     run.status = "running"
     return run
@@ -856,7 +854,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
             return_value=AsyncMock(),
         ),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="x" * 32)),
     ):
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="a" * 32)
