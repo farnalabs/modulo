@@ -5,10 +5,10 @@ import uuid
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class SavedView(OrgScoped):
+class SavedView(SoftDeleteMixin, OrgScoped):
     """A saved view/filter configuration for the runs listing page."""
 
     __tablename__ = "saved_views"

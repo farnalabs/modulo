@@ -16,9 +16,10 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.environment_profile import (
     create_environment_profile,
-    delete_environment_profile,
     get_environment_profile,
     list_environment_profiles,
+    restore_environment_profile,
+    soft_delete_environment_profile,
     update_environment_profile,
 )
 from modulo.db.models.environment_profile import EnvironmentProfile
@@ -293,7 +294,7 @@ async def delete_profile(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_environment_profile(session, profile_id)
+            deleted = await soft_delete_environment_profile(session, profile_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -312,3 +313,38 @@ async def delete_profile(
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Environment profile not found")
+
+
+@handle_db_errors("environment_profiles.restore_profile")
+@router.post("/{profile_id}/restore", response_model=ProfileResponse)
+async def restore_profile(
+    profile_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> ProfileResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            profile = await restore_environment_profile(session, profile_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("Unexpected error restoring environment profile: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Environment profile not found")
+    return _to_response(profile)
