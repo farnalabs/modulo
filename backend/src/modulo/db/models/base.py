@@ -21,6 +21,15 @@ class TimestampMixin:
     )
 
 
+class SoftDeleteMixin:
+    """Mixin that adds soft-delete support. Set deleted_at to mark as deleted.
+
+    Queries should filter ``WHERE deleted_at IS NULL`` unless explicitly requesting deleted records.
+    """
+
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
+
+
 class OrgScoped(Base, TimestampMixin):
     """Mixin for entities that belong to an organisation.
 

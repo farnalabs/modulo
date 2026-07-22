@@ -4,10 +4,10 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class EnvironmentProfile(OrgScoped):
+class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
     __tablename__ = "environment_profiles"
     __table_args__ = (
         CheckConstraint("visibility IN ('org', 'team')", name="ck_env_profiles_visibility"),

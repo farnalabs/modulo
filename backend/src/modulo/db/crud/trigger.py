@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.trigger import Trigger
 
 
@@ -17,7 +18,14 @@ async def list_triggers(
     cursor: str | None = None,
     limit: int = 20,
 ) -> PageResult[Trigger]:
-    q = select(Trigger).where(Trigger.organisation_id == org_id)
+    q = (
+        select(Trigger)
+        .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+        .where(
+            Trigger.organisation_id == org_id,
+            Pipeline.deleted_at.is_(None),
+        )
+    )
     if pipeline_id is not None:
         q = q.where(Trigger.pipeline_id == pipeline_id)
     q = q.order_by(Trigger.created_at.desc())
