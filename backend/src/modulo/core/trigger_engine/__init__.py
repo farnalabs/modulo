@@ -29,6 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.connectors.base import ConnectorQuery
+from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -94,6 +95,14 @@ class ReplayNotFoundError(KeyError):
     def __init__(self, event_id: uuid.UUID) -> None:
         super().__init__(str(event_id))
         self.event_id = event_id
+
+
+class TriggerBusyError(RuntimeError):
+    """Raised when a concurrent dispatch for the same trigger is already in progress."""
+
+    def __init__(self, trigger_id: uuid.UUID) -> None:
+        super().__init__(f"Trigger {trigger_id} is busy — another dispatch is in progress")
+        self.trigger_id = trigger_id
 
 
 # ---------------------------------------------------------------------------
@@ -224,142 +233,154 @@ class TriggerEngine:
         always written (pass or fail) so every delivery attempt is audited.
         The caller must have already set RLS context on the session.
         """
-        trigger = await self._load_trigger(session, trigger_id, org_id)
-        payload_hash = _sha256_hex(raw_body)
-
-        # X-Modulo-Timestamp replay window check
+        key1, key2 = _uuid_to_lock_keys(trigger_id)
+        lock_result = await session.execute(
+            text("SELECT pg_try_advisory_lock(:key1, :key2)"),
+            {"key1": key1, "key2": key2},
+        )
+        if not lock_result.scalar_one():
+            raise TriggerBusyError(trigger_id)
         try:
-            ts = _verify_timestamp(modulo_timestamp)
-        except TimestampExpiredError as exc:
-            _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
-            await self._log_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                payload_hash=payload_hash,
-                result="timestamp_expired",
-            )
-            raise
+            trigger = await self._load_trigger(session, trigger_id, org_id)
+            payload_hash = _sha256_hex(raw_body)
 
-        # HMAC validation (only if secret is configured)
-        # HMAC is computed over timestamp.body for replay protection
-        cfg = trigger.config_json or {}
-        hmac_secret: str | None = cfg.get("hmac_secret")
-        if hmac_secret is not None and not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
-            _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
-            await self._log_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                payload_hash=payload_hash,
-                result="hmac_failed",
-            )
-            raise HmacValidationError()
+            # X-Modulo-Timestamp replay window check
+            try:
+                ts = _verify_timestamp(modulo_timestamp)
+            except TimestampExpiredError as exc:
+                _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=payload_hash,
+                    result="timestamp_expired",
+                )
+                raise
 
-        # Deduplication — insert dedup hash via savepoint; unique constraint handles races.
-        is_new = await self._try_insert_dedup(session, trigger_id, org_id, payload_hash)
-        if not is_new:
-            _log.warning("Webhook deduplicated for trigger %s (hash=%s)", trigger_id, payload_hash[:16])
-            await self._log_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                payload_hash=payload_hash,
-                result="deduplicated",
-            )
-            raise DuplicateWebhookError(payload_hash)
+            # HMAC validation (only if secret is configured)
+            cfg = trigger.config_json or {}
+            hmac_secret: str | None = cfg.get("hmac_secret")
+            if hmac_secret is not None and not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
+                _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=payload_hash,
+                    result="hmac_failed",
+                )
+                raise HmacValidationError()
 
-        # Flood / concurrency protection
-        active_count = await self._count_active_runs(session, trigger.id)
-        if active_count >= trigger.max_concurrent_runs:
-            _log.warning(
-                "Webhook concurrency limit reached for trigger %s (%d active >= %d limit)",
-                trigger_id,
-                active_count,
-                trigger.max_concurrent_runs,
-            )
-            await self._log_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                payload_hash=payload_hash,
-                result="concurrency_limit_reached",
-            )
-            raise ConcurrentRunLimitError(trigger_id, trigger.max_concurrent_runs)
+            # Deduplication
+            is_new = await self._try_insert_dedup(session, trigger_id, org_id, payload_hash)
+            if not is_new:
+                _log.warning("Webhook deduplicated for trigger %s (hash=%s)", trigger_id, payload_hash[:16])
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=payload_hash,
+                    result="deduplicated",
+                )
+                raise DuplicateWebhookError(payload_hash)
 
-        # Payload mapping → input payload for the run
-        mapping: dict[str, str] = cfg.get("payload_mapping", {})
-        input_payload = _apply_payload_mapping(raw_payload, mapping)
-
-        # Rate limit check
-        pipeline_rate_limit = cfg.get("rate_limit")
-        if pipeline_rate_limit is None:
-            from modulo.db.models.pipeline import Pipeline
-
-            pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-            pipeline = pipe_result.scalar_one_or_none()
-            if pipeline is not None:
-                pipeline_rate_limit = pipeline.rate_limit_config
-
-        if pipeline_rate_limit and pipeline_rate_limit.get("max_triggers"):
-            max_triggers = int(pipeline_rate_limit["max_triggers"])
-            window_seconds = int(pipeline_rate_limit.get("window_seconds", 3600))
-            rate_limit_key = self._compute_rate_limit_key(input_payload, pipeline_rate_limit)
-            recent_count = await self._count_recent_rate_limited(
-                session, trigger.pipeline_id, rate_limit_key, window_seconds
-            )
-            if recent_count >= max_triggers:
+            # Flood / concurrency protection
+            active_count = await self._count_active_runs(session, trigger.id)
+            if active_count >= trigger.max_concurrent_runs:
                 _log.warning(
-                    "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
-                    trigger.pipeline_id,
-                    recent_count,
-                    max_triggers,
-                    rate_limit_key,
+                    "Webhook concurrency limit reached for trigger %s (%d active >= %d limit)",
+                    trigger_id,
+                    active_count,
+                    trigger.max_concurrent_runs,
                 )
                 await self._log_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
                     payload_hash=payload_hash,
-                    result="rate_limited",
+                    result="concurrency_limit_reached",
                 )
-                raise PipelineRateLimitError(trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
-        else:
-            rate_limit_key = None
+                raise ConcurrentRunLimitError(trigger_id, trigger.max_concurrent_runs)
 
-        # Create run
-        run = await create_run(
-            session,
-            org_id=org_id,
-            pipeline_id=trigger.pipeline_id,
-            snapshot_id=snapshot_id,
-            trigger_type="webhook",
-            input_payload=input_payload,
-            trigger_id=trigger_id,
-            rate_limit_key=rate_limit_key,
-        )
+            # Payload mapping
+            mapping: dict[str, str] = cfg.get("payload_mapping", {})
+            input_payload = _apply_payload_mapping(raw_payload, mapping)
 
-        # Audit log — success
-        trigger_event = await self._log_event(
-            session,
-            trigger=trigger,
-            org_id=org_id,
-            payload_hash=payload_hash,
-            result="accepted",
-            run_id=run.id,
-        )
-        _log.info("Webhook accepted for trigger %s → run %s", trigger_id, run.id)
+            # Rate limit check
+            pipeline_rate_limit = cfg.get("rate_limit")
+            if pipeline_rate_limit is None:
+                from modulo.db.models.pipeline import Pipeline
 
-        # Store raw payload for replay (link to trigger_event)
-        await self._store_raw_payload(
-            session,
-            trigger_event_id=trigger_event.id,
-            raw_body=raw_body,
-            raw_payload=raw_payload,
-            org_id=org_id,
-        )
+                pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
+                pipeline = pipe_result.scalar_one_or_none()
+                if pipeline is not None:
+                    pipeline_rate_limit = pipeline.rate_limit_config
 
-        return run, trigger_event, input_payload
+            if pipeline_rate_limit and pipeline_rate_limit.get("max_triggers"):
+                max_triggers = int(pipeline_rate_limit["max_triggers"])
+                window_seconds = int(pipeline_rate_limit.get("window_seconds", 3600))
+                rate_limit_key = self._compute_rate_limit_key(input_payload, pipeline_rate_limit)
+                recent_count = await self._count_recent_rate_limited(
+                    session, trigger.pipeline_id, rate_limit_key, window_seconds
+                )
+                if recent_count >= max_triggers:
+                    _log.warning(
+                        "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
+                        trigger.pipeline_id,
+                        recent_count,
+                        max_triggers,
+                        rate_limit_key,
+                    )
+                    await self._log_event(
+                        session,
+                        trigger=trigger,
+                        org_id=org_id,
+                        payload_hash=payload_hash,
+                        result="rate_limited",
+                    )
+                    raise PipelineRateLimitError(trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
+            else:
+                rate_limit_key = None
+
+            # Create run
+            run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=trigger.pipeline_id,
+                snapshot_id=snapshot_id,
+                trigger_type="webhook",
+                input_payload=input_payload,
+                trigger_id=trigger_id,
+                rate_limit_key=rate_limit_key,
+            )
+
+            # Audit log
+            trigger_event = await self._log_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                payload_hash=payload_hash,
+                result="accepted",
+                run_id=run.id,
+            )
+            _log.info("Webhook accepted for trigger %s → run %s", trigger_id, run.id)
+
+            # Store raw payload for replay
+            await self._store_raw_payload(
+                session,
+                trigger_event_id=trigger_event.id,
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+                org_id=org_id,
+            )
+
+            return run, trigger_event, input_payload
+        finally:
+            await session.execute(
+                text("SELECT pg_advisory_unlock(:key1, :key2)"),
+                {"key1": key1, "key2": key2},
+            )
 
     async def replay_event(
         self,
@@ -385,125 +406,136 @@ class TriggerEngine:
         if event is None:
             raise ReplayNotFoundError(event_id)
 
-        # Load trigger
-        trigger_result = await session.execute(
-            select(Trigger)
-            .where(
-                Trigger.id == event.trigger_id,
-                Trigger.organisation_id == org_id,
-            )
-            .with_for_update()
+        # Load trigger with advisory lock
+        key1, key2 = _uuid_to_lock_keys(event.trigger_id)
+        lock_result = await session.execute(
+            text("SELECT pg_try_advisory_lock(:key1, :key2)"),
+            {"key1": key1, "key2": key2},
         )
-        trigger = trigger_result.scalar_one_or_none()
-        if trigger is None:
-            raise TriggerNotFoundError(event.trigger_id)
-        if not trigger.active:
-            raise TriggerInactiveError(event.trigger_id)
-
-        # Load raw payload from WebhookPayload
-        payload_result = await session.execute(
-            select(WebhookPayload).where(
-                WebhookPayload.trigger_event_id == event_id,
-                WebhookPayload.organisation_id == org_id,
-            )
-        )
-        stored = payload_result.scalar_one_or_none()
-        if stored is None:
-            raise ReplayNotFoundError(event_id)
-
-        raw_payload = stored.raw_payload
-        raw_body = stored.raw_body
-
-        # Run the rest of the pipeline (skip HMAC + timestamp validation)
-        payload_hash = _sha256_hex(raw_body)
-
-        # No dedup check for replays — this is an intentional re-fire.
-        # The original event already went through dedup validation.
-
-        # Flood protection
-        active_count = await self._count_active_runs(session, trigger.id)
-        if active_count >= trigger.max_concurrent_runs:
-            await self._log_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                payload_hash=payload_hash,
-                result="concurrency_limit_reached",
-            )
-            raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
-
-        # Payload mapping
-        cfg = trigger.config_json or {}
-        mapping: dict[str, str] = cfg.get("payload_mapping", {})
-        input_payload = _apply_payload_mapping(raw_payload, mapping)
-
-        # Rate limit check
-        pipeline_rate_limit = cfg.get("rate_limit")
-        if pipeline_rate_limit is None:
-            from modulo.db.models.pipeline import Pipeline
-
-            pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
-            pipeline = pipe_result.scalar_one_or_none()
-            if pipeline is not None:
-                pipeline_rate_limit = pipeline.rate_limit_config
-
-        if pipeline_rate_limit and pipeline_rate_limit.get("max_triggers"):
-            max_triggers = int(pipeline_rate_limit["max_triggers"])
-            window_seconds = int(pipeline_rate_limit.get("window_seconds", 3600))
-            rate_limit_key = self._compute_rate_limit_key(input_payload, pipeline_rate_limit)
-            recent_count = await self._count_recent_rate_limited(
-                session, trigger.pipeline_id, rate_limit_key, window_seconds
-            )
-            if recent_count >= max_triggers:
-                _log.warning(
-                    "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
-                    trigger.pipeline_id,
-                    recent_count,
-                    max_triggers,
-                    rate_limit_key,
+        if not lock_result.scalar_one():
+            raise TriggerBusyError(event.trigger_id)
+        try:
+            trigger_result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == event.trigger_id,
+                    Trigger.organisation_id == org_id,
                 )
+            )
+            trigger = trigger_result.scalar_one_or_none()
+            if trigger is None:
+                raise TriggerNotFoundError(event.trigger_id)
+            if not trigger.active:
+                raise TriggerInactiveError(event.trigger_id)
+
+            # Load raw payload from WebhookPayload
+            payload_result = await session.execute(
+                select(WebhookPayload).where(
+                    WebhookPayload.trigger_event_id == event_id,
+                    WebhookPayload.organisation_id == org_id,
+                )
+            )
+            stored = payload_result.scalar_one_or_none()
+            if stored is None:
+                raise ReplayNotFoundError(event_id)
+
+            raw_payload = stored.raw_payload
+            raw_body = stored.raw_body
+
+            # Run the rest of the pipeline (skip HMAC + timestamp validation)
+            payload_hash = _sha256_hex(raw_body)
+
+            # No dedup check for replays — this is an intentional re-fire.
+            # The original event already went through dedup validation.
+
+            # Flood protection
+            active_count = await self._count_active_runs(session, trigger.id)
+            if active_count >= trigger.max_concurrent_runs:
                 await self._log_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
                     payload_hash=payload_hash,
-                    result="rate_limited",
+                    result="concurrency_limit_reached",
                 )
-                raise PipelineRateLimitError(trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
-        else:
-            rate_limit_key = None
+                raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
 
-        # Create run
-        run = await create_run(
-            session,
-            org_id=org_id,
-            pipeline_id=trigger.pipeline_id,
-            snapshot_id=snapshot_id,
-            trigger_type="webhook",
-            input_payload=input_payload,
-            trigger_id=trigger.id,
-            rate_limit_key=rate_limit_key,
-        )
+            # Payload mapping
+            cfg = trigger.config_json or {}
+            mapping: dict[str, str] = cfg.get("payload_mapping", {})
+            input_payload = _apply_payload_mapping(raw_payload, mapping)
 
-        trigger_event = await self._log_event(
-            session,
-            trigger=trigger,
-            org_id=org_id,
-            payload_hash=payload_hash,
-            result="accepted",
-            run_id=run.id,
-        )
+            # Rate limit check
+            pipeline_rate_limit = cfg.get("rate_limit")
+            if pipeline_rate_limit is None:
+                from modulo.db.models.pipeline import Pipeline
 
-        # Store raw payload for the new event (re-replay support)
-        await self._store_raw_payload(
-            session,
-            trigger_event_id=trigger_event.id,
-            raw_body=raw_body,
-            raw_payload=raw_payload,
-            org_id=org_id,
-        )
+                pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
+                pipeline = pipe_result.scalar_one_or_none()
+                if pipeline is not None:
+                    pipeline_rate_limit = pipeline.rate_limit_config
 
-        return run, trigger_event, input_payload
+            if pipeline_rate_limit and pipeline_rate_limit.get("max_triggers"):
+                max_triggers = int(pipeline_rate_limit["max_triggers"])
+                window_seconds = int(pipeline_rate_limit.get("window_seconds", 3600))
+                rate_limit_key = self._compute_rate_limit_key(input_payload, pipeline_rate_limit)
+                recent_count = await self._count_recent_rate_limited(
+                    session, trigger.pipeline_id, rate_limit_key, window_seconds
+                )
+                if recent_count >= max_triggers:
+                    _log.warning(
+                        "Rate limit exceeded for pipeline %s: %d >= %d for key %s",
+                        trigger.pipeline_id,
+                        recent_count,
+                        max_triggers,
+                        rate_limit_key,
+                    )
+                    await self._log_event(
+                        session,
+                        trigger=trigger,
+                        org_id=org_id,
+                        payload_hash=payload_hash,
+                        result="rate_limited",
+                    )
+                    raise PipelineRateLimitError(trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
+            else:
+                rate_limit_key = None
+
+            # Create run
+            run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=trigger.pipeline_id,
+                snapshot_id=snapshot_id,
+                trigger_type="webhook",
+                input_payload=input_payload,
+                trigger_id=trigger.id,
+                rate_limit_key=rate_limit_key,
+            )
+
+            trigger_event = await self._log_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                payload_hash=payload_hash,
+                result="accepted",
+                run_id=run.id,
+            )
+
+            # Store raw payload for the new event (re-replay support)
+            await self._store_raw_payload(
+                session,
+                trigger_event_id=trigger_event.id,
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+                org_id=org_id,
+            )
+
+            return run, trigger_event, input_payload
+        finally:
+            await session.execute(
+                text("SELECT pg_advisory_unlock(:key1, :key2)"),
+                {"key1": key1, "key2": key2},
+            )
 
     # ------------------------------------------------------------------
     # Polling trigger
@@ -695,14 +727,12 @@ class TriggerEngine:
         trigger_id: uuid.UUID,
         org_id: uuid.UUID,
     ) -> Trigger:
-        """Load trigger with FOR UPDATE lock to serialise concurrent webhook requests."""
+        """Load trigger row (no FOR UPDATE — caller holds advisory lock if needed)."""
         result = await session.execute(
-            select(Trigger)
-            .where(
+            select(Trigger).where(
                 Trigger.id == trigger_id,
                 Trigger.organisation_id == org_id,
             )
-            .with_for_update()
         )
         trigger = result.scalar_one_or_none()
         if trigger is None:
