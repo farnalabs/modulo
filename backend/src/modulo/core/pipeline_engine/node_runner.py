@@ -659,12 +659,19 @@ def make_sandbox_agent_fn(
 
             await sandbox.files.write("/home/user/prompt.md", rendered_prompt)
 
+            _input_json = json.dumps(raw_input)
+            if len(_input_json) > 10240:
+                _input_json = json.dumps(
+                    {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
+                )
+
             cmd_result = await sandbox.commands.run(
                 agent_command,
                 envs={
                     "MODULO_RUN_ID": run_id,
                     "MODULO_PIPELINE_ID": pipeline_id,
                     "MODULO_ORG_ID": org_id,
+                    "MODULO_INPUT_PAYLOAD": _input_json,
                     "APP_MODULO_OPENCODE_API_KEY": os.environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
                     "GITHUB_TOKEN": os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
                     or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
