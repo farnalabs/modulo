@@ -16,7 +16,7 @@ from modulo.db.models.account import Account
 
 
 async def get_account_by_email(session: AsyncSession, email: str) -> Account | None:
-    result = await session.execute(select(Account).where(Account.email == email))
+    result = await session.execute(select(Account).where(Account.email == email, Account.deleted_at.is_(None)))
     return result.scalar_one_or_none()
 
 
@@ -80,7 +80,7 @@ async def list_accounts(
     page_size: int = 20,
     search: str | None = None,
 ) -> PageResult[Account]:
-    conditions: list[Any] = []
+    conditions: list[Any] = [Account.deleted_at.is_(None)]
     if search:
         conditions.append(Account.email.ilike(f"%{search}%"))
 
@@ -101,3 +101,25 @@ async def list_accounts(
         return PageResult(items=[], total=0, page=page, page_size=page_size)
 
     return PageResult(items=items, total=total, page=page, page_size=page_size)
+
+
+async def soft_delete_account(session: AsyncSession, account_id: uuid.UUID) -> Account | None:
+    result = await session.execute(
+        update(Account)
+        .where(Account.id == account_id, Account.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(Account)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
+async def restore_account(session: AsyncSession, account_id: uuid.UUID) -> Account | None:
+    result = await session.execute(
+        update(Account)
+        .where(Account.id == account_id, Account.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(Account)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()

@@ -6,10 +6,10 @@ from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String, Uuid
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base, TimestampMixin
+from modulo.db.models.base import Base, SoftDeleteMixin, TimestampMixin
 
 
-class Account(Base, TimestampMixin):
+class Account(SoftDeleteMixin, Base, TimestampMixin):
     __tablename__ = "accounts"
     __table_args__ = (
         CheckConstraint("auth_provider IN ('local', 'oidc', 'saml', 'scim')", name="ck_accounts_auth_provider"),

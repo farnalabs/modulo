@@ -5,10 +5,10 @@ from typing import Any
 from sqlalchemy import JSON, ForeignKey, Numeric, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class Team(OrgScoped):
+class Team(SoftDeleteMixin, OrgScoped):
     __tablename__ = "teams"
     __table_args__ = (UniqueConstraint("organisation_id", "name", name="uq_teams_organisation_name"),)
 

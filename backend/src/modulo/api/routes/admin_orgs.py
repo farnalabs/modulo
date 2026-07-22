@@ -13,7 +13,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
-from modulo.db.crud.account import create_account, get_account_by_email
+from modulo.db.crud.account import create_account, get_account_by_email, restore_account, soft_delete_account
 from modulo.db.crud.org_membership import create_membership
 from modulo.db.crud.organisation import (
     create_organisation,
@@ -319,6 +319,83 @@ async def admin_delete_org(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
+
+
+# ── Account Soft Delete ────────────────────────────────────────────────
+
+
+@handle_db_errors("admin.orgs.admin_soft_delete_account")
+@router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_soft_delete_account(
+    account_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    if not current_user.is_system_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin role required")
+
+    try:
+        async with session.begin():
+            deleted = await soft_delete_account(session, account_id)
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while deleting account.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in admin_soft_delete_account")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
+
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+
+@handle_db_errors("admin.orgs.admin_restore_account")
+@router.post("/accounts/{account_id}/restore", status_code=status.HTTP_200_OK)
+async def admin_restore_account(
+    account_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, str]:
+    if not current_user.is_system_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin role required")
+
+    try:
+        async with session.begin():
+            account = await restore_account(session, account_id)
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while restoring account.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in admin_restore_account")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
+
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    return {"id": str(account.id), "email": account.email, "status": "restored"}
 
 
 # ── Org License Management ──────────────────────────────────────────────

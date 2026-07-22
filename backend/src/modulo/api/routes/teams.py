@@ -15,10 +15,11 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, TEAM_ROLE_HIERARCHY
 from modulo.db.crud.team import (
     create_team,
-    delete_team,
     get_team,
     get_team_by_name,
     list_teams,
+    restore_team,
+    soft_delete_team,
     update_team,
 )
 from modulo.db.crud.team_membership import (
@@ -454,7 +455,7 @@ async def delete_team_endpoint(
                     detail=f"Cannot delete team: still has resources — {details}",
                 )
 
-            deleted = await delete_team(session, team_id)
+            deleted = await soft_delete_team(session, team_id)
     except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -516,6 +517,57 @@ async def delete_team_endpoint(
             "delete_team audit event SQLAlchemyError — team was deleted",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
+
+
+@handle_db_errors("teams.restore_team_endpoint")
+@router.post("/{team_id}/restore", response_model=TeamResponse)
+async def restore_team_endpoint(
+    team_id: uuid.UUID,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> TeamResponse:
+    _require_admin(current_user)
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            team = await restore_team(session, team_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(
+            "restore_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(
+            "restore_team unexpected error",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while restoring the team.",
+        ) from None
+
+    if team is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    return TeamResponse(
+        id=str(team.id),
+        name=team.name,
+        description=team.description,
+        account_id=str(team.account_id),
+        created_at=team.created_at.isoformat() if team.created_at else "",
+    )
 
 
 @handle_db_errors("teams.list_members_endpoint")
