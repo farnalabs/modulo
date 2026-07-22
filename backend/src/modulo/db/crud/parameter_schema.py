@@ -7,7 +7,7 @@ references this schema.
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -53,9 +53,16 @@ async def list_schemas(
     cursor: str | None = None,
     limit: int = 20,
 ) -> PageResult[ParameterSchema]:
-    q = select(ParameterSchema).where(ParameterSchema.organisation_id == org_id)
+    q = (
+        select(ParameterSchema)
+        .where(ParameterSchema.organisation_id == org_id)
+        .where(ParameterSchema.deleted_at.is_(None))
+    )
     total_result = await session.execute(
-        select(func.count()).select_from(ParameterSchema).where(ParameterSchema.organisation_id == org_id)
+        select(func.count())
+        .select_from(ParameterSchema)
+        .where(ParameterSchema.organisation_id == org_id)
+        .where(ParameterSchema.deleted_at.is_(None))
     )
     total = total_result.scalar_one()
 
@@ -115,6 +122,28 @@ async def update_schema(
     schema.version += 1
     await session.flush()
     return schema
+
+
+async def soft_delete_schema(session: AsyncSession, schema_id: uuid.UUID) -> ParameterSchema | None:
+    result = await session.execute(
+        update(ParameterSchema)
+        .where(ParameterSchema.id == schema_id, ParameterSchema.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(ParameterSchema)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
+async def restore_schema(session: AsyncSession, schema_id: uuid.UUID) -> ParameterSchema | None:
+    result = await session.execute(
+        update(ParameterSchema)
+        .where(ParameterSchema.id == schema_id, ParameterSchema.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(ParameterSchema)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
 
 
 async def delete_schema(

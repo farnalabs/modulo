@@ -16,18 +16,20 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.parameter_schema import (
     create_schema,
-    delete_schema,
     get_schema,
     get_schema_references,
     list_schemas,
+    restore_schema,
+    soft_delete_schema,
     update_schema,
 )
 from modulo.db.crud.parameter_set import (
     create_set,
-    delete_set,
     get_set,
     get_set_references,
     list_sets,
+    restore_set,
+    soft_delete_set,
     update_set,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -351,18 +353,18 @@ async def update_parameter_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.delete("/parameter-schemas/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/parameter-schemas/{schema_id}", response_model=SchemaResponse)
 @handle_db_errors("parameter_schemas.delete")
 async def delete_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
-) -> None:
+) -> SchemaResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_schema(session, schema_id)
+            schema = await soft_delete_schema(session, schema_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -388,11 +390,46 @@ async def delete_parameter_schema_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    if not deleted:
+    if schema is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+    return SchemaResponse.model_validate(schema)
+
+
+@router.post("/parameter-schemas/{schema_id}/restore", response_model=SchemaResponse)
+@handle_db_errors("parameter_schemas.restore")
+async def restore_parameter_schema_endpoint(
+    schema_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> SchemaResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            schema = await restore_schema(session, schema_id)
+    except ProgrammingError:
+        logger.exception("parameter_schemas.restore")
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Schema cannot be deleted: it is referenced by agents or parameter sets.",
-        )
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Parameter schemas are not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("parameter_schemas.restore")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Parameter schemas are temporarily unavailable.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("parameter_schemas.restore")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    if schema is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found or not deleted")
+    return SchemaResponse.model_validate(schema)
 
 
 @router.get("/parameter-schemas/{schema_id}/diff")
@@ -790,7 +827,7 @@ async def update_parameter_set_endpoint(
 
 @router.delete(
     "/parameter-schemas/{schema_id}/sets/{set_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=SetResponse,
 )
 @handle_db_errors("parameter_schemas.delete_set")
 async def delete_parameter_set_endpoint(
@@ -798,7 +835,7 @@ async def delete_parameter_set_endpoint(
     set_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
-) -> None:
+) -> SetResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -806,7 +843,7 @@ async def delete_parameter_set_endpoint(
             schema = await get_schema(session, schema_id)
             if schema is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
-            deleted = await delete_set(session, set_id)
+            ps = await soft_delete_set(session, set_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -832,8 +869,52 @@ async def delete_parameter_set_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    if not deleted:
+    if ps is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter set not found")
+    if ps.parameter_schema_id != schema_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter set not found")
+    return SetResponse.model_validate(ps)
+
+
+@router.post("/parameter-schemas/{schema_id}/sets/{set_id}/restore", response_model=SetResponse)
+@handle_db_errors("parameter_schemas.restore_set")
+async def restore_parameter_set_endpoint(
+    schema_id: uuid.UUID,
+    set_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> SetResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            schema = await get_schema(session, schema_id)
+            if schema is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+            ps = await restore_set(session, set_id)
+    except ProgrammingError:
+        logger.exception("parameter_schemas.restore_set")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Parameter schemas are not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("parameter_schemas.restore_set")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Parameter schemas are temporarily unavailable.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("parameter_schemas.restore_set")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    if ps is None or ps.parameter_schema_id != schema_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter set not found or not deleted")
+    return SetResponse.model_validate(ps)
 
 
 # ---------------------------------------------------------------------------
