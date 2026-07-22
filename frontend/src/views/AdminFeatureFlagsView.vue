@@ -20,6 +20,34 @@
       </div>
     </header>
 
+    <!-- Dev Mode Toggle -->
+    <div class="mb-6 rounded-lg border bg-card p-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="text-sm font-semibold">Developer Mode</h3>
+          <p class="text-xs text-muted-foreground">
+            When enabled, preview/in-development features are shown in the sidebar. When disabled, they are hidden from all users.
+          </p>
+        </div>
+        <span
+          class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors"
+          role="switch"
+          :aria-checked="devModeEnabled"
+          aria-label="Developer Mode"
+          tabindex="0"
+          @click="toggleDevMode(!devModeEnabled)"
+          @keydown.enter="toggleDevMode(!devModeEnabled)"
+          @keydown.space.prevent="toggleDevMode(!devModeEnabled)"
+          :class="devModeEnabled ? 'bg-primary' : 'bg-input'"
+        >
+          <span
+            class="inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform"
+            :class="devModeEnabled ? 'translate-x-[18px]' : 'translate-x-0.5'"
+          />
+        </span>
+      </div>
+    </div>
+
     <div class="card p-4">
       <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminFeatureFlagsView.license_status') }}</h2>
       <div v-if="loading" class="flex items-center justify-center py-8">
@@ -247,6 +275,20 @@ import { formatDateShort } from '../lib/formatDate'
 
 const planStore = usePlanStore()
 const { t } = useI18n()
+
+const devModeEnabled = ref(planStore.devMode)
+
+async function toggleDevMode(enabled: boolean) {
+  try {
+    const resp = await (api as any).PUT('/api/v1/admin/dev-mode', { body: { enabled } }) as { data?: { enabled: boolean }; error?: unknown }
+    if (resp.data) {
+      devModeEnabled.value = resp.data.enabled
+      planStore.devMode = resp.data.enabled
+    }
+  } catch (err) {
+    console.warn('Failed to toggle dev mode', err)
+  }
+}
 
 const enabledCount = computed(() => {
   return Object.values(planStore.features).filter(Boolean).length

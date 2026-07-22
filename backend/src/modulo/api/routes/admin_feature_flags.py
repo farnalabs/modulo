@@ -121,6 +121,7 @@ async def list_feature_flags(
                 "has_license_key": registry.has_license_key,
                 "is_valid": True,
             },
+            "dev_mode": settings.modulo_dev_mode,
             "flags": [
                 {
                     "name": f.name,

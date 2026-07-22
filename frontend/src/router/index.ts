@@ -16,6 +16,7 @@ declare module 'vue-router' {
     requiredTier?: string
     requiredPermissions?: string[]
     featureFlag?: string
+    preview?: boolean
   }
 }
 
@@ -28,6 +29,7 @@ interface ManifestEntry {
   required_tier: string
   required_permissions: string[] | null
   feature_flag: string | null
+  preview?: boolean
 }
 
 const manifestRoutes = (manifest as { routes?: Record<string, ManifestEntry> })?.routes ?? {}
@@ -527,6 +529,7 @@ router.beforeEach((to) => {
         to.meta.requiredTier = entry.required_tier
         to.meta.requiredPermissions = entry.required_permissions ?? undefined
         to.meta.featureFlag = entry.feature_flag ?? undefined
+        to.meta.preview = entry.preview ?? undefined
         to.meta.parent = entry.parent
           ? (manifestPathToName.get(entry.parent) ?? entry.parent)
           : undefined
@@ -554,6 +557,12 @@ router.beforeEach((to) => {
       if (to.meta?.requiredTier) {
         const planStore = usePlanStore()
         if (Object.keys(planStore.features).length > 0 && !planStore.isAtMinimumTier(to.meta.requiredTier)) {
+          return { name: 'dashboard' }
+        }
+      }
+      if (to.meta?.preview) {
+        const planStore = usePlanStore()
+        if (!planStore.devMode) {
           return { name: 'dashboard' }
         }
       }
