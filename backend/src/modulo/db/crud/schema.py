@@ -1,7 +1,8 @@
 """Org-scoped CRUD for Schema and SchemaVersion.
 
-Deletion protection: delete_schema refuses if any Agent, PipelineSnapshot,
-or LibraryPrimitive references this schema. Use force=True to skip all checks.
+Deletion protection: delete_schema refuses if any Agent, SnapshotSchemaPin,
+or LibraryPrimitive references this schema, or if the schema is a system schema.
+Use force=True to skip all checks.
 All functions require RLS org context to be set by the caller.
 """
 
@@ -9,7 +10,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import String, cast, func, or_, select
+from fastapi import HTTPException
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,8 +19,8 @@ from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.agent import Agent
 from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import Schema, SchemaVersion
+from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 
 
 class SchemaDeletionProtectedError(Exception):
@@ -135,9 +137,19 @@ async def delete_schema(
     """Delete a schema.
 
     Raises SchemaDeletionProtectedError if references exist (Agents,
-    PipelineSnapshots, LibraryPrimitives) unless force=True.
+    SnapshotSchemaPins, LibraryPrimitives) unless force=True.
     """
+    schema = await get_schema(session, schema_id)
+    if schema is None:
+        return False
+
     if not force:
+        if schema.system:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot delete system schema. System schemas are undeletable.",
+            )
+
         refs: list[str] = []
 
         agent_count = (
@@ -155,15 +167,16 @@ async def delete_schema(
         if agent_count:
             refs.append("Agents")
 
-        pipelines_with_ref = (
+        snap_pin_count = (
             await session.execute(
                 select(func.count())
-                .select_from(PipelineSnapshot)
-                .where(cast(PipelineSnapshot.schema_pins_json, String).contains(str(schema_id)))
+                .select_from(SnapshotSchemaPin)
+                .where(SnapshotSchemaPin.schema_id == schema_id)
+                .limit(1)
             )
         ).scalar_one()
-        if pipelines_with_ref:
-            refs.append("PipelineSnapshots (schema_pins_json)")
+        if snap_pin_count:
+            refs.append("PipelineSnapshots (snapshot_schema_pins)")
 
         library_refs = (
             await session.execute(
@@ -172,7 +185,6 @@ async def delete_schema(
                 .where(
                     LibraryPrimitive.primitive_type == "schema",
                     LibraryPrimitive.source == "local",
-                    cast(LibraryPrimitive.content_json, String).contains(str(schema_id)),
                 )
             )
         ).scalar_one()
@@ -186,10 +198,6 @@ async def delete_schema(
                 "Remove those references or use force=true to delete unconditionally."
             )
             raise SchemaDeletionProtectedError(schema_id, detail=detail)
-
-    schema = await get_schema(session, schema_id)
-    if schema is None:
-        return False
     await session.delete(schema)
     await session.flush()
     return True
