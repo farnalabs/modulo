@@ -14,7 +14,7 @@ import logging
 import re
 import uuid
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any
 
@@ -54,7 +54,7 @@ _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyTyp
 
 # Phase 1 cutover: pipelines with snapshots created before this date
 # use degraded-mode validation (warnings instead of hard errors).
-_PHASE_1_CUTOVER = datetime(2026, 7, 22)
+_PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=timezone.utc)
 
 _DEFERRED_SCHEMA_KEYWORDS = frozenset({"$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"})
 
