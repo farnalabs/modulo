@@ -10,9 +10,11 @@ Checks:
 7. Node category: ``node_category_id`` references exist and are compatible with node type
 """
 
+import logging
 import re
 import uuid
 from collections import deque
+from datetime import datetime
 from types import MappingProxyType
 from typing import Any
 
@@ -37,6 +39,7 @@ from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import SchemaVersion
 
+_log = logging.getLogger(__name__)
 _SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback", "loop"})
 _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType(
     {
@@ -48,6 +51,22 @@ _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyTyp
         "array": list,
     }
 )
+
+# Phase 1 cutover: pipelines with snapshots created before this date
+# use degraded-mode validation (warnings instead of hard errors).
+_PHASE_1_CUTOVER = datetime(2026, 7, 22)
+
+_DEFERRED_SCHEMA_KEYWORDS = frozenset({"$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"})
+
+
+def _is_pre_existing(snapshot: PipelineSnapshot) -> bool:
+    """Check if a snapshot was created before the Phase 1 cutover date."""
+    created_at = getattr(snapshot, "created_at", None)
+    if created_at is None:
+        return False
+    if isinstance(created_at, datetime):
+        return created_at < _PHASE_1_CUTOVER
+    return False
 
 
 def _string_or_default(value: object, default: str = "?") -> str:
@@ -68,7 +87,6 @@ class GraphValidator:
             snapshot.graph_json,
             session,
             connector_bindings=snapshot.connector_bindings_json,
-            schema_pins=snapshot.schema_pins_json,
             model_backend_pins=snapshot.model_backend_pins_json,
             environment_profile_id=snapshot.environment_profile_id,
         )
@@ -79,7 +97,6 @@ class GraphValidator:
         session: AsyncSession,
         *,
         connector_bindings: list[dict[str, Any]] | None = None,
-        schema_pins: list[dict[str, Any]] | None = None,
         model_backend_pins: list[dict[str, Any]] | None = None,
         environment_profile_id: uuid.UUID | None = None,
     ) -> ValidationResult:
@@ -93,7 +110,7 @@ class GraphValidator:
         if not result.is_valid:
             return result
 
-        self._check_schema_compatibility(graph_json, schema_pins or [], result)
+        self._check_schema_compatibility(graph_json, result)
         await self._check_connector_bindings(connector_bindings or [], session, result)
         await self._check_model_backends(model_backend_pins or [], session, result)
         await self._check_environment_capabilities(
@@ -117,9 +134,12 @@ class GraphValidator:
     ) -> ValidationResult:
         """Pre-run validation — all save-time checks plus input schema checking.
 
-        Returns errors only (no warnings). Any error blocks run start.
+        Returns errors only (no warnings). Any error blocks run start,
+        unless the snapshot pre-dates the Phase 1 cutover (grace period).
         """
         result = ValidationResult()
+
+        pre_existing = _is_pre_existing(snapshot)
 
         # Topology: hard errors block immediately.
         self._check_topology(snapshot.graph_json, result)
@@ -127,14 +147,22 @@ class GraphValidator:
             return self._strip_warnings(result)
 
         # Schema compatibility (field-level).
-        schema_pins = snapshot.schema_pins_json or []
         await self._check_schema_compatibility_deep(
             snapshot.graph_json,
-            schema_pins,
             session,
             result,
         )
-        if not result.is_valid:
+        if not result.is_valid and pre_existing:
+            _log.warning(
+                "Schema incompatibility in pipeline %s (snapshot %s). Run proceeds in degraded mode.",
+                snapshot.pipeline_id,
+                snapshot.id,
+            )
+            result.warning(
+                "SCHEMA_DEGRADED",
+                "Schema incompatibility found. Run proceeds in degraded mode.",
+            )
+        elif not result.is_valid:
             return self._strip_warnings(result)
 
         # Input payload compatibility with entry node schema.
@@ -144,11 +172,20 @@ class GraphValidator:
         await self._check_input_schema_compatibility(
             snapshot.graph_json,
             input_payload,
-            schema_pins,
             session,
             result,
         )
-        if not result.is_valid:
+        if not result.is_valid and pre_existing:
+            _log.warning(
+                "Input schema incompatibility in pipeline %s (snapshot %s). Run proceeds in degraded mode.",
+                snapshot.pipeline_id,
+                snapshot.id,
+            )
+            result.warning(
+                "SCHEMA_DEGRADED",
+                "Input schema incompatibility found. Run proceeds in degraded mode.",
+            )
+        elif not result.is_valid:
             return self._strip_warnings(result)
 
         # Connector and backend checks.
@@ -520,26 +557,47 @@ class GraphValidator:
 
     @staticmethod
     def _build_schema_pins_map(
-        schema_pins: list[dict[str, Any]],
-    ) -> dict[str, dict[str, str]]:
-        """Build node_id -> direction -> schema_id from schema pin list."""
-        pins: dict[str, dict[str, str]] = {}
-        for pin in schema_pins:
-            nid = _string_or_default(pin.get("node_id"))
-            direction = pin.get("direction", "?")
-            schema_id = pin.get("schema_id")
-            if schema_id is None:
+        graph_json: dict,
+    ) -> dict[str, dict[str, tuple[uuid.UUID, str] | None]]:
+        """Build a map of (node_id, direction) -> (schema_id, version) from graph_json.
+
+        Returns dict[node_id][direction] = (schema_id, schema_version) or None.
+        """
+        pins_map: dict[str, dict[str, tuple[uuid.UUID, str] | None]] = {}
+
+        for node in graph_json.get("nodes", []):
+            node_id = str(node.get("id"))
+            if not node_id:
                 continue
-            pins.setdefault(nid, {})[direction] = str(schema_id)
-        return pins
+
+            pins_map[node_id] = {"input": None, "output": None}
+
+            input_pin = node.get("input_schema_pin")
+            if input_pin:
+                sid = (
+                    uuid.UUID(input_pin["schema_id"])
+                    if isinstance(input_pin["schema_id"], str)
+                    else input_pin["schema_id"]
+                )
+                pins_map[node_id]["input"] = (sid, input_pin["schema_version"])
+
+            output_pin = node.get("output_schema_pin")
+            if output_pin:
+                sid = (
+                    uuid.UUID(output_pin["schema_id"])
+                    if isinstance(output_pin["schema_id"], str)
+                    else output_pin["schema_id"]
+                )
+                pins_map[node_id]["output"] = (sid, output_pin["schema_version"])
+
+        return pins_map
 
     def _check_schema_compatibility(
         self,
         graph_json: dict[str, Any],
-        schema_pins: list[dict[str, Any]],
         result: ValidationResult,
     ) -> None:
-        schemas = self._build_schema_pins_map(schema_pins)
+        schemas = self._build_schema_pins_map(graph_json)
 
         for edge in graph_json.get("edges", []):
             if edge.get("type") in _SKIPPED_EDGE_TYPES:
@@ -551,185 +609,268 @@ class GraphValidator:
             if src_out is None or tgt_in is None:
                 continue
 
-            if src_out != tgt_in:
+            if src_out[0] != tgt_in[0]:
                 result.error(
                     "SCHEMA_INCOMPATIBLE",
-                    f"Edge {src}→{tgt}: output schema '{src_out}' != input schema '{tgt_in}'",
+                    f"Edge {src}→{tgt}: output schema '{src_out[0]}' != input schema '{tgt_in[0]}'",
                     node_id=src,
                 )
 
     async def _check_schema_compatibility_deep(
         self,
         graph_json: dict[str, Any],
-        schema_pins: list[dict[str, Any]],
         session: AsyncSession,
         result: ValidationResult,
     ) -> None:
         """Field-level schema: output fields must exist in input with compatible types."""
-        pins = self._build_schema_pins_map(schema_pins)
+        pins = self._build_schema_pins_map(graph_json)
 
-        all_schema_ids: set[str] = set()
-        for mapping in pins.values():
-            for sid in mapping.values():
-                all_schema_ids.add(sid)
+        all_pins: dict[tuple[uuid.UUID, str], None] = {}
+        for node_pins in pins.values():
+            for direction_pin in node_pins.values():
+                if direction_pin is not None:
+                    all_pins[direction_pin] = None
 
-        if not all_schema_ids:
+        if not all_pins:
             return
 
-        definitions = await self._resolve_schema_definitions(all_schema_ids, session)
+        definitions = await self._resolve_schema_definitions(all_pins, session)
 
         for edge in graph_json.get("edges", []):
             if edge.get("type") in _SKIPPED_EDGE_TYPES:
                 continue
             src, tgt = str(edge["source"]), str(edge["target"])
-            src_out_id = pins.get(src, {}).get("output")
-            tgt_in_id = pins.get(tgt, {}).get("input")
+            src_out_pin = pins.get(src, {}).get("output")
+            tgt_in_pin = pins.get(tgt, {}).get("input")
 
-            if src_out_id is None or tgt_in_id is None:
+            if src_out_pin is None or tgt_in_pin is None:
                 continue
 
-            out_def = definitions.get(src_out_id, {})
-            in_def = definitions.get(tgt_in_id, {})
+            src_schema_id = src_out_pin[0]
+            tgt_schema_id = tgt_in_pin[0]
 
-            self._check_field_compatibility(src, tgt, out_def, in_def, result)
+            out_def = definitions.get(src_schema_id, {})
+            in_def = definitions.get(tgt_schema_id, {})
 
-    def _check_field_compatibility(
+            if not out_def or not in_def:
+                continue
+
+            has_deferred = any(k in out_def or k in in_def for k in _DEFERRED_SCHEMA_KEYWORDS)
+            if has_deferred:
+                result.warning(
+                    "SCHEMA_CHECK_DEFERRED",
+                    f"Edge {src}→{tgt}: schema contains deferred keywords ($ref, oneOf, etc.). "
+                    f"Full structural validation deferred.",
+                    node_id=src,
+                )
+
+            errors = self._check_schema_fields(out_def, in_def, path="")
+            for error in errors:
+                result.error(
+                    "SCHEMA_FIELD_INCOMPATIBLE",
+                    f"Edge {src}→{tgt}: {error}",
+                    node_id=src,
+                )
+
+    def _check_schema_fields(
         self,
-        src: str,
-        tgt: str,
-        out_def: dict[str, Any],
-        in_def: dict[str, Any],
-        result: ValidationResult,
-    ) -> None:
-        out_props = out_def.get("properties", {}) if isinstance(out_def, dict) else {}
-        in_props = in_def.get("properties", {}) if isinstance(in_def, dict) else {}
-        required_fields: set[str] = set(in_def.get("required", []) if isinstance(in_def, dict) else [])
+        out_field: dict,
+        in_field: dict,
+        path: str = "",
+        depth: int = 0,
+    ) -> list[str]:
+        """Check if out_field is compatible with in_field (subtype check).
 
-        # Check every output field exists in input with matching type.
-        for field_name, out_field in out_props.items():
-            if not isinstance(out_field, dict):
-                continue
-            in_field = in_props.get(field_name)
-            if in_field is None:
-                result.error(
-                    "SCHEMA_MISSING_FIELD",
-                    f"Edge {src}→{tgt}: output field '{field_name}' not found in input schema",
-                    node_id=src,
-                )
-                continue
-            if isinstance(in_field, dict):
-                out_type = out_field.get("type")
-                in_type = in_field.get("type")
-                if out_type and in_type and out_type != in_type:
-                    result.error(
-                        "SCHEMA_FIELD_TYPE_MISMATCH",
-                        f"Edge {src}→{tgt}: field '{field_name}' type '{out_type}' != input type '{in_type}'",
-                        node_id=src,
-                    )
+        Recursively checks type compatibility, required fields, additionalProperties,
+        nested properties, array items, and enum subsets. Returns a list of error
+        messages (empty means compatible).
+        """
+        max_depth_val = 20
+        if depth > max_depth_val:
+            return []
 
-        # Check every required input field has a corresponding output field.
-        for field_name in required_fields:
-            if field_name not in out_props:
-                result.error(
-                    "SCHEMA_MISSING_OUTPUT_FIELD",
-                    f"Edge {src}→{tgt}: required input field '{field_name}' has no matching output",
-                    node_id=src,
+        errors: list[str] = []
+        out_type = out_field.get("type")
+        in_type = in_field.get("type")
+
+        # Handle nullable (array of types)
+        if isinstance(in_type, list):
+            if isinstance(out_type, list):
+                for ot in out_type:
+                    if ot not in in_type:
+                        errors.append(f"{path}: output type '{ot}' not in input types {in_type}")
+            else:
+                if out_type not in in_type:
+                    errors.append(f"{path}: output type '{out_type}' not in input types {in_type}")
+            return errors
+
+        if out_type and in_type and out_type != in_type:
+            promotable = {"integer": ["number"]}
+            if in_type in promotable.get(out_type, []):
+                pass
+            else:
+                errors.append(f"{path}: type mismatch '{out_type}' -> '{in_type}'")
+
+        # Check additionalProperties
+        in_addl = in_field.get("additionalProperties", True)
+        if in_addl is False:
+            out_props_raw = out_field.get("properties", {})
+            in_props_raw = in_field.get("properties", {})
+            out_props = set(out_props_raw.keys()) if isinstance(out_props_raw, dict) else set()
+            in_props = set(in_props_raw.keys()) if isinstance(in_props_raw, dict) else set()
+            extra = out_props - in_props
+            if extra:
+                errors.append(f"{path}: extra properties {extra} not allowed (additionalProperties: false)")
+
+        # Check nested properties
+        out_properties = out_field.get("properties", {})
+        in_properties = in_field.get("properties", {})
+
+        if isinstance(out_properties, dict) and isinstance(in_properties, dict):
+            in_required = in_field.get("required", [])
+            for req_field in in_required:
+                if req_field not in out_properties:
+                    errors.append(f"{path}.{req_field}: required field missing in output")
+
+            for field_name in set(out_properties) & set(in_properties):
+                sub_errors = self._check_schema_fields(
+                    out_properties[field_name],
+                    in_properties[field_name],
+                    f"{path}.{field_name}",
+                    depth + 1,
                 )
+                errors.extend(sub_errors)
+
+        # Check array items
+        out_items = out_field.get("items", {})
+        in_items = in_field.get("items", {})
+        if isinstance(out_items, dict) and isinstance(in_items, dict):
+            sub_errors = self._check_schema_fields(out_items, in_items, f"{path}.items", depth + 1)
+            errors.extend(sub_errors)
+
+        # Check enum compatibility
+        out_enum = out_field.get("enum")
+        in_enum = in_field.get("enum")
+        if out_enum is not None and in_enum is not None and not set(out_enum).issubset(set(in_enum)):
+            errors.append(f"{path}: output enum values {out_enum} not subset of input enum {in_enum}")
+
+        return errors
 
     async def _resolve_schema_definitions(
         self,
-        schema_ids: set[str],
+        schema_pins: dict[tuple[uuid.UUID, str], None],
         session: AsyncSession,
-    ) -> dict[str, dict[str, Any]]:
-        """Fetch the latest published definition_json for each schema_id.
+    ) -> dict[uuid.UUID, dict]:
+        """Resolve schema definitions for the given (schema_id, version) pins.
 
-        Returns dict[schema_id, definition_json].
+        Queries by exact version, not latest published.
         """
-        if not schema_ids:
+        if not schema_pins:
             return {}
 
-        parsed_uuids, _ = try_parse_uuids(list(schema_ids))
-        if not parsed_uuids:
-            return {}
+        definitions: dict[uuid.UUID, dict] = {}
 
-        rows = (
-            (
-                await session.execute(
-                    select(SchemaVersion).where(
-                        SchemaVersion.schema_id.in_(parsed_uuids),
-                        SchemaVersion.published.is_(True),
-                    )
-                )
+        for schema_id, version in schema_pins:
+            stmt = select(SchemaVersion).where(
+                SchemaVersion.schema_id == schema_id,
+                SchemaVersion.version == version,
             )
-            .scalars()
-            .all()
-        )
-        latest: dict[uuid.UUID, dict[str, Any]] = {}
-        version_tracker: dict[uuid.UUID, int] = {}
-        for row in rows:
-            existing = latest.get(row.schema_id)
-            current_version = version_tracker.get(row.schema_id, -1)
-            if existing is None or row.version_number > current_version:
-                defn = dict(row.definition_json) if row.definition_json else {}
-                latest[row.schema_id] = defn
-                version_tracker[row.schema_id] = row.version_number
+            result = await session.execute(stmt)
+            sv = result.scalar_one_or_none()
 
-        return {str(k): v for k, v in latest.items()}
+            if sv is None:
+                _log.warning(
+                    "Schema version not found: %s/%s. It may have been deleted.",
+                    schema_id,
+                    version,
+                )
+                continue
+
+            definitions[schema_id] = dict(sv.definition_json) if sv.definition_json else {}
+
+        return definitions
 
     async def _check_input_schema_compatibility(
         self,
         graph_json: dict[str, Any],
         input_payload: dict[str, Any],
-        schema_pins: list[dict[str, Any]],
         session: AsyncSession,
         result: ValidationResult,
     ) -> None:
-        """Validate trigger input payload is compatible with entry node's input schema."""
-        nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
-        edges: list[dict[str, Any]] = graph_json.get("edges", [])
-        flow_edges = [e for e in edges if e.get("type") not in _SKIPPED_EDGE_TYPES]
-        entry_candidates = self._find_entry_candidates(nodes, flow_edges)
-        if not entry_candidates:
-            result.error("INPUT_NO_ENTRY", "Cannot determine entry node for input validation")
-            return
-        entry_id = entry_candidates[0]
-
-        entry_pins = [p for p in schema_pins if str(p.get("node_id")) == entry_id and p.get("direction") == "input"]
-        if not entry_pins:
+        """Check pipeline input payload against the first node's input schema."""
+        nodes = graph_json.get("nodes", [])
+        if not nodes:
             return
 
-        entry_schema_id = str(entry_pins[0]["schema_id"])
-        definitions = await self._resolve_schema_definitions({entry_schema_id}, session)
-        entry_def = definitions.get(entry_schema_id, {})
+        first_node = nodes[0]
+        input_pin = first_node.get("input_schema_pin")
 
-        entry_props = entry_def.get("properties", {}) if isinstance(entry_def, dict) else {}
+        if not input_pin:
+            return
 
-        required_fields: set[str] = set(entry_def.get("required", []))
+        schema_id = input_pin["schema_id"]
+        if isinstance(schema_id, str):
+            schema_id = uuid.UUID(schema_id)
 
-        for field_name, field_def in entry_props.items():
+        stmt = select(SchemaVersion).where(
+            SchemaVersion.schema_id == schema_id,
+            SchemaVersion.version == input_pin["schema_version"],
+        )
+        sv = await session.execute(stmt)
+        schema_version = sv.scalar_one_or_none()
+
+        if not schema_version:
+            return
+
+        errors = self._validate_payload(input_payload, schema_version.definition_json)
+        for error in errors:
+            result.error(
+                "INPUT_SCHEMA_MISMATCH",
+                f"Input payload does not match schema: {error}",
+            )
+
+    def _validate_payload(
+        self,
+        payload: dict[str, Any],
+        schema_definition: dict[str, Any] | None,
+    ) -> list[str]:
+        """Validate a payload against a JSON schema definition.
+
+        Returns a list of error messages (empty means valid).
+        """
+        errors: list[str] = []
+        if not schema_definition:
+            return errors
+
+        properties = schema_definition.get("properties", {})
+        if not isinstance(properties, dict):
+            return errors
+
+        required = schema_definition.get("required", [])
+
+        for field_name in required:
+            if field_name not in payload:
+                errors.append(f"Missing required field '{field_name}'")
+
+        for field_name, field_def in properties.items():
             if not isinstance(field_def, dict):
                 continue
-            if field_name in required_fields and field_name not in input_payload:
-                result.error(
-                    "INPUT_MISSING_FIELD",
-                    f"Input payload missing required field '{field_name}' for entry node '{entry_id}'",
-                    node_id=entry_id,
-                )
+            if field_name not in payload:
                 continue
-            if field_name not in input_payload:
+
+            expected_type = field_def.get("type")
+            if expected_type is None:
                 continue
-            expected_type: str | None = field_def.get("type")
-            val = input_payload[field_name]
-            type_map_entry = _JSON_TYPE_MAP.get(expected_type, object) if expected_type else object
+
+            val = payload[field_name]
+            type_map_entry = _JSON_TYPE_MAP.get(expected_type, object)
             is_bool = isinstance(val, bool)
             matches = isinstance(val, type_map_entry) and not (is_bool and expected_type in ("integer", "number"))
-            if expected_type and not matches:
+            if not matches:
                 actual_type = type(val).__name__
-                result.error(
-                    "INPUT_FIELD_TYPE_MISMATCH",
-                    f"Input field '{field_name}' expected type '{expected_type}', got '{actual_type}'",
-                    node_id=entry_id,
-                )
+                errors.append(f"Field '{field_name}' expected type '{expected_type}', got '{actual_type}'")
+
+        return errors
 
     # ------------------------------------------------------------------
     # Connector bindings
