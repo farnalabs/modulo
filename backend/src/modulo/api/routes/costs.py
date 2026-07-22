@@ -742,11 +742,11 @@ async def get_anomalies(
 
             # Merge: use stored dismissed status, and include stored anomalies
             seen_dates: set[str] = set()
-            for a in anomalies:  # type: ignore[assignment]
-                key = a["anomaly_date"]  # type: ignore[index]
+            for anomaly in anomalies:
+                key = anomaly["anomaly_date"]
                 seen_dates.add(key)
                 if key in stored_dict:
-                    a["dismissed"] = stored_dict[key]["dismissed"]  # type: ignore[index]
+                    anomaly["dismissed"] = stored_dict[key]["dismissed"]
 
             for key, sa in stored_dict.items():
                 if key not in seen_dates:
