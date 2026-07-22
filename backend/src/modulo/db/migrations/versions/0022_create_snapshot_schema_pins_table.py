@@ -7,9 +7,8 @@ Create Date: 2026-07-22
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "0022_create_snapshot_schema_pins_table"
 down_revision = "0021_add_system_bool_to_schemas"
