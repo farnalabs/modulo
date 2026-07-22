@@ -647,7 +647,7 @@ async def replace_pipeline_graph_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            schema_pins, model_backend_pins = await _resolve_graph_references(
+            _schema_pins, model_backend_pins = await _resolve_graph_references(
                 session,
                 req.nodes,
                 principal.organisation_id,
@@ -664,7 +664,6 @@ async def replace_pipeline_graph_endpoint(
                     validator_graph,
                     session,
                     connector_bindings=connector_bindings,
-                    schema_pins=schema_pins,
                     model_backend_pins=model_backend_pins,
                 )
     except ProgrammingError:
