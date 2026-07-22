@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import count_active_runs_for_pipeline, create_run
 from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.variant_group import VariantGroup
 
@@ -59,8 +60,17 @@ async def list_variant_groups(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[VariantGroup], int]:
-    q = select(VariantGroup)
-    count_q = select(func.count()).select_from(VariantGroup)
+    q = (
+        select(VariantGroup)
+        .join(Pipeline, Pipeline.id == VariantGroup.pipeline_id)
+        .where(Pipeline.deleted_at.is_(None))
+    )
+    count_q = (
+        select(func.count())
+        .select_from(VariantGroup)
+        .join(Pipeline, Pipeline.id == VariantGroup.pipeline_id)
+        .where(Pipeline.deleted_at.is_(None))
+    )
     if pipeline_id is not None:
         q = q.where(VariantGroup.pipeline_id == pipeline_id)
         count_q = count_q.where(VariantGroup.pipeline_id == pipeline_id)

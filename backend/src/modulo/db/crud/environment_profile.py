@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,8 +50,13 @@ async def create_environment_profile(
     return profile
 
 
-async def get_environment_profile(session: AsyncSession, profile_id: uuid.UUID) -> EnvironmentProfile | None:
-    result = await session.execute(select(EnvironmentProfile).where(EnvironmentProfile.id == profile_id))
+async def get_environment_profile(
+    session: AsyncSession, profile_id: uuid.UUID, *, include_deleted: bool = False
+) -> EnvironmentProfile | None:
+    stmt = select(EnvironmentProfile).where(EnvironmentProfile.id == profile_id)
+    if not include_deleted:
+        stmt = stmt.where(EnvironmentProfile.deleted_at.is_(None))
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -60,15 +65,25 @@ async def list_environment_profiles(
     *,
     page: int = 1,
     page_size: int = 20,
+    include_deleted: bool = False,
 ) -> PageResult[EnvironmentProfile]:
     offset = (page - 1) * page_size
+    count_where = []
+    if not include_deleted:
+        count_where.append(EnvironmentProfile.deleted_at.is_(None))
     try:
-        count_q = select(func.count()).select_from(EnvironmentProfile)
+        count_q = select(func.count()).select_from(EnvironmentProfile).where(*count_where)
         total = (await session.execute(count_q)).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
 
-    q = select(EnvironmentProfile).order_by(EnvironmentProfile.created_at.desc()).offset(offset).limit(page_size)
+    q = (
+        select(EnvironmentProfile)
+        .where(*count_where)
+        .order_by(EnvironmentProfile.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+    )
     rows = (await session.execute(q)).scalars().all()
     return PageResult(items=list(rows), total=total, page=page, page_size=page_size)
 
@@ -86,11 +101,35 @@ async def update_environment_profile(
     return profile
 
 
+async def soft_delete_environment_profile(session: AsyncSession, profile_id: uuid.UUID) -> EnvironmentProfile | None:
+    """Soft-delete: set deleted_at timestamp. Returns None if not found or already deleted."""
+    result = await session.execute(
+        update(EnvironmentProfile)
+        .where(EnvironmentProfile.id == profile_id, EnvironmentProfile.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(EnvironmentProfile)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
+async def restore_environment_profile(session: AsyncSession, profile_id: uuid.UUID) -> EnvironmentProfile | None:
+    """Restore a soft-deleted environment profile. Returns None if not found."""
+    result = await session.execute(
+        update(EnvironmentProfile)
+        .where(EnvironmentProfile.id == profile_id, EnvironmentProfile.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(EnvironmentProfile)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
 async def delete_environment_profile(session: AsyncSession, profile_id: uuid.UUID) -> bool:
-    """Soft-delete: set status to 'deleted' instead of hard-deleting."""
-    profile = await get_environment_profile(session, profile_id)
+    """Hard-delete. Only call from admin cleanup, not from user-facing API."""
+    profile = await get_environment_profile(session, profile_id, include_deleted=True)
     if profile is None:
         return False
-    profile.status = "deleted"
+    await session.delete(profile)
     await session.flush()
     return True
