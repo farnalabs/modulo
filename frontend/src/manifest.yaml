@@ -353,7 +353,6 @@ routes:
         sidebar_order: 9
         type: page
         <<: *community
-        preview: true
         deprecated: false
 
     /settings/observability:
