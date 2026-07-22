@@ -18,6 +18,8 @@ from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 
 _log = logging.getLogger(__name__)
 
@@ -224,10 +226,11 @@ async def clone_pipeline(
     account_id: uuid.UUID,
     new_name: str | None = None,
 ) -> Pipeline | None:
-    """Deep-copy a pipeline and its graph (nodes + first-class edges).
+    """Deep-copy a pipeline and its graph (nodes + first-class edges + snapshots).
 
     Returns the *new* Pipeline, or *None* if the source does not exist.
     Connector bindings are preserved by reference so users can rebind later.
+    SnapshotSchemaPins are also copied for each cloned snapshot.
     """
     _log.info("Cloning pipeline %s (org=%s, requested_name=%s)", pipeline_id, org_id, new_name)
 
@@ -280,7 +283,65 @@ async def clone_pipeline(
         edge_count += 1
     await session.flush()
     node_count = len(source.graph_nodes_json)
-    _log.info("Clone complete: %s -> %s (%d edges, %d nodes)", pipeline_id, cloned.id, edge_count, node_count)
+    _log.info("Copying snapshots for pipeline %s -> %s", pipeline_id, cloned.id)
+    snapshots = list(
+        (
+            await session.execute(
+                select(PipelineSnapshot)
+                .where(PipelineSnapshot.pipeline_id == pipeline_id)
+                .order_by(PipelineSnapshot.snapshot_version)
+            )
+        ).scalars()
+    )
+    snap_count = 0
+    for snap in snapshots:
+        cloned_snap = PipelineSnapshot(
+            organisation_id=org_id,
+            pipeline_id=cloned.id,
+            snapshot_version=snap.snapshot_version,
+            account_id=snap.account_id,
+            environment_profile_id=snap.environment_profile_id,
+            graph_json=copy.deepcopy(snap.graph_json),
+            connector_bindings_json=copy.deepcopy(snap.connector_bindings_json),
+            schema_pins_json=copy.deepcopy(snap.schema_pins_json),
+            prompt_pins_json=copy.deepcopy(snap.prompt_pins_json),
+            model_backend_pins_json=copy.deepcopy(snap.model_backend_pins_json),
+            composite_bindings_json=copy.deepcopy(snap.composite_bindings_json),
+            parameter_bindings_json=copy.deepcopy(snap.parameter_bindings_json),
+            tag=snap.tag,
+            notes=snap.notes,
+            default_autonomy_level=snap.default_autonomy_level,
+            config_json=copy.deepcopy(snap.config_json),
+            run_context_defaults=copy.deepcopy(snap.run_context_defaults),
+        )
+        session.add(cloned_snap)
+        await session.flush()
+
+        old_pins = list(
+            (await session.execute(select(SnapshotSchemaPin).where(SnapshotSchemaPin.snapshot_id == snap.id))).scalars()
+        )
+        for pin in old_pins:
+            session.add(
+                SnapshotSchemaPin(
+                    organisation_id=org_id,
+                    snapshot_id=cloned_snap.id,
+                    node_id=pin.node_id,
+                    direction=pin.direction,
+                    schema_id=pin.schema_id,
+                    schema_version=pin.schema_version,
+                )
+            )
+        snap_count += 1
+
+    await session.flush()
+    _log.info(
+        "Clone complete: %s -> %s (%d edges, %d nodes, %d snapshots)",
+        pipeline_id,
+        cloned.id,
+        edge_count,
+        node_count,
+        snap_count,
+    )
     return cloned
 
 
