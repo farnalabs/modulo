@@ -108,8 +108,8 @@ jobs:
             sudo apt-get update -qq && sudo apt-get install -y -qq powershell
           fi
       - name: Validate product map graph
-        shell: bash
-        run: pwsh -NoProfile -File tools/graph-validate.ps1 -CI
+        shell: pwsh
+        run: .\tools\graph-validate.ps1 -CI
 
   manifest-validate:
     name: Manifest validation
