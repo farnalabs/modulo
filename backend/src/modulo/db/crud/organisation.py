@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import apply_updates
 from modulo.db.models.organisation import Organisation
+from modulo.db.seed import seed_system_schemas
 
 
 async def get_organisation(
@@ -35,6 +36,15 @@ async def create_organisation(
     session.add(org)
     await session.flush()
     await session.refresh(org)
+
+    # Seed system schemas for the new organisation.
+    if created_by is not None:
+        try:
+            await seed_system_schemas(session, org.id, created_by)
+        except Exception:
+            _log = __import__("logging").getLogger(__name__)
+            _log.warning("seed.system_schemas_failed_for_new_org", exc_info=True)
+
     return org
 
 

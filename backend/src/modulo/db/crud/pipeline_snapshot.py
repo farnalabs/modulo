@@ -20,6 +20,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import Schema
+from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 
 
 def _ids(values: Iterable[Any]) -> set[uuid.UUID]:
@@ -270,6 +271,33 @@ async def create_snapshot_from_live_graph(
         )
         session.add(snapshot)
         await session.flush()
+
+        for node in nodes:
+            raw_input_pin = node.get("input_schema_pin")
+            raw_output_pin = node.get("output_schema_pin")
+            if raw_input_pin is not None:
+                session.add(
+                    SnapshotSchemaPin(
+                        organisation_id=pipeline.organisation_id,
+                        snapshot_id=snapshot.id,
+                        node_id=uuid.UUID(str(node["id"])),
+                        direction="input",
+                        schema_id=uuid.UUID(str(raw_input_pin["schema_id"])),
+                        schema_version=str(raw_input_pin.get("schema_version", "")),
+                    )
+                )
+            if raw_output_pin is not None:
+                session.add(
+                    SnapshotSchemaPin(
+                        organisation_id=pipeline.organisation_id,
+                        snapshot_id=snapshot.id,
+                        node_id=uuid.UUID(str(node["id"])),
+                        direction="output",
+                        schema_id=uuid.UUID(str(raw_output_pin["schema_id"])),
+                        schema_version=str(raw_output_pin.get("schema_version", "")),
+                    )
+                )
+
         return snapshot
     finally:
         await session.execute(
