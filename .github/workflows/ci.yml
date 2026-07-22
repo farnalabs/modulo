@@ -101,7 +101,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - name: Setup PowerShell
+          enable-cache: false
         shell: bash
         run: |
           if ! command -v pwsh &>/dev/null; then
@@ -109,8 +109,8 @@ jobs:
           fi
       - name: Validate product map graph
         shell: pwsh
+        shell: pwsh
         run: .\tools\graph-validate.ps1 -CI
-
   manifest-validate:
     name: Manifest validation
     runs-on: ubicloud-standard-2
