@@ -34,15 +34,15 @@ from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import get_connector_instance
 from modulo.db.crud.model_backend import list_model_backends
 from modulo.db.crud.schema import (
-    SchemaDeletionProtectedError,
     create_schema,
     create_schema_version,
-    delete_schema,
     deprecate_schema,
     get_schema,
     get_schema_version,
     list_schema_versions,
     list_schemas,
+    restore_schema,
+    soft_delete_schema,
     update_schema,
 )
 from modulo.db.models.schema import SchemaVersion as SchemaVersionModel
@@ -376,20 +376,13 @@ async def deprecate_schema_endpoint(
 @router.delete("/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_schema_endpoint(
     schema_id: uuid.UUID,
-    force: bool = Query(False),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
-        try:
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                deleted = await delete_schema(session, schema_id, force=force)
-        except SchemaDeletionProtectedError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=str(exc),
-            ) from exc
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            deleted = await soft_delete_schema(session, schema_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -419,6 +412,49 @@ async def delete_schema_endpoint(
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+
+
+@handle_db_errors("schemas.restore_schema_endpoint")
+@router.post("/{schema_id}/restore", response_model=SchemaResponse)
+async def restore_schema_endpoint(
+    schema_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> SchemaResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            schema = await restore_schema(session, schema_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        logger.exception("schemas.restore")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.restore_schema")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("schemas.restore_schema")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    if schema is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+    return SchemaResponse.model_validate(schema)
 
 
 # ---------------------------------------------------------------------------

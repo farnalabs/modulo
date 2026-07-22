@@ -23,12 +23,13 @@ from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.agent import (
     add_prompt_version,
     create_agent,
-    delete_agent,
     get_agent,
     get_eval_results_with_defs,
     get_prompt_version,
     list_agents,
+    restore_agent,
     rollback_prompt_version,
+    soft_delete_agent,
     update_agent,
 )
 from modulo.db.models.model_backend import ModelBackend
@@ -901,7 +902,7 @@ async def delete_agent_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            deleted = await delete_agent(session, agent_id)
+            deleted = await soft_delete_agent(session, agent_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -926,3 +927,36 @@ async def delete_agent_endpoint(
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+
+@handle_db_errors("agents.restore_agent_endpoint")
+@router.post("/{agent_id}/restore", response_model=AgentResponse)
+async def restore_agent_endpoint(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> AgentResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await restore_agent(session, agent_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("Database operation failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error restoring agent")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    return AgentResponse.model_validate(agent)

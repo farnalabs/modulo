@@ -9,7 +9,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import String, cast, func, or_, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,11 +70,17 @@ async def list_schemas(
     *,
     cursor: str | None = None,
     limit: int = 20,
+    include_deleted: bool = False,
 ) -> PageResult[Schema]:
     q = select(Schema)
+    if not include_deleted:
+        q = q.where(Schema.deleted_at.is_(None))
 
     try:
-        total = (await session.execute(select(func.count()).select_from(Schema))).scalar_one()
+        count_where: list[Any] = []
+        if not include_deleted:
+            count_where.append(Schema.deleted_at.is_(None))
+        total = (await session.execute(select(func.count()).select_from(Schema).where(*count_where))).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=1, page_size=limit)
 
@@ -127,12 +133,36 @@ async def deprecate_schema(session: AsyncSession, schema_id: uuid.UUID) -> Schem
     return schema
 
 
+async def soft_delete_schema(session: AsyncSession, schema_id: uuid.UUID) -> Schema | None:
+    """Mark a schema as deleted (soft delete). Returns None if not found or already deleted."""
+    result = await session.execute(
+        update(Schema)
+        .where(Schema.id == schema_id, Schema.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(Schema)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
+async def restore_schema(session: AsyncSession, schema_id: uuid.UUID) -> Schema | None:
+    """Restore a soft-deleted schema. Returns None if not found."""
+    result = await session.execute(
+        update(Schema)
+        .where(Schema.id == schema_id, Schema.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(Schema)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
 async def delete_schema(
     session: AsyncSession,
     schema_id: uuid.UUID,
     force: bool = False,
 ) -> bool:
-    """Delete a schema.
+    """Hard-delete a schema. Only call from admin cleanup, not from user-facing API.
 
     Raises SchemaDeletionProtectedError if references exist (Agents,
     PipelineSnapshots, LibraryPrimitives) unless force=True.

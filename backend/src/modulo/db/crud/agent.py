@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,16 +83,21 @@ async def list_agents(
     *,
     page: int = 1,
     page_size: int = 20,
+    include_deleted: bool = False,
 ) -> PageResult[Agent]:
+    base = select(Agent)
+    if not include_deleted:
+        base = base.where(Agent.deleted_at.is_(None))
     offset = (page - 1) * page_size
     try:
-        total = (await session.execute(select(func.count()).select_from(Agent))).scalar_one()
+        count_where: list[Any] = []
+        if not include_deleted:
+            count_where.append(Agent.deleted_at.is_(None))
+        total = (await session.execute(select(func.count()).select_from(Agent).where(*count_where))).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(
-        (
-            await session.execute(select(Agent).order_by(Agent.created_at.desc()).offset(offset).limit(page_size))
-        ).scalars()
+        (await session.execute(base.order_by(Agent.created_at.desc()).offset(offset).limit(page_size))).scalars()
     )
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
@@ -110,7 +115,32 @@ async def update_agent(
     return agent
 
 
+async def soft_delete_agent(session: AsyncSession, agent_id: uuid.UUID) -> Agent | None:
+    """Mark an agent as deleted (soft delete). Returns None if not found or already deleted."""
+    result = await session.execute(
+        update(Agent)
+        .where(Agent.id == agent_id, Agent.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(Agent)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
+async def restore_agent(session: AsyncSession, agent_id: uuid.UUID) -> Agent | None:
+    """Restore a soft-deleted agent. Returns None if not found."""
+    result = await session.execute(
+        update(Agent)
+        .where(Agent.id == agent_id, Agent.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(Agent)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
 async def delete_agent(session: AsyncSession, agent_id: uuid.UUID) -> bool:
+    """Hard-delete an agent. Only call from admin cleanup, not from user-facing API."""
     agent = await get_agent(session, agent_id)
     if agent is None:
         return False
