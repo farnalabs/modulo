@@ -237,7 +237,7 @@ async def test_execute_success_transitions_status():
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={"x": 1})
@@ -265,7 +265,7 @@ async def test_execute_publishes_run_completed_event():
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -301,7 +301,7 @@ async def test_execute_seeds_state_with_run_context():
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={"task": "do it"})
@@ -356,7 +356,7 @@ async def test_execute_marks_failed_on_graph_exception():
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -387,7 +387,7 @@ async def test_execute_error_code_matches_exception_type():
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -423,7 +423,7 @@ async def test_execute_sets_awaiting_human_on_node_interrupt():
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -455,7 +455,7 @@ async def test_execute_publishes_hitl_awaiting_event():
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -494,7 +494,7 @@ async def test_execute_handles_streamed_interrupt_from_real_graph():
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.HITLManager", return_value=hitl_manager),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -539,7 +539,7 @@ async def test_execute_passes_hash_to_cache():
         ),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -653,7 +653,7 @@ async def test_execute_sets_cancelled_on_run_cancelled_error():
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=_mock_registry()),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -666,7 +666,7 @@ async def test_execute_sets_cancelled_on_run_cancelled_error():
 # ---------------------------------------------------------------------------
 
 
-async def _bypass_capacity(mock_self, *, run_id, org_id, pipeline_id, max_concurrent, lock_wait_seconds):
+async def _bypass_capacity(mock_self, *, run_id, org_id, pipeline_id, max_concurrent):
     """Return a run with status='running' to bypass the capacity check."""
     run = MagicMock()
     run.status = "running"
@@ -692,7 +692,7 @@ async def test_execute_sets_eval_failed_on_eval_blocked_error():
             return_value=final_run,
         ) as mock_update,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
@@ -725,7 +725,7 @@ async def test_execute_publishes_run_failed_on_eval_blocked():
             return_value=final_run,
         ),
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
@@ -760,7 +760,7 @@ async def test_execute_eval_failed_stores_error_detail():
             return_value=final_run,
         ) as mock_update,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
@@ -831,7 +831,7 @@ async def test_execute_fails_on_checkpointer_connection_error():
         patch("modulo.core.pipeline_engine.executor._checkpointer_scope") as mock_scope,
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         mock_scope.side_effect = ConnectionError("db not available")
 
