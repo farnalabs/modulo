@@ -116,7 +116,7 @@ jobs:
                   "prNumber": ${NUM},
                   "failureDescription": "PR Housekeeper detected ${FAILED_CHECKS} failed CI check(s) on PR #${NUM} (branch: ${REF})"
                 }
-                ENDJSON
+          ENDJSON
                 )
                 HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
                 curl -s -X POST "${BF_WEBHOOK_URL}" \
@@ -142,7 +142,7 @@ jobs:
                   "prNumber": ${NUM},
                   "failureDescription": "PR Housekeeper: modulo-reviewbot requested changes on PR #${NUM} (branch: ${REF})"
                 }
-                ENDJSON
+          ENDJSON
                 )
                 HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
                 curl -s -X POST "${BF_WEBHOOK_URL}"                   -H "Content-Type: application/json"                   -H "X-Modulo-Timestamp: ${TIMESTAMP}"                   -H "X-Modulo-Webhook-Secret: sha256=${HMAC}"                   -d "${BODY}" && echo "  Branch Fixer pipeline notified" || echo "  WARNING: Could not notify Branch Fixer"
