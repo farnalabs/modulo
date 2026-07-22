@@ -1,4 +1,4 @@
-name: Merge Queue
+name: "Merge: Queue"
 
 on:
   schedule:

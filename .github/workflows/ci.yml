@@ -1,4 +1,4 @@
-name: CI
+name: "CI: PR Validation"
 
 on:
   pull_request:
@@ -150,7 +150,7 @@ jobs:
   # â�€â�€ Full jobs â€� run ONLY on push (not PRs) â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
 
   # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
-  # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
+  # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
   # workflow_dispatch when needed.
   backend-integration:
     name: Integration tests
@@ -213,7 +213,7 @@ jobs:
           docker rm -f modulo-ci-redis 2>/dev/null || true
 
   # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
-  # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
+  # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
   # workflow_dispatch when needed.
   bdd-e2e:
     name: BDD / E2E Tests
@@ -319,7 +319,7 @@ jobs:
           docker rm -f modulo-ci-redis 2>/dev/null || true
 
   # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
-  # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
+  # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
   # workflow_dispatch when needed.
   docker-build:
     name: Docker build and scan
@@ -419,7 +419,7 @@ jobs:
           exit 1
 
   # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
-  # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
+  # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
   # workflow_dispatch when needed.
   security-audit:
     name: Security audit
@@ -460,7 +460,7 @@ jobs:
   # â�€â�€ Failure notifications â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
 
   # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
-  # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
+  # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
   # workflow_dispatch when needed.
   notify-merge-group-failure:
     name: Notify Modulo fixer â€� queue CI failure

@@ -1,4 +1,4 @@
-name: Trigger PR Review Agent
+name: "Review: Modulo Agent"
 
 on:
   pull_request:
