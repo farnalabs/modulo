@@ -54,6 +54,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "runs",
         "saved_views",
         "scheduled_reports",
+        "snapshot_schema_pins",
         "schema_versions",
         "schemas",
         "secrets",
