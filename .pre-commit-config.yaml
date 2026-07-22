@@ -122,3 +122,9 @@ repos:
         files: \.(vue|ts)$
         pass_filenames: false
         stages: [manual]
+      - id: check-c1-chars
+        name: check C1 control characters in workflow files
+        entry: powershell -NoProfile -File tools/check-c1-chars.ps1
+        language: system
+        files: ^\\.github/workflows/.*\\.yml$
+        pass_filenames: false
