@@ -556,7 +556,7 @@ async def test_graph_references_reject_unknown_manual_schema() -> None:
         await _resolve_graph_references(session, [node], _ORG_ID)
 
     assert exc_info.value.status_code == 422
-    assert "Unknown manual output schema IDs" in exc_info.value.detail
+    assert "Unknown schema IDs for this organisation" in exc_info.value.detail
 
 
 # ---------------------------------------------------------------------------
