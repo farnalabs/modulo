@@ -213,15 +213,6 @@ jobs:
               continue
             fi
 
-            # Rule 6: Stale >24h with no progress — close
-            if [ "$AGE_HOURS" -ge 24 ] && [ "$CHECKS_COUNT" -eq 0 ] && [ "$REVIEW_STATE" = "none" ]; then
-              echo "  ACTION: PR stale >24h — closing"
-              echo "## PR Housekeeper" > /tmp/pr-msg.txt
-              echo "" >> /tmp/pr-msg.txt
-              echo "This PR has been open for over 24 hours with no activity. Closing as stale." >> /tmp/pr-msg.txt
-              gh pr close "$NUM" --comment-file /tmp/pr-msg.txt 2>/dev/null || echo "  WARNING: Could not close PR"
-              ACTIONS="$ACTIONS closed-$NUM"
-              continue
             fi
 
             echo "  No action needed"
