@@ -37,11 +37,12 @@ from modulo.db.crud.pipeline import (
     check_pipeline_name_available,
     clone_pipeline,
     create_pipeline,
-    delete_pipeline,
     get_pipeline,
     get_pipeline_graph,
     list_pipelines,
     replace_pipeline_graph,
+    restore_pipeline,
+    soft_delete_pipeline,
     unarchive_pipeline,
     update_pipeline,
 )
@@ -744,7 +745,7 @@ async def delete_pipeline_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_pipeline(session, pipeline_id)
+            deleted = await soft_delete_pipeline(session, pipeline_id)
     except ProgrammingError:
         logger.exception("routes.pipelines")
 
@@ -755,6 +756,29 @@ async def delete_pipeline_endpoint(
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+
+
+@router.post("/{pipeline_id}/restore", response_model=PipelineResponse)
+@handle_db_errors("pipelines.restore")
+async def restore_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> PipelineResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            pipeline = await restore_pipeline(session, pipeline_id)
+    except ProgrammingError:
+        logger.exception("routes.pipelines")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+    return PipelineResponse.model_validate(pipeline)
 
 
 @router.post("/{pipeline_id}/archive", response_model=PipelineResponse)
