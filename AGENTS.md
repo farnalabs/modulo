@@ -982,7 +982,7 @@ For tests that need the login page visible:
 
 ### Never merge PRs directly unless explicitly authorised
 
-The --admin flag on \gh pr merge\ bypasses the merge queue, CI checks, and all SDLC gates. This must NEVER be used unless the user explicitly says "merge it manually" or "use --admin".
+The `--admin` flag on `gh pr merge` bypasses the merge queue, CI checks, and all SDLC gates. This must NEVER be used unless the user explicitly says "merge it manually" or "use --admin".
 
 Default merge path: let the merge queue pick up approved PRs. If a PR needs expediting, ask the user first. Direct merges skip:
 - CI validation (lint, tests, security scans)
