@@ -1,0 +1,11 @@
+﻿with open("AGENTS.md", "a") as f:
+    f.write("\n\n### Agentic steps belong in modulo pipelines, not GitHub Actions\n\n")
+    f.write("GitHub Actions workflows MUST NOT install or invoke AI agent CLIs (opencode, Claude Code, etc.) directly in runners. The modulo platform owns all agentic orchestration. GHA's role is CI/CD mechanics only: trigger builds, run tests, send webhooks to modulo pipelines.\n\n")
+    f.write("This means:\n")
+    f.write("- No `npm install -g opencode-ai` or equivalent in any `.github/workflows/*.yml` file\n")
+    f.write("- No `opencode run`, `claude`, or any AI agent CLI invocation in GHA steps\n")
+    f.write("- No inline AI logic (fix scripts, auto-review, auto-fix) running inside GHA runners\n")
+    f.write("- AI work (code review, branch fixing, code improvement) must dispatch to the appropriate modulo pipeline via HMAC-signed webhook\n\n")
+    f.write("The modulo pipelines (`sandbox_agent` nodes with `template_id: \"opencode\"`) run in E2B sandboxes with `opencode` CLI available. GHA runners do not have AI tools installed and should not install them.\n\n")
+    f.write("**Enforcement:** Any PR that adds `opencode`, `claude`, or any AI agent CLI installation/invocation to a `.github/workflows/*.yml` file must be blocked.\n")
+print("Done")

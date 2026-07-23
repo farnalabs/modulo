@@ -979,3 +979,18 @@ For tests that need the login page visible:
 - Skip `storageState` for those tests (use a separate config or override)
 - Or explicitly clear the session in the test before navigating to login
 - Or check for redirect: `await page.waitForURL('/login')` before testing elements
+
+
+### Agentic steps belong in modulo pipelines, not GitHub Actions
+
+GitHub Actions workflows MUST NOT install or invoke AI agent CLIs (opencode, Claude Code, etc.) directly in runners. The modulo platform owns all agentic orchestration. GHA's role is CI/CD mechanics only: trigger builds, run tests, send webhooks to modulo pipelines.
+
+This means:
+- No `npm install -g opencode-ai` or equivalent in any `.github/workflows/*.yml` file
+- No `opencode run`, `claude`, or any AI agent CLI invocation in GHA steps
+- No inline AI logic (fix scripts, auto-review, auto-fix) running inside GHA runners
+- AI work (code review, branch fixing, code improvement) must dispatch to the appropriate modulo pipeline via HMAC-signed webhook
+
+The modulo pipelines (`sandbox_agent` nodes with `template_id: "opencode"`) run in E2B sandboxes with `opencode` CLI available. GHA runners do not have AI tools installed and should not install them.
+
+**Enforcement:** Any PR that adds `opencode`, `claude`, or any AI agent CLI installation/invocation to a `.github/workflows/*.yml` file must be blocked.
