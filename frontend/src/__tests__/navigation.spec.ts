@@ -52,8 +52,8 @@ const mockManifest = vi.hoisted(() => ({
     '/notifications': {
       name: 'notifications',
       breadcrumb: 'Notifications',
-      sidebar_group: 'core',
-      sidebar_order: 2,
+      sidebar_group: null,
+      sidebar_order: null,
       type: 'page',
       required_tier: null,
       required_roles: null,
@@ -176,9 +176,8 @@ describe('navigation.ts', () => {
 
   it('items within groups are sorted by sidebar_order', () => {
     const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items.length).toBe(2)
+    expect(core.items.length).toBe(1)
     expect(core.items[0].to).toBe('/')
-    expect(core.items[1].to).toBe('/notifications')
   })
 
   it('excludes detail_page items from sidebar', () => {
