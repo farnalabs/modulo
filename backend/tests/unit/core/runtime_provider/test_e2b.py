@@ -1,4 +1,4 @@
-"""Unit tests for E2BRuntimeProvider with a mocked E2B SDK."""
+﻿"""Unit tests for E2BRuntimeProvider with a mocked E2B SDK."""
 
 from __future__ import annotations
 
@@ -309,7 +309,7 @@ async def test_exec_command_default_timeout_when_none(
 
     mock_sandbox.commands.run.assert_called_once()
     _args, kwargs = mock_sandbox.commands.run.call_args
-    assert kwargs.get("timeout") == 60
+    assert kwargs.get("timeout") == 300
 
 
 @pytest.mark.asyncio
