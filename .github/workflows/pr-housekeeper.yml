@@ -26,6 +26,28 @@ jobs:
           fetch-depth: 0
 
 
+      - name: Check main CI
+        id: check-main
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          BF_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          BF_HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          CI_STATUS=$(gh run list --repo farnalabs/modulo --workflow CI --branch main --limit 1 --json conclusion --jq '.[0].conclusion' 2>/dev/null || echo 'unknown')
+          echo 'Main CI: '$CI_STATUS
+          if [ '"$CI_STATUS"' = 'failure' ]; then
+            echo 'main_ci=failing' >> $GITHUB_OUTPUT
+            if [ -n '"$BF_WEBHOOK_URL"' ]; then
+              TS=$(date +%s)
+              BODY=$(jq -n --arg bn 'main' --arg fd 'Main CI failing' '{branchName: $bn, failureDescription: $fd}')
+              HMAC=$(echo -n '"$TS.$BODY"' | openssl dgst -sha256 -hmac '"$BF_HMAC_SECRET"' | sed 's/^.* //')
+              curl -s -X POST '"$BF_WEBHOOK_URL"' -H 'Content-Type: application/json' -H 'X-Modulo-Timestamp: $TS' -H 'X-Modulo-Webhook-Secret: sha256=$HMAC' -d '"$BODY"' || true
+            fi
+          else
+            echo 'main_ci=ok' >> $GITHUB_OUTPUT
+          fi
+
       - name: List all open PRs
         id: list
         env:
@@ -39,7 +61,7 @@ jobs:
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 
       - name: Process each PR
-        if: steps.list.outputs.count > 0
+        if: steps.check-main.outputs.main_ci == 'ok' && steps.list.outputs.count > 0
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
