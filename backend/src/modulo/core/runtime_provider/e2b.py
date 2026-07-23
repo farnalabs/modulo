@@ -14,8 +14,8 @@ from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceS
 _log = logging.getLogger(__name__)
 
 _DEFAULT_TEMPLATE_ID = "base"
-_DEFAULT_CMD_TIMEOUT = 60
-_REPO_CLONE_TIMEOUT = 120
+_DEFAULT_CMD_TIMEOUT = 300
+_REPO_CLONE_TIMEOUT = 600
 _MAX_PROVISION_TIMEOUT = 120
 
 
