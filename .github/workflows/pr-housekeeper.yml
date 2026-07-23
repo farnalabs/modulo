@@ -1,4 +1,4 @@
-ï»¿# PR Housekeeper
+# PR Housekeeper
 # Scans all open PRs and handles stale/abandoned PRs automatically.
 # Runs every 30 minutes alongside the merge queue.
 # NON-AI tasks only: CI re-dispatch, reminders, conflict notices, stale closing.
@@ -36,7 +36,7 @@ jobs:
         run: |
           CI_STATUS=$(gh run list --repo farnalabs/modulo --workflow CI --branch main --limit 1 --json conclusion --jq '.[0].conclusion' 2>/dev/null || echo 'unknown')
           echo 'Main CI: '$CI_STATUS
-          if [ '"$CI_STATUS"' = 'failure' ]; then
+          if [ "$CI_STATUS" = "failure" ]; then
             echo 'main_ci=failing' >> $GITHUB_OUTPUT
             if [ -n '"$BF_WEBHOOK_URL"' ]; then
               TS=$(date +%s)
@@ -107,9 +107,9 @@ jobs:
             STALE_CHECKS=$(echo "$CHECKS" | jq '[.[] | select(.status == "QUEUED" or .status == "PENDING" or .status == "EXPECTED")] | length')
             FAILED_CHECKS=$(echo "$CHECKS" | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "ACTION_REQUIRED")] | length')
 
-            # Rule 1: No CI checks at all â€” webhook may have failed
+            # Rule 1: No CI checks at all — webhook may have failed
             if [ "$CHECKS_COUNT" -eq 0 ]; then
-              echo "  ACTION: No CI checks â€” re-dispatching CI"
+              echo "  ACTION: No CI checks — re-dispatching CI"
               gh workflow run ci.yml --ref "$REF" 2>/dev/null && echo "  CI dispatched" || echo "  WARNING: Could not dispatch CI"
               ACTIONS="$ACTIONS ci-dispatch-$NUM"
               continue
@@ -117,15 +117,15 @@ jobs:
 
             # Rule 2: CI stuck on pending checks
             if [ "$STALE_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 0 ]; then
-              echo "  ACTION: ${STALE_CHECKS} check(s) stuck â€” re-dispatching CI"
+              echo "  ACTION: ${STALE_CHECKS} check(s) stuck — re-dispatching CI"
               gh workflow run ci.yml --ref "$REF" 2>/dev/null && echo "  CI dispatched" || echo "  WARNING: Could not dispatch CI"
               ACTIONS="$ACTIONS ci-redispatch-$NUM"
               continue
             fi
 
-            # Rule 3: CI failed â€” dispatch to Modulo Branch Fixer pipeline
+            # Rule 3: CI failed — dispatch to Modulo Branch Fixer pipeline
             if [ "$FAILED_CHECKS" -gt 0 ] && [ "$STALE_HOURS" -ge 0 ]; then
-              echo "  ACTION: ${FAILED_CHECKS} check(s) failed â€” dispatching to Modulo Branch Fixer"
+              echo "  ACTION: ${FAILED_CHECKS} check(s) failed — dispatching to Modulo Branch Fixer"
               if [ -n "$BF_WEBHOOK_URL" ]; then
                 TIMESTAMP=$(date +%s)
                 BODY=$(cat << ENDJSON
@@ -137,7 +137,7 @@ jobs:
           ENDJSON
                 )
                 HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
-                for attempt in 10 20 40; do
+                for attempt in 10; do
                   RESP=$(curl -s -w "\n%{http_code}" -X POST "${BF_WEBHOOK_URL}" \
                     -H "Content-Type: application/json" \
                     -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
@@ -148,11 +148,11 @@ jobs:
                     echo "  Branch Fixer pipeline accepted (attempt $attempt)"
                     break
                   elif [ "$HTTP" = "429" ]; then
-                    echo "  Rate limited (attempt $attempt) - retrying in ${attempt}s"
-                    sleep "$attempt"
+                    echo "  Rate limited (attempt $attempt) - skipping - will retry next cycle"
+                # skip sleep - will retry next cycle
                   else
                     echo "  WARNING: Branch Fixer returned HTTP $HTTP (attempt $attempt)"
-                    sleep "$attempt"
+                # skip sleep - will retry next cycle
                   fi
                 done
               else
@@ -176,7 +176,7 @@ jobs:
           ENDJSON
                 )
                 HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
-                for attempt in 10 20 40; do
+                for attempt in 10; do
                   RESP=$(curl -s -w "\n%{http_code}" -X POST "${BF_WEBHOOK_URL}" \
                     -H "Content-Type: application/json" \
                     -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
@@ -187,11 +187,11 @@ jobs:
                     echo "  Branch Fixer pipeline accepted (attempt $attempt)"
                     break
                   elif [ "$HTTP" = "429" ]; then
-                    echo "  Rate limited (attempt $attempt) - retrying in ${attempt}s"
-                    sleep "$attempt"
+                    echo "  Rate limited (attempt $attempt) - skipping - will retry next cycle"
+                # skip sleep - will retry next cycle
                   else
                     echo "  WARNING: Branch Fixer returned HTTP $HTTP (attempt $attempt)"
-                    sleep "$attempt"
+                # skip sleep - will retry next cycle
                   fi
                 done
               else
@@ -204,7 +204,7 @@ jobs:
 
             # Rule 5: Approved but has merge conflicts
             if [ "$REVIEW_STATE" = "APPROVED" ] && [ "$MERGEABLE" = "CONFLICTING" ]; then
-              echo "  ACTION: Approved but has merge conflicts â€” posting rebase reminder"
+              echo "  ACTION: Approved but has merge conflicts — posting rebase reminder"
               echo "## PR Housekeeper Notice" > /tmp/pr-msg.txt
               echo "" >> /tmp/pr-msg.txt
               echo "This PR is approved but has merge conflicts with main. Please rebase." >> /tmp/pr-msg.txt
@@ -213,9 +213,9 @@ jobs:
               continue
             fi
 
-            # Rule 6: Stale >24h with no progress â€” close
+            # Rule 6: Stale >24h with no progress — close
             if [ "$AGE_HOURS" -ge 24 ] && [ "$CHECKS_COUNT" -eq 0 ] && [ "$REVIEW_STATE" = "none" ]; then
-              echo "  ACTION: PR stale >24h â€” closing"
+              echo "  ACTION: PR stale >24h — closing"
               echo "## PR Housekeeper" > /tmp/pr-msg.txt
               echo "" >> /tmp/pr-msg.txt
               echo "This PR has been open for over 24 hours with no activity. Closing as stale." >> /tmp/pr-msg.txt
