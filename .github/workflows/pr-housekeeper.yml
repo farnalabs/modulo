@@ -115,7 +115,7 @@ jobs:
           ENDJSON
                 )
                 HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
-                for attempt in 10 20 40; do
+                for attempt in 2 4 8 16 30 60 90 120 180 240; do
                   RESP=$(curl -s -w "\n%{http_code}" -X POST "${BF_WEBHOOK_URL}" \
                     -H "Content-Type: application/json" \
                     -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
@@ -123,13 +123,13 @@ jobs:
                     -d "${BODY}")
                   HTTP=$(echo "$RESP" | tail -1)
                   if [ "$HTTP" = "202" ] || [ "$HTTP" = "200" ]; then
-                    echo "  Branch Fixer pipeline accepted (attempt $attempt)"
+                    echo "  Branch Fixer pipeline accepted"
                     break
                   elif [ "$HTTP" = "429" ]; then
-                    echo "  Rate limited (attempt $attempt) - retrying in ${attempt}s"
+                    echo "  Rate limited - retrying in ${attempt}s (10 max concurrent)"
                     sleep "$attempt"
                   else
-                    echo "  WARNING: Branch Fixer returned HTTP $HTTP (attempt $attempt)"
+                    echo "  WARNING: Branch Fixer returned HTTP $HTTP - retrying in ${attempt}s"
                     sleep "$attempt"
                   fi
                 done
@@ -154,7 +154,7 @@ jobs:
           ENDJSON
                 )
                 HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
-                for attempt in 10 20 40; do
+                for attempt in 2 4 8 16 30 60 90 120 180 240; do
                   RESP=$(curl -s -w "\n%{http_code}" -X POST "${BF_WEBHOOK_URL}" \
                     -H "Content-Type: application/json" \
                     -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
@@ -162,13 +162,13 @@ jobs:
                     -d "${BODY}")
                   HTTP=$(echo "$RESP" | tail -1)
                   if [ "$HTTP" = "202" ] || [ "$HTTP" = "200" ]; then
-                    echo "  Branch Fixer pipeline accepted (attempt $attempt)"
+                    echo "  Branch Fixer pipeline accepted"
                     break
                   elif [ "$HTTP" = "429" ]; then
-                    echo "  Rate limited (attempt $attempt) - retrying in ${attempt}s"
+                    echo "  Rate limited - retrying in ${attempt}s (10 max concurrent)"
                     sleep "$attempt"
                   else
-                    echo "  WARNING: Branch Fixer returned HTTP $HTTP (attempt $attempt)"
+                    echo "  WARNING: Branch Fixer returned HTTP $HTTP - retrying in ${attempt}s"
                     sleep "$attempt"
                   fi
                 done
