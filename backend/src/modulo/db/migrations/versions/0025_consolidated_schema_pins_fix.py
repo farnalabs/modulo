@@ -5,6 +5,7 @@ Revises: 0020_add_missing_performance_indexes
 """
 import sqlalchemy as sa
 from alembic import op
+import contextlib
 from sqlalchemy import text
 
 revision = "0025_consolidated_schema_pins_fix"
@@ -77,14 +78,12 @@ def upgrade() -> None:
                 if not schema_id or not version:
                     continue
                 direction = pin.get("direction", "input")
-                try:
+                with contextlib.suppress(Exception):
                     conn.execute(insert_sql, {
                         "org_id": org_id, "snap_id": sid,
                         "node_id": agent_id, "dir": direction,
                         "schema_id": schema_id, "schema_ver": version
                     })
-                except Exception:
-                    pass  # skip FK violations gracefully
 
     # Step 6: Add RLS policies (from 0023)
     conn.execute(text("""

@@ -1,4 +1,4 @@
-"""Graph validator — pre-run and on-save validation.
+﻿"""Graph validator — pre-run and on-save validation.
 
 Checks:
 1. Topology: no cycles, valid edge references, reachability, max nesting depth 3
@@ -54,7 +54,7 @@ _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyTyp
 
 # Phase 1 cutover: pipelines with snapshots created before this date
 # use degraded-mode validation (warnings instead of hard errors).
-_PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=timezone.utc)
+_PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=timezone.utc)  # noqa: UP017
 
 _DEFERRED_SCHEMA_KEYWORDS = frozenset({"$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"})
 
