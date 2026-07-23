@@ -994,3 +994,11 @@ This means:
 The modulo pipelines (`sandbox_agent` nodes with `template_id: "opencode"`) run in E2B sandboxes with `opencode` CLI available. GHA runners do not have AI tools installed and should not install them.
 
 **Enforcement:** Any PR that adds `opencode`, `claude`, or any AI agent CLI installation/invocation to a `.github/workflows/*.yml` file must be blocked.
+### Migration FK errors
+
+Alembic migrations that add foreign keys must ensure the referenced columns have a UNIQUE constraint. Without it, PostgreSQL rejects the FK and the entire migration chain is blocked. This happened with migration 0022_create_snapshot_schema_pins_table.
+
+Safeguards:
+- Run alembic upgrade heads locally before merging any migration PR
+- Verify referenced tables have required unique constraints before adding FKs
+- Validate Python syntax of migration files before committing
