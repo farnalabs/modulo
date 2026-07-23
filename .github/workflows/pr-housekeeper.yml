@@ -1,4 +1,4 @@
-# PR Housekeeper
+﻿# PR Housekeeper
 # Scans all open PRs and handles stale/abandoned PRs automatically.
 # Runs every 30 minutes alongside the merge queue.
 # NON-AI tasks only: CI re-dispatch, reminders, conflict notices, stale closing.
