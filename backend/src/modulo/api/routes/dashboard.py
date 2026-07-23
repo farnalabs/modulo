@@ -128,7 +128,14 @@ async def dashboard_summary(
 
             # --- Queries that can all run independently (no dependencies between them) ---
 
-            count_query = select(func.count()).select_from(Pipeline).where(Pipeline.archived_at.is_(None))
+            count_query = (
+                select(func.count())
+                .select_from(Pipeline)
+                .where(
+                    Pipeline.archived_at.is_(None),
+                    Pipeline.deleted_at.is_(None),
+                )
+            )
             active_pipelines = (await session.execute(count_query)).scalar_one() or 0
 
             status_count_query = (
@@ -136,7 +143,12 @@ async def dashboard_summary(
                     Run.status,
                     func.count().label("cnt"),
                 )
-                .where(Run.organisation_id == org_id)
+                .select_from(Run)
+                .join(Pipeline, Run.pipeline_id == Pipeline.id)
+                .where(
+                    Run.organisation_id == org_id,
+                    Pipeline.deleted_at.is_(None),
+                )
                 .group_by(Run.status)
             )
             status_count_rows = (await session.execute(status_count_query)).all()
@@ -158,9 +170,12 @@ async def dashboard_summary(
                     Run.status,
                     func.count().label("cnt"),
                 )
+                .select_from(Run)
+                .join(Pipeline, Run.pipeline_id == Pipeline.id)
                 .where(
                     Run.organisation_id == org_id,
                     Run.owner_team_id.is_not(None),
+                    Pipeline.deleted_at.is_(None),
                 )
                 .group_by(Run.owner_team_id, Run.status)
             )
@@ -171,9 +186,12 @@ async def dashboard_summary(
                     Run.owner_team_id,
                     func.count(func.distinct(Run.pipeline_id)).label("pipeline_cnt"),
                 )
+                .select_from(Run)
+                .join(Pipeline, Run.pipeline_id == Pipeline.id)
                 .where(
                     Run.organisation_id == org_id,
                     Run.owner_team_id.is_not(None),
+                    Pipeline.deleted_at.is_(None),
                 )
                 .group_by(Run.owner_team_id)
             )
@@ -355,7 +373,10 @@ async def dashboard_summary(
                     Run.trigger_type,
                 )
                 .join(Pipeline, Run.pipeline_id == Pipeline.id)
-                .where(Run.organisation_id == org_id)
+                .where(
+                    Run.organisation_id == org_id,
+                    Pipeline.deleted_at.is_(None),
+                )
                 .order_by(Run.created_at.desc())
                 .limit(10)
             )
