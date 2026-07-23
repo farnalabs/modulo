@@ -1,4 +1,4 @@
-"""Factory that builds a cancellable LangGraph node function from a node definition.
+﻿"""Factory that builds a cancellable LangGraph node function from a node definition.
 
 Node types:
   - standard (agent):  agent/connector node; runs the node body, then checks for
@@ -649,7 +649,7 @@ def make_sandbox_agent_fn(
         _stderr_len = 0
 
         try:
-            sandbox = await AsyncSandbox.create(template=template_id)
+            sandbox = await AsyncSandbox.create(template=template_id, timeout=sandbox_timeout)
 
             for path, content in context_files.items():
                 if path.endswith(".b64"):
