@@ -1855,10 +1855,10 @@ async def delete_pipeline(
             except ValueError:
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
-            from modulo.db.crud.pipeline import delete_pipeline as db_delete_pipeline
+            from modulo.db.crud.pipeline import soft_delete_pipeline
 
             async with _session(org_id) as s:
-                deleted = await db_delete_pipeline(s, pid)
+                deleted = await soft_delete_pipeline(s, pid)
 
             if not deleted:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
