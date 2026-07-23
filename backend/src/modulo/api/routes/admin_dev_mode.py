@@ -70,4 +70,4 @@ async def set_dev_mode(
         return {"enabled": req.enabled, "source": "db"}
     except Exception:
         logger.exception("Failed to set dev_mode")
-        raise HTTPException(status_code=500, detail="Failed to set dev mode")
+        raise HTTPException(status_code=500, detail="Failed to set dev mode") from None

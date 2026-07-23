@@ -2324,7 +2324,10 @@ async def infer_schema(
             from modulo.settings import get_settings
             settings = get_settings()
             if not settings.modulo_dev_mode:
-                return _tool_error("Schema inference requires developer mode. Set MODULO_DEV_MODE=true or toggle Developer Mode in Admin > Feature Flags.")
+                return _tool_error(
+                    "Schema inference requires developer mode. "
+                    "Set MODULO_DEV_MODE=true or toggle Developer Mode in Admin > Feature Flags."
+                )
             from modulo.core.schema_registry import SchemaInferenceError, SchemaInferenceService
 
             org_id = _ctx_org_id_val()
