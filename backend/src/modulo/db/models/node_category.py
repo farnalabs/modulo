@@ -5,10 +5,10 @@ import uuid
 from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class NodeCategory(OrgScoped):
+class NodeCategory(SoftDeleteMixin, OrgScoped):
     __tablename__ = "node_categories"
     __table_args__ = (UniqueConstraint("organisation_id", "name", name="uq_node_categories_org_name"),)
 
