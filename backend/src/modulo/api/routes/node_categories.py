@@ -15,9 +15,10 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.node_category import (
     create_node_category,
-    delete_node_category,
     get_node_category,
     list_node_categories,
+    restore_node_category,
+    soft_delete_node_category,
     update_node_category,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -265,7 +266,7 @@ async def delete_node_category_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_node_category(session, category_id, org_id=principal.organisation_id)
+            deleted = await soft_delete_node_category(session, category_id, org_id=principal.organisation_id)
     except ProgrammingError:
         logger.warning("node_categories.delete.programming_error — missing DB table?")
         raise HTTPException(
@@ -294,3 +295,40 @@ async def delete_node_category_endpoint(
         ) from e
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")
+
+
+@handle_db_errors("node_categories.restore_node_category_endpoint")
+@router.post("/{category_id}/restore", response_model=NodeCategoryResponse)
+async def restore_node_category_endpoint(
+    category_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> NodeCategoryResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            category = await restore_node_category(session, category_id, org_id=principal.organisation_id)
+    except ProgrammingError:
+        logger.warning("node_categories.restore.programming_error — missing DB table?")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.warning("node_categories.restore.database_error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("node_categories.restore.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
+    if category is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")
+    return NodeCategoryResponse.model_validate(category)
