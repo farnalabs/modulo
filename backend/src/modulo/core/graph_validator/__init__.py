@@ -1,4 +1,4 @@
-﻿"""Graph validator — pre-run and on-save validation.
+"""Graph validator — pre-run and on-save validation.
 
 Checks:
 1. Topology: no cycles, valid edge references, reachability, max nesting depth 3

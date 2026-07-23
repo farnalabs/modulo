@@ -1,4 +1,4 @@
-﻿"""Unit tests for E2BRuntimeProvider with a mocked E2B SDK."""
+"""Unit tests for E2BRuntimeProvider with a mocked E2B SDK."""
 
 from __future__ import annotations
 

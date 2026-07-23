@@ -1,9 +1,10 @@
-﻿"""Consolidated: add unique constraint, create snapshot_schema_pins table, backfill data
+"""Consolidated: add unique constraint, create snapshot_schema_pins table, backfill data
 
 Revision ID: 0025_consolidated_schema_pins_fix
 Revises: 0020_add_missing_performance_indexes
 """
 import contextlib
+
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import text
