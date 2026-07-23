@@ -3,7 +3,7 @@ import uuid
 from modulo.db.crud.model_backend import list_model_backends
 from modulo.db.models.model_backend import ModelBackend
 
-from .conftest import TierFilterTestBase
+from conftest import TierFilterTestBase
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 

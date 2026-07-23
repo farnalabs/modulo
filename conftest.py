@@ -45,12 +45,14 @@ class TierFilterTestBase:
         self.session = mock_session
         self.mock_execute = make_mock_execute(self.model_class)
 
+    @pytest.mark.asyncio
     async def test_default_excludes_in_dev(self):
         self.session.execute = self.mock_execute(count=self.default_count)
         result = await self.crud_func(self.session, **self._crud_kwargs())
         assert result.total == self.default_count
         assert len(result.items) == self.default_count
 
+    @pytest.mark.asyncio
     async def test_excluded_tiers_none_same_as_default(self):
         self.session.execute = self.mock_execute(count=self.none_count)
         result = await self.crud_func(
@@ -58,6 +60,7 @@ class TierFilterTestBase:
         )
         assert result.total == self.none_count
 
+    @pytest.mark.asyncio
     async def test_excluded_tiers_explicit_in_dev(self):
         self.session.execute = self.mock_execute(count=self.in_dev_count)
         result = await self.crud_func(
@@ -65,6 +68,7 @@ class TierFilterTestBase:
         )
         assert result.total == self.in_dev_count
 
+    @pytest.mark.asyncio
     async def test_excluded_tiers_empty_skips_filter(self):
         self.session.execute = self.mock_execute(count=self.empty_count)
         result = await self.crud_func(
@@ -72,6 +76,7 @@ class TierFilterTestBase:
         )
         assert result.total == self.empty_count
 
+    @pytest.mark.asyncio
     async def test_excluded_tiers_preview(self):
         self.session.execute = self.mock_execute(count=self.preview_count)
         result = await self.crud_func(
