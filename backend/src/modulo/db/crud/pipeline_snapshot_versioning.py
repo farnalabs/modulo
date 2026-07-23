@@ -61,7 +61,11 @@ async def list_snapshots(
     offset = (page - 1) * page_size
     result = await session.execute(
         select(PipelineSnapshot)
-        .where(PipelineSnapshot.pipeline_id == pipeline_id)
+        .join(Pipeline, PipelineSnapshot.pipeline_id == Pipeline.id)
+        .where(
+            PipelineSnapshot.pipeline_id == pipeline_id,
+            Pipeline.deleted_at.is_(None),
+        )
         .order_by(PipelineSnapshot.snapshot_version.desc())
         .offset(offset)
         .limit(page_size)
@@ -71,7 +75,13 @@ async def list_snapshots(
     # Get total count
     try:
         count_result = await session.execute(
-            select(func.count()).select_from(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pipeline_id)
+            select(func.count())
+            .select_from(PipelineSnapshot)
+            .join(Pipeline, PipelineSnapshot.pipeline_id == Pipeline.id)
+            .where(
+                PipelineSnapshot.pipeline_id == pipeline_id,
+                Pipeline.deleted_at.is_(None),
+            )
         )
         total = count_result.scalar() or 0
     except ProgrammingError:
