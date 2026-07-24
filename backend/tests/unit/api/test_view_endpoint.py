@@ -271,7 +271,7 @@ class TestUpdateView:
 class TestDeleteView:
     def test_returns_204(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.views.delete_view", return_value=True),
+            patch("modulo.api.routes.views.soft_delete_view", return_value=True),
             patch("modulo.api.routes.views.set_rls_org"),
             patch("modulo.api.routes.views.set_rls_user_context"),
         ):
@@ -280,7 +280,7 @@ class TestDeleteView:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.views.delete_view", return_value=False),
+            patch("modulo.api.routes.views.soft_delete_view", return_value=False),
             patch("modulo.api.routes.views.set_rls_org"),
             patch("modulo.api.routes.views.set_rls_user_context"),
         ):

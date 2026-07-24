@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -72,8 +72,13 @@ async def create_pipeline(
     return pipeline
 
 
-async def get_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
-    result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
+async def get_pipeline(
+    session: AsyncSession, pipeline_id: uuid.UUID, *, include_deleted: bool = False
+) -> Pipeline | None:
+    stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+    if not include_deleted:
+        stmt = stmt.where(Pipeline.deleted_at.is_(None))
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -88,6 +93,7 @@ async def check_pipeline_name_available(
         .where(
             Pipeline.organisation_id == org_id,
             Pipeline.name == name,
+            Pipeline.deleted_at.is_(None),
         )
         .with_for_update()
     )
@@ -101,9 +107,12 @@ async def list_pipelines(
     page_size: int = 20,
     cursor: str | None = None,
     include_archived: bool = False,
+    include_deleted: bool = False,
     folder_id: uuid.UUID | None = None,
 ) -> PageResult[Pipeline]:
     base = select(Pipeline)
+    if not include_deleted:
+        base = base.where(Pipeline.deleted_at.is_(None))
     if not include_archived:
         base = base.where(Pipeline.archived_at.is_(None))
     if folder_id is not None:
@@ -130,13 +139,12 @@ async def list_pipelines(
 
     offset = (page - 1) * page_size
     try:
-        total = (
-            await session.execute(
-                select(func.count())
-                .select_from(Pipeline)
-                .where(*([Pipeline.archived_at.is_(None)] if not include_archived else []))
-            )
-        ).scalar_one()
+        count_where = []
+        if not include_deleted:
+            count_where.append(Pipeline.deleted_at.is_(None))
+        if not include_archived:
+            count_where.append(Pipeline.archived_at.is_(None))
+        total = (await session.execute(select(func.count()).select_from(Pipeline).where(*count_where))).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(
@@ -158,8 +166,33 @@ async def update_pipeline(
     return pipeline
 
 
+async def soft_delete_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
+    """Mark a pipeline as deleted (soft delete). Returns None if not found or already deleted."""
+    result = await session.execute(
+        update(Pipeline)
+        .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(Pipeline)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
+async def restore_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
+    """Restore a soft-deleted pipeline. Returns None if not found."""
+    result = await session.execute(
+        update(Pipeline)
+        .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(Pipeline)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
 async def delete_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> bool:
-    pipeline = await get_pipeline(session, pipeline_id)
+    """Hard-delete a pipeline. Only call from admin cleanup, not from user-facing API."""
+    pipeline = await get_pipeline(session, pipeline_id, include_deleted=True)
     if pipeline is None:
         return False
     await session.delete(pipeline)
@@ -190,8 +223,11 @@ async def count_pipelines(
     *,
     org_id: uuid.UUID,
     include_archived: bool = False,
+    include_deleted: bool = False,
 ) -> int:
     query = select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
+    if not include_deleted:
+        query = query.where(Pipeline.deleted_at.is_(None))
     if not include_archived:
         query = query.where(Pipeline.archived_at.is_(None))
     result = await session.execute(query)
@@ -354,7 +390,9 @@ async def replace_pipeline_graph(
     edges: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
     """Atomically replace an editable graph while preserving first-class edges."""
-    result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
+    result = await session.execute(
+        select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None)).with_for_update()
+    )
     pipeline = result.scalar_one_or_none()
     if pipeline is None:
         return None
