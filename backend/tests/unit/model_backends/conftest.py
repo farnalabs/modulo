@@ -17,19 +17,30 @@ def ai21_backend():
 @pytest.fixture
 def anthropic_backend():
     from modulo.model_backends.anthropic import AnthropicBackend
-    return _mock_backend("anthropic", "ChatAnthropic", AnthropicBackend, api_key="sk-ant-test", model_id="claude-haiku-4-5")
+    return _mock_backend(
+        "anthropic", "ChatAnthropic", AnthropicBackend,
+        api_key="sk-ant-test", model_id="claude-haiku-4-5",
+    )
 
 
 @pytest.fixture
 def azure_openai_backend():
     from modulo.model_backends.azure_openai import AzureOpenAIBackend
-    return _mock_backend("azure_openai", "ChatOpenAI", AzureOpenAIBackend, api_key="test-key", model_id="gpt-4-deployment", azure_endpoint="https://my-resource.openai.azure.com")
+    return _mock_backend(
+        "azure_openai", "ChatOpenAI", AzureOpenAIBackend,
+        api_key="test-key", model_id="gpt-4-deployment",
+        azure_endpoint="https://my-resource.openai.azure.com",
+    )
 
 
 @pytest.fixture
 def bedrock_backend():
     from modulo.model_backends.bedrock import BedrockBackend
-    return _mock_backend("bedrock", "ChatBedrock", BedrockBackend, aws_access_key_id="AKIA123", aws_secret_access_key="secret123", model_id="us.anthropic.claude-sonnet-4-5-v2", region="us-east-1")
+    return _mock_backend(
+        "bedrock", "ChatBedrock", BedrockBackend,
+        aws_access_key_id="AKIA123", aws_secret_access_key="secret123",
+        model_id="us.anthropic.claude-sonnet-4-5-v2", region="us-east-1",
+    )
 
 
 @pytest.fixture
@@ -47,13 +58,19 @@ def deepseek_backend():
 @pytest.fixture
 def fireworks_backend():
     from modulo.model_backends.fireworks import FireworksBackend
-    return _mock_backend("fireworks", "ChatOpenAI", FireworksBackend, api_key="test-key", model_id="accounts/fireworks/models/llama-v3p1-8b")
+    return _mock_backend(
+        "fireworks", "ChatOpenAI", FireworksBackend,
+        api_key="test-key", model_id="accounts/fireworks/models/llama-v3p1-8b",
+    )
 
 
 @pytest.fixture
 def gemini_backend():
     from modulo.model_backends.gemini import GeminiBackend
-    return _mock_backend("gemini", "ChatGoogleGenerativeAI", GeminiBackend, api_key="test-key", model_id="gemini-2.0-flash")
+    return _mock_backend(
+        "gemini", "ChatGoogleGenerativeAI", GeminiBackend,
+        api_key="test-key", model_id="gemini-2.0-flash",
+    )
 
 
 @pytest.fixture
