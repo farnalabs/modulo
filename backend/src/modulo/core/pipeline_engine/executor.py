@@ -271,7 +271,7 @@ class PipelineExecutor:
 
         Starts at *delay* seconds, doubles each attempt, caps at *max_delay*.
         If the run transitions to ``running`` on any attempt, returns immediately.
-        Exceptions are logged and loop continues — the final attempt runs at
+        Exceptions are logged and loop continues - the final attempt runs at
         *max_delay* seconds.
         """
         current_delay = delay
