@@ -18,6 +18,7 @@ from modulo.core.eval_engine import (
     _OUTER_DELIMITER,
     EvalBlockedError,
     EvalEngine,
+    EvalSuiteBlockedError,
     EvalType,
     SuiteEvalResult,
     UnknownEvalTypeError,

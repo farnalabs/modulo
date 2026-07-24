@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import os
+import sys
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+
+_root = os.path.dirname(os.path.abspath(__file__))
+for _p in [os.path.join(_root, "backend", "src"), os.path.join(_root, "backend")]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.settings import Settings

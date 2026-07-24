@@ -1,5 +1,3 @@
-from unittest.mock import AsyncMock, patch
-
 from conftest import make_mock_session
 
 from modulo.core.feature_flags import FeatureFlagRegistry

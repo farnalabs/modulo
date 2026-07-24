@@ -13,6 +13,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.eval_engine.regression import detect_regressions
+from modulo.settings import get_settings
 
 _EVAL_ID_1 = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _EVAL_ID_2 = uuid.UUID("00000000-0000-0000-0000-000000000002")
