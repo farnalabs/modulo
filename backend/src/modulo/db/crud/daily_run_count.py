@@ -64,7 +64,7 @@ async def get_daily_run_counts(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
-    team_id: uuid.UUID | None | object = _UNSET,
+    team_id: uuid.UUID | object | None = _UNSET,
     since: date | None = None,
     until: date | None = None,
 ) -> list[OrgDailyRunCount]:
