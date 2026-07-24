@@ -246,7 +246,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 status_code=401,
                 media_type="application/json",
             )
-        token = auth_header[len("Bearer ") :].strip()
+        token = auth_header[len("Bearer "):].strip()
 
         # Try API key first (backwards compatible).
         if token.startswith("mk_"):
@@ -254,7 +254,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 # Validate the key without RLS first (the key's org is unknown).
                 from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
 
-                prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
+                prefix = token[len(_MK_PREFIX):][:_PREFIX_LEN]
                 from sqlalchemy import select
 
                 from modulo.db.models.api_key import OrgApiKey
@@ -2011,7 +2011,7 @@ _doc_index_ttl: float = 300.0  # 5 minutes
 
 
 def _get_doc_index() -> DocumentationIndex:
-    global _doc_index, _doc_index_ts, _doc_index_ttl
+    global _doc_index, _doc_index_ts
     import time as _time
 
     now = _time.time()

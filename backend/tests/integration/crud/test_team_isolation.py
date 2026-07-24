@@ -238,10 +238,11 @@ async def test_crud_team_round_trip(db_engine: AsyncEngine) -> None:
 
     from modulo.db.crud.team import (
         create_team,
-        delete_team,
         get_team,
         get_team_by_name,
         list_teams,
+        restore_team,
+        soft_delete_team,
         update_team,
     )
 
@@ -277,11 +278,30 @@ async def test_crud_team_round_trip(db_engine: AsyncEngine) -> None:
         assert updated is not None
         assert updated.name == "Updated Team"
 
-        deleted = await delete_team(session, created.id)
-        assert deleted is True
+        # Soft-delete
+        deleted = await soft_delete_team(session, created.id)
+        assert deleted is not None
+        assert deleted.id == created.id
+        assert deleted.deleted_at is not None
 
-        gone = await get_team(session, created.id)
-        assert gone is None
+        # get_team still returns soft-deleted team
+        still_there = await get_team(session, created.id)
+        assert still_there is not None
+        assert still_there.id == created.id
+
+        # get_team_by_name filters soft-deleted teams
+        by_name = await get_team_by_name(session, org, "Updated Team")
+        assert by_name is None
+
+        # Restore
+        restored = await restore_team(session, created.id)
+        assert restored is not None
+        assert restored.deleted_at is None
+
+        # Now findable again
+        by_name = await get_team_by_name(session, org, "Updated Team")
+        assert by_name is not None
+        assert by_name.id == created.id
 
 
 async def test_membership_round_trip(db_engine: AsyncEngine) -> None:

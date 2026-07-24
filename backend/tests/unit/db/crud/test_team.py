@@ -147,25 +147,25 @@ class TestUpdateTeam:
         assert result is None
 
 
-class TestDeleteTeam:
-    async def test_deletes_and_returns_true(self, mock_session: AsyncMock) -> None:
+class TestSoftDeleteTeam:
+    async def test_soft_deletes_and_returns_team(self, mock_session: AsyncMock) -> None:
         team = _make_team()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
 
-        from modulo.db.crud.team import delete_team
+        from modulo.db.crud.team import soft_delete_team
 
-        result = await delete_team(mock_session, _TEAM_ID)
-        assert result is True
-        mock_session.delete.assert_awaited_once_with(team)
+        result = await soft_delete_team(mock_session, _TEAM_ID)
+        assert result is not None
+        assert result.id == _TEAM_ID
         mock_session.flush.assert_awaited_once()
 
-    async def test_returns_false_when_not_found(self, mock_session: AsyncMock) -> None:
+    async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.team import delete_team
+        from modulo.db.crud.team import soft_delete_team
 
-        result = await delete_team(mock_session, uuid.uuid4())
-        assert result is False
+        result = await soft_delete_team(mock_session, uuid.uuid4())
+        assert result is None
 
 
 class TestGetTeamByName:

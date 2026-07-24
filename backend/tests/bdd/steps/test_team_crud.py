@@ -225,7 +225,7 @@ def delete_team(team_name: str, request, ctx) -> None:
     team = ctx.get("teams", {}).get(team_name)
     if team is None:
         with (
-            patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False),
+            patch("modulo.api.routes.teams.soft_delete_team", new_callable=AsyncMock, return_value=None),
             patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
             patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
         ):
@@ -234,7 +234,7 @@ def delete_team(team_name: str, request, ctx) -> None:
         return
 
     with (
-        patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True),
+        patch("modulo.api.routes.teams.soft_delete_team", new_callable=AsyncMock, return_value=MagicMock()),
         patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
     ):
@@ -260,7 +260,7 @@ def delete_team_by_id(team_id: str, request, ctx) -> None:
         return
 
     with (
-        patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False),
+        patch("modulo.api.routes.teams.soft_delete_team", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
     ):

@@ -37,7 +37,7 @@ from modulo.db.crud.publisher import (
     update_publisher as crud_update_publisher,
 )
 from modulo.db.crud.run import batch_delete_old_terminal_runs, purge_runs
-from modulo.db.crud.team import create_team, delete_team, get_team_by_name, list_teams
+from modulo.db.crud.team import create_team, get_team_by_name, list_teams, soft_delete_team
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
@@ -325,7 +325,7 @@ async def global_search(
                     total_by_type["library"] = count
 
             all_items.sort(key=lambda x: (-x[0], x[1].title))
-            paginated = [item for _, item in all_items[offset : offset + limit]]
+            paginated = [item for _, item in all_items[offset: offset + limit]]
 
     except ProgrammingError:
         logger.exception("routes.admin")
@@ -1434,7 +1434,7 @@ async def admin_delete_team(
                     detail=f"Cannot delete team: still has resources — {details}",
                 )
 
-            deleted = await delete_team(session, team_id)
+            deleted = await soft_delete_team(session, team_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

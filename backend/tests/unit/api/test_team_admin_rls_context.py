@@ -161,7 +161,7 @@ class TestAdminTeamRlsUserContext:
         with (
             patch("modulo.api.routes.admin.set_rls_user_context", new_callable=AsyncMock) as mock_rls_user,
             patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.admin.delete_team", new_callable=AsyncMock, return_value=True),
+            patch("modulo.api.routes.admin.soft_delete_team", new_callable=AsyncMock, return_value=MagicMock()),
         ):
             resp = admin_client.delete(f"/api/v1/admin/teams/{_TEAM_ID}")
 

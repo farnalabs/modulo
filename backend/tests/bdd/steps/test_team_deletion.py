@@ -40,10 +40,7 @@ def user_is_member(username: str, team_name: str, ctx) -> None:
 
 @when(parsers.parse('I delete the team "{team_identifier}"'))
 def delete_team_endpoint(team_identifier: str, request, client, ctx) -> None:
-    from fastapi import HTTPException
-
     team_id = ctx.get("team_id", team_identifier)
-    active_runs = ctx.get("active_runs", 0)
     org_role = ctx.get("org_role", "admin")
 
     if org_role == "viewer":
@@ -55,17 +52,12 @@ def delete_team_endpoint(team_identifier: str, request, client, ctx) -> None:
     with (
         patch("modulo.api.routes.teams.set_rls_org"),
         patch("modulo.api.routes.teams.set_rls_user_context"),
-        patch("modulo.api.routes.teams.delete_team") as mock_delete,
+        patch("modulo.api.routes.teams.soft_delete_team") as mock_delete,
     ):
-        if active_runs > 0:
-            mock_delete.side_effect = HTTPException(
-                status_code=409,
-                detail=f"Cannot delete team with {active_runs} active runs",
-            )
-        elif team_identifier == "00000000-0000-0000-0000-000000009999":
-            mock_delete.return_value = False
+        if team_identifier == "00000000-0000-0000-0000-000000009999":
+            mock_delete.return_value = None
         else:
-            mock_delete.return_value = True
+            mock_delete.return_value = MagicMock()
 
         resp = client.delete(f"/api/v1/teams/{team_id}")
 

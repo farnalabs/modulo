@@ -461,8 +461,8 @@ class TestAdminTeamDelete:
     def test_delete_team_success(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin.delete_team",
-                AsyncMock(return_value=True),
+                "modulo.api.routes.admin.soft_delete_team",
+                AsyncMock(return_value=MagicMock()),
             ),
         ):
             resp = client.delete(f"{self.URL}/{_TEAM_ID}")
@@ -472,8 +472,8 @@ class TestAdminTeamDelete:
     def test_delete_team_not_found(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin.delete_team",
-                AsyncMock(return_value=False),
+                "modulo.api.routes.admin.soft_delete_team",
+                AsyncMock(return_value=None),
             ),
         ):
             resp = client.delete(f"{self.URL}/{_TEAM_ID}")

@@ -355,3 +355,120 @@ async def test_create_org_user_invalid_role(client_system_admin):
         },
     )
     assert resp.status_code == 422
+
+
+# ── DELETE /api/v1/admin/orgs/accounts/{account_id} ──────────────────────────
+
+
+@pytest.mark.anyio
+async def test_soft_delete_account_success(client_system_admin, mock_session):
+    """System admin can soft-delete an account."""
+    import modulo.api.routes.admin_orgs as admin_orgs
+    from modulo.db.models.account import Account
+
+    target_account_id = uuid4()
+    target_account = Account(
+        id=target_account_id,
+        email="test@example.com",
+        display_name="Test User",
+        password_hash="hash",
+        created_at=datetime.now(UTC),
+    )
+
+    original = admin_orgs.soft_delete_account
+    admin_orgs.soft_delete_account = AsyncMock(return_value=target_account)
+
+    try:
+        resp = await client_system_admin.delete(f"/api/v1/admin/orgs/accounts/{target_account_id}")
+        assert resp.status_code == 204, f"Expected 204, got {resp.status_code}: {resp.text}"
+    finally:
+        admin_orgs.soft_delete_account = original
+
+
+@pytest.mark.anyio
+async def test_soft_delete_account_not_found(client_system_admin, mock_session):
+    """Soft-deleting a non-existent account returns 404."""
+    import modulo.api.routes.admin_orgs as admin_orgs
+
+    original = admin_orgs.soft_delete_account
+    admin_orgs.soft_delete_account = AsyncMock(return_value=None)
+
+    try:
+        resp = await client_system_admin.delete(f"/api/v1/admin/orgs/accounts/{uuid4()}")
+        assert resp.status_code == 404
+    finally:
+        admin_orgs.soft_delete_account = original
+
+
+@pytest.mark.anyio
+async def test_soft_delete_account_viewer_forbidden(client_viewer):
+    """Viewers get 403 when soft-deleting accounts."""
+    resp = await client_viewer.delete(f"/api/v1/admin/orgs/accounts/{uuid4()}")
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_soft_delete_account_admin_forbidden(client_admin):
+    """Regular admin (not system admin) gets 403 when soft-deleting accounts."""
+    resp = await client_admin.delete(f"/api/v1/admin/orgs/accounts/{uuid4()}")
+    assert resp.status_code == 403
+
+
+# ── POST /api/v1/admin/orgs/accounts/{account_id}/restore ─────────────────────
+
+
+@pytest.mark.anyio
+async def test_restore_account_success(client_system_admin, mock_session):
+    """System admin can restore a soft-deleted account."""
+    import modulo.api.routes.admin_orgs as admin_orgs
+    from modulo.db.models.account import Account
+
+    target_account_id = uuid4()
+    target_account = Account(
+        id=target_account_id,
+        email="restored@example.com",
+        display_name="Restored User",
+        password_hash="hash",
+        created_at=datetime.now(UTC),
+    )
+
+    original = admin_orgs.restore_account
+    admin_orgs.restore_account = AsyncMock(return_value=target_account)
+
+    try:
+        resp = await client_system_admin.post(f"/api/v1/admin/orgs/accounts/{target_account_id}/restore")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["id"] == str(target_account_id)
+        assert data["status"] == "restored"
+    finally:
+        admin_orgs.restore_account = original
+
+
+@pytest.mark.anyio
+async def test_restore_account_not_found(client_system_admin, mock_session):
+    """Restoring a non-existent account returns 404."""
+    import modulo.api.routes.admin_orgs as admin_orgs
+
+    original = admin_orgs.restore_account
+    admin_orgs.restore_account = AsyncMock(return_value=None)
+
+    try:
+        resp = await client_system_admin.post(f"/api/v1/admin/orgs/accounts/{uuid4()}/restore")
+        assert resp.status_code == 404
+    finally:
+        admin_orgs.restore_account = original
+
+
+@pytest.mark.anyio
+async def test_restore_account_viewer_forbidden(client_viewer):
+    """Viewers get 403 when restoring accounts."""
+    resp = await client_viewer.post(f"/api/v1/admin/orgs/accounts/{uuid4()}/restore")
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_restore_account_admin_forbidden(client_admin):
+    """Regular admin (not system admin) gets 403 when restoring accounts."""
+    resp = await client_admin.post(f"/api/v1/admin/orgs/accounts/{uuid4()}/restore")
+    assert resp.status_code == 403

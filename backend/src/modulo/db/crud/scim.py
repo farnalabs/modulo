@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
 from modulo.db.crud.base import apply_updates
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
-from modulo.db.crud.team import create_team, delete_team, get_team, update_team
+from modulo.db.crud.team import create_team, get_team, soft_delete_team, update_team
 from modulo.db.crud.team_membership import (
     add_team_member,
     get_membership_by_team_and_account,
@@ -202,8 +202,8 @@ async def scim_update_group(
     return await update_team(session, team.id, updates)
 
 
-async def scim_delete_group_by_id(session: AsyncSession, team_id: uuid.UUID) -> bool:
-    return await delete_team(session, team_id)
+async def scim_delete_group_by_id(session: AsyncSession, team_id: uuid.UUID) -> Team | None:
+    return await soft_delete_team(session, team_id)
 
 
 async def scim_list_groups(

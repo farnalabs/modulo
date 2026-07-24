@@ -274,7 +274,7 @@ class TestUpdateTeam:
 class TestDeleteTeam:
     def test_returns_204(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.teams.delete_team", return_value=True),
+            patch("modulo.api.routes.teams.soft_delete_team", return_value=_make_team()),
             patch("modulo.api.routes.teams.set_rls_org"),
             patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
@@ -283,7 +283,7 @@ class TestDeleteTeam:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.teams.delete_team", return_value=False),
+            patch("modulo.api.routes.teams.soft_delete_team", return_value=None),
             patch("modulo.api.routes.teams.set_rls_org"),
             patch("modulo.api.routes.teams.set_rls_user_context"),
         ):
