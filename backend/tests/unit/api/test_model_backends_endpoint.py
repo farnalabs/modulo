@@ -254,7 +254,7 @@ def test_update_model_backend_not_found_returns_404(client: TestClient) -> None:
 
 def test_delete_model_backend_returns_204(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
+        patch("modulo.api.routes.model_backends.soft_delete_model_backend", return_value=True),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -264,11 +264,33 @@ def test_delete_model_backend_returns_204(client: TestClient) -> None:
 
 def test_delete_model_backend_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=False),
+        patch("modulo.api.routes.model_backends.soft_delete_model_backend", return_value=False),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
+    assert resp.status_code == 404
+
+
+def test_restore_model_backend_returns_200(client: TestClient) -> None:
+    backend = _make_backend()
+    with (
+        patch("modulo.api.routes.model_backends.restore_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post(f"/api/v1/model-backends/{_BACKEND_ID}/restore")
+    assert resp.status_code == 200
+    assert resp.json()["has_credentials"] is True
+
+
+def test_restore_model_backend_not_found_returns_404(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.model_backends.restore_model_backend", return_value=None),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post(f"/api/v1/model-backends/{uuid.uuid4()}/restore")
     assert resp.status_code == 404
 
 
@@ -362,7 +384,7 @@ def test_delete_model_backend_programming_error_returns_501(client: TestClient) 
 
     with (
         patch(
-            "modulo.api.routes.model_backends.delete_model_backend",
+            "modulo.api.routes.model_backends.soft_delete_model_backend",
             side_effect=ProgrammingError_("mock", "mock", "mock"),
         ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
@@ -514,7 +536,7 @@ def test_delete_model_backend_sqlalchemy_error_returns_503(client: TestClient) -
 
     with (
         patch(
-            "modulo.api.routes.model_backends.delete_model_backend",
+            "modulo.api.routes.model_backends.soft_delete_model_backend",
             side_effect=SQLAlchemyError_("mock", "mock", "mock"),
         ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
@@ -576,7 +598,7 @@ def test_update_model_backend_exception_returns_500(client: TestClient) -> None:
 
 def test_delete_model_backend_exception_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.delete_model_backend", side_effect=RuntimeError("unexpected")),
+        patch("modulo.api.routes.model_backends.soft_delete_model_backend", side_effect=RuntimeError("unexpected")),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
