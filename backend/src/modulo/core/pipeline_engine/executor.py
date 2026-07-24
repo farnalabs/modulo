@@ -213,7 +213,7 @@ class PipelineExecutor:
         Avoids FOR UPDATE on the pipeline row — the advisory lock on snapshot
         creation is the primary serialisation mechanism. If the pipeline has
         reached its max_concurrent_runs limit, the run stays ``pending`` and
-        will be picked up by a background retry loop.
+        will be picked up by a background retry loop (see :meth:`_retry_pending`).
 
         When *max_concurrent* is 0 or negative, capacity is unlimited and the
         run transitions directly to ``running``.
@@ -257,6 +257,41 @@ class PipelineExecutor:
                 return running_run
 
         return run
+
+    async def _retry_pending(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        input_payload: dict[str, Any],
+        delay: int = 30,
+        max_delay: int = 300,
+    ) -> None:
+        """Retry a pending run with exponential backoff until capacity frees up.
+
+        Starts at *delay* seconds, doubles each attempt, caps at *max_delay*.
+        If the run transitions to ``running`` on any attempt, returns immediately.
+        Exceptions are logged and loop continues — the final attempt runs at
+        *max_delay* seconds.
+        """
+        current_delay = delay
+        while current_delay <= max_delay:
+            await asyncio.sleep(current_delay)
+            try:
+                result = await self.execute(
+                    run_id=run_id,
+                    org_id=org_id,
+                    input_payload=input_payload,
+                )
+                if result.status == "running":
+                    return
+            except Exception:
+                _log.exception(
+                    "retry_pending attempt failed for run %s (next retry in %ss)",
+                    run_id,
+                    min(current_delay * 2, max_delay),
+                )
+            current_delay = min(current_delay * 2, max_delay)
 
     async def _load_eval_defs_for_pipeline(
         self,
@@ -681,6 +716,14 @@ class PipelineExecutor:
             max_concurrent=max_concurrent,
         )
         if capacity_run.status != "running":
+            retry_task = asyncio.create_task(
+                self._retry_pending(
+                    run_id=run_id,
+                    org_id=org_id,
+                    input_payload=input_payload,
+                )
+            )
+            retry_task.add_done_callback(lambda t: t.exception())
             return capacity_run
 
         final_status: str = "failed"
