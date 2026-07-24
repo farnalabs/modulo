@@ -1490,6 +1490,7 @@ async def list_trigger_events(
             from sqlalchemy import func, select
 
             from modulo.db.crud.pagination import CursorPaginator
+            from modulo.db.models.pipeline import Pipeline as _Pipeline
             from modulo.db.models.trigger import Trigger
             from modulo.db.models.trigger_event import TriggerEvent
 
@@ -1519,8 +1520,11 @@ async def list_trigger_events(
                             "field": "pipeline_id",
                             "detail": f"Invalid UUID format: {pipeline_id}",
                         }
-                    q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id).where(
+                    q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
+                    q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
+                    q = q.where(
                         Trigger.pipeline_id == pid,
+                        _Pipeline.deleted_at.is_(None),
                     )
 
                 total = (await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0
@@ -1855,10 +1859,10 @@ async def delete_pipeline(
             except ValueError:
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
-            from modulo.db.crud.pipeline import delete_pipeline as db_delete_pipeline
+            from modulo.db.crud.pipeline import soft_delete_pipeline
 
             async with _session(org_id) as s:
-                deleted = await db_delete_pipeline(s, pid)
+                deleted = await soft_delete_pipeline(s, pid)
 
             if not deleted:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
