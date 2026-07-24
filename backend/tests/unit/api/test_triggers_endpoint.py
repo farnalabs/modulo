@@ -296,35 +296,41 @@ def test_delete_trigger_returns_204(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("modulo.api.routes.triggers.soft_delete_trigger", return_value=trigger),
     ):
-        session = _make_mock_session()
-        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
-
-        async def override_session() -> AsyncGenerator[AsyncMock, None]:
-            yield session
-
-        client.app.dependency_overrides[get_db_session] = override_session
         resp = client.delete(f"/api/v1/triggers/{_TRIGGER_ID}")
 
     assert resp.status_code == 204
-    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 
 def test_delete_trigger_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("modulo.api.routes.triggers.soft_delete_trigger", return_value=None),
     ):
-        session = _make_mock_session()
-        session.execute = AsyncMock(return_value=_make_trigger_result([]))
-
-        async def override_session() -> AsyncGenerator[AsyncMock, None]:
-            yield session
-
-        client.app.dependency_overrides[get_db_session] = override_session
         resp = client.delete(f"/api/v1/triggers/{uuid.uuid4()}")
 
     assert resp.status_code == 404
-    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_restore_trigger_returns_200(client: TestClient) -> None:
+    trigger = _make_mock_trigger()
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("modulo.api.routes.triggers.restore_trigger", return_value=trigger),
+    ):
+        resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/restore")
+    assert resp.status_code == 200
+    assert resp.json()["trigger_type"] == "cron"
+
+
+def test_restore_trigger_not_found_returns_404(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("modulo.api.routes.triggers.restore_trigger", return_value=None),
+    ):
+        resp = client.post(f"/api/v1/triggers/{uuid.uuid4()}/restore")
+    assert resp.status_code == 404
 
 
 def test_toggle_trigger_returns_200(client: TestClient) -> None:
