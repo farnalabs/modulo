@@ -45,6 +45,9 @@ def _hub(ci: object) -> ConnectorHub:
     """Create a ConnectorHub with a mocked secrets backend."""
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend)
+    # The initialise method calls backend.get_secret; mock it to return
+    # the credentials that _fake_ci stored. We don't have a DB session so
+    # we bypass the real backend lookup.
     ci_creds_json = "{}"
     payload = getattr(ci, "credentials_ciphertext", None)
     if payload:
@@ -77,7 +80,7 @@ async def test_github_scan():
     respx.get(f"{_GITHUB_API}/repos/owner/repo2/pulls").mock(httpx.Response(200, json=[]))
 
     samples = await run_scan(hub)
-    assert len(samples) >= 2
+    assert len(samples) >= 2  # repos + pulls
     resources = {s.resource for s in samples}
     assert "repos" in resources
     assert "pulls" in resources
@@ -180,7 +183,7 @@ async def test_filesystem_connector_skipped():
         hub = _hub(ci)
         await hub.initialise([ci])
         samples = await run_scan(hub)
-    assert len(samples) == 0
+    assert len(samples) == 0  # filesystem is not sampled
 
 
 @respx.mock
@@ -189,9 +192,12 @@ async def test_health_check_failure_still_attempts_queries():
     hub = _hub(ci)
     await hub.initialise([ci])
 
+    # Health check returns 401 but doesn't raise; scanner proceeds to attempt queries
     respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(401, text="Unauthorized"))
 
     samples = await run_scan(hub)
+    # Scanner attempts queries despite health check failure — individual query errors
+    # are captured as error samples, not as an unhandled exception
     resources = {s.resource for s in samples}
     assert len(resources) > 0
 
@@ -210,6 +216,7 @@ async def test_connector_query_error_returns_error_in_sample():
     await hub.initialise([ci])
 
     respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
+    # Repos endpoint fails; pulls won't be queried since repos list is empty
     respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(500, text="Server Error"))
 
     samples = await run_scan(hub)

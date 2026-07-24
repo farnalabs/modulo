@@ -26,6 +26,7 @@ def _sample(
 def test_empty_samples_returns_findings():
     findings = infer([])
     assert len(findings) >= 1
+    # Should indicate no data was available
     categories = {f.category for f in findings}
     assert "automation" in categories
 

@@ -131,6 +131,7 @@ def test_placeholder_nodes_have_correct_types():
     for n in draft.nodes:
         if n.id in ("start", "end"):
             assert n.node_type == "placeholder", f"{n.id} should be placeholder"
+    # Review is an agent node
     review = next((n for n in draft.nodes if n.id == "review"), None)
     assert review is not None
     assert review.node_type == "agent"
