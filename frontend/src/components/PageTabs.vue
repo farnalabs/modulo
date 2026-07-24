@@ -1,6 +1,6 @@
 <template>
   <nav
-    :aria-label="$t('components.PageTabs.section_navigation')"
+    :aria-label="t('components.PageTabs.section_navigation')"
     class="page-tabs-wrapper"
     role="tablist"
   >
@@ -32,14 +32,17 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
 import type { Component } from 'vue'
+import { useI18n } from 'vue-i18n'
 
-interface Tab {
+export interface Tab {
   label: string
   to: string
   icon?: Component
   badge?: number | string
   badgeVariant?: 'primary' | 'warning' | 'destructive'
 }
+
+const { t } = useI18n()
 
 const props = defineProps<{
   tabs: Tab[]
@@ -50,7 +53,7 @@ const route = useRoute()
 function isActive(to: string): boolean {
   if (route.path === to) return true
   if (!route.path.startsWith(to + '/')) return false
-  return !(props.tabs as Tab[]).some(
+  return !props.tabs.some(
     (tab) => tab.to !== to && (route.path.startsWith(tab.to + '/') || route.path === tab.to) && tab.to.length > to.length,
   )
 }
