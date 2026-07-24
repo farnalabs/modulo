@@ -334,7 +334,7 @@ def crud_delete_pipeline(client, url: str, request: pytest.FixtureRequest, patch
     _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
 
     patcher = patch(
-        "modulo.api.routes.pipelines.delete_pipeline",
+        "modulo.api.routes.pipelines.soft_delete_pipeline",
         new_callable=AsyncMock,
         return_value=True,
     )
