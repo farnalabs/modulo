@@ -336,7 +336,7 @@ def crud_delete_pipeline(client, url: str, request: pytest.FixtureRequest, patch
     patcher = patch(
         "modulo.api.routes.pipelines.soft_delete_pipeline",
         new_callable=AsyncMock,
-        return_value=True,
+        return_value=MagicMock(),
     )
     patcher.start()
     patches.append(patcher)
