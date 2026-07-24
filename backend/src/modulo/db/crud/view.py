@@ -7,7 +7,7 @@ before calling. The session must be within an active transaction.
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,8 +44,11 @@ async def create_view(
     return view
 
 
-async def get_view(session: AsyncSession, view_id: uuid.UUID) -> SavedView | None:
-    result = await session.execute(select(SavedView).where(SavedView.id == view_id))
+async def get_view(session: AsyncSession, view_id: uuid.UUID, *, include_deleted: bool = False) -> SavedView | None:
+    stmt = select(SavedView).where(SavedView.id == view_id)
+    if not include_deleted:
+        stmt = stmt.where(SavedView.deleted_at.is_(None))
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -55,10 +58,13 @@ async def list_views(
     view_type: str | None = None,
     page: int = 1,
     page_size: int = 20,
+    include_deleted: bool = False,
 ) -> PageResult[SavedView]:
     conditions = []
     if view_type is not None:
         conditions.append(SavedView.view_type == view_type)
+    if not include_deleted:
+        conditions.append(SavedView.deleted_at.is_(None))
 
     count_q = select(func.count()).select_from(SavedView).where(*conditions)
     try:
@@ -94,8 +100,33 @@ async def update_view(
     return view
 
 
+async def soft_delete_view(session: AsyncSession, view_id: uuid.UUID) -> SavedView | None:
+    """Soft-delete: set deleted_at. Returns None if not found or already deleted."""
+    result = await session.execute(
+        update(SavedView)
+        .where(SavedView.id == view_id, SavedView.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(SavedView)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
+async def restore_view(session: AsyncSession, view_id: uuid.UUID) -> SavedView | None:
+    """Restore a soft-deleted view. Returns None if not found."""
+    result = await session.execute(
+        update(SavedView)
+        .where(SavedView.id == view_id, SavedView.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(SavedView)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
 async def delete_view(session: AsyncSession, view_id: uuid.UUID) -> bool:
-    view = await get_view(session, view_id)
+    """Hard-delete. Only call from admin cleanup."""
+    view = await get_view(session, view_id, include_deleted=True)
     if view is None:
         return False
     await session.delete(view)
