@@ -14,7 +14,7 @@ import logging
 import re
 import uuid
 from collections import deque
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from types import MappingProxyType
 from typing import Any
 
