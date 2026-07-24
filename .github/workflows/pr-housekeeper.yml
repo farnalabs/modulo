@@ -115,7 +115,7 @@ jobs:
           ENDJSON
                 )
                 HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
-                for attempt in 2 4 8 15; do
+                for attempt in 2 4 8 15 30 60 120 180 240; do
                   RESP=$(curl -s -w "\n%{http_code}" -X POST "${BF_WEBHOOK_URL}" \
                     -H "Content-Type: application/json" \
                     -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
@@ -154,7 +154,7 @@ jobs:
           ENDJSON
                 )
                 HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${BF_HMAC_SECRET}" | sed 's/^.* //')
-                for attempt in 2 4 8 15; do
+                for attempt in 2 4 8 15 30 60 120 180 240; do
                   RESP=$(curl -s -w "\n%{http_code}" -X POST "${BF_WEBHOOK_URL}" \
                     -H "Content-Type: application/json" \
                     -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
