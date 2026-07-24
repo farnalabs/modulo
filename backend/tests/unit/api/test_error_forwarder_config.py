@@ -693,3 +693,113 @@ class TestTestForwarder:
         # forwarder was called with empty config
         forwarded_config = mock_fwd.forward.call_args[0][3]
         assert forwarded_config == {}
+
+
+# ── DELETE /api/v1/errors/forwarders/{forwarder_type} ─────────────────────
+
+
+class TestDeleteForwarder:
+    """Tests for DELETE /api/v1/errors/forwarders/{forwarder_type}."""
+
+    def test_delete_forwarder_returns_204(self, client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=uuid.uuid4())
+        mock_session.execute = AsyncMock(return_value=execute_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.delete("/api/v1/errors/forwarders/sentry")
+
+        assert resp.status_code == 204
+
+    def test_delete_forwarder_not_found_returns_404(self, client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=None)
+        mock_session.execute = AsyncMock(return_value=execute_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.delete("/api/v1/errors/forwarders/sentry")
+
+        assert resp.status_code == 404
+
+    def test_delete_forwarder_unknown_type_returns_404(self, client: TestClient) -> None:
+        resp = client.delete("/api/v1/errors/forwarders/unknown")
+        assert resp.status_code == 404
+
+    def test_delete_forwarder_requires_admin(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.delete("/api/v1/errors/forwarders/sentry")
+        assert resp.status_code == 403
+
+    def test_delete_forwarder_no_org_returns_403(self, no_org_client: TestClient) -> None:
+        resp = no_org_client.delete("/api/v1/errors/forwarders/sentry")
+        assert resp.status_code == 403
+
+    def test_delete_forwarder_gated_returns_402(self, gated_client: TestClient) -> None:
+        resp = gated_client.delete("/api/v1/errors/forwarders/sentry")
+        assert resp.status_code == 402
+
+
+# ── POST /api/v1/errors/forwarders/{forwarder_type}/restore ────────────────
+
+
+class TestRestoreForwarder:
+    """Tests for POST /api/v1/errors/forwarders/{forwarder_type}/restore."""
+
+    def test_restore_forwarder_returns_200(self, client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        cfg = _make_mock_config("sentry")
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=cfg)
+        mock_session.execute = AsyncMock(return_value=execute_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.post("/api/v1/errors/forwarders/sentry/restore")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["forwarder_type"] == "sentry"
+        assert body["enabled"] is True
+
+    def test_restore_forwarder_not_found_returns_404(self, client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=None)
+        mock_session.execute = AsyncMock(return_value=execute_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.post("/api/v1/errors/forwarders/sentry/restore")
+
+        assert resp.status_code == 404
+
+    def test_restore_forwarder_unknown_type_returns_404(self, client: TestClient) -> None:
+        resp = client.post("/api/v1/errors/forwarders/unknown/restore")
+        assert resp.status_code == 404
+
+    def test_restore_forwarder_requires_admin(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.post("/api/v1/errors/forwarders/sentry/restore")
+        assert resp.status_code == 403
+
+    def test_restore_forwarder_no_org_returns_403(self, no_org_client: TestClient) -> None:
+        resp = no_org_client.post("/api/v1/errors/forwarders/sentry/restore")
+        assert resp.status_code == 403
+
+    def test_restore_forwarder_gated_returns_402(self, gated_client: TestClient) -> None:
+        resp = gated_client.post("/api/v1/errors/forwarders/sentry/restore")
+        assert resp.status_code == 402
