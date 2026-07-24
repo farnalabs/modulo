@@ -27,7 +27,7 @@ _SIMPLE_GRAPH = {
     "edges": [{"source": "a", "target": "b", "type": "normal"}],
 }
 
-_PHASE_1_CUTOVER = datetime(2026, 7, 22)
+_PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=datetime.UTC)
 
 
 def _snapshot(**kw):
@@ -414,7 +414,7 @@ async def test_pre_existing_pipeline_gets_degraded_warning():
 
     snap = _snapshot(
         graph_json=graph,
-        created_at=datetime(2026, 7, 21, 12, 0, 0),
+        created_at=datetime(2026, 7, 21, 12, 0, 0, tzinfo=datetime.UTC),
         schema_pins_json=[],
     )
 
@@ -445,7 +445,7 @@ async def test_non_pre_existing_pipeline_blocks_on_incompatible():
 
     snap = _snapshot(
         graph_json=graph,
-        created_at=datetime(2026, 7, 23, 12, 0, 0),
+        created_at=datetime(2026, 7, 23, 12, 0, 0, tzinfo=datetime.UTC),
         schema_pins_json=[],
     )
 
