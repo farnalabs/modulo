@@ -833,7 +833,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _shutdown_manager.shutdown()
 
 
-async def _seed_tier_catalog(settings: object) -> None:
+async def _seed_tier_catalog(settings: Settings) -> None:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from modulo.db.session import engine as db_engine

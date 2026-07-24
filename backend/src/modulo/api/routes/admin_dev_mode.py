@@ -32,7 +32,7 @@ class SetDevModeRequest(BaseModel):
 async def get_dev_mode(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Get current dev mode status.
 
