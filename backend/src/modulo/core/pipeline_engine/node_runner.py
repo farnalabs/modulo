@@ -619,7 +619,7 @@ def make_sandbox_agent_fn(
         import os
         import time as _time
 
-        from e2b import AsyncSandbox  # type: ignore[import-untyped]
+        from e2b import AsyncSandbox, CommandExitException  # type: ignore[import-untyped]
         from jinja2.sandbox import SandboxedEnvironment
         from opentelemetry import trace as _otel_trace
 
