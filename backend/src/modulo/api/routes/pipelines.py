@@ -5,6 +5,8 @@ replace_pipeline_graph. No advisory lock is deployed; the row lock on the
 pipeline row serialises concurrent graph writes within a serialisable transaction.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import re
@@ -93,7 +95,7 @@ class PipelineCreate(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_team_visibility(self) -> "PipelineCreate":
+    def _validate_team_visibility(self) -> PipelineCreate:
         if self.visibility == "team" and self.owner_team_id is None:
             raise ValueError("owner_team_id is required when visibility is 'team'")
         return self
@@ -114,9 +116,13 @@ class PipelineUpdate(BaseModel):
         None,
         description="Rate limit config. Set to {} to clear.",
     )
+    graph_json: PipelineGraphUpdate | None = Field(
+        None,
+        description="Replace the pipeline graph (nodes + edges). Creates a new snapshot.",
+    )
 
     @model_validator(mode="after")
-    def _validate_team_visibility(self) -> "PipelineUpdate":
+    def _validate_team_visibility(self) -> PipelineUpdate:
         if self.visibility == "team" and self.owner_team_id is None:
             raise ValueError("owner_team_id is required when visibility is 'team'")
         return self
@@ -204,7 +210,7 @@ class PipelineGraphNode(BaseModel):
     context_files: dict[str, str] | None = None
 
     @model_validator(mode="after")
-    def validate_node_type(self) -> "PipelineGraphNode":
+    def validate_node_type(self) -> PipelineGraphNode:
         if self.node_type == "manual":
             if self.agent_id is not None:
                 raise ValueError("Manual nodes cannot reference an agent")
@@ -308,7 +314,7 @@ class PipelineGraphUpdate(BaseModel):
     edges: list[PipelineGraphEdge]
 
     @model_validator(mode="after")
-    def reject_database_conflicts(self) -> "PipelineGraphUpdate":
+    def reject_database_conflicts(self) -> PipelineGraphUpdate:
         if len(self.nodes) > _MAX_GRAPH_NODES:
             raise ValueError(f"Graph exceeds maximum of {_MAX_GRAPH_NODES} nodes")
         if len(self.edges) > _MAX_GRAPH_EDGES:
@@ -698,6 +704,8 @@ async def update_pipeline_endpoint(
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineResponse:
     updates = req.model_dump(exclude_unset=True)
+    has_graph = "graph_json" in updates
+    updates.pop("graph_json", None)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -719,6 +727,30 @@ async def update_pipeline_endpoint(
                         ),
                         request_id=getattr(principal, "request_id", None),
                     )
+            if has_graph and req.graph_json is not None:
+                node_data = [node.model_dump(mode="json") for node in req.graph_json.nodes]
+                edge_data = [
+                    {
+                        "id": edge.id,
+                        "source_node_id": edge.source_node_id,
+                        "target_node_id": edge.target_node_id,
+                        "edge_type": edge.edge_type,
+                        "condition_expression": edge.condition_expression,
+                        "hitl_gate_config": (
+                            edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
+                        ),
+                    }
+                    for edge in req.graph_json.edges
+                ]
+                graph = await replace_pipeline_graph(
+                    session,
+                    pipeline_id=pipeline_id,
+                    org_id=principal.organisation_id,
+                    nodes=node_data,
+                    edges=edge_data,
+                )
+                if graph is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
             pipeline = await update_pipeline(session, pipeline_id, updates)
     except ProgrammingError:
         logger.exception("routes.pipelines")
