@@ -31,10 +31,10 @@ vi.mock('vue-router', () => ({
   })),
 }))
 
+import { useRoute } from 'vue-router'
 import PageTabs from '../../components/PageTabs.vue'
 
 function createWrapper(tabs: any[], routePath = '/evals/editor') {
-  const { useRoute } = require('vue-router')
   ;(useRoute as any).mockReturnValue({
     path: routePath,
     fullPath: routePath,
