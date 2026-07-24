@@ -111,7 +111,7 @@ class TriggerBusyError(RuntimeError):
 
 _DEDUP_TTL_SECONDS = 300  # 5 minutes
 _REPLAY_WINDOW_SECONDS = 300  # ±300s for X-Modulo-Timestamp
-_ACTIVE_STATUSES = ("pending", "running", "awaiting_human", "claimed", "waiting_for_lock")
+_ACTIVE_STATUSES = ("running", "awaiting_human", "claimed", "waiting_for_lock")
 
 
 # ---------------------------------------------------------------------------

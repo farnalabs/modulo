@@ -28,7 +28,7 @@ from modulo.db.models.trigger_event import TriggerEvent
 
 _log = logging.getLogger(__name__)
 
-_ACTIVE_STATUSES = ("pending", "running", "awaiting_human", "claimed", "waiting_for_lock")
+_ACTIVE_STATUSES = ("running", "awaiting_human", "claimed", "waiting_for_lock")
 
 
 async def fire_agent_signal(

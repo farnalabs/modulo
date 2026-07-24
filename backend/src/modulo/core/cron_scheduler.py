@@ -63,7 +63,7 @@ def _get_engine() -> AsyncEngine:
     return _ENGINE
 
 
-_ACTIVE_STATUSES = ("pending", "running", "awaiting_human", "claimed", "waiting_for_lock")
+_ACTIVE_STATUSES = ("running", "awaiting_human", "claimed", "waiting_for_lock")
 
 
 # ---------------------------------------------------------------------------

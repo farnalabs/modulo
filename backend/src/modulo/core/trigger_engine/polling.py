@@ -42,7 +42,7 @@ except ImportError:
 
 _log = logging.getLogger(__name__)
 
-_ACTIVE_STATUSES = ("pending", "running", "awaiting_human", "claimed", "waiting_for_lock")
+_ACTIVE_STATUSES = ("running", "awaiting_human", "claimed", "waiting_for_lock")
 
 _engine: Any = None
 _engine_lock = threading.Lock()
