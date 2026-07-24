@@ -251,7 +251,7 @@ class TestUpdateNodeCategory:
 class TestDeleteNodeCategory:
     def test_returns_204(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.node_categories.delete_node_category", return_value=True),
+            patch("modulo.api.routes.node_categories.soft_delete_node_category", return_value=True),
             patch("modulo.api.routes.node_categories.set_rls_org"),
             patch("modulo.api.routes.node_categories.set_rls_user_context"),
         ):
@@ -260,7 +260,7 @@ class TestDeleteNodeCategory:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.node_categories.delete_node_category", return_value=False),
+            patch("modulo.api.routes.node_categories.soft_delete_node_category", return_value=False),
             patch("modulo.api.routes.node_categories.set_rls_org"),
             patch("modulo.api.routes.node_categories.set_rls_user_context"),
         ):
