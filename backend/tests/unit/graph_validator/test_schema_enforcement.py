@@ -10,7 +10,7 @@ Tests needing DB interaction use mocked AsyncSession.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -27,7 +27,7 @@ _SIMPLE_GRAPH = {
     "edges": [{"source": "a", "target": "b", "type": "normal"}],
 }
 
-_PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=datetime.UTC)
+_PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=timezone.utc)
 
 
 def _snapshot(**kw):
@@ -414,7 +414,7 @@ async def test_pre_existing_pipeline_gets_degraded_warning():
 
     snap = _snapshot(
         graph_json=graph,
-        created_at=datetime(2026, 7, 21, 12, 0, 0, tzinfo=datetime.UTC),
+        created_at=datetime(2026, 7, 21, 12, 0, 0, tzinfo=timezone.utc),
         schema_pins_json=[],
     )
 
@@ -445,7 +445,7 @@ async def test_non_pre_existing_pipeline_blocks_on_incompatible():
 
     snap = _snapshot(
         graph_json=graph,
-        created_at=datetime(2026, 7, 23, 12, 0, 0, tzinfo=datetime.UTC),
+        created_at=datetime(2026, 7, 23, 12, 0, 0, tzinfo=timezone.utc),
         schema_pins_json=[],
     )
 
