@@ -129,7 +129,7 @@ def _update_view(name: str, ctx: dict[str, Any], client: Any) -> None:
 def _delete_view(ctx: dict[str, Any], client: Any) -> None:
     view_id = ctx.get("view_id", VIEW_ID)
     with (
-        patch("modulo.api.routes.views.delete_view", return_value=True),
+        patch("modulo.api.routes.views.soft_delete_view", return_value=True),
         patch("modulo.api.routes.views.set_rls_org"),
         patch("modulo.api.routes.views.set_rls_user_context"),
     ):
