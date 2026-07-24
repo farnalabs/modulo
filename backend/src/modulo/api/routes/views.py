@@ -10,14 +10,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.view import (
     create_view,
-    delete_view,
     get_view,
     list_views,
+    restore_view,
+    soft_delete_view,
     update_view,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -250,7 +252,7 @@ async def delete_view_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_view(session, view_id)
+            deleted = await soft_delete_view(session, view_id)
     except ProgrammingError:
         logger.exception("views.table_missing")
         raise HTTPException(
@@ -273,3 +275,40 @@ async def delete_view_endpoint(
         ) from e
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
+
+
+@router.post("/{view_id}/restore", response_model=ViewResponse, dependencies=[require_feature("view_modes")])
+@handle_db_errors("views.restore")
+async def restore_view_endpoint(
+    view_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> ViewResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            view = await restore_view(session, view_id)
+    except ProgrammingError:
+        logger.exception("views.table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="The saved_views feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("views.restore.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("views.restore.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
+    if view is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
+    return ViewResponse.model_validate(view)
