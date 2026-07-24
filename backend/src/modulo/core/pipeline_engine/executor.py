@@ -264,8 +264,8 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         org_id: uuid.UUID,
         input_payload: dict[str, Any],
-        delay: int = 30,
-        max_delay: int = 300,
+        delay: int = 120,
+        max_delay: int = 600,
     ) -> None:
         """Retry a pending run with exponential backoff until capacity frees up.
 
@@ -274,24 +274,29 @@ class PipelineExecutor:
         Exceptions are logged and loop continues - the final attempt runs at
         *max_delay* seconds.
         """
-        current_delay = delay
-        while current_delay <= max_delay:
-            await asyncio.sleep(current_delay)
-            try:
-                result = await self.execute(
-                    run_id=run_id,
-                    org_id=org_id,
-                    input_payload=input_payload,
-                )
-                if result.status == "running":
-                    return
-            except Exception:
-                _log.exception(
-                    "retry_pending attempt failed for run %s (next retry in %ss)",
-                    run_id,
-                    min(current_delay * 2, max_delay),
-                )
-            current_delay = min(current_delay * 2, max_delay)
+        global _RETRY_SEMAPHORE
+        if _RETRY_SEMAPHORE is None:
+            import asyncio
+            _RETRY_SEMAPHORE = asyncio.Semaphore(2)
+        async with _RETRY_SEMAPHORE:
+            current_delay = delay
+            while current_delay <= max_delay:
+                await asyncio.sleep(current_delay + __import__("random").uniform(0, 30))
+                try:
+                    result = await self.execute(
+                        run_id=run_id,
+                        org_id=org_id,
+                        input_payload=input_payload,
+                    )
+                    if result.status == "running":
+                        return
+                except Exception:
+                    _log.exception(
+                        "retry_pending attempt failed for run %s (next retry in %ss)",
+                        run_id,
+                        min(int(current_delay * 1.5), max_delay),
+                    )
+                current_delay = min(int(current_delay * 1.5), max_delay)
 
     async def _load_eval_defs_for_pipeline(
         self,
