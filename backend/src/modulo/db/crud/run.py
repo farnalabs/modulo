@@ -117,8 +117,18 @@ async def list_runs(
     page_size: int = 20,
     cursor: str | None = None,
 ) -> PageResult[Run]:
-    q = select(Run).options(selectinload(Run.pipeline)).join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
-    count_q = select(func.count()).select_from(Run).join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
+    q = (
+        select(Run)
+        .options(selectinload(Run.pipeline))
+        .join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
+        .where(Pipeline.deleted_at.is_(None))
+    )
+    count_q = (
+        select(func.count())
+        .select_from(Run)
+        .join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
+        .where(Pipeline.deleted_at.is_(None))
+    )
     if pipeline_id is not None:
         q = q.where(Run.pipeline_id == pipeline_id)
         count_q = count_q.where(Run.pipeline_id == pipeline_id)
@@ -245,7 +255,15 @@ async def get_run_stats(
     days = {"7d": 7, "30d": 30, "90d": 90}.get(period, 30)
     cutoff = datetime.now(UTC) - timedelta(days=days)
 
-    result = await session.execute(select(Run).where(Run.created_at >= cutoff).order_by(Run.created_at))
+    result = await session.execute(
+        select(Run)
+        .join(Pipeline, Run.pipeline_id == Pipeline.id)
+        .where(
+            Run.created_at >= cutoff,
+            Pipeline.deleted_at.is_(None),
+        )
+        .order_by(Run.created_at)
+    )
     runs: list[Run] = list(result.scalars().all())
 
     total = len(runs)
@@ -321,9 +339,11 @@ async def get_run_heatmap(
 
     result = await session.execute(
         select(Run)
+        .join(Pipeline, Run.pipeline_id == Pipeline.id)
         .where(
             Run.created_at >= cutoff_start,
             Run.created_at < cutoff_end,
+            Pipeline.deleted_at.is_(None),
         )
         .order_by(Run.created_at)
     )
