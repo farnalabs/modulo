@@ -43,7 +43,8 @@ from modulo.core.workflow_import_export import (
 )
 from modulo.db.crud.library_primitive import (
     create_library_primitive,
-    delete_library_primitive,
+    restore_library_primitive,
+    soft_delete_library_primitive,
     update_library_primitive,
 )
 from modulo.db.crud.pipeline import (
@@ -507,17 +508,17 @@ async def update_library_primitive_endpoint(
 
 
 @handle_db_errors("library.delete_library_primitive_endpoint")
-@router.delete("/{primitive_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{primitive_id}", response_model=LibraryPrimitiveResponse)
 async def delete_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
-) -> None:
+) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_library_primitive(session, primitive_id)
+            prim = await soft_delete_library_primitive(session, primitive_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -534,11 +535,43 @@ async def delete_library_primitive_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
-    if not deleted:
+    if prim is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Primitive {primitive_id} not found",
         )
+    return LibraryPrimitiveResponse.model_validate(prim)
+
+
+@handle_db_errors("library.restore_library_primitive_endpoint")
+@router.post("/{primitive_id}/restore", response_model=LibraryPrimitiveResponse)
+async def restore_library_primitive_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> LibraryPrimitiveResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            prim = await restore_library_primitive(session, primitive_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("restore_library_primitive_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
+    if prim is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Primitive {primitive_id} not found or not deleted",
+        )
+    return LibraryPrimitiveResponse.model_validate(prim)
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -89,7 +89,7 @@ async def list_library_primitives(
     if excluded_tiers is None:
         excluded_tiers = ["in_dev"]
 
-    conditions = []
+    conditions = [LibraryPrimitive.deleted_at.is_(None)]
 
     if org_id is not None:
         conditions.append(LibraryPrimitive.organisation_id == org_id)
@@ -234,6 +234,28 @@ async def list_primitives_by_version_group(
     )
     result = await session.execute(stmt)
     return list(result.scalars())
+
+
+async def soft_delete_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) -> LibraryPrimitive | None:
+    result = await session.execute(
+        update(LibraryPrimitive)
+        .where(LibraryPrimitive.id == primitive_id, LibraryPrimitive.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(LibraryPrimitive)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
+async def restore_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) -> LibraryPrimitive | None:
+    result = await session.execute(
+        update(LibraryPrimitive)
+        .where(LibraryPrimitive.id == primitive_id, LibraryPrimitive.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(LibraryPrimitive)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
 
 
 async def delete_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) -> bool:

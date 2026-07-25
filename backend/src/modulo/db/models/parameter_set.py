@@ -4,10 +4,10 @@ from typing import Any
 from sqlalchemy import JSON, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class ParameterSet(OrgScoped):
+class ParameterSet(SoftDeleteMixin, OrgScoped):
     __tablename__ = "parameter_sets"
     __table_args__ = (UniqueConstraint("parameter_schema_id", "name", name="uq_parameter_sets_schema_name"),)
 

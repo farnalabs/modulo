@@ -15,10 +15,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class LibraryPrimitive(OrgScoped):
+class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     __tablename__ = "library_primitives"
     __table_args__ = (
         CheckConstraint("source IN ('local', 'registry', 'modulo', 'community')", name="ck_library_primitives_source"),
