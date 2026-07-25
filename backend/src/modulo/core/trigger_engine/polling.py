@@ -42,7 +42,7 @@ except ImportError:
 
 _log = logging.getLogger(__name__)
 
-_ACTIVE_STATUSES = ("running", "awaiting_human", "claimed", "waiting_for_lock")
+_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
 
 _engine: Any = None
 _engine_lock = threading.Lock()
@@ -650,6 +650,7 @@ async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> in
         select(func.count()).where(
             Run.trigger_id == trigger_id,
             Run.status.in_(_ACTIVE_STATUSES),
+            Run.cancellation_requested == False,  # noqa: E712
         )
     )
     return int(result.scalar_one() or 0)

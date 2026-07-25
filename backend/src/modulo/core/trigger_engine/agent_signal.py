@@ -28,7 +28,7 @@ from modulo.db.models.trigger_event import TriggerEvent
 
 _log = logging.getLogger(__name__)
 
-_ACTIVE_STATUSES = ("running", "awaiting_human", "claimed", "waiting_for_lock")
+_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
 
 
 async def fire_agent_signal(
@@ -199,6 +199,7 @@ async def _count_active_runs(session: AsyncSession, pipeline_id: uuid.UUID) -> i
         select(sa_func.count()).where(
             Run.pipeline_id == pipeline_id,
             Run.status.in_(_ACTIVE_STATUSES),
+            Run.cancellation_requested == False,  # noqa: E712
         )
     )
     return int(result.scalar_one() or 0)
