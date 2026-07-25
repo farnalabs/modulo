@@ -191,6 +191,11 @@ ignore = [
 "tests/unit/runtime_provider/*" = ["E402"]
 "tests/unit/secrets_backend/*" = ["E402"]
 "src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
+"src/modulo/api/routes/triggers.py" = ["UP017"]
+"src/modulo/core/cron_scheduler.py" = ["UP017"]
+"src/modulo/core/in_process_scheduler.py" = ["UP017"]
+"src/modulo/core/reports/scheduler.py" = ["UP017"]
+"src/modulo/core/trigger_engine/polling.py" = ["UP017"]
 
 [tool.mypy]
 strict = true
