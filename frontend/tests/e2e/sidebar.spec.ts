@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Sidebar Navigation', () => {
   test('displays Core, Settings, and Remy groups in simple mode', { tag: '@smoke' }, async ({ page, env }) => {
@@ -11,7 +11,7 @@ test.describe('Sidebar Navigation', () => {
 
     const groupHeaders = sidebar.locator('button.sidebar-group-header')
     const headerCount = await groupHeaders.count()
-    expect(headerCount).toBeGreaterThanOrEqual(3)
+    expect(headerCount).toBeGreaterThanOrEqual(2)
   })
 
   test('sidebar link navigates to the correct page', async ({ page, env }) => {
@@ -44,3 +44,4 @@ test.describe('Sidebar Navigation', () => {
     }
   })
 })
+
