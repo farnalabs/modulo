@@ -1,4 +1,4 @@
-import { formatApiError } from '../lib/api/formatError'
+﻿import { formatApiError } from '../lib/api/formatError'
 
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
@@ -16,7 +16,7 @@ declare module 'vue-router' {
     requiredTier?: string
     requiredPermissions?: string[]
     featureFlag?: string
-    preview?: boolean
+    visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
   }
 }
 
@@ -29,7 +29,7 @@ interface ManifestEntry {
   required_tier: string
   required_permissions: string[] | null
   feature_flag: string | null
-  preview?: boolean
+  visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
 }
 
 const manifestRoutes = (manifest as { routes?: Record<string, ManifestEntry> })?.routes ?? {}
@@ -81,7 +81,7 @@ const StageBoardView = () => import('../views/StageBoardView.vue')
 const PipelineEditorView = () => import('../views/PipelineEditorView.vue')
 const CompositeEditorView = () => import('../views/pipeline/CompositeEditorView.vue')
 const CopyPipelineWizard = () => import('../views/CopyPipelineWizard.vue')
-// removed: PipelineTemplateGallery — merged into /library
+// removed: PipelineTemplateGallery â€” merged into /library
 const AdminUsersView = () => import('../views/AdminUsersView.vue')
 const AdminSpendLimitsView = () => import('../views/AdminSpendLimitsView.vue')
 const AdminCostBreakdownView = () => import('../views/AdminCostBreakdownView.vue')
@@ -529,7 +529,7 @@ router.beforeEach((to) => {
         to.meta.requiredTier = entry.required_tier
         to.meta.requiredPermissions = entry.required_permissions ?? undefined
         to.meta.featureFlag = entry.feature_flag ?? undefined
-        to.meta.preview = entry.preview ?? undefined
+        to.meta.visibility = entry.visibility ?? undefined
         to.meta.parent = entry.parent
           ? (manifestPathToName.get(entry.parent) ?? entry.parent)
           : undefined
@@ -560,7 +560,7 @@ router.beforeEach((to) => {
           return { name: 'dashboard' }
         }
       }
-      if (to.meta?.preview) {
+      if (to.meta?.visibility === 'private_preview' || to.meta?.visibility === 'in_dev') {
         const planStore = usePlanStore()
         if (!planStore.devMode) {
           return { name: 'dashboard' }
@@ -593,3 +593,4 @@ router.onError((err) => {
 })
 
 export default router
+
