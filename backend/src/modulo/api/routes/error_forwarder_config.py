@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -85,7 +85,10 @@ async def list_forwarders(
             await set_rls_org(session, org_id)
 
             result = await session.execute(
-                select(ErrorForwarderConfig).where(ErrorForwarderConfig.organisation_id == org_id)
+                select(ErrorForwarderConfig).where(
+                    ErrorForwarderConfig.organisation_id == org_id,
+                    ErrorForwarderConfig.deleted_at.is_(None),
+                )
             )
             existing = {r.forwarder_type: r for r in result.scalars().all()}
     except ProgrammingError as exc:
@@ -154,6 +157,7 @@ async def configure_forwarder(
                 select(ErrorForwarderConfig).where(
                     ErrorForwarderConfig.organisation_id == org_id,
                     ErrorForwarderConfig.forwarder_type == forwarder_type,
+                    ErrorForwarderConfig.deleted_at.is_(None),
                 )
             )
             cfg = result.scalar_one_or_none()
@@ -230,6 +234,7 @@ async def test_forwarder(
                     select(ErrorForwarderConfig).where(
                         ErrorForwarderConfig.organisation_id == org_id,
                         ErrorForwarderConfig.forwarder_type == forwarder_type,
+                        ErrorForwarderConfig.deleted_at.is_(None),
                     )
                 )
                 db_cfg = result.scalar_one_or_none()
@@ -284,6 +289,7 @@ async def test_forwarder(
                 select(ErrorForwarderConfig).where(
                     ErrorForwarderConfig.organisation_id == org_id,
                     ErrorForwarderConfig.forwarder_type == forwarder_type,
+                    ErrorForwarderConfig.deleted_at.is_(None),
                 )
             )
             db_cfg = result.scalar_one_or_none()
@@ -313,3 +319,118 @@ async def test_forwarder(
     if ok:
         return ForwarderTestResult(ok=True, message=f"Successfully connected to {name}")
     return ForwarderTestResult(ok=False, message=f"Failed to connect to {name}. Check your configuration.")
+
+
+@router.delete(
+    "/{forwarder_type}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[require_feature("error_forwarders")],
+)
+async def delete_forwarder(
+    forwarder_type: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> None:
+    org_id = principal.organisation_id
+    if org_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+
+    if forwarder_type not in _FORWARDER_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown forwarder type: {forwarder_type}",
+        )
+
+    _require_admin(principal)
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            result = await session.execute(
+                update(ErrorForwarderConfig)
+                .where(
+                    ErrorForwarderConfig.organisation_id == org_id,
+                    ErrorForwarderConfig.forwarder_type == forwarder_type,
+                    ErrorForwarderConfig.deleted_at.is_(None),
+                )
+                .values(deleted_at=func.now())
+                .returning(ErrorForwarderConfig.id)
+            )
+            deleted = result.scalar_one_or_none()
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("error_tracking.delete_forwarder_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
+        ) from exc
+    except Exception as exc:
+        _log.exception("error_tracking.delete_forwarder_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
+        ) from exc
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Forwarder configuration not found")
+
+
+@router.post(
+    "/{forwarder_type}/restore",
+    response_model=ForwarderConfigResponse,
+    dependencies=[require_feature("error_forwarders")],
+)
+async def restore_forwarder(
+    forwarder_type: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> ForwarderConfigResponse:
+    org_id = principal.organisation_id
+    if org_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+
+    if forwarder_type not in _FORWARDER_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown forwarder type: {forwarder_type}",
+        )
+
+    _require_admin(principal)
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            result = await session.execute(
+                update(ErrorForwarderConfig)
+                .where(
+                    ErrorForwarderConfig.organisation_id == org_id,
+                    ErrorForwarderConfig.forwarder_type == forwarder_type,
+                    ErrorForwarderConfig.deleted_at.is_not(None),
+                )
+                .values(deleted_at=None)
+                .returning(ErrorForwarderConfig)
+            )
+            cfg = result.scalar_one_or_none()
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Error tracking is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("error_tracking.restore_forwarder_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Error tracking is temporarily unavailable. Please try again.",
+        ) from exc
+    except Exception as exc:
+        _log.exception("error_tracking.restore_forwarder_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
+        ) from exc
+    if cfg is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Forwarder configuration not found")
+    return ForwarderConfigResponse.from_orm_model(cfg)

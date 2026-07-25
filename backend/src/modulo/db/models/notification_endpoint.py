@@ -5,10 +5,10 @@ from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, LargeBinary
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class NotificationEndpoint(OrgScoped):
+class NotificationEndpoint(SoftDeleteMixin, OrgScoped):
     __tablename__ = "notification_endpoints"
 
     url: Mapped[str] = mapped_column(String(2048), nullable=False)

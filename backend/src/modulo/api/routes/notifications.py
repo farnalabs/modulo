@@ -13,7 +13,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,7 +86,10 @@ async def list_endpoints(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await session.execute(
-                select(NotificationEndpoint).where(NotificationEndpoint.organisation_id == principal.organisation_id)
+                select(NotificationEndpoint).where(
+                    NotificationEndpoint.organisation_id == principal.organisation_id,
+                    NotificationEndpoint.deleted_at.is_(None),
+                )
             )
             endpoints = list(result.scalars())
     except ProgrammingError:
@@ -188,8 +191,15 @@ async def get_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            ep = await session.get(NotificationEndpoint, endpoint_id)
-            if ep is None or ep.organisation_id != principal.organisation_id:
+            result = await session.execute(
+                select(NotificationEndpoint).where(
+                    NotificationEndpoint.id == endpoint_id,
+                    NotificationEndpoint.organisation_id == principal.organisation_id,
+                    NotificationEndpoint.deleted_at.is_(None),
+                )
+            )
+            ep = result.scalar_one_or_none()
+            if ep is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
     except ProgrammingError:
         logger.exception("notifications.endpoint_table_missing")
@@ -235,8 +245,15 @@ async def update_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            ep = await session.get(NotificationEndpoint, endpoint_id)
-            if ep is None or ep.organisation_id != principal.organisation_id:
+            result = await session.execute(
+                select(NotificationEndpoint).where(
+                    NotificationEndpoint.id == endpoint_id,
+                    NotificationEndpoint.organisation_id == principal.organisation_id,
+                    NotificationEndpoint.deleted_at.is_(None),
+                )
+            )
+            ep = result.scalar_one_or_none()
+            if ep is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
 
             if req.url is not None:
@@ -287,10 +304,17 @@ async def delete_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            ep = await session.get(NotificationEndpoint, endpoint_id)
-            if ep is None or ep.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
-            await session.delete(ep)
+            result = await session.execute(
+                update(NotificationEndpoint)
+                .where(
+                    NotificationEndpoint.id == endpoint_id,
+                    NotificationEndpoint.organisation_id == principal.organisation_id,
+                    NotificationEndpoint.deleted_at.is_(None),
+                )
+                .values(deleted_at=func.now())
+                .returning(NotificationEndpoint.id)
+            )
+            deleted = result.scalar_one_or_none()
     except ProgrammingError:
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
@@ -311,6 +335,55 @@ async def delete_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
         ) from e
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
+
+
+@handle_db_errors("notifications.restore_endpoint")
+@router.post("/{endpoint_id}/restore", response_model=NotificationEndpointResponse)
+async def restore_endpoint(
+    endpoint_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> NotificationEndpointResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                update(NotificationEndpoint)
+                .where(
+                    NotificationEndpoint.id == endpoint_id,
+                    NotificationEndpoint.organisation_id == principal.organisation_id,
+                    NotificationEndpoint.deleted_at.is_not(None),
+                )
+                .values(deleted_at=None)
+                .returning(NotificationEndpoint)
+            )
+            ep = result.scalar_one_or_none()
+    except ProgrammingError:
+        logger.exception("notifications.endpoint_table_missing")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Notifications are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.restore_endpoint.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("notifications.restore_endpoint.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
+    if ep is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
+    return _ep_to_response(ep)
 
 
 def _ep_to_response(ep: NotificationEndpoint) -> NotificationEndpointResponse:
