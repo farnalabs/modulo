@@ -281,8 +281,9 @@ class TestUpdateCompositeTemplate:
 class TestDeleteCompositeTemplate:
     def test_returns_204(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.soft_delete_composite_template", return_value=_make_template()),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch(
+                "modulo.api.routes.composite_templates.soft_delete_composite_template", return_value=_make_template()
+            ),
         ):
             resp = client.delete(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
         assert resp.status_code == 204

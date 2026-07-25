@@ -2326,6 +2326,7 @@ async def infer_schema(
 
             # Preview feature - requires dev mode
             from modulo.settings import get_settings
+
             settings = get_settings()
             if not settings.modulo_dev_mode:
                 return _tool_error(
