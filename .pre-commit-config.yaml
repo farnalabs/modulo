@@ -134,3 +134,17 @@
         entry: powershell -NoProfile -File tools/check-utf8-encoding.ps1
         language: system
         pass_filenames: false
+      - id: run-changed-tests
+        name: run tests for changed test files
+        entry: powershell -NoProfile -File tools/run-changed-tests.ps1
+        language: system
+        files: ^backend/tests/.*\.py$
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: check-uv-lock
+        name: check uv lockfile freshness
+        entry: powershell -NoProfile -File tools/check-uv-lock.ps1
+        language: system
+        files: ^backend/pyproject\.toml$
+        pass_filenames: false
