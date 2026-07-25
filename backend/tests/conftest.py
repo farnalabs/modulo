@@ -1,7 +1,5 @@
-"""
-Root conftest for the Modulo backend test suite.
+"""Project-level conftest — shared test utilities only.
 
-Enable the quarantine plugin so that .quarantine.yml is read automatically.
+Do NOT put connector-specific fixtures here; they belong in
+``tests/connectors/conftest.py``.
 """
-
-pytest_plugins = ["tests.quarantine_plugin"]
