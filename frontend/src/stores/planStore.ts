@@ -13,6 +13,7 @@ interface ApiResult<T> {
 
 interface FeatureFlagsPayload {
   license: { tier: string };
+  dev_mode?: boolean;
   flags: Array<{ name: string; currently_active: boolean }>;
 }
 
@@ -29,6 +30,7 @@ interface TiersPayload {
 export const usePlanStore = defineStore("plan", () => {
   const currentTier = ref("community");
   const features = ref<Record<string, boolean>>({});
+  const devMode = ref(false);
   const isLoading = ref(false);
   const error = ref<string | null>(null);
   const expiresAt = ref<string | null>(null);
@@ -95,6 +97,7 @@ export const usePlanStore = defineStore("plan", () => {
           apiErrors.push(`Feature flags: ${formatApiError(flagsRes.error)}`);
         } else if (flagsRes.data) {
           currentTier.value = flagsRes.data.license.tier;
+          devMode.value = flagsRes.data.dev_mode === true;
           const map: Record<string, boolean> = {};
           for (const flag of flagsRes.data.flags) {
             map[flag.name] = flag.currently_active;
@@ -221,6 +224,7 @@ export const usePlanStore = defineStore("plan", () => {
   return {
     currentTier,
     features,
+    devMode,
     isLoading,
     error,
     isTeam,

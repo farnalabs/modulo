@@ -1,0 +1,73 @@
+"""Admin dev-mode toggle — enables preview/in-development features."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.api.dependencies import get_db_session
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.crud.system_config import get_config, set_config
+from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/v1/admin/dev-mode", tags=["admin-dev-mode"])
+
+
+class DevModeResponse(BaseModel):
+    enabled: bool
+    source: str  # "env" | "db" | "default"
+
+
+class SetDevModeRequest(BaseModel):
+    enabled: bool
+
+
+@router.get("", response_model=DevModeResponse)
+async def get_dev_mode(
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+    _: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Get current dev mode status.
+
+    Resolution: SystemConfig override → env var → false.
+    """
+    # 1. Check DB override
+    try:
+        config = await get_config(session, "dev_mode")
+        if config is not None:
+            return {"enabled": bool(config.value), "source": "db"}
+    except Exception:
+        logger.warning("Failed to read dev_mode from DB", exc_info=True)
+
+    # 2. Check env var
+    if settings.modulo_dev_mode:
+        return {"enabled": True, "source": "env"}
+
+    # 3. Default
+    return {"enabled": False, "source": "default"}
+
+
+@router.put("", response_model=DevModeResponse)
+async def set_dev_mode(
+    req: SetDevModeRequest,
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Enable or disable dev mode. Persisted in SystemConfig."""
+    if not current_user.is_system_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    try:
+        await set_config(session, "dev_mode", req.enabled)
+        return {"enabled": req.enabled, "source": "db"}
+    except Exception:
+        logger.exception("Failed to set dev_mode")
+        raise HTTPException(status_code=500, detail="Failed to set dev mode") from None

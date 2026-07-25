@@ -91,6 +91,7 @@ const visibleSidebarGroups = computed(() =>
     .map((group) => ({
       ...group,
       items: group.items.filter((item) => {
+        if (item.preview && !planStore.devMode) return false
         if (!item.requiredRoles && !item.requiredTier) return true
         if (item.requiredTier && !tierInfoLoaded.value) return false
         return canSeeItem(
