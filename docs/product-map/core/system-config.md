@@ -4,6 +4,7 @@ prd: 6
 delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/admin_system_config.py
+  - backend/src/modulo/api/routes/admin_dev_mode.py
   - backend/src/modulo/db/models/system_config.py
   - backend/src/modulo/db/crud/system_config.py
 bdd:
