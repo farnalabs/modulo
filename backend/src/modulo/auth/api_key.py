@@ -61,6 +61,7 @@ def generate_api_key() -> tuple[str, str, str]:
 
 
 def _hash_key(full_key: str) -> str:
+    """Return SHA-256 hex digest of *full_key*."""
     return hashlib.sha256(full_key.encode()).hexdigest()
 
 
@@ -169,6 +170,11 @@ async def revoke_api_key(
 
 
 def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
+    """Build a serialisable dict from an OrgApiKey for API responses.
+
+    Masks the secret portion of the key and adds a computed ``is_active``
+    field based on revocation and expiration state.
+    """
     now = datetime.now(UTC)
     is_active = k.revoked_at is None and (k.expires_at is None or k.expires_at > now)
     return {
