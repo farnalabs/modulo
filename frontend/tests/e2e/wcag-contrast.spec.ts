@@ -17,7 +17,7 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', () => {
 
   for (const { path, name } of pages) {
     test(`${name} â€” light mode has no unexpected WCAG AA violations`, async ({ page }) => {
-      await page.goto(path)
+      await page.goto(path, { waitUntil: 'networkidle' })
 
       await page.evaluate(() => {
         document.documentElement.classList.add('light')
@@ -42,7 +42,7 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', () => {
     })
 
     test(`${name} â€” dark mode has no unexpected WCAG AA violations`, async ({ page }) => {
-      await page.goto(path)
+      await page.goto(path, { waitUntil: 'networkidle' })
 
       await page.evaluate(() => {
         document.documentElement.classList.remove('light')
