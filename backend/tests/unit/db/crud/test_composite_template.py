@@ -182,3 +182,53 @@ class TestDeleteCompositeTemplate:
 
         result = await delete_composite_template(mock_session, uuid.uuid4())
         assert result is False
+
+
+class TestSoftDeleteCompositeTemplate:
+    async def test_soft_deletes_and_returns_template(self, mock_session: AsyncMock) -> None:
+        template = _make_template()
+        mock_session.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=template))
+        )
+
+        from modulo.db.crud.composite_template import soft_delete_composite_template
+
+        result = await soft_delete_composite_template(mock_session, _TEMPLATE_ID)
+        assert result is not None
+        assert result.id == _TEMPLATE_ID
+        mock_session.flush.assert_awaited()
+
+    async def test_soft_delete_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
+        mock_session.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        )
+
+        from modulo.db.crud.composite_template import soft_delete_composite_template
+
+        result = await soft_delete_composite_template(mock_session, uuid.uuid4())
+        assert result is None
+
+
+class TestRestoreCompositeTemplate:
+    async def test_restores_and_returns_template(self, mock_session: AsyncMock) -> None:
+        template = _make_template()
+        mock_session.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=template))
+        )
+
+        from modulo.db.crud.composite_template import restore_composite_template
+
+        result = await restore_composite_template(mock_session, _TEMPLATE_ID)
+        assert result is not None
+        assert result.id == _TEMPLATE_ID
+        mock_session.flush.assert_awaited()
+
+    async def test_restore_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
+        mock_session.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        )
+
+        from modulo.db.crud.composite_template import restore_composite_template
+
+        result = await restore_composite_template(mock_session, uuid.uuid4())
+        assert result is None

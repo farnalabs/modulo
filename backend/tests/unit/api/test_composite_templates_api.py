@@ -125,6 +125,25 @@ class TestListCompositeTemplates:
         assert resp.status_code in (401, 403)
 
 
+class TestRestoreCompositeTemplate:
+    def test_restore_returns_200(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.composite_templates.restore_composite_template", return_value=_make_template()),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.post(f"/api/v1/composite-templates/{_TEMPLATE_ID}/restore")
+        assert resp.status_code == 200
+        assert resp.json()["id"] == str(_TEMPLATE_ID)
+
+    def test_restore_not_found_returns_404(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.composite_templates.restore_composite_template", return_value=None),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.post(f"/api/v1/composite-templates/{uuid.uuid4()}/restore")
+        assert resp.status_code == 404
+
+
 class TestCreateCompositeTemplate:
     def test_returns_201(self, client: TestClient) -> None:
         template = _make_template(name="Test Composite")
@@ -262,7 +281,7 @@ class TestUpdateCompositeTemplate:
 class TestDeleteCompositeTemplate:
     def test_returns_204(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.delete_composite_template", return_value=True),
+            patch("modulo.api.routes.composite_templates.soft_delete_composite_template", return_value=_make_template()),
             patch("modulo.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.delete(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
@@ -270,7 +289,7 @@ class TestDeleteCompositeTemplate:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.delete_composite_template", return_value=False),
+            patch("modulo.api.routes.composite_templates.soft_delete_composite_template", return_value=None),
             patch("modulo.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.delete(f"/api/v1/composite-templates/{uuid.uuid4()}")

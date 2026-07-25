@@ -4,10 +4,10 @@ from typing import Any
 from sqlalchemy import JSON, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class CompositeTemplate(OrgScoped):
+class CompositeTemplate(SoftDeleteMixin, OrgScoped):
     __tablename__ = "composite_templates"
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)

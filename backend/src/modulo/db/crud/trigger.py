@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
@@ -24,6 +24,7 @@ async def list_triggers(
         .where(
             Trigger.organisation_id == org_id,
             Pipeline.deleted_at.is_(None),
+            Trigger.deleted_at.is_(None),
         )
     )
     if pipeline_id is not None:
@@ -53,3 +54,33 @@ async def list_triggers(
     items = list(result.scalars().all())
     total = len(items)
     return PageResult(items=items, total=total, page=1, page_size=limit, has_more=False)
+
+
+async def soft_delete_trigger(
+    session: AsyncSession,
+    trigger_id: uuid.UUID,
+) -> Trigger | None:
+    """Mark a trigger as deleted (soft delete). Returns None if not found or already deleted."""
+    result = await session.execute(
+        update(Trigger)
+        .where(Trigger.id == trigger_id, Trigger.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(Trigger)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
+async def restore_trigger(
+    session: AsyncSession,
+    trigger_id: uuid.UUID,
+) -> Trigger | None:
+    """Restore a soft-deleted trigger. Returns None if not found."""
+    result = await session.execute(
+        update(Trigger)
+        .where(Trigger.id == trigger_id, Trigger.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(Trigger)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
