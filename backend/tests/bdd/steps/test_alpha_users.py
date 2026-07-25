@@ -83,7 +83,7 @@ def delete_pipeline(name, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
         patch(
-            "modulo.core.pipeline_engine.run_crud.delete_pipeline",
+            "modulo.core.pipeline_engine.run_crud.soft_delete_pipeline",
             return_value=True,
         ),
     ):

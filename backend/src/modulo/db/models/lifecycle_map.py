@@ -5,10 +5,10 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class LifecycleMap(OrgScoped):
+class LifecycleMap(SoftDeleteMixin, OrgScoped):
     __tablename__ = "lifecycle_maps"
     __table_args__ = (
         CheckConstraint("visibility IN ('org', 'team')", name="ck_lifecycle_maps_visibility"),

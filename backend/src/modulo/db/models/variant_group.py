@@ -4,14 +4,14 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 if TYPE_CHECKING:
     from modulo.db.models.organisation import Organisation
     from modulo.db.models.pipeline import Pipeline
 
 
-class VariantGroup(OrgScoped):
+class VariantGroup(SoftDeleteMixin, OrgScoped):
     __tablename__ = "variant_groups"
     __table_args__ = (
         CheckConstraint(

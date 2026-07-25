@@ -16,12 +16,13 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.variant_group import (
     check_pipeline_run_quota,
     create_variant_group,
-    delete_variant_group,
     get_coverage_gaps,
     get_prompt_diffs,
     get_variant_group,
     list_variant_groups,
+    restore_variant_group,
     run_variant_weighted,
+    soft_delete_variant_group,
     update_variant_group,
 )
 from modulo.db.rls import set_rls_org
@@ -285,7 +286,7 @@ async def delete_group(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            deleted = await delete_variant_group(session, group_id)
+            deleted = await soft_delete_variant_group(session, group_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -312,6 +313,45 @@ async def delete_group(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
     return
+
+
+@handle_db_errors("variants.restore_group")
+@router.post("/{group_id}/restore", response_model=VariantGroupResponse)
+async def restore_group(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await restore_variant_group(session, group_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resource conflict.",
+        ) from None
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group restore endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
+    if group is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found or not deleted")
+    return _variant_to_response(group)
 
 
 @handle_db_errors("variants.run_variant")

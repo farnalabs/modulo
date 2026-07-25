@@ -6,6 +6,7 @@ All functions require RLS org context to be set by the caller.
 import logging
 import random
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import count_active_runs_for_pipeline, create_run
 from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.variant_group import VariantGroup
 
@@ -59,8 +61,17 @@ async def list_variant_groups(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[VariantGroup], int]:
-    q = select(VariantGroup)
-    count_q = select(func.count()).select_from(VariantGroup)
+    q = (
+        select(VariantGroup)
+        .join(Pipeline, Pipeline.id == VariantGroup.pipeline_id)
+        .where(Pipeline.deleted_at.is_(None), VariantGroup.deleted_at.is_(None))
+    )
+    count_q = (
+        select(func.count())
+        .select_from(VariantGroup)
+        .join(Pipeline, Pipeline.id == VariantGroup.pipeline_id)
+        .where(Pipeline.deleted_at.is_(None), VariantGroup.deleted_at.is_(None))
+    )
     if pipeline_id is not None:
         q = q.where(VariantGroup.pipeline_id == pipeline_id)
         count_q = count_q.where(VariantGroup.pipeline_id == pipeline_id)
@@ -107,13 +118,22 @@ async def update_variant_group(
     return group
 
 
-async def delete_variant_group(session: AsyncSession, group_id: uuid.UUID) -> bool:
+async def soft_delete_variant_group(session: AsyncSession, group_id: uuid.UUID) -> bool:
     group = await get_variant_group(session, group_id)
     if group is None:
         return False
-    await session.delete(group)
+    group.deleted_at = datetime.now(UTC)
     await session.flush()
     return True
+
+
+async def restore_variant_group(session: AsyncSession, group_id: uuid.UUID) -> VariantGroup | None:
+    group = await get_variant_group(session, group_id)
+    if group is None or group.deleted_at is None:
+        return None
+    group.deleted_at = None
+    await session.flush()
+    return group
 
 
 async def increment_run_count(session: AsyncSession, group_id: uuid.UUID) -> VariantGroup | None:

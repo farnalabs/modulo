@@ -19,6 +19,7 @@ from modulo.core.lifecycle_map.service import (
     delete_lifecycle_map,
     get_lifecycle_map,
     list_lifecycle_maps,
+    restore_lifecycle_map,
     update_lifecycle_map,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -277,3 +278,38 @@ async def delete_lifecycle_map_endpoint(
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+
+
+@handle_db_errors("lifecycle_maps.restore_lifecycle_map_endpoint")
+@router.post("/{lifecycle_map_id}/restore", response_model=LifecycleMapResponse)
+async def restore_lifecycle_map_endpoint(
+    lifecycle_map_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> LifecycleMapResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            lifecycle_map = await restore_lifecycle_map(session, lifecycle_map_id)
+    except ProgrammingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("lifecycle_maps.restore")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    if lifecycle_map is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found or not deleted")
+    return LifecycleMapResponse.model_validate(lifecycle_map)
