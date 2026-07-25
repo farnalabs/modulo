@@ -188,3 +188,21 @@ await page.waitForURL('/login')  // confirm not redirected
 // Test that needs authenticated state:
 // This test works fine with storageState
 ```
+
+### Manifest visibility field replaces preview boolean
+
+Routes in \manifest.yaml\ use \isibility\ instead of \preview\ to control when a sidebar item appears:
+
+| Value | Behavior | Example |
+|---|---|---|
+| (omitted) | Always visible | Most routes |
+| \public_preview\ | Always visible with a "Preview" badge | Future public betas |
+| \private_preview\ | Visible only when \MODULO_DEV_MODE=true\ | Remy (dev-mode-only) |
+| \in_dev\ | Visible only when \MODULO_DEV_MODE=true\ | Incomplete features under active development |
+
+The \SidebarNav.vue\ filter logic is:
+- \private_preview\ / \in_dev\: hidden unless \planStore.devMode\ is true
+- \public_preview\: always shown, \SidebarLink.vue\ renders a "Preview" badge
+- \public\ (default): always shown with no badge
+
+Never remove or downgrade \private_preview\ to \public\ without explicit product direction. Remy is the canonical example of a \private_preview\ feature.
