@@ -231,7 +231,6 @@ async function handleCompare() {
     await compare()
   } catch (e) {
     // useMutation exposes the error for the page-level alert.
-    console.warn('Compare failed', e)
   }
 }
 </script>

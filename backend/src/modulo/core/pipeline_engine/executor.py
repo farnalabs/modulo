@@ -71,6 +71,8 @@ from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 from modulo.otel_bridge import LangGraphOtelBridge
 
+_RETRY_SEMAPHORE: asyncio.Semaphore | None = None
+
 _log = logging.getLogger(__name__)
 
 
@@ -277,6 +279,7 @@ class PipelineExecutor:
         global _RETRY_SEMAPHORE
         if _RETRY_SEMAPHORE is None:
             import asyncio
+
             _RETRY_SEMAPHORE = asyncio.Semaphore(2)
         async with _RETRY_SEMAPHORE:
             current_delay = delay

@@ -65,6 +65,8 @@ def _is_pre_existing(snapshot: PipelineSnapshot) -> bool:
     if created_at is None:
         return False
     if isinstance(created_at, datetime):
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
         return created_at < _PHASE_1_CUTOVER
     return False
 
@@ -557,7 +559,7 @@ class GraphValidator:
 
     @staticmethod
     def _build_schema_pins_map(
-        graph_json: dict,
+        graph_json: dict[str, Any],
     ) -> dict[str, dict[str, tuple[uuid.UUID, str] | None]]:
         """Build a map of (node_id, direction) -> (schema_id, version) from graph_json.
 
@@ -674,8 +676,8 @@ class GraphValidator:
 
     def _check_schema_fields(
         self,
-        out_field: dict,
-        in_field: dict,
+        out_field: dict[str, Any],
+        in_field: dict[str, Any],
         path: str = "",
         depth: int = 0,
     ) -> list[str]:
@@ -772,7 +774,7 @@ class GraphValidator:
         self,
         schema_pins: dict[tuple[uuid.UUID, str], None],
         session: AsyncSession,
-    ) -> dict[uuid.UUID, dict]:
+    ) -> dict[uuid.UUID, dict[str, Any]]:
         """Resolve schema definitions for the given (schema_id, version) pins.
 
         Queries by exact version, not latest published.
@@ -780,7 +782,7 @@ class GraphValidator:
         if not schema_pins:
             return {}
 
-        definitions: dict[uuid.UUID, dict] = {}
+        definitions: dict[uuid.UUID, dict[str, Any]] = {}
 
         for schema_id, version in schema_pins:
             stmt = select(SchemaVersion).where(
