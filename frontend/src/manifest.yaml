@@ -264,7 +264,6 @@ routes:
         sidebar_order: 2
         type: form_page
         <<: *community
-        preview: true
         deprecated: false
 
     /settings/teams:
