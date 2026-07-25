@@ -275,6 +275,7 @@
     </div>
 
     <SpotlightOverlay />
+    <CommandPalette />
     <RemyPanel />
   </div>
   </TooltipProvider>
@@ -297,6 +298,7 @@ import { useSidebar } from "../composables/useSidebar";
 import { useRemyStore } from "../composables/useRemyStore";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
+import CommandPalette from "./CommandPalette.vue";
 import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
 
 const viewModeOptions = [
