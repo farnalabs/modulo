@@ -3,10 +3,10 @@ from datetime import datetime
 from sqlalchemy import JSON, Boolean, DateTime, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class ErrorForwarderConfig(OrgScoped):
+class ErrorForwarderConfig(SoftDeleteMixin, OrgScoped):
     __tablename__ = "error_forwarder_configs"
 
     __table_args__ = (UniqueConstraint("organisation_id", "forwarder_type", name="uq_org_forwarder_type"),)

@@ -245,7 +245,9 @@ def test_get_endpoint_returns_200(client: TestClient) -> None:
         patch("modulo.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
-        session.get = AsyncMock(return_value=ep)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=ep)
+        session.execute = AsyncMock(return_value=execute_result)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
@@ -263,7 +265,9 @@ def test_get_endpoint_not_found_returns_404(client: TestClient) -> None:
         patch("modulo.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
-        session.get = AsyncMock(return_value=None)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=execute_result)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
@@ -276,13 +280,13 @@ def test_get_endpoint_not_found_returns_404(client: TestClient) -> None:
 
 
 def test_get_endpoint_wrong_org_returns_404(client: TestClient) -> None:
-    ep = _make_mock_endpoint()
-    ep.organisation_id = uuid.UUID("00000000-0000-0000-0000-00000000ffff")
     with (
         patch("modulo.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
-        session.get = AsyncMock(return_value=ep)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=execute_result)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
@@ -300,7 +304,9 @@ def test_update_endpoint_returns_200(client: TestClient) -> None:
         patch("modulo.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
-        session.get = AsyncMock(return_value=ep)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=ep)
+        session.execute = AsyncMock(return_value=execute_result)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
@@ -322,7 +328,9 @@ def test_update_endpoint_not_found_returns_404(client: TestClient) -> None:
         patch("modulo.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
-        session.get = AsyncMock(return_value=None)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=execute_result)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
@@ -338,12 +346,13 @@ def test_update_endpoint_not_found_returns_404(client: TestClient) -> None:
 
 
 def test_delete_endpoint_returns_204(client: TestClient) -> None:
-    ep = _make_mock_endpoint()
     with (
         patch("modulo.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
-        session.get = AsyncMock(return_value=ep)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=_ENDPOINT_ID)
+        session.execute = AsyncMock(return_value=execute_result)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
@@ -360,13 +369,57 @@ def test_delete_endpoint_not_found_returns_404(client: TestClient) -> None:
         patch("modulo.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
-        session.get = AsyncMock(return_value=None)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=execute_result)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
 
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.delete(f"/api/v1/notifications/{uuid.uuid4()}")
+        client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+    assert resp.status_code == 404
+
+
+def test_restore_endpoint_returns_200(client: TestClient) -> None:
+    ep = _make_mock_endpoint()
+    with (
+        patch("modulo.api.routes.notifications.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=ep)
+        session.execute = AsyncMock(return_value=execute_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(f"/api/v1/notifications/{_ENDPOINT_ID}/restore")
+        client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == str(_ENDPOINT_ID)
+    assert body["url"] == "https://hooks.example.com/notify"
+
+
+def test_restore_endpoint_not_found_returns_404(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.notifications.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=execute_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(f"/api/v1/notifications/{uuid.uuid4()}/restore")
         client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
     assert resp.status_code == 404
