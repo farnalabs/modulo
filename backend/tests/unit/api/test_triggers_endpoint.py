@@ -296,7 +296,7 @@ def test_delete_trigger_returns_204(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.soft_delete_trigger", return_value=trigger),
+        patch("modulo.db.crud.trigger.soft_delete_trigger", return_value=trigger),
     ):
         resp = client.delete(f"/api/v1/triggers/{_TRIGGER_ID}")
 
@@ -306,7 +306,7 @@ def test_delete_trigger_returns_204(client: TestClient) -> None:
 def test_delete_trigger_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.soft_delete_trigger", return_value=None),
+        patch("modulo.db.crud.trigger.soft_delete_trigger", return_value=None),
     ):
         resp = client.delete(f"/api/v1/triggers/{uuid.uuid4()}")
 
@@ -317,7 +317,7 @@ def test_restore_trigger_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.restore_trigger", return_value=trigger),
+        patch("modulo.db.crud.trigger.restore_trigger", return_value=trigger),
     ):
         resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/restore")
     assert resp.status_code == 200
@@ -327,7 +327,7 @@ def test_restore_trigger_returns_200(client: TestClient) -> None:
 def test_restore_trigger_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.restore_trigger", return_value=None),
+        patch("modulo.db.crud.trigger.restore_trigger", return_value=None),
     ):
         resp = client.post(f"/api/v1/triggers/{uuid.uuid4()}/restore")
     assert resp.status_code == 404
