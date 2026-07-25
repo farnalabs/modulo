@@ -1,4 +1,4 @@
-name: "CI: PR Validation"
+﻿name: "CI: PR Validation"
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ env:
   FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
 
 jobs:
-  # â�€â�€ Fast jobs â€� run on ALL events (PR + push + manual) â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
+  # Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬ Fast jobs Ã¢â‚¬ï¿½ run on ALL events (PR + push + manual) Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬
 
   backend-lint:
     name: Lint (Backend)
@@ -147,14 +147,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # â�€â�€ Full jobs â€� run ONLY on push (not PRs) â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
+  # Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬ Full jobs Ã¢â‚¬ï¿½ run ONLY on push (not PRs) Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬
 
-  # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
-  # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
-  # workflow_dispatch when needed.
   backend-integration:
     name: Integration tests
-    if: false
     runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     steps:
@@ -212,12 +208,8 @@ jobs:
           docker rm -f modulo-ci-pg 2>/dev/null || true
           docker rm -f modulo-ci-redis 2>/dev/null || true
 
-  # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
-  # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
-  # workflow_dispatch when needed.
   bdd-e2e:
     name: BDD / E2E Tests
-    if: false
     runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     steps:
@@ -318,12 +310,8 @@ jobs:
           docker rm -f modulo-ci-pg 2>/dev/null || true
           docker rm -f modulo-ci-redis 2>/dev/null || true
 
-  # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
-  # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
-  # workflow_dispatch when needed.
   docker-build:
     name: Docker build and scan
-    if: false
     runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     permissions:
@@ -418,12 +406,8 @@ jobs:
           echo "::error::One or more container images contain critical vulnerabilities."
           exit 1
 
-  # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
-  # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
-  # workflow_dispatch when needed.
   security-audit:
     name: Security audit
-    if: false
     runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     steps:
@@ -457,13 +441,13 @@ jobs:
           fi
           uv --directory backend run --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error .
 
-  # â�€â�€ Failure notifications â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
+  # Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬ Failure notifications Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬Ã¢ï¿½â‚¬
 
   # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
   # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
   # workflow_dispatch when needed.
   notify-merge-group-failure:
-    name: Notify Modulo fixer â€� queue CI failure
+    name: Notify Modulo fixer Ã¢â‚¬ï¿½ queue CI failure
     if: false
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks, backend-integration, bdd-e2e, docker-build, security-audit]
     runs-on: ubicloud-standard-2
@@ -520,12 +504,12 @@ jobs:
             --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | length' 2>/dev/null || echo "0")
 
           echo "fix_attempts=$FIX_COUNT" >> "$GITHUB_OUTPUT"
-          echo "PR #${PR_NUM} on '${BRANCH}' â€� branch fixer has pushed $FIX_COUNT fix commit(s)."
+          echo "PR #${PR_NUM} on '${BRANCH}' Ã¢â‚¬ï¿½ branch fixer has pushed $FIX_COUNT fix commit(s)."
 
           if [ "$FIX_COUNT" -ge 3 ]; then
             echo "exhausted=true" >> "$GITHUB_OUTPUT"
             echo "::warning::Branch fixer exhausted after $FIX_COUNT attempts against PR #${PR_NUM}."
-            gh pr comment "$PR_NUM" --body "## â¹ï¸ Branch Fixer Exhausted
+            gh pr comment "$PR_NUM" --body "## Ã¢Â¹Ã¯Â¸ Branch Fixer Exhausted
 
             The automated branch fixer has attempted $FIX_COUNT fixes against this PR but CI is still failing. Manual intervention is required.
 
@@ -554,7 +538,7 @@ jobs:
           }
           ENDJSON
           )
-          echo "PR #${PR_NUM} on branch '${BRANCH}' — CI checks failed."
+          echo "PR #${PR_NUM} on branch '${BRANCH}' â€” CI checks failed."
           echo "Sending to Modulo Branch Fixer pipeline..."
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
@@ -567,7 +551,7 @@ jobs:
           if [ "$HTTP_CODE" = "202" ]; then
             echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
           elif [ "$HTTP_CODE" = "429" ]; then
-            echo "::warning::Modulo Branch Fixer rate-limited — $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
+            echo "::warning::Modulo Branch Fixer rate-limited â€” $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
           else
             echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
           fi

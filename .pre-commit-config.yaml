@@ -1,4 +1,4 @@
-repos:
+﻿repos:
   - repo: https://github.com/PyCQA/bandit
     rev: 1.8.3
     hooks:
@@ -127,4 +127,10 @@ repos:
         entry: powershell -NoProfile -File tools/check-c1-chars.ps1
         language: system
         files: ^\\.github/workflows/.*\\.yml$
+        pass_filenames: false
+
+      - id: check-utf8
+        name: check UTF-8 encoding (no corrupted files)
+        entry: powershell -NoProfile -File tools/check-utf8-encoding.ps1
+        language: system
         pass_filenames: false
