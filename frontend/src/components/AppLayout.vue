@@ -37,6 +37,9 @@
         </div>
 
         <div class="flex items-center justify-between pb-2 mb-1">
+          <NotificationBell />
+        </div>
+        <div class="flex items-center justify-between pb-2 mb-1">
           <label for="applayout-field-2" class="toggle-switch" :class="isLight ? 'light' : 'dark'">
             <span class="track">
               <span class="thumb" />
