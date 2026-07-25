@@ -51,16 +51,15 @@ async def list_triggers(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            q = select(Trigger).where(Trigger.organisation_id == principal.organisation_id)
+            base_filter = Trigger.organisation_id == principal.organisation_id
+            q = select(Trigger).where(base_filter, Trigger.deleted_at.is_(None))
 
             if pipeline_id is not None:
                 q = q.where(Trigger.pipeline_id == pipeline_id)
             if trigger_type is not None:
                 q = q.where(Trigger.trigger_type == trigger_type)
 
-            count_q = (
-                select(func.count()).select_from(Trigger).where(Trigger.organisation_id == principal.organisation_id)
-            )
+            count_q = select(func.count()).select_from(Trigger).where(base_filter, Trigger.deleted_at.is_(None))
             if pipeline_id is not None:
                 count_q = count_q.where(Trigger.pipeline_id == pipeline_id)
             if trigger_type is not None:
@@ -159,6 +158,7 @@ async def update_cron_config(
                 select(Trigger).where(
                     Trigger.id == trigger_id,
                     Trigger.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
                 )
             )
             trigger = result.scalar_one_or_none()
@@ -239,6 +239,7 @@ async def preview_cron_schedule(
                 select(Trigger).where(
                     Trigger.id == trigger_id,
                     Trigger.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
                 )
             )
             trigger = result.scalar_one_or_none()
@@ -323,6 +324,7 @@ async def update_polling_config(
                 select(Trigger).where(
                     Trigger.id == trigger_id,
                     Trigger.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
                 )
             )
             trigger = result.scalar_one_or_none()
@@ -423,6 +425,7 @@ async def test_polling_condition(
                 select(Trigger).where(
                     Trigger.id == trigger_id,
                     Trigger.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
                 )
             )
             trigger = result.scalar_one_or_none()
@@ -571,6 +574,7 @@ async def update_trigger(
                 select(Trigger).where(
                     Trigger.id == trigger_id,
                     Trigger.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
                 )
             )
             trigger = result.scalar_one_or_none()
@@ -644,20 +648,15 @@ async def delete_trigger(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
-    """Delete a trigger and its associated events (cascade)."""
+    """Soft-delete a trigger."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result = await session.execute(
-                select(Trigger).where(
-                    Trigger.id == trigger_id,
-                    Trigger.organisation_id == principal.organisation_id,
-                )
-            )
-            trigger = result.scalar_one_or_none()
-            if trigger is None:
+            from modulo.db.crud.trigger import soft_delete_trigger
+
+            deleted = await soft_delete_trigger(session, trigger_id)
+            if deleted is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
-            await session.delete(trigger)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -678,6 +677,55 @@ async def delete_trigger(
         ) from None
 
 
+@handle_db_errors("triggers.restore_trigger")
+@router.post("/triggers/{trigger_id}/restore", status_code=status.HTTP_200_OK)
+async def restore_trigger(
+    trigger_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
+    """Restore a soft-deleted trigger."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            from modulo.db.crud.trigger import restore_trigger as _restore_trigger
+
+            trigger = await _restore_trigger(session, trigger_id)
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("restore_trigger failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
+
+    return {
+        "id": str(trigger.id),
+        "pipeline_id": str(trigger.pipeline_id),
+        "trigger_type": trigger.trigger_type,
+        "active": trigger.active,
+        "max_concurrent_runs": trigger.max_concurrent_runs,
+        "config_json": mask_config_json(trigger.config_json),
+        "cron_expression": trigger.cron_expression,
+        "cron_timezone": trigger.cron_timezone,
+        "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
+        "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+    }
+
+
 @handle_db_errors("triggers.toggle_trigger")
 @router.post("/triggers/{trigger_id}/toggle", status_code=status.HTTP_200_OK)
 async def toggle_trigger(
@@ -693,6 +741,7 @@ async def toggle_trigger(
                 select(Trigger).where(
                     Trigger.id == trigger_id,
                     Trigger.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
                 )
             )
             trigger = result.scalar_one_or_none()
@@ -747,6 +796,7 @@ async def test_trigger(
                 select(Trigger).where(
                     Trigger.id == trigger_id,
                     Trigger.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
                 )
             )
             trigger = result.scalar_one_or_none()
@@ -841,6 +891,7 @@ async def list_trigger_events(
                 select(Trigger).where(
                     Trigger.id == trigger_id,
                     Trigger.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
                 )
             )
             trigger = trigger_result.scalar_one_or_none()
@@ -937,6 +988,7 @@ async def list_pipeline_triggers(
             q = select(Trigger).where(
                 Trigger.pipeline_id == pipeline_id,
                 Trigger.organisation_id == principal.organisation_id,
+                Trigger.deleted_at.is_(None),
             )
             if trigger_type is not None:
                 q = q.where(Trigger.trigger_type == trigger_type)

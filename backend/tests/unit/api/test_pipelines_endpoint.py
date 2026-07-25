@@ -637,7 +637,7 @@ def test_update_pipeline_not_found_returns_404(client: TestClient) -> None:
 
 def test_delete_pipeline_returns_204(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.soft_delete_pipeline", return_value=True),
+        patch("modulo.api.routes.pipelines.soft_delete_pipeline", return_value=_make_pipeline()),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
@@ -648,7 +648,7 @@ def test_delete_pipeline_returns_204(client: TestClient) -> None:
 
 def test_delete_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.soft_delete_pipeline", return_value=False),
+        patch("modulo.api.routes.pipelines.soft_delete_pipeline", return_value=None),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
