@@ -7,7 +7,7 @@ before calling. The session must be within an active transaction.
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import apply_updates
@@ -59,6 +59,7 @@ async def list_sets(
         .where(
             ParameterSet.parameter_schema_id == parameter_schema_id,
             ParameterSet.organisation_id == org_id,
+            ParameterSet.deleted_at.is_(None),
         )
         .order_by(ParameterSet.name)
     )
@@ -96,6 +97,28 @@ async def update_set(
     ps.version += 1
     await session.flush()
     return ps
+
+
+async def soft_delete_set(session: AsyncSession, set_id: uuid.UUID) -> ParameterSet | None:
+    result = await session.execute(
+        update(ParameterSet)
+        .where(ParameterSet.id == set_id, ParameterSet.deleted_at.is_(None))
+        .values(deleted_at=func.now())
+        .returning(ParameterSet)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
+
+
+async def restore_set(session: AsyncSession, set_id: uuid.UUID) -> ParameterSet | None:
+    result = await session.execute(
+        update(ParameterSet)
+        .where(ParameterSet.id == set_id, ParameterSet.deleted_at.is_not(None))
+        .values(deleted_at=None)
+        .returning(ParameterSet)
+    )
+    await session.flush()
+    return result.scalar_one_or_none()
 
 
 async def delete_set(
