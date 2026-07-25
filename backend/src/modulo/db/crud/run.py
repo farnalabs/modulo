@@ -232,6 +232,7 @@ async def count_active_runs_for_pipeline(
         .where(
             Run.pipeline_id == pipeline_id,
             Run.status.in_(active_statuses),
+            Run.cancellation_requested == False,  # noqa: E712
         )
     )
     return int(result.scalar_one_or_none() or 0)

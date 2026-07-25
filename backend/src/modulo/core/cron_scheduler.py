@@ -63,7 +63,7 @@ def _get_engine() -> AsyncEngine:
     return _ENGINE
 
 
-_ACTIVE_STATUSES = ("running", "awaiting_human", "claimed", "waiting_for_lock")
+_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
 
 
 # ---------------------------------------------------------------------------
@@ -563,6 +563,7 @@ async def _count_active_runs(session: AsyncSession, pipeline_id: uuid.UUID) -> i
         select(func.count()).where(
             Run.pipeline_id == pipeline_id,
             Run.status.in_(_ACTIVE_STATUSES),
+            Run.cancellation_requested == False,  # noqa: E712
         )
     )
     return result.scalar_one()
