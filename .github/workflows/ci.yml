@@ -90,7 +90,7 @@ jobs:
       - run: npm run type-check
       - run: npm run test:unit
       - run: npm run build
-      - run: npm audit
+      - run: npm audit --audit-level=critical
 
   product-map-validate:
     name: Product map validation
@@ -446,7 +446,7 @@ jobs:
         run: uv run pip-audit
       - name: npm audit (frontend)
         working-directory: frontend
-        run: npm audit
+        run: npm audit --audit-level=critical
       - name: Semgrep (block new findings)
         shell: bash
         run: |
