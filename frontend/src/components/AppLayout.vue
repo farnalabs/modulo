@@ -270,7 +270,7 @@
     </main>
 
     <!-- Remy execution overlay -->
-    <div v-if="remyStore.isExecutingUi" class="remy-execution-overlay">
+    <div v-if="planStore.devMode && remyStore.isExecutingUi" class="remy-execution-overlay">
       <div class="remy-execution-banner">
         <span>Remy is performing actions on this page</span>
         <button class="remy-stop-btn" @click="abortUiCommands">Stop</button>
@@ -279,7 +279,7 @@
 
     <SpotlightOverlay />
     <CommandPalette />
-    <RemyPanel />
+    <RemyPanel v-if="planStore.devMode" />
   </div>
   </TooltipProvider>
 </template>

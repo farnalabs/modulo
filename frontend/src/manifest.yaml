@@ -240,6 +240,7 @@ routes:
         sidebar_order: 3
         type: form_page
         <<: *community
+        preview: true
         deprecated: false
 
     /admin/remy:
@@ -251,6 +252,7 @@ routes:
         sidebar_order: 1
         type: form_page
         <<: *team
+        preview: true
         deprecated: false
 
     /settings/remy:
@@ -262,6 +264,7 @@ routes:
         sidebar_order: 2
         type: form_page
         <<: *community
+        preview: true
         deprecated: false
 
     /settings/teams:
@@ -350,7 +353,6 @@ routes:
         sidebar_order: 9
         type: page
         <<: *community
-        preview: true
         deprecated: false
 
     /settings/observability:
@@ -362,6 +364,7 @@ routes:
         sidebar_order: 10
         type: form_page
         <<: *team
+        preview: true
         deprecated: false
 
     /settings/error-forwarders:
@@ -666,6 +669,7 @@ routes:
         sidebar_order: 2
         type: list_page
         <<: *community
+        preview: true
         deprecated: false
 
     /lifecycle-maps/:id:

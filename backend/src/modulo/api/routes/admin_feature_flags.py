@@ -23,8 +23,6 @@ from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-_log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
 
 
@@ -121,6 +119,7 @@ async def list_feature_flags(
                 "has_license_key": registry.has_license_key,
                 "is_valid": True,
             },
+            "dev_mode": settings.modulo_dev_mode,
             "flags": [
                 {
                     "name": f.name,

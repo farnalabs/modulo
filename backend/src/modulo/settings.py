@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     # Entries are validated to not contain semicolons (which would break CSP).
     modulo_monitor_domains: str = Field("")
 
+    modulo_dev_mode: bool = Field(
+        default=False,
+        description="Enable preview/in-development features (MODULO_DEV_MODE)",
+    )
+
     # Plugin discovery — when enabled, scans installed packages for entry points
     # registered in the ``modulo.connectors`` and ``modulo.model_backends`` groups.
     # Set to "false" to disable plugin discovery at startup.

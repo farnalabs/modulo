@@ -2319,6 +2319,15 @@ async def infer_schema(
             if not await validate_current_auth():
                 return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "infer_schema")
+
+            # Preview feature - requires dev mode
+            from modulo.settings import get_settings
+            settings = get_settings()
+            if not settings.modulo_dev_mode:
+                return _tool_error(
+                    "Schema inference requires developer mode. "
+                    "Set MODULO_DEV_MODE=true or toggle Developer Mode in Admin > Feature Flags."
+                )
             from modulo.core.schema_registry import SchemaInferenceError, SchemaInferenceService
 
             org_id = _ctx_org_id_val()

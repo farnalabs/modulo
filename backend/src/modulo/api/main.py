@@ -33,6 +33,7 @@ from modulo.api.middleware.request_timeout import RequestTimeoutMiddleware
 from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
 from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
+from modulo.api.routes.admin_dev_mode import router as admin_dev_mode_router
 from modulo.api.routes.admin_email import router as admin_email_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
 from modulo.api.routes.admin_housekeeping import router as admin_housekeeping_router
@@ -832,7 +833,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _shutdown_manager.shutdown()
 
 
-async def _seed_tier_catalog(settings: object) -> None:
+async def _seed_tier_catalog(settings: Settings) -> None:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from modulo.db.session import engine as db_engine
@@ -899,6 +900,7 @@ app.add_middleware(RequestTimeoutMiddleware, timeout_seconds=120, overrides={"/h
 
 app.include_router(health_router)
 app.include_router(admin_router)
+app.include_router(admin_dev_mode_router)
 app.include_router(admin_email_router)
 app.include_router(admin_feature_flags_router)
 app.include_router(admin_license_router)
