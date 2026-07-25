@@ -218,7 +218,7 @@ async def fire_polling_trigger(
             trigger = result.scalar_one_or_none()
             if trigger is None or not trigger.active:
                 return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-            if trigger.next_fire_at is not None and trigger.next_fire_at > datetime.datetime.now(datetime.UTC):
+            if trigger.next_fire_at is not None and trigger.next_fire_at > datetime.datetime.now(datetime.timezone.utc):
                 return {"status": "skipped", "reason": "already_fired_this_cycle"}
 
             # Concurrency check
@@ -415,7 +415,7 @@ async def _update_next_fire(session: AsyncSession, trigger: Trigger) -> None:
     also updating last_fired_at to now. Only call this when a run was actually created."""
     config = trigger.config_json or {}
     interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-    now = datetime.datetime.now(datetime.UTC)
+    now = datetime.datetime.now(datetime.timezone.utc)
     next_fire = now + datetime.timedelta(seconds=interval)
     await session.execute(
         update(Trigger).where(Trigger.id == trigger.id).values(last_fired_at=now, next_fire_at=next_fire)
@@ -427,7 +427,7 @@ async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> 
     Used when the condition was NOT met — the trigger didn't actually fire."""
     config = trigger.config_json or {}
     interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-    now = datetime.datetime.now(datetime.UTC)
+    now = datetime.datetime.now(datetime.timezone.utc)
     next_fire = now + datetime.timedelta(seconds=interval)
     await session.execute(update(Trigger).where(Trigger.id == trigger.id).values(next_fire_at=next_fire))
 
@@ -490,7 +490,7 @@ class DatabasePollingEntry(ScheduleEntry):  # type: ignore[misc]
         return {"task_id": f"polling-{self._trigger_id}-{self._next_fire_at.timestamp():.0f}"}
 
     def is_due(self) -> tuple[bool, datetime.timedelta]:
-        now = datetime.datetime.now(datetime.UTC)
+        now = datetime.datetime.now(datetime.timezone.utc)
         if self._next_fire_at <= now:
             return (True, datetime.timedelta(seconds=0))
         delay = (self._next_fire_at - now).total_seconds()
@@ -567,7 +567,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
             factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
 
             async with factory() as session, session.begin():
-                now = datetime.datetime.now(datetime.UTC)
+                now = datetime.datetime.now(datetime.timezone.utc)
                 result = await session.execute(
                     select(
                         Trigger.id,
@@ -604,7 +604,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                         session.add(event)
                         # Advance next_fire_at to prevent perpetual re-fetch on every tick
                         interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-                        next_fire = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=interval)
+                        next_fire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=interval)
                         await session.execute(
                             update(Trigger).where(Trigger.id == row.id).values(next_fire_at=next_fire)
                         )
