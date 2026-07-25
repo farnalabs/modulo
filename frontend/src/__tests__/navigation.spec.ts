@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+﻿import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockManifest = vi.hoisted(() => ({
   sidebar_groups: {
@@ -27,9 +27,9 @@ const mockManifest = vi.hoisted(() => ({
     '/lifecycle-maps': { name: 'lifecycle-maps', breadcrumb: 'Lifecycle Maps', sidebar_group: 'core', sidebar_order: 9, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/runs/diff': { name: 'runs-diff', breadcrumb: 'Output Diff', sidebar_group: 'analysis', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/evals/editor': { name: 'eval-editor', breadcrumb: 'Evals', sidebar_group: 'evals', sidebar_order: 1, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
-    '/evals/proposals': { name: 'eval-proposals-queue', breadcrumb: 'Eval Proposals', sidebar_group: 'evals', sidebar_order: 2, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, preview: true },
-    '/variants/compare': { name: 'variant-compare', breadcrumb: 'Variants', sidebar_group: 'evals', sidebar_order: 3, type: 'page', required_tier: null, required_roles: null, required_permissions: null, preview: true },
-    '/variants/ab-test': { name: 'ab-test-models', breadcrumb: 'AB Test Models', sidebar_group: 'evals', sidebar_order: 4, type: 'page', required_tier: null, required_roles: null, required_permissions: null, preview: true },
+    '/evals/proposals': { name: 'eval-proposals-queue', breadcrumb: 'Eval Proposals', sidebar_group: 'evals', sidebar_order: 2, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'private_preview' },
+    '/variants/compare': { name: 'variant-compare', breadcrumb: 'Variants', sidebar_group: 'evals', sidebar_order: 3, type: 'page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'private_preview' },
+    '/variants/ab-test': { name: 'ab-test-models', breadcrumb: 'AB Test Models', sidebar_group: 'evals', sidebar_order: 4, type: 'page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'private_preview' },
     '/schemas': { name: 'schemas', breadcrumb: 'Schemas', sidebar_group: 'schemas', sidebar_order: 1, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/schemas/editor/:id': { name: 'schema-editor', breadcrumb: 'Schema Editor', sidebar_group: 'schemas', sidebar_order: 2, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
     '/schemas/infer': { name: 'schema-infer', breadcrumb: 'Schema Inference', sidebar_group: 'schemas', sidebar_order: 3, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
@@ -43,7 +43,7 @@ const mockManifest = vi.hoisted(() => ({
     '/settings/triggers': { name: 'settings-triggers', breadcrumb: 'Triggers', sidebar_group: 'settings', sidebar_order: 5, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
     '/settings/runtime-config': { name: 'settings-runtime-config', breadcrumb: 'Runtime Config', sidebar_group: 'settings', sidebar_order: 7, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/rate-limits': { name: 'settings-rate-limits', breadcrumb: 'Rate Limits', sidebar_group: 'settings', sidebar_order: 8, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
-    '/settings/hitl-review': { name: 'settings-hitl-review', breadcrumb: 'HITL Review', sidebar_group: 'settings', sidebar_order: 9, type: 'page', required_tier: null, required_roles: null, required_permissions: null, preview: true },
+    '/settings/hitl-review': { name: 'settings-hitl-review', breadcrumb: 'HITL Review', sidebar_group: 'settings', sidebar_order: 9, type: 'page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'private_preview' },
     '/settings/observability': { name: 'settings-observability', breadcrumb: 'Observability', sidebar_group: 'settings', sidebar_order: 10, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/error-forwarders': { name: 'settings-error-forwarders', breadcrumb: 'Error Forwarders', sidebar_group: 'settings', sidebar_order: 11, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/email': { name: 'settings-email', breadcrumb: 'Email', sidebar_group: 'settings', sidebar_order: 12, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
@@ -234,3 +234,4 @@ describe('navigation.ts', () => {
     expect(core.labelKey).toBe('components.SidebarNav.group_core')
   })
 })
+

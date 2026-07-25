@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <OverlayScrollbarsComponent
     defer
     :options="osOptions"
@@ -24,7 +24,7 @@
             :label="item.label"
             :label-key="item.labelKey"
             :exact="item.exact"
-            :preview="item.preview"
+            :preview="item.visibility === 'public_preview'"
             @click="$emit('navigate')"
           /></SidebarGroup>
       </template>
@@ -91,7 +91,7 @@ const visibleSidebarGroups = computed(() =>
     .map((group) => ({
       ...group,
       items: group.items.filter((item) => {
-        if (item.preview && !planStore.devMode) return false
+        if ((item.visibility === 'private_preview' || item.visibility === 'in_dev') && !planStore.devMode) return false
         if (!item.requiredRoles && !item.requiredTier) return true
         if (item.requiredTier && !tierInfoLoaded.value) return false
         return canSeeItem(

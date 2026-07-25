@@ -1,4 +1,4 @@
-import manifest from '@/manifest.yaml'
+﻿import manifest from '@/manifest.yaml'
 
 export interface NavItem {
   to: string
@@ -6,7 +6,7 @@ export interface NavItem {
   label: string
   labelKey: string
   exact?: boolean
-  preview?: boolean
+  visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
   requiredRoles?: string[] | null
   requiredTier?: string | null
   requiredPermissions?: string[] | null
@@ -103,7 +103,7 @@ interface ManifestRoute {
   sidebar_order?: number | null
   type?: string
   exact?: boolean
-  preview?: boolean
+  visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
   required_tier?: string | null
   required_roles?: string[] | null
   required_permissions?: string[] | null
@@ -140,7 +140,7 @@ function isManifest(obj: unknown): obj is Manifest {
 
 function buildSidebarGroups(): NavGroup[] {
   if (!isManifest(manifest)) {
-    console.error('[navigation] manifest is invalid — missing routes or sidebar_groups')
+    console.error('[navigation] manifest is invalid â€” missing routes or sidebar_groups')
     return []
   }
 
@@ -164,7 +164,7 @@ function buildSidebarGroups(): NavGroup[] {
       label: route.breadcrumb || route.name,
       labelKey: routeConfigMap[route.name]?.labelKey || `nav.${route.name}`,
       exact: route.exact || undefined,
-      preview: route.preview || undefined,
+      visibility: (route.visibility as 'public_preview' | 'private_preview' | 'in_dev') || undefined,
       requiredRoles: route.required_roles || null,
       requiredTier: route.required_tier || null,
       requiredPermissions: route.required_permissions || null,
@@ -218,3 +218,4 @@ export function getNavGroups(): NavGroup[] {
   }
   return _cachedGroups.map((g) => ({ ...g, items: [...g.items] }))
 }
+
