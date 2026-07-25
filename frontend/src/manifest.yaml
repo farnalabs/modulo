@@ -42,8 +42,8 @@ routes:
         breadcrumb: Notifications
         parent: /
         product_map:
-        sidebar_group: core
-        sidebar_order: 2
+        sidebar_group:
+        sidebar_order:
         type: page
         <<: *community
         deprecated: false
