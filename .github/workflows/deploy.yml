@@ -1,4 +1,4 @@
-name: "Deploy: Staging + Prod"
+﻿name: "Deploy: Staging + Prod"
 
 on:
   push:
@@ -90,7 +90,7 @@ jobs:
               EXIT_CODE=$?
               if [ $attempt -lt $MAX_RETRIES ]; then
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
-                echo "Deploy failed (exit $EXIT_CODE) — retrying in ${DELAY}s..."
+                echo "Deploy failed (exit $EXIT_CODE) â€” retrying in ${DELAY}s..."
                 sleep $DELAY
               else
                 echo "Deploy failed after $MAX_RETRIES attempts"
@@ -206,7 +206,7 @@ jobs:
 
   deploy-production:
     name: Deploy to app.modulo.run
-    needs: [check-context]
+    needs: [check-context, staging-e2e]
     if: needs.check-context.outputs.is_main == 'true' && needs.check-context.outputs.ci_passed == 'true'
     runs-on: ubicloud-standard-2
     steps:
@@ -244,7 +244,7 @@ jobs:
               EXIT_CODE=$?
               if [ $attempt -lt $MAX_RETRIES ]; then
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
-                echo "Deploy failed (exit $EXIT_CODE) — retrying in ${DELAY}s..."
+                echo "Deploy failed (exit $EXIT_CODE) â€” retrying in ${DELAY}s..."
                 sleep $DELAY
               else
                 echo "Deploy failed after $MAX_RETRIES attempts"
@@ -271,3 +271,4 @@ jobs:
             exit 1
           }
           Write-Host "app.modulo.run SHA match: $deployedSha"
+
