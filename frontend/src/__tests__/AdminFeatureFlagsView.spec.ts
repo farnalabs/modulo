@@ -97,20 +97,20 @@ describe('AdminFeatureFlagsView', () => {
   it('shows toggle indicators for each flag', async () => {
     const wrapper = await mountView()
     const toggles = wrapper.findAll('[role="switch"]')
-    expect(toggles.length).toBe(3)
+    expect(toggles.length).toBe(4)
   })
 
   it('shows active toggle for active flags', async () => {
     const wrapper = await mountView()
-    const toggles = wrapper.findAll('[role="switch"]')
-    const activeToggle = toggles[0]
+    const flagToggles = wrapper.findAll('table [role="switch"]')
+    const activeToggle = flagToggles[0]
     expect(activeToggle.classes()).toContain('bg-primary')
   })
 
   it('shows inactive toggle for inactive flags', async () => {
     const wrapper = await mountView()
-    const toggles = wrapper.findAll('[role="switch"]')
-    const inactiveToggle = toggles[1]
+    const flagToggles = wrapper.findAll('table [role="switch"]')
+    const inactiveToggle = flagToggles[1]
     expect(inactiveToggle.classes()).toContain('bg-input')
   })
 
