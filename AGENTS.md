@@ -998,3 +998,11 @@ Default merge path: let the merge queue pick up approved PRs. If a PR needs expe
 
 Exception: trivial documentation-only changes (typos, formatting) may be merged directly without asking.
 
+
+### Manifest: preview: true means dev-mode-only, not feature preview
+
+In rontend/src/manifest.yaml, preview: true on a route or element means it is ONLY visible when MODULO_DEV_MODE=true (dev mode). It does NOT mean "beta" or "coming soon." Routes with preview: true are hidden in normal mode via SidebarNav.vue:94: if (item.preview && !planStore.devMode) return false.
+
+Remy was descoped from MVP and gated behind dev mode. BOTH /admin/remy and /settings/remy have preview: true for this reason — Remy is intentionally invisible in production until dev mode is enabled. Never remove preview: true from a dev-mode-only feature without explicit product direction.
+
+Sidebar tests that check group header counts must account for preview-hidden groups. In simple mode with dev mode off, only core and settings groups are guaranteed visible. Test assertions should use 	oBeGreaterThanOrEqual(2) not 3.
