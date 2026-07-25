@@ -122,7 +122,7 @@ async def _polling_scheduler_loop(factory: async_sessionmaker[AsyncSession]) -> 
 
 async def _fetch_due_cron_triggers(factory: async_sessionmaker[AsyncSession]) -> list[dict[str, Any]]:
     """Query the database for cron triggers whose next_fire_at <= now."""
-    now = datetime.datetime.now(datetime.UTC)
+    now = datetime.datetime.now(datetime.timezone.utc)
     triggers: list[dict[str, Any]] = []
     async with factory() as session:
         result = await session.execute(
@@ -181,7 +181,7 @@ async def _fetch_due_cron_triggers(factory: async_sessionmaker[AsyncSession]) ->
 
 async def _fetch_due_polling_triggers(factory: async_sessionmaker[AsyncSession]) -> list[dict[str, Any]]:
     """Query the database for polling triggers whose next_fire_at <= now."""
-    now = datetime.datetime.now(datetime.UTC)
+    now = datetime.datetime.now(datetime.timezone.utc)
     triggers: list[dict[str, Any]] = []
     async with factory() as session:
         result = await session.execute(

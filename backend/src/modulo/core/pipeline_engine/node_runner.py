@@ -619,7 +619,7 @@ def make_sandbox_agent_fn(
         import os
         import time as _time
 
-        from e2b import AsyncSandbox, CommandExitException  # type: ignore[import-untyped]
+        from e2b import AsyncSandbox  # type: ignore[import-untyped]
         from jinja2.sandbox import SandboxedEnvironment
         from opentelemetry import trace as _otel_trace
 
@@ -681,7 +681,7 @@ def make_sandbox_agent_fn(
                         **env_vars_extra,
                     },
                 )
-            except CommandExitException as _cee:
+            except Exception as _cee:
                 cmd_result = getattr(_cee, "result", None) or _cee
 
             elapsed = _time.monotonic() - start_time
