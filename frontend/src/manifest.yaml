@@ -1,4 +1,4 @@
-﻿schema_version: 1
+schema_version: 1
 
 x-community: &community
     required_tier: community
@@ -843,4 +843,3 @@ sidebar_groups:
         default_expanded: true
         simple_mode: false
         labelKey: components.SidebarNav.group_extensions
-
