@@ -681,6 +681,8 @@ def make_sandbox_agent_fn(
                         **env_vars_extra,
                     },
                 )
+            except asyncio.CancelledError:
+                raise
             except Exception as _cee:
                 cmd_result = getattr(_cee, "result", None) or _cee
 
