@@ -37,6 +37,7 @@ def client() -> Generator[TestClient, None, None]:
         organisation_id="00000000-0000-0000-0000-000000000001",
         account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin",
+        is_system_admin=True,
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -66,10 +67,8 @@ class TestGetDevMode:
     def test_env_var_returns_true(self, client: TestClient) -> None:
         settings = _make_settings()
         settings.modulo_dev_mode = True
-        with (
-            patch("modulo.api.routes.admin_dev_mode.get_config", return_value=None),
-            patch("modulo.api.routes.admin_dev_mode.get_settings", return_value=settings),
-        ):
+        app.dependency_overrides[get_settings] = lambda: settings
+        with patch("modulo.api.routes.admin_dev_mode.get_config", return_value=None):
             resp = client.get("/api/v1/admin/dev-mode")
         assert resp.status_code == 200
         body = resp.json()
@@ -103,10 +102,8 @@ class TestGetDevMode:
     def test_db_error_falls_back(self, client: TestClient) -> None:
         settings = _make_settings()
         settings.modulo_dev_mode = True
-        with (
-            patch("modulo.api.routes.admin_dev_mode.get_config", side_effect=RuntimeError("DB error")),
-            patch("modulo.api.routes.admin_dev_mode.get_settings", return_value=settings),
-        ):
+        app.dependency_overrides[get_settings] = lambda: settings
+        with patch("modulo.api.routes.admin_dev_mode.get_config", side_effect=RuntimeError("DB error")):
             resp = client.get("/api/v1/admin/dev-mode")
         assert resp.status_code == 200
         body = resp.json()
