@@ -11,7 +11,7 @@ env:
   FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
 
 jobs:
-  # â�€â�€ Fast jobs â€� run on ALL events (PR + push + manual) â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
+  # â�€â�€ Fast jobs â€� run on ALL events (PR + push + manual) â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
 
   backend-lint:
     name: Lint (Backend)
@@ -90,7 +90,7 @@ jobs:
       - run: npm run type-check
       - run: npm run test:unit
       - run: npm run build
-      - run: npm audit
+      - run: npm audit --audit-level=critical
 
   product-map-validate:
     name: Product map validation
@@ -100,7 +100,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
-          enable-cache: true
+          enable-cache: false
       - name: Setup PowerShell
         shell: bash
         run: |
@@ -119,7 +119,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
-          enable-cache: true
+          enable-cache: false
       - name: Setup PowerShell
         shell: bash
         run: |
@@ -147,7 +147,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # â�€â�€ Full jobs â€� run ONLY on push (not PRs) â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
+  # â�€â�€ Full jobs â€� run ONLY on push (not PRs) â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
 
   # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
   # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
@@ -446,7 +446,7 @@ jobs:
         run: uv run pip-audit
       - name: npm audit (frontend)
         working-directory: frontend
-        run: npm audit
+        run: npm audit --audit-level=critical
       - name: Semgrep (block new findings)
         shell: bash
         run: |
@@ -457,13 +457,13 @@ jobs:
           fi
           uv --directory backend run --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error .
 
-  # â�€â�€ Failure notifications â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
+  # â�€â�€ Failure notifications â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
 
   # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
   # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
   # workflow_dispatch when needed.
   notify-merge-group-failure:
-    name: Notify Modulo fixer â€� queue CI failure
+    name: Notify Modulo fixer â€� queue CI failure
     if: false
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks, backend-integration, bdd-e2e, docker-build, security-audit]
     runs-on: ubicloud-standard-2
@@ -520,7 +520,7 @@ jobs:
             --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | length' 2>/dev/null || echo "0")
 
           echo "fix_attempts=$FIX_COUNT" >> "$GITHUB_OUTPUT"
-          echo "PR #${PR_NUM} on '${BRANCH}' â€� branch fixer has pushed $FIX_COUNT fix commit(s)."
+          echo "PR #${PR_NUM} on '${BRANCH}' â€� branch fixer has pushed $FIX_COUNT fix commit(s)."
 
           if [ "$FIX_COUNT" -ge 3 ]; then
             echo "exhausted=true" >> "$GITHUB_OUTPUT"
