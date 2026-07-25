@@ -1,4 +1,4 @@
-"""Unit tests for variant group API — pure function tests (no DB, no auth)."""
+"""Unit tests for variant group API â€” pure function tests (no DB, no auth)."""
 
 import uuid
 from datetime import UTC
@@ -276,7 +276,7 @@ class TestDeleteGroup:
         group_id = uuid.uuid4()
 
         with patch(
-            "modulo.db.crud.variant_group.soft_delete_variant_group",
+            "modulo.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -288,7 +288,7 @@ class TestDeleteGroup:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.db.crud.variant_group.soft_delete_variant_group",
+            "modulo.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             return_value=False,
         ):
@@ -632,7 +632,7 @@ class TestDeleteGroupSQLAlchemyError:
         group_id = uuid.uuid4()
 
         with patch(
-            "modulo.db.crud.variant_group.soft_delete_variant_group",
+            "modulo.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -778,7 +778,7 @@ class TestDeleteGroupException:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.db.crud.variant_group.soft_delete_variant_group",
+            "modulo.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             side_effect=ValueError("unexpected"),
         ):
