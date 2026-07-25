@@ -8,6 +8,8 @@
     <span class="h-4 w-4 shrink-0"><SvgIcon :name="icon" /></span>
     <span class="truncate" :title="labelKey ? $t(labelKey) : label">{{ labelKey ? $t(labelKey) : label }}</span>
     <span v-if="visibility === 'public_preview'" class="badge badge-context-preview ml-auto text-[10px] leading-none py-0.5">Preview</span>
+    <span v-else-if="visibility === 'private_preview'" class="badge badge-context-purple ml-auto text-[10px] leading-none py-0.5">Dev Preview</span>
+    <span v-else-if="visibility === 'in_dev'" class="badge badge-context-amber ml-auto text-[10px] leading-none py-0.5">In Dev</span>
   </router-link>
 </template>
 
