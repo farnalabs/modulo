@@ -543,7 +543,7 @@ async def list_runs(
     for attempt in range(3):
         try:
             if not await validate_current_auth():
-                return _tool_error("Token revoked or expired - re-authenticate")
+                return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "list_runs")
             from modulo.db.crud.run import list_runs as db_list_runs
 
@@ -946,7 +946,7 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
     for attempt in range(3):
         try:
             if not await validate_current_auth():
-                return _tool_error("Token revoked or expired - re-authenticate")
+                return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "get_run_evals")
             from modulo.db.crud.eval_run import get_run_evals as db_get_run_evals
 
@@ -1006,7 +1006,7 @@ async def list_eval_definitions(
     for attempt in range(3):
         try:
             if not await validate_current_auth():
-                return _tool_error("Token revoked or expired - re-authenticate")
+                return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "list_eval_definitions")
             from modulo.db.crud.eval_definition import list_eval_definitions as db_list_eval_definitions
 
@@ -1593,7 +1593,7 @@ async def list_triggers(
     for attempt in range(3):
         try:
             if not await validate_current_auth():
-                return _tool_error("Token revoked or expired - re-authenticate")
+                return _tool_auth_error("Token revoked or expired - re-authenticate")
             check_tool_scope(_ctx_role_val(), "list_triggers")
             from modulo.db.crud.trigger import list_triggers as db_list_triggers
 
@@ -1855,10 +1855,10 @@ async def delete_pipeline(
             except ValueError:
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
-            from modulo.db.crud.pipeline import delete_pipeline as db_delete_pipeline
+            from modulo.db.crud.pipeline import soft_delete_pipeline
 
             async with _session(org_id) as s:
-                deleted = await db_delete_pipeline(s, pid)
+                deleted = await soft_delete_pipeline(s, pid)
 
             if not deleted:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
@@ -1971,6 +1971,7 @@ async def create_agent(
                     connector_type_refs=connector_type_refs or [],
                     template_id=template_id,
                     agent_command=agent_command,
+                    required_environment_capabilities=required_environment_capabilities,
                 )
 
             return {

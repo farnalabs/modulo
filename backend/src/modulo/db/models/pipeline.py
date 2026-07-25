@@ -5,14 +5,14 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 if TYPE_CHECKING:
     from modulo.db.models.account import Account
     from modulo.db.models.organisation import Organisation
 
 
-class Pipeline(OrgScoped):
+class Pipeline(SoftDeleteMixin, OrgScoped):
     __tablename__ = "pipelines"
     __table_args__ = (
         CheckConstraint("visibility IN ('org', 'team')", name="ck_pipelines_visibility"),

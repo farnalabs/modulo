@@ -45,7 +45,11 @@ async def create_lifecycle_map(
 
 async def get_lifecycle_map(session: AsyncSession, lifecycle_map_id: uuid.UUID) -> LifecycleMap | None:
     result = await session.execute(
-        select(LifecycleMap).where(LifecycleMap.id == lifecycle_map_id, LifecycleMap.archived_at.is_(None))
+        select(LifecycleMap).where(
+            LifecycleMap.id == lifecycle_map_id,
+            LifecycleMap.archived_at.is_(None),
+            LifecycleMap.deleted_at.is_(None),
+        )
     )
     return result.scalar_one_or_none()
 
@@ -59,8 +63,8 @@ async def list_lifecycle_maps(
     include_archived: bool = False,
 ) -> PageResult[LifecycleMap]:
     offset = (page - 1) * page_size
-    query = select(LifecycleMap)
-    count_query = select(func.count()).select_from(LifecycleMap)
+    query = select(LifecycleMap).where(LifecycleMap.deleted_at.is_(None))
+    count_query = select(func.count()).select_from(LifecycleMap).where(LifecycleMap.deleted_at.is_(None))
     if not include_archived:
         query = query.where(LifecycleMap.archived_at.is_(None))
         count_query = count_query.where(LifecycleMap.archived_at.is_(None))
@@ -96,6 +100,21 @@ async def delete_lifecycle_map(session: AsyncSession, lifecycle_map_id: uuid.UUI
     lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
     if lifecycle_map is None:
         return False
-    lifecycle_map.archived_at = datetime.now(UTC)
+    lifecycle_map.deleted_at = datetime.now(UTC)
     await session.flush()
     return True
+
+
+async def restore_lifecycle_map(session: AsyncSession, lifecycle_map_id: uuid.UUID) -> LifecycleMap | None:
+    result = await session.execute(
+        select(LifecycleMap).where(
+            LifecycleMap.id == lifecycle_map_id,
+            LifecycleMap.deleted_at.isnot(None),
+        )
+    )
+    lifecycle_map = result.scalar_one_or_none()
+    if lifecycle_map is None:
+        return None
+    lifecycle_map.deleted_at = None
+    await session.flush()
+    return lifecycle_map
