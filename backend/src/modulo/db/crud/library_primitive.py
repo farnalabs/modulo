@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.pagination import CursorPaginator
@@ -89,7 +90,7 @@ async def list_library_primitives(
     if excluded_tiers is None:
         excluded_tiers = ["in_dev"]
 
-    conditions = [LibraryPrimitive.deleted_at.is_(None)]
+    conditions: list[ColumnElement[bool]] = [LibraryPrimitive.deleted_at.is_(None)]
 
     if org_id is not None:
         conditions.append(LibraryPrimitive.organisation_id == org_id)
