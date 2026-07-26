@@ -208,6 +208,23 @@ async def update_run_status(
     return run
 
 
+async def cancel_run(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    error_code: str = "cancelled",
+    error_detail: str | None = None,
+) -> Run | None:
+    run = await session.get(Run, run_id)
+    if run and run.status in ("running", "pending"):
+        run.status = "cancelled" if error_code == "cancelled" else "failed"
+        run.error_code = error_code
+        if error_detail is not None:
+            run.error_detail = error_detail
+        run.completed_at = func.now()
+        return run
+    return None
+
+
 async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
     run = result.scalar_one_or_none()

@@ -14,12 +14,15 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.db.crud.run import update_run_status
+from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -143,6 +146,7 @@ class BackgroundPipelineWorker:
         backoff = 0.1
         while True:
             try:
+                await self.cleanup_stale_runs()
                 job = await self._queue.get()
                 backoff = 0.1
                 task = asyncio.create_task(
@@ -197,6 +201,37 @@ class BackgroundPipelineWorker:
     async def _execute_job_with_semaphore(self, job: PipelineJob) -> None:
         async with self._semaphore:
             await self._execute_job(job)
+
+    async def cleanup_stale_runs(self) -> int:
+        engine = self._engine
+        if engine is None:
+            return 0
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        killed = 0
+        try:
+            async with factory() as session, session.begin():
+                cutoff = datetime.now(UTC) - timedelta(minutes=30)
+                result = await session.execute(
+                    select(Run).where(
+                        Run.status.in_(["pending", "running"]),
+                        Run.updated_at < cutoff,
+                        Run.outputs_json.is_(None),
+                    )
+                )
+                stale_runs = result.scalars().all()
+                for run in stale_runs:
+                    await update_run_status(
+                        session,
+                        run.id,
+                        "failed",
+                        error_code="stale_run_killed",
+                        error_detail="Run stuck for >30 min with no node progress — killed by cleanup",
+                    )
+                    _log.warning("Killed stale run %s (%s) — stuck for >30 min", run.id, run.status)
+                    killed += 1
+        except Exception:
+            _log.exception("cleanup_stale_runs failed")
+        return killed
 
     def info(self) -> dict[str, Any]:
         return {
