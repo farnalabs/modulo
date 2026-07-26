@@ -19,10 +19,10 @@ from jwt import InvalidTokenError as JWTError
 
 _log = logging.getLogger(__name__)
 
-_ALGORITHM = "HS256"
-_ACCESS_TOKEN_MINUTES = 15
-_REFRESH_TOKEN_HOURS = 168
-_WS_TOKEN_MINUTES = 15
+_ALGORITHM: str = "HS256"
+_ACCESS_TOKEN_MINUTES: int = 15
+_REFRESH_TOKEN_HOURS: int = 168
+_WS_TOKEN_MINUTES: int = 15
 
 
 @dataclass(frozen=True)
@@ -58,9 +58,9 @@ def create_access_token(
     user_id: str = "",
 ) -> str:
     """15-minute access token."""
-    resolved_account_id = account_id or user_id
-    now = datetime.now(UTC)
-    claims = {
+    resolved_account_id: str = account_id or user_id
+    now: datetime = datetime.now(UTC)
+    claims: dict[str, object] = {
         "sub": subject,
         "org_id": organisation_id,
         "account_id": resolved_account_id,
@@ -85,9 +85,9 @@ def create_refresh_token(
     user_id: str = "",
 ) -> str:
     """7-day refresh token with family+sequence for rotation detection."""
-    resolved_account_id = account_id or user_id
-    now = datetime.now(UTC)
-    claims = {
+    resolved_account_id: str = account_id or user_id
+    now: datetime = datetime.now(UTC)
+    claims: dict[str, object] = {
         "sub": subject,
         "org_id": organisation_id,
         "account_id": resolved_account_id,
@@ -104,7 +104,7 @@ def create_refresh_token(
 
 def refresh_access_token(refresh_token: str, secret_key: str) -> str:
     """Validate a refresh token and issue a new access token."""
-    principal = decode_principal(refresh_token, secret_key, allowed_purposes=["refresh"])
+    principal: AuthenticatedPrincipal = decode_principal(refresh_token, secret_key, allowed_purposes=["refresh"])
     return create_access_token(
         principal.username,
         secret_key,
@@ -118,11 +118,11 @@ def refresh_access_token(refresh_token: str, secret_key: str) -> str:
 def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | None = None) -> AuthenticatedPrincipal:
     """Decode and validate all identity claims needed for tenant-scoped API access."""
     payload: dict[str, object] = jwt.decode(token, secret_key, algorithms=[_ALGORITHM])
-    sub = payload.get("sub")
-    org_id = payload.get("org_id")
-    account_id = payload.get("account_id") or payload.get("user_id")
-    org_role = payload.get("org_role")
-    is_system_admin = payload.get("is_system_admin", False)
+    sub: object = payload.get("sub")
+    org_id: object = payload.get("org_id")
+    account_id: object = payload.get("account_id") or payload.get("user_id")
+    org_role: object = payload.get("org_role")
+    is_system_admin: object = payload.get("is_system_admin", False)
     if not isinstance(sub, str) or not sub:
         raise JWTError("Token missing or invalid 'sub' claim")
     if not isinstance(account_id, str):
@@ -131,11 +131,11 @@ def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | 
         _log.warning("jwt.non_bool_is_system_admin", extra={"value": str(is_system_admin)})
         is_system_admin = False
     if allowed_purposes is not None:
-        purpose = payload.get("purpose")
+        purpose: object = payload.get("purpose")
         if not isinstance(purpose, str) or purpose not in allowed_purposes:
             raise JWTError(f"Token purpose '{purpose}' not in allowed list: {allowed_purposes}")
     try:
-        parsed_account_id = uuid.UUID(account_id)
+        parsed_account_id: uuid.UUID = uuid.UUID(account_id)
     except ValueError as exc:
         raise JWTError("Token contains a malformed identity UUID") from exc
     parsed_org_id: uuid.UUID | None = None
@@ -166,9 +166,9 @@ def create_ws_token(
     ttl_minutes: int | None = None,
 ) -> str:
     """Short-lived JWT for WebSocket authentication (15 minute TTL by default)."""
-    resolved_account_id = account_id or user_id
-    now = datetime.now(UTC)
-    claims = {
+    resolved_account_id: str = account_id or user_id
+    now: datetime = datetime.now(UTC)
+    claims: dict[str, object] = {
         "sub": subject,
         "org_id": organisation_id,
         "account_id": resolved_account_id,
@@ -184,13 +184,13 @@ def create_ws_token(
 def decode_refresh_token_claims(token: str, secret_key: str) -> dict[str, object]:
     """Decode a refresh token and return raw claims including family/sequence."""
     payload: dict[str, object] = jwt.decode(token, secret_key, algorithms=[_ALGORITHM])
-    purpose = payload.get("purpose")
+    purpose: object = payload.get("purpose")
     if purpose != "refresh":
         raise JWTError("Token is not a refresh token")
     return payload
 
 
-_CLAIM_TOKEN_MINUTES = 15
+_CLAIM_TOKEN_MINUTES: int = 15
 
 
 def create_claim_token(
@@ -208,8 +208,8 @@ def create_claim_token(
     claimant) so that approve/reject can verify the claim scope without a
     separate DB lookup of who claimed the gate.
     """
-    now = datetime.now(UTC)
-    claims = {
+    now: datetime = datetime.now(UTC)
+    claims: dict[str, object] = {
         "sub": subject,
         "purpose": "claim_token",
         "run_id": run_id,
@@ -239,17 +239,17 @@ def decode_claim_token(
     Returns the full payload dict on success.
     """
     payload: dict[str, object] = jwt.decode(token, secret_key, algorithms=[_ALGORITHM])
-    purpose = payload.get("purpose")
+    purpose: object = payload.get("purpose")
     if purpose != "claim_token":
         raise JWTError(f"Token purpose '{purpose}' is not 'claim_token'")
-    actual_run = payload.get("run_id")
+    actual_run: object = payload.get("run_id")
     if actual_run != run_id:
         raise JWTError("claim_token run_id mismatch")
-    actual_gate = payload.get("gate_id")
+    actual_gate: object = payload.get("gate_id")
     if actual_gate != gate_id:
         raise JWTError("claim_token gate_id mismatch")
     if expected_client_id is not None:
-        actual_client = payload.get("client_id")
+        actual_client: object = payload.get("client_id")
         if actual_client != expected_client_id:
             raise JWTError("claim_token client_id mismatch")
     return payload
