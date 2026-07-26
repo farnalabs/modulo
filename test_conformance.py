@@ -33,7 +33,7 @@ class TestConnectorQuery:
         ],
     )
     async def test_invalid_query_raises(
-        self, conformance_connector: ConnectorBase, query: ConnectorQuery, expected_exc
+        self, conformance_connector: ConnectorBase, query: ConnectorQuery, expected_exc: type[Exception] | tuple[type[Exception], ...]
     ) -> None:
         with pytest.raises(expected_exc):
             await conformance_connector.query(query)
@@ -48,7 +48,7 @@ class TestConnectorWrite:
         ],
     )
     async def test_invalid_payload_raises(
-        self, conformance_connector: ConnectorBase, payload: ConnectorPayload, expected_exc
+        self, conformance_connector: ConnectorBase, payload: ConnectorPayload, expected_exc: type[Exception] | tuple[type[Exception], ...]
     ) -> None:
         with pytest.raises(expected_exc):
             await conformance_connector.write(payload)
