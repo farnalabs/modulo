@@ -3,7 +3,13 @@
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.auth.secret_storage import decode_stored_secret, encrypt_stored_secret
+from modulo.auth.secret_storage import (
+    CorruptSecretError,
+    DecryptionError,
+    InvalidSecretTypeError,
+    decode_stored_secret,
+    encrypt_stored_secret,
+)
 
 _FERNET_KEY = Fernet.generate_key().decode()
 
@@ -37,20 +43,20 @@ def test_decode_stored_secret_with_legacy_plaintext_bytes() -> None:
 def test_decode_stored_secret_with_invalid_token_raises() -> None:
     wrong_key = Fernet.generate_key().decode()
     wrong_encrypted = Fernet(wrong_key.encode()).encrypt(b"other-data")
-    with pytest.raises(ValueError, match="cannot be decrypted"):
+    with pytest.raises(DecryptionError, match="cannot be decrypted"):
         decode_stored_secret(wrong_encrypted, _FERNET_KEY)
 
 
 def test_decode_stored_secret_with_non_utf8_bytes_raises() -> None:
     non_utf8 = bytes(range(128, 160))
-    with pytest.raises(ValueError, match="not valid encrypted or UTF-8"):
+    with pytest.raises(CorruptSecretError, match="not valid encrypted or UTF-8"):
         decode_stored_secret(non_utf8, _FERNET_KEY)
 
 
 def test_decode_stored_secret_with_non_str_non_bytes_raises() -> None:
-    with pytest.raises(ValueError, match="Stored secret must be text or bytes"):
+    with pytest.raises(InvalidSecretTypeError, match="Stored secret must be text or bytes"):
         decode_stored_secret(42, _FERNET_KEY)
-    with pytest.raises(ValueError, match="Stored secret must be text or bytes"):
+    with pytest.raises(InvalidSecretTypeError, match="Stored secret must be text or bytes"):
         decode_stored_secret(None, _FERNET_KEY)
-    with pytest.raises(ValueError, match="Stored secret must be text or bytes"):
+    with pytest.raises(InvalidSecretTypeError, match="Stored secret must be text or bytes"):
         decode_stored_secret([], _FERNET_KEY)
