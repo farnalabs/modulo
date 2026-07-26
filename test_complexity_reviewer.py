@@ -10,7 +10,7 @@ from modulo.core.pipeline_engine.decorator import (
 
 
 class TestComplexityReviewerDefinition:
-    def test_has_required_fields(self):
+    def test_has_required_fields(self) -> None:
         assert "name" in COMPLEXITY_REVIEWER
         assert "description" in COMPLEXITY_REVIEWER
         assert "prompt_template" in COMPLEXITY_REVIEWER
@@ -19,31 +19,31 @@ class TestComplexityReviewerDefinition:
         assert COMPLEXITY_REVIEWER["role"] == "context_setter"
         assert "run_context_writes" in COMPLEXITY_REVIEWER
 
-    def test_output_schema_has_required_fields(self):
+    def test_output_schema_has_required_fields(self) -> None:
         schema = COMPLEXITY_REVIEWER["output_schema"]
         required = schema.get("required", [])
         assert "model_tier" in required
         assert "estimated_tokens" in required
         assert "complexity_reason" in required
 
-    def test_run_context_writes_are_specified(self):
+    def test_run_context_writes_are_specified(self) -> None:
         writes = COMPLEXITY_REVIEWER.get("run_context_writes", [])
         assert "model_tier" in writes
         assert "estimated_tokens" in writes
         assert "complexity_reason" in writes
 
-    def test_model_tier_has_valid_enums(self):
+    def test_model_tier_has_valid_enums(self) -> None:
         model_tier = COMPLEXITY_REVIEWER["output_schema"]["properties"]["model_tier"]
         enums = model_tier.get("enum", [])
         assert "tier-1" in enums
         assert "tier-2" in enums
         assert "tier-3" in enums
 
-    def test_prompt_template_uses_artifact_placeholder(self):
+    def test_prompt_template_uses_artifact_placeholder(self) -> None:
         template = COMPLEXITY_REVIEWER["prompt_template"]
         assert "{artifact}" in template
 
-    def test_content_json_is_serializable(self):
+    def test_content_json_is_serializable(self) -> None:
         import json
 
         serialized = json.dumps(COMPLEXITY_REVIEWER)
@@ -54,7 +54,7 @@ class TestComplexityReviewerDefinition:
 
 class TestContextSetterRole:
     @pytest.mark.asyncio
-    async def test_context_setter_can_write_to_run_context(self):
+    async def test_context_setter_can_write_to_run_context(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -75,7 +75,7 @@ class TestContextSetterRole:
         assert "Moderate" in result["run_context"]["complexity_reason"]
 
     @pytest.mark.asyncio
-    async def test_non_context_setter_cannot_write_to_run_context(self):
+    async def test_non_context_setter_cannot_write_to_run_context(self) -> None:
         @cancellable_node(role="standard")
         async def standard_node(state: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -93,7 +93,7 @@ class TestContextSetterRole:
         assert "context_setter" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_context_setter_without_run_context_ok(self):
+    async def test_context_setter_without_run_context_ok(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"artifacts": [{"status": "ok"}]}
@@ -106,7 +106,7 @@ class TestContextSetterRole:
         assert len(result["artifacts"]) == 1
 
     @pytest.mark.asyncio
-    async def test_complexity_reviewer_style_node(self):
+    async def test_complexity_reviewer_style_node(self) -> None:
         @cancellable_node(role="context_setter")
         async def complexity_reviewer(state: dict[str, Any]) -> dict[str, Any]:
             artifact = state.get("run_context", {}).get("input", {}).get("code", "")
@@ -136,7 +136,7 @@ class TestContextSetterRole:
         assert result["run_context"]["model_tier"] == "tier-1"
 
     @pytest.mark.asyncio
-    async def test_context_setter_cancellation_still_works(self):
+    async def test_context_setter_cancellation_still_works(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"model_tier": "tier-1"}}
@@ -151,7 +151,7 @@ class TestContextSetterRole:
 
 
 class TestComplexityReviewerPrompt:
-    def test_prompt_contains_instruction(self):
+    def test_prompt_contains_instruction(self) -> None:
         prompt = COMPLEXITY_REVIEWER["prompt_template"]
         assert "model_tier" in prompt
         assert "estimated_tokens" in prompt
