@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.secret_storage import decode_stored_secret
+from modulo.auth.secret_storage import SecretStorageError, decode_stored_secret
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -144,7 +144,7 @@ async def _fetch_value(
             return ""
         try:
             return decode_stored_secret(provider.client_secret, settings.fernet_key)
-        except ValueError:
+        except SecretStorageError:
             _log.exception("middleware.sensitive_mask.invalid_sso_secret")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
