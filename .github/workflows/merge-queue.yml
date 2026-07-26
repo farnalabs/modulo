@@ -109,11 +109,11 @@ jobs:
 
             # Check for approval reviews
             APPROVERS=$(gh pr view "$NUM" --json reviews --jq '.reviews[]? | select(.state == "APPROVED") | .author.login' 2>/dev/null | sort -u)
-            PR_AUTHOR=$(gh pr view "$NUM" --json author --jq '.author.login' 2>/dev/null)
+            # Check for approval reviews
+            APPROVERS=$(gh pr view "$NUM" --json reviews --jq '.reviews[]? | select(.state == "APPROVED") | .author.login' 2>/dev/null | sort -u)
 
-            if echo "$APPROVERS" | grep -qE '^(farnalabs|modulo-reviewbot)$' || [ "$PR_AUTHOR" = 'farnalabs' ]; then
-              echo "approved by $APPROVERS (author: $PR_AUTHOR)"
-              echo "$pr" >> /tmp/approved_prs.json
+            if echo "$APPROVERS" | grep -qE '^(farnalabs|modulo-reviewbot)$'; then
+              echo "approved by $APPROVERS"
               APPROVED_COUNT=$((APPROVED_COUNT + 1))
             else
               echo "not approved yet — skipping"
