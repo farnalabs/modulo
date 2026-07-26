@@ -1,4 +1,4 @@
-﻿# Modulo Ã¢â‚¬â€ Agent & Developer Guidance
+# Modulo Ã¢â‚¬â€ Agent & Developer Guidance
 
 Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files Ã¢â€ â€™ fix the conflict.
 
@@ -1006,3 +1006,69 @@ In rontend/src/manifest.yaml, preview: true on a route or element means it is O
 Remy was descoped from MVP and gated behind dev mode. BOTH /admin/remy and /settings/remy have preview: true for this reason — Remy is intentionally invisible in production until dev mode is enabled. Never remove preview: true from a dev-mode-only feature without explicit product direction.
 
 Sidebar tests that check group header counts must account for preview-hidden groups. In simple mode with dev mode off, only core and settings groups are guaranteed visible. Test assertions should use 	oBeGreaterThanOrEqual(2) not 3.
+
+## Modulo Pipeline Configuration (E2B Sandbox Agents)
+
+All Modulo agent pipelines (Branch Fixer, PR Reviewer, Improve Tests, Improve Architecture, Codebase Improver, Daily Watcher) use a single `sandbox_agent` node type that runs an opencode agent inside an E2B sandbox. The sandbox is ephemeral — created per-run, destroyed after completion.
+
+### E2B Sandbox Configuration
+
+When creating or updating a Modulo pipeline with a `sandbox_agent` node, use these settings:
+
+| Setting | Value | Reason |
+|---|---|---|
+| `template_id` | `"opencode"` | The "base" template lacks opencode CLI. The "opencode" template has it pre-installed. |
+| `agent_command` | `OPENCODE_API_KEY="$APP_MODULO_OPENCODE_API_KEY" GITHUB_TOKEN="$GITHUB_REVIEWBOT_PAT" opencode run --model opencode/deepseek-v4-flash --auto --format json < /home/user/prompt.md` | `opencode run` reads the rendered prompt from stdin. `--auto` skips interactive prompts. `--format json` produces structured output. |
+| `timeout_seconds` | `1200` (20 min) | 600s (10 min) is insufficient for complex tasks like rebase + lint fix + push. |
+| `env_vars` | `{"GITHUB_REVIEWBOT_PAT":"ghp_..."}` | Needed for git push and gh pr create. Stored in vault as `github-reviewbot-pat`. |
+
+### Identity Separation
+
+The system uses two distinct GitHub identities:
+
+| Identity | Username | PAT (vault entry) | Purpose |
+|---|---|---|---|
+| **Bot** | `farnalabs` | `github-dogfood-pat-all` | Creates PRs (automation pipelines, improve-* agents) |
+| **Reviewer** | `modulo-reviewbot` | `github-reviewbot-pat` | Reviews and approves PRs (PR Reviewer pipeline), posts formal GitHub reviews |
+
+The reviewer identity CANNOT be the same as the bot identity — GitHub does not allow self-approval of PRs. Always use `modulo-reviewbot` for posting reviews.
+
+### Git Operations in E2B Sandbox
+
+Inside the sandbox, git operations require explicit token auth. The `GITHUB_TOKEN` env var is available but not automatically used by git:
+
+```bash
+# Clone with auth:
+git clone https://x-access-token:$GITHUB_TOKEN@github.com/farnalabs/modulo.git /tmp/repo
+
+# Push with auth:
+git push https://x-access-token:$GITHUB_TOKEN@github.com/farnalabs/modulo.git <branch>
+
+# GitHub API for CI status checks:
+curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/farnalabs/modulo/commits/{sha}/status
+```
+
+### Running Python Tools in E2B Sandbox
+
+Do NOT use `uv run` inside the E2B sandbox. The sandbox has Python 3.11, but `uv` downloads CPython 3.14 which breaks dependency resolution for the project's older dependencies. Instead:
+
+```bash
+pip install ruff 2>&1 | tail -3
+ruff check --fix . 2>&1
+pip install mypy 2>&1 | tail -3
+mypy src/modulo/ 2>&1
+```
+
+### Pipeline Prompt Guidelines
+
+1. **CI failures are NEVER transient.** The agent must fix the root cause, not retrigger CI or push empty commits.
+2. **Set git identity** before committing: `git config user.email "bot@farnalabs.com" && git config user.name "Branch Fixer Bot"`
+3. **Force push after rebase:** `git push origin HEAD:<branch> --force-with-lease`
+4. **Output JSON** must be written to `/home/user/output.json` with format: `{"summary":"...","changed_files":[],"pr_url":""}`
+5. **Timeout**: If the default 1200s is insufficient, increase it on the pipeline's node definition.
+
+### Known Issues
+
+- **The runner machine (duncan-pc) can go offline.** Check `gh api repos/farnalabs/modulo/actions/runners --jq '.runners[] | [.name, .status, .busy]'`. Restart with `Start-Process -FilePath "C:\actions-runner\run.cmd" -WindowStyle Hidden`.
+- **Force pushes lose CI results.** After a force push (rebase), CI won't automatically re-trigger on the new SHA. The next `pull_request` event (from a new commit or PR reopen) will trigger it.
+- **Concurrent run limits on triggers** default to 1. When a pipeline gets a burst of webhooks, increase `max_concurrent_runs` on the trigger to match expected burst volume.
