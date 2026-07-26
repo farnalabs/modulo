@@ -14,6 +14,49 @@ _log = logging.getLogger(__name__)
 _bearer = HTTPBearer()
 
 
+class InvalidToken(HTTPException):
+    def __init__(self, detail: str = "Invalid or expired token") -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=detail,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+class OrganisationMembershipRequired(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organisation membership required",
+        )
+
+
+class AccountNotFound(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account not found. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+class OrganisationNotFound(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Organisation not found. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+class SystemAdminRequired(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="System admin role required",
+        )
+
+
 async def get_current_tenant_user_optional(
     credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
     settings: Settings = Depends(get_settings),
@@ -47,13 +90,10 @@ async def get_current_user(
         principal = decode_principal(credentials.credentials, settings.secret_key)
     except JWTError as exc:
         _log.warning(
-            "auth.jwt_decode_failed", extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)}
+            "auth.jwt_decode_failed",
+            extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
+        raise InvalidToken() from exc
 
     return principal
 
@@ -68,10 +108,7 @@ async def get_current_tenant_user(
     message instead of letting them surface as confusing 409 FK violations.
     """
     if current_user.organisation_id is None or current_user.org_role is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Organisation membership required",
-        )
+        raise OrganisationMembershipRequired()
 
     await _verify_identity(current_user)
 
@@ -119,10 +156,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
                         "username": principal.username,
                     },
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Account not found. Please log in again.",
-                )
+                raise AccountNotFound()
 
             result = await session.execute(
                 _text("SELECT 1 FROM organisations WHERE id = :oid"),
@@ -136,10 +170,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
                         "username": principal.username,
                     },
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Organisation not found. Please log in again.",
-                )
+                raise OrganisationNotFound()
     except HTTPException:
         raise
     except SQLAlchemyError:
@@ -151,8 +182,5 @@ async def require_system_admin(
 ) -> AuthenticatedPrincipal:
     """Require the current user to have system admin privileges."""
     if not current_user.is_system_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="System admin role required",
-        )
+        raise SystemAdminRequired()
     return current_user
