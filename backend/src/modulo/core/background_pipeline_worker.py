@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from modulo.core.pipeline_engine.executor import PipelineExecutor
-from modulo.db.crud.run import update_run_status
+from modulo.db.crud.run import cancel_run, update_run_status
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -138,11 +138,55 @@ class BackgroundPipelineWorker:
 
         _log.info("Background pipeline worker stopped")
 
+    async def cleanup_stale_runs(self) -> int:
+        """Kill runs stuck in pending/running for longer than their pipeline's configured timeout.
+
+        Uses per-pipeline ``stale_run_timeout_minutes`` if set, otherwise defaults to 60 minutes.
+        Called automatically at the start of each consumer loop iteration.
+        """
+        engine = self._engine
+        if engine is None:
+            return 0
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        killed = 0
+        try:
+            async with factory() as session, session.begin():
+                from sqlalchemy import text
+
+                rows = await session.execute(
+                    text("""
+                        SELECT r.id, r.status, p.stale_run_timeout_minutes
+                        FROM runs r
+                        JOIN pipelines p ON p.id = r.pipeline_id
+                        WHERE r.status IN ('running', 'pending')
+                          AND r.updated_at < NOW() - COALESCE(p.stale_run_timeout_minutes, 60) * INTERVAL '1 minute'
+                          AND (r.outputs_json IS NULL OR r.outputs_json = '{}'::jsonb)
+                    """)
+                )
+                for row in rows:
+                    run_id = row[0]
+                    status = row[1]
+                    timeout = row[2]
+                    await cancel_run(session, run_id, error_code="stale_run_killed")
+                    _log.warning(
+                        "Killed stale run %s (%s) — stuck >%s min with no node progress",
+                        run_id,
+                        status,
+                        timeout or 60,
+                    )
+                    killed += 1
+        except Exception:
+            _log.exception("cleanup_stale_runs failed")
+        if killed:
+            _log.info("cleanup_stale_runs: killed %d stale run(s)", killed)
+        return killed
+
     async def _consumer_loop(self) -> None:
         """Consume jobs from the queue and spawn sub-tasks for each."""
         backoff = 0.1
         while True:
             try:
+                await self.cleanup_stale_runs()
                 job = await self._queue.get()
                 backoff = 0.1
                 task = asyncio.create_task(

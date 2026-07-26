@@ -752,6 +752,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             checkpointer_conn_string=pg_connection_string(settings.database_url),
         )
         await _bg_worker.start()
+        try:
+            await _bg_worker.cleanup_stale_runs()
+        except Exception:
+            logger.exception("Startup stale-run cleanup failed")
         set_runs_bg_worker(_bg_worker)
         set_mcp_bg_worker(_bg_worker)
         from modulo.api.routes.health import set_worker_ref as set_health_bg_worker

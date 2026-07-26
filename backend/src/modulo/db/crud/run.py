@@ -5,13 +5,14 @@ All functions require RLS org context to be set by the caller.
 
 import hashlib
 import json
+import logging
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -20,6 +21,8 @@ from modulo.db.crud.base import PageResult
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
+
+_log = logging.getLogger(__name__)
 
 
 def _input_hash(payload: dict[str, Any]) -> str:
@@ -432,3 +435,28 @@ async def purge_runs(
         if len(ids) < batch_size:
             break
     return {"deleted_run_count": deleted_total}
+
+
+async def cancel_run(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    error_code: str = "cancelled",
+) -> uuid.UUID | None:
+    """Atomically cancel a run that is still in pending/running status."""
+    result = await session.execute(
+        text("""
+            UPDATE runs
+            SET status = 'failed',
+                error_code = :error_code,
+                completed_at = NOW()
+            WHERE id = :run_id
+              AND status IN ('running', 'pending')
+            RETURNING id
+        """),
+        {"error_code": error_code, "run_id": run_id},
+    )
+    row = result.fetchone()
+    if row:
+        _log.warning("CRUD cancelled run %s with error_code=%s", run_id, error_code)
+        return row[0]
+    return None
