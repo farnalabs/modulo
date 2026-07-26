@@ -1,6 +1,7 @@
 """FastAPI auth dependencies for v1 user management."""
 
 import logging
+from typing import Any
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -12,6 +13,46 @@ from modulo.settings import Settings, get_settings
 _log = logging.getLogger(__name__)
 
 _bearer = HTTPBearer()
+
+
+class AuthError(HTTPException):
+    """Base for all authentication errors (401)."""
+
+    def __init__(self, detail: str, **kwargs: Any) -> None:
+        headers = kwargs.pop("headers", {"WWW-Authenticate": "Bearer"})
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=detail,
+            headers=headers,
+            **kwargs,
+        )
+
+
+class TokenInvalidError(AuthError):
+    """Raised when the JWT is malformed, expired, or otherwise invalid."""
+
+
+class AccountNotFoundError(AuthError):
+    """Raised when the JWT references a deleted account."""
+
+
+class OrganisationDeletedError(AuthError):
+    """Raised when the JWT references a deleted organisation."""
+
+
+class ForbiddenError(HTTPException):
+    """Base for all authorisation errors (403)."""
+
+    def __init__(self, detail: str, **kwargs: Any) -> None:
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=detail, **kwargs)
+
+
+class OrgMembershipRequiredError(ForbiddenError):
+    """Raised when a route requires tenant (org-scoped) claims."""
+
+
+class AdminRequiredError(ForbiddenError):
+    """Raised when a route requires the system-admin role."""
 
 
 async def get_current_tenant_user_optional(
@@ -47,13 +88,10 @@ async def get_current_user(
         principal = decode_principal(credentials.credentials, settings.secret_key)
     except JWTError as exc:
         _log.warning(
-            "auth.jwt_decode_failed", extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)}
+            "auth.jwt_decode_failed",
+            extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
+        raise TokenInvalidError("Invalid or expired token") from exc
 
     return principal
 
@@ -68,10 +106,7 @@ async def get_current_tenant_user(
     message instead of letting them surface as confusing 409 FK violations.
     """
     if current_user.organisation_id is None or current_user.org_role is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Organisation membership required",
-        )
+        raise OrgMembershipRequiredError("Organisation membership required")
 
     await _verify_identity(current_user)
 
@@ -119,10 +154,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
                         "username": principal.username,
                     },
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Account not found. Please log in again.",
-                )
+                raise AccountNotFoundError("Account not found. Please log in again.")
 
             result = await session.execute(
                 _text("SELECT 1 FROM organisations WHERE id = :oid"),
@@ -136,10 +168,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
                         "username": principal.username,
                     },
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Organisation not found. Please log in again.",
-                )
+                raise OrganisationDeletedError("Organisation not found. Please log in again.")
     except HTTPException:
         raise
     except SQLAlchemyError:
@@ -151,8 +180,5 @@ async def require_system_admin(
 ) -> AuthenticatedPrincipal:
     """Require the current user to have system admin privileges."""
     if not current_user.is_system_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="System admin role required",
-        )
+        raise AdminRequiredError("System admin role required")
     return current_user
