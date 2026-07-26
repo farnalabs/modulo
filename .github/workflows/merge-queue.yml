@@ -112,8 +112,16 @@ jobs:
 
             if echo "$APPROVERS" | grep -qE '^(farnalabs|modulo-reviewbot)$'; then
               echo "approved by $APPROVERS"
-              echo "$pr" >> /tmp/approved_prs.json
-              APPROVED_COUNT=$((APPROVED_COUNT + 1))
+
+              # Check CI status - only include PRs with passing CI
+              CI_BRANCH=$(echo "$pr" | jq -r ".headRefName")
+              CI_CONCLUSION=$(gh run list --branch "$CI_BRANCH" --workflow "CI: PR Validation" --limit 1 --json conclusion --jq ".[0].conclusion" 2>/dev/null || echo "unknown")
+              if [ "$CI_CONCLUSION" != "success" ]; then
+                echo "  skipping - CI not passing (latest: $CI_CONCLUSION)"
+              else
+                echo "$pr" >> /tmp/approved_prs.json
+                APPROVED_COUNT=$((APPROVED_COUNT + 1))
+              fi
             else
               echo "not approved yet — skipping"
             fi
