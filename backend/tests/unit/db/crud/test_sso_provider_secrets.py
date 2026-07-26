@@ -7,7 +7,7 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.secret_storage import decode_stored_secret
+from modulo.auth.secret_storage import DecryptionError, decode_stored_secret
 from modulo.db.crud.sso_provider import create_provider, update_provider
 from modulo.db.models.sso_provider import SsoProvider
 
@@ -15,7 +15,7 @@ from modulo.db.models.sso_provider import SsoProvider
 def test_decode_rejects_encrypted_secret_from_different_key() -> None:
     encrypted = Fernet(Fernet.generate_key()).encrypt(b"secret")
 
-    with pytest.raises(ValueError, match="cannot be decrypted"):
+    with pytest.raises(DecryptionError, match="cannot be decrypted"):
         decode_stored_secret(encrypted, Fernet.generate_key().decode())
 
 
