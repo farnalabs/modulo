@@ -3,6 +3,7 @@
 import contextlib
 import json
 import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -27,10 +28,8 @@ def _fake_ci(
     connector_type_id: str,
     creds: dict | None = None,
     config: dict | None = None,
-) -> object:
+) -> SimpleNamespace:
     """Minimal fake ConnectorInstance."""
-    from types import SimpleNamespace
-
     return SimpleNamespace(
         id=uuid.uuid4(),
         connector_type_id=connector_type_id,
