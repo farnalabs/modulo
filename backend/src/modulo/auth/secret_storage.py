@@ -7,6 +7,10 @@ class SecretStorageError(Exception):
     """Base exception for secret storage operations."""
 
 
+class InvalidFernetKeyError(SecretStorageError):
+    """Raised when the Fernet key is invalid or malformed."""
+
+
 class InvalidSecretTypeError(SecretStorageError):
     """Raised when the stored secret is neither text nor bytes."""
 
@@ -21,7 +25,13 @@ class CorruptSecretError(SecretStorageError):
 
 def encrypt_stored_secret(value: str, fernet_key: str) -> bytes:
     """Encode and encrypt a secret for a binary database column."""
-    return Fernet(fernet_key.encode()).encrypt(value.encode())
+    try:
+        f = Fernet(fernet_key.encode())
+    except (ValueError, TypeError) as exc:
+        raise InvalidFernetKeyError(
+            "Provided Fernet key is not valid"
+        ) from exc
+    return f.encrypt(value.encode())
 
 
 def decode_stored_secret(value: object, fernet_key: str) -> str:
@@ -32,7 +42,14 @@ def decode_stored_secret(value: object, fernet_key: str) -> str:
         raise InvalidSecretTypeError("Stored secret must be text or bytes")
 
     try:
-        plaintext = Fernet(fernet_key.encode()).decrypt(value)
+        f = Fernet(fernet_key.encode())
+    except (ValueError, TypeError) as exc:
+        raise InvalidFernetKeyError(
+            "Provided Fernet key is not valid"
+        ) from exc
+
+    try:
+        plaintext = f.decrypt(value)
     except InvalidToken as exc:
         if value.startswith(b"gAAAA"):
             raise DecryptionError(
