@@ -35,7 +35,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+from modulo.api.dependencies import (
+    get_or_create_engine,
+    get_or_create_session_factory,
+    pg_connection_string,
+)
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.auth.api_key import ApiKeyInvalidError, validate_api_key
 from modulo.auth.oauth import (
@@ -74,9 +78,10 @@ from modulo.core.library_service import (
     list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
-from modulo.db.crud.run import get_run
+from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
@@ -764,6 +769,13 @@ async def trigger_pipeline(
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
             payload = input_payload or {}
 
+            if _bg_worker is None or not _bg_worker.is_alive:
+                return {
+                    "status": "error",
+                    "error": "background_worker_unavailable",
+                    "detail": "Pipeline execution worker is not running. Cannot create run.",
+                }
+
             async with _session(org_id) as s:
                 pipeline = await get_pipeline(s, pid)
                 if pipeline is None:
@@ -788,10 +800,58 @@ async def trigger_pipeline(
                 run_id = run.id
                 thread_id = run.langgraph_thread_id
 
-            if _bg_worker is not None:
-                _bg_worker.submit(run_id, org_id, payload)
-            else:
-                _log.warning("MCP: Background worker not initialized â€” run %s will not execute", run_id)
+            _bg_worker.submit(run_id, org_id, payload)
+
+            # Verify the worker picked up the run; fall back to direct execution if not
+            await asyncio.sleep(0.5)
+            async with _session(org_id) as vs:
+                verify_run = await get_run(vs, run_id)
+            if verify_run and verify_run.status == "pending" and _bg_worker.is_alive:
+                _log.info(
+                    "MCP: Run %s still pending after submit — spawning fallback execution",
+                    run_id,
+                )
+                settings = get_settings()
+                fallback_engine = get_or_create_engine(settings)
+                fallback_executor = PipelineExecutor(
+                    fallback_engine,
+                    checkpointer_conn_string=pg_connection_string(str(fallback_engine.url)),
+                )
+
+                async def _fallback_execute(
+                    _engine=fallback_engine,
+                    _executor=fallback_executor,
+                    _run_id=run_id,
+                    _org_id=org_id,
+                    _payload=payload,
+                ) -> None:
+                    try:
+                        await _executor.execute(
+                            run_id=_run_id,
+                            org_id=_org_id,
+                            input_payload=_payload,
+                        )
+                    except Exception:
+                        _log.exception("MCP fallback execution failed for run %s", _run_id)
+                        try:
+                            factory = async_sessionmaker(_engine, expire_on_commit=False)
+                            async with factory() as fe, fe.begin():
+                                await set_rls_org(fe, _org_id)
+                                await update_run_status(fe, _run_id, "failed", error_code="internal_error")
+                        except Exception:
+                            _log.exception("MCP fallback marking run %s as failed", _run_id)
+
+                _fallback_task = asyncio.create_task(  # noqa: RUF006
+                    _fallback_execute(),
+                    name=f"mcp-fallback-run-{run_id}",
+                )
+            elif verify_run and verify_run.status == "pending" and not _bg_worker.is_alive:
+                _log.warning(
+                    "MCP: Run %s has no active worker — marking as failed",
+                    run_id,
+                )
+                async with _session(org_id) as fs:
+                    await update_run_status(fs, run_id, "failed", error_code="worker_unavailable")
 
             return {
                 "run_id": str(run_id),
