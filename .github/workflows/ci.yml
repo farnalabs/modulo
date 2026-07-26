@@ -559,3 +559,39 @@ jobs:
           else
             echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
           fi
+
+  notify-pr-review:
+    name: Trigger PR Reviewer
+    if: github.event_name == 'pull_request' && success()
+    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Send webhook to Modulo PR Review Agent
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          TIMESTAMP=$(date +%s)
+          PAYLOAD=$(cat << ENDJSON
+          {
+            "action": "check_run",
+            "repository": {"full_name": "${REPO}"},
+            "pull_request": {
+              "number": ${PR_NUMBER},
+              "head": {"sha": "${SHA}", "ref": "${BRANCH}"}
+            }
+          }
+          ENDJSON
+          )
+          BODY=$(echo "${PAYLOAD}")
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+          curl -s -X POST "${MODULO_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "${BODY}"
+          echo "PR Reviewer notified"
