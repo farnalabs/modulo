@@ -46,7 +46,7 @@ class TestFilesystemConnector:
         ],
     )
     async def test_invalid_file_query_resolves(
-        self, fs_connector: FilesystemConnector, path: str, expected_exc, expected_match
+        self, fs_connector: FilesystemConnector, path: str, expected_exc: type[Exception] | tuple[type[Exception], ...], expected_match: str | None
     ) -> None:
         with pytest.raises(expected_exc, match=expected_match):
             await fs_connector.query(_file_query(path))
