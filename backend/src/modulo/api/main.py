@@ -4,7 +4,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 
 import anyio
 from fastapi import FastAPI
@@ -108,7 +108,6 @@ from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
-from modulo.core.in_process_scheduler import dispose_scheduler_engine, start_schedulers
 from modulo.core.logging_config import configure_logging
 from modulo.core.seed_data.catalog import FLAGS, TIERS
 from modulo.db.session import engine as db_engine
@@ -741,7 +740,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     get_runtime_config_store()
 
     # Start the background pipeline worker (after migrations and checkpointer init).
-    _scheduler_tasks: list[asyncio.Task[Any]] = []
     try:
         from modulo.api.mcp_server import set_background_worker as set_mcp_bg_worker
         from modulo.api.routes.runs import set_background_worker as set_runs_bg_worker
@@ -761,12 +759,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         from modulo.api.routes.health import set_worker_ref as set_health_bg_worker
 
         set_health_bg_worker(_bg_worker)
-        from modulo.core.in_process_scheduler import set_bg_worker as set_scheduler_bg_worker
-
-        set_scheduler_bg_worker(_bg_worker)
-
-        logger.info("startup.redis_configured â€” Celery beat available for distributed scheduling")
-        _scheduler_tasks = await start_schedulers(engine=db_engine)
+        logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
     except Exception:
         logger.warning("startup.background_worker_init_failed", exc_info=True)
 
@@ -787,7 +780,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         _shutdown_manager.register("db_engine", db_engine.dispose)
         _shutdown_manager.register("di_engine", _di_engine.dispose)
         _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
-        _shutdown_manager.register("scheduler_engine", dispose_scheduler_engine)
     except Exception:
         logger.warning("startup.shutdown_manager_init_failed", exc_info=True)
 
@@ -822,16 +814,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _mcp_tg.__aexit__(None, None, None)
     retention_task.cancel()
     await _claim_expiry_job.stop()
-    for st in _scheduler_tasks:
-        st.cancel()
-    try:
+    with suppress(asyncio.CancelledError):
         await retention_task
-        for st in _scheduler_tasks:
-            with suppress(asyncio.CancelledError):
-                await st
-    except asyncio.CancelledError:
-        pass
-    await dispose_scheduler_engine()
     with suppress(NameError):
         await _bg_worker.stop()
     await _shutdown_manager.shutdown()

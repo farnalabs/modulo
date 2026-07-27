@@ -1,8 +1,7 @@
 """Polling trigger -- connector-driven condition evaluation and run creation.
 
-Fire logic lives in ``fire_polling_trigger()`` -- used by both Celery beat
-(``PollingFireTask`` / ``DatabasePollingScheduler``) and the in-process
-scheduler (``InProcessPollingScheduler`` in ``modulo.core.in_process_scheduler``).
+Fire logic lives in ``fire_polling_trigger()`` -- used by Celery beat
+(``PollingFireTask`` / ``DatabasePollingScheduler``).
 """
 
 import asyncio
