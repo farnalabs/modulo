@@ -1,4 +1,4 @@
-"""CRUD for Run records.
+﻿"""CRUD for Run records.
 
 All functions require RLS org context to be set by the caller.
 """
@@ -458,5 +458,6 @@ async def cancel_run(
     row = result.fetchone()
     if row:
         _log.warning("CRUD cancelled run %s with error_code=%s", run_id, error_code)
-        return row[0]
+        return uuid.UUID(str(row[0]))
     return None
+
