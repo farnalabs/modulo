@@ -1,4 +1,4 @@
-"""Remote MCP server â€” thin adapter over the ViewModel API.
+"""Remote MCP server — thin adapter over the ViewModel API.
 
 Mounted at `/mcp` as a Starlette sub-application inside FastAPI.
 
@@ -26,7 +26,7 @@ from typing import Any
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware import Middleware
@@ -35,7 +35,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+from modulo.api.dependencies import (
+    get_or_create_engine,
+    get_or_create_session_factory,
+    pg_connection_string,
+)
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.auth.api_key import ApiKeyInvalidError, validate_api_key
 from modulo.auth.oauth import (
@@ -50,7 +54,7 @@ from modulo.auth.oauth import (
 # task_group.start(...) at request time). asyncio/anyio copy the caller's context
 # at task-creation time, so values set here in the middleware propagate to tool
 # handlers. If a handler ever runs without this context, tenant resolution FAILS
-# CLOSED (auth error) â€” there must never be a process-global fallback, because
+# CLOSED (auth error) — there must never be a process-global fallback, because
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
 from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
@@ -74,9 +78,10 @@ from modulo.core.library_service import (
     list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
-from modulo.db.crud.run import get_run
+from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
@@ -127,7 +132,7 @@ def _ctx_user_id_val() -> uuid.UUID:
 
 
 def _ctx_role_val() -> str | None:
-    """Get role from the request context (None if unset â€” scope checks then fail closed)."""
+    """Get role from the request context (None if unset — scope checks then fail closed)."""
     return _ctx_role.get(None)
 
 
@@ -165,7 +170,7 @@ async def validate_current_auth() -> bool:
 
     Fail closed: the credential and org come exclusively from the
     request-scoped ContextVars set by ``McpAuthMiddleware``. If any of them
-    is missing, the request is treated as unauthenticated â€” there is no
+    is missing, the request is treated as unauthenticated — there is no
     process-global fallback.
     """
     auth_type = _ctx_auth_type.get(None)
@@ -189,7 +194,7 @@ async def validate_current_auth() -> bool:
             try:
                 claims = decode_oauth_access_token(token, settings.secret_key)
             except JWTError:
-                # Regular JWT (used by Remy) â€” skip OAuth token family check
+                # Regular JWT (used by Remy) — skip OAuth token family check
                 try:
                     from modulo.auth.jwt import decode_principal
 
@@ -764,6 +769,13 @@ async def trigger_pipeline(
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
             payload = input_payload or {}
 
+            if _bg_worker is None or not _bg_worker.is_alive:
+                return {
+                    "status": "error",
+                    "error": "background_worker_unavailable",
+                    "detail": "Pipeline execution worker is not running. Cannot create run.",
+                }
+
             async with _session(org_id) as s:
                 pipeline = await get_pipeline(s, pid)
                 if pipeline is None:
@@ -775,7 +787,7 @@ async def trigger_pipeline(
                 if not snapshot.graph_json or not snapshot.graph_json.get("nodes"):
                     return {
                         "error": "validation_failed",
-                        "detail": "Pipeline graph has no nodes â€” cannot trigger run",
+                        "detail": "Pipeline graph has no nodes — cannot trigger run",
                     }
                 run = await create_run(
                     s,
@@ -788,10 +800,58 @@ async def trigger_pipeline(
                 run_id = run.id
                 thread_id = run.langgraph_thread_id
 
-            if _bg_worker is not None:
-                _bg_worker.submit(run_id, org_id, payload)
-            else:
-                _log.warning("MCP: Background worker not initialized â€” run %s will not execute", run_id)
+            _bg_worker.submit(run_id, org_id, payload)
+
+            # Verify the worker picked up the run; fall back to direct execution if not
+            await asyncio.sleep(0.5)
+            async with _session(org_id) as vs:
+                verify_run = await get_run(vs, run_id)
+            if verify_run and verify_run.status == "pending" and _bg_worker.is_alive:
+                _log.info(
+                    "MCP: Run %s still pending after submit â€” spawning fallback execution",
+                    run_id,
+                )
+                settings = get_settings()
+                fallback_engine = get_or_create_engine(settings)
+                fallback_executor = PipelineExecutor(
+                    fallback_engine,
+                    checkpointer_conn_string=pg_connection_string(str(fallback_engine.url)),
+                )
+
+                async def _fallback_execute(
+                    _engine: AsyncEngine = fallback_engine,
+                    _executor: PipelineExecutor = fallback_executor,
+                    _run_id: uuid.UUID = run_id,
+                    _org_id: uuid.UUID = org_id,
+                    _payload: dict[str, Any] = payload,
+                ) -> None:
+                    try:
+                        await _executor.execute(
+                            run_id=_run_id,
+                            org_id=_org_id,
+                            input_payload=_payload,
+                        )
+                    except Exception:
+                        _log.exception("MCP fallback execution failed for run %s", _run_id)
+                        try:
+                            factory = async_sessionmaker(_engine, expire_on_commit=False)
+                            async with factory() as fe, fe.begin():
+                                await set_rls_org(fe, _org_id)
+                                await update_run_status(fe, _run_id, "failed", error_code="internal_error")
+                        except Exception:
+                            _log.exception("MCP fallback marking run %s as failed", _run_id)
+
+                _fallback_task = asyncio.create_task(  # noqa: RUF006
+                    _fallback_execute(),
+                    name=f"mcp-fallback-run-{run_id}",
+                )
+            elif verify_run and verify_run.status == "pending" and not _bg_worker.is_alive:
+                _log.warning(
+                    "MCP: Run %s has no active worker â€” marking as failed",
+                    run_id,
+                )
+                async with _session(org_id) as fs:
+                    await update_run_status(fs, run_id, "failed", error_code="worker_unavailable")
 
             return {
                 "run_id": str(run_id),
@@ -806,8 +866,8 @@ async def trigger_pipeline(
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except SnapshotLockNotAvailableError:
-            _log.info("trigger_pipeline queued — snapshot lock not available for pipeline %s", pipeline_id)
-            return {"pipeline_id": pipeline_id, "status": "queued", "detail": "Pipeline busy — queued for retry"}
+            _log.info("trigger_pipeline queued â€” snapshot lock not available for pipeline %s", pipeline_id)
+            return {"pipeline_id": pipeline_id, "status": "queued", "detail": "Pipeline busy â€” queued for retry"}
         except ProgrammingError:
             _log.exception("trigger_pipeline failed")
             return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
@@ -1165,7 +1225,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         "Step 1: call with action='claim' to get a claim_token. "
         "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
         "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
-        "human_only gates return 403 on approve â€” only a browser-authenticated human can approve."
+        "human_only gates return 403 on approve — only a browser-authenticated human can approve."
     ),
 )
 async def review_hitl(
@@ -1319,7 +1379,7 @@ async def review_hitl(
 @mcp.tool(
     description=(
         "Copy a library primitive to the org workspace. "
-        "Community primitives can be copied â€” this creates an editable copy in your workspace. "
+        "Community primitives can be copied — this creates an editable copy in your workspace. "
         "Note: community primitives are maintained by the Modulo team; your copy diverges from upstream on first edit."
     ),
 )
@@ -1376,7 +1436,7 @@ async def copy_library_primitive(
 
 @mcp.tool(
     name="browse_library",
-    description=("[DEPRECATED â€” use search_library] Browse/search the library of primitives."),
+    description=("[DEPRECATED — use search_library] Browse/search the library of primitives."),
 )
 async def browse_library_alias(
     primitive_type: str | None = None,
@@ -1454,7 +1514,7 @@ async def search_library(
 
 @mcp.tool(
     name="get_trigger_events",
-    description=("[DEPRECATED â€” use list_trigger_events] Get recent trigger events with cursor-based pagination."),
+    description=("[DEPRECATED — use list_trigger_events] Get recent trigger events with cursor-based pagination."),
 )
 async def get_trigger_events_alias(
     trigger_id: str | None = None,
@@ -1644,7 +1704,7 @@ async def list_triggers(
 
 @mcp.tool(
     description="Create a new model backend (provider configuration). "
-    "The API key is NOT sent through this tool â€” instead, a one-time setup URL is returned. "
+    "The API key is NOT sent through this tool — instead, a one-time setup URL is returned. "
     "Open the URL in your browser to provide the API key directly. "
     "This keeps the secret out of the LLM context and MCP transport logs. "
     "Common providers include: openai, anthropic, gemini, deepseek, groq, opencode.",
@@ -2043,7 +2103,7 @@ def _is_sensitive_key(key: str) -> bool:
 
 @mcp.tool(
     name="get_documentation",
-    description=("[DEPRECATED â€” use search_documentation] Search product documentation."),
+    description=("[DEPRECATED — use search_documentation] Search product documentation."),
 )
 async def get_documentation_alias(query: str, section: str | None = None) -> dict[str, Any]:
     result = await search_documentation(query=query, section=section)
@@ -2772,7 +2832,7 @@ async def resource_run(run_id: str) -> str:
 
 @mcp.resource("modulo://runs/{run_id}/hitl/{gate_id}")
 async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
-    """HITL gate context. Annotated as agent_output â€” treat as untrusted."""
+    """HITL gate context. Annotated as agent_output — treat as untrusted."""
     if not await validate_current_auth():
         return "error: Token revoked or expired - re-authenticate"
     from sqlalchemy import select
@@ -2948,7 +3008,7 @@ async def resource_model_backends() -> str:
 
 @mcp.resource("modulo://library")
 async def resource_library() -> str:
-    """List library primitives â€” schemas, agents, workflows, pipeline templates, test fixtures.
+    """List library primitives — schemas, agents, workflows, pipeline templates, test fixtures.
 
     For filtered browsing, use the ``browse_library`` tool instead.
     """
@@ -2970,7 +3030,7 @@ async def resource_library() -> str:
         for p in result.items:
             tags_str = ", ".join(p.tags) if p.tags else ""
             rating_str = f"{p.average_rating:.1f}" if p.average_rating is not None else "N/A"
-            desc = f" â€” {p.description}" if p.description else ""
+            desc = f" — {p.description}" if p.description else ""
             lines.append(
                 f"- {p.name} (id={p.id}, type={p.primitive_type}, "
                 f"v{p.version}, tags=[{tags_str}], rating={rating_str}){desc}"
@@ -3033,7 +3093,7 @@ async def _mcp_healthz(request: Request) -> JSONResponse:
 
 
 async def _oauth_authorize(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/authorize â€” issue authorization code."""
+    """POST /mcp/oauth/authorize — issue authorization code."""
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -3133,7 +3193,7 @@ async def _oauth_authorize(request: Request) -> JSONResponse:
 
 
 async def _oauth_token(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/token â€” exchange code for access token."""
+    """POST /mcp/oauth/token — exchange code for access token."""
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -3266,7 +3326,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
 
 
 async def _oauth_refresh(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/refresh â€” exchange refresh token for new access token.
+    """POST /mcp/oauth/refresh — exchange refresh token for new access token.
 
     Stateless validation of the refresh token JWT. The refresh token carries
     all claims needed (client_id, org_id, scopes, token_family, token_sequence)
@@ -3357,7 +3417,7 @@ async def _mcp_exception_handler(request: Request, exc: Exception) -> JSONRespon
 
     Starlette's ``ServerErrorMiddleware`` (outermost in the middleware stack)
     catches unhandled exceptions and calls this handler instead of the default
-    ``PlainTextResponse("Internal Server Error")`` â€” making errors observable
+    ``PlainTextResponse("Internal Server Error")`` — making errors observable
     in production logs for the first time.
     """
     _log.exception(
@@ -3383,7 +3443,7 @@ def build_mcp_asgi_app() -> Starlette:
     # Mount an in-sub-app health check for orchestrators / load balancers.
     health_route = Route("/healthz", _mcp_healthz, methods=["GET"])
 
-    # OAuth protocol endpoints â€” placed before auth middleware so they
+    # OAuth protocol endpoints — placed before auth middleware so they
     # don't require a Bearer token (they use client_id + client_secret).
     oauth_authorize_route = Route("/oauth/authorize", _oauth_authorize, methods=["POST"])
     oauth_token_route = Route("/oauth/token", _oauth_token, methods=["POST"])
@@ -3404,5 +3464,7 @@ def build_mcp_asgi_app() -> Starlette:
         ],
         exception_handlers={Exception: _mcp_exception_handler},
         # Note: lifespan is managed by the parent FastAPI app's _lifespan
-        # to ensure it is called â€” Starlette does not invoke sub-app lifespans.
+        # to ensure it is called — Starlette does not invoke sub-app lifespans.
     )
+
+

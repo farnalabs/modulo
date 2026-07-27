@@ -198,6 +198,15 @@ class BackgroundPipelineWorker:
         async with self._semaphore:
             await self._execute_job(job)
 
+    @property
+    def is_alive(self) -> bool:
+        """Check whether the consumer loop is running.
+
+        Returns True if the worker has been started and its consumer
+        task is still active (not cancelled or finished).
+        """
+        return self._started and self._consumer_task is not None and not self._consumer_task.done()
+
     def info(self) -> dict[str, Any]:
         return {
             "started": self._started,
