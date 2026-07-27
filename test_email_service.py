@@ -1,3 +1,4 @@
+import smtplib
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -97,9 +98,9 @@ class TestSendEmail:
     def test_send_email_smtp_failure(self):
         settings = MockSettings()
         with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
-            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
-                "smtplib"
-            ).SMTPException("Connection refused")
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = smtplib.SMTPException(
+                "Connection refused"
+            )
 
             with pytest.raises(EmailSendingError, match="Connection refused"):
                 send_email(
@@ -108,3 +109,30 @@ class TestSendEmail:
                     subject="Test",
                     body_html="<html><body><h1>Test</h1></body></html>",
                 )
+
+    def test_send_email_empty_recipients_returns_false(self):
+        settings = MockSettings()
+        result = send_email(
+            settings,
+            to=[],
+            subject="Test",
+            body_html="<html><body><h1>Test</h1></body></html>",
+        )
+        assert result is False
+
+    def test_send_email_empty_subject_still_sends(self):
+        settings = MockSettings()
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+
+            result = send_email(
+                settings,
+                to=["admin@example.com"],
+                subject="",
+                body_html="<html><body><h1>Test</h1></body></html>",
+            )
+
+            assert result is True
+            msg = mock_server.send_message.call_args[0][0]
+            assert msg["Subject"] == ""
