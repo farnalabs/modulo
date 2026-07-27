@@ -4,7 +4,7 @@ import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -170,6 +170,16 @@ def mock_session() -> AsyncMock:
     return session
 
 
+@pytest.fixture(autouse=True)
+def _mock_redis():
+    with patch("redis.asyncio.Redis.from_url") as mock:
+        redis_instance = AsyncMock()
+        redis_instance.setex = AsyncMock()
+        redis_instance.aclose = AsyncMock()
+        mock.return_value = redis_instance
+        yield mock
+
+
 @pytest.fixture()
 def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
@@ -201,7 +211,7 @@ def test_ws_token_endpoint_returns_200(client: TestClient) -> None:
     body = resp.json()
     assert "ws_token" in body
     assert len(body["ws_token"]) > 20
-    assert body["token_type"] == "ws-jwt"
+    assert body["token_type"] == "ws-opaque"
     assert body["expires_in_seconds"] == 60
 
 

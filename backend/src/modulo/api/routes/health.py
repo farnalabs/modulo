@@ -73,8 +73,6 @@ async def _check_database() -> CheckResult:
 
 async def _check_redis() -> CheckResult:
     settings = get_settings()
-    if not settings.redis_url:
-        return CheckResult(status="degraded", detail="redis not configured")
     start = time.monotonic()
     r = None
     try:
