@@ -41,8 +41,8 @@ class TestFilesystemConnector:
         ("path", "expected_exc", "expected_match"),
         [
             pytest.param("nonexistent.txt", ValueError, "File not found", id="missing"),
-            pytest.param("../etc/passwd", PathTraversalError, None, id="traversal"),
-            pytest.param("", (ValueError, PathTraversalError), None, id="empty"),
+            pytest.param("../etc/passwd", PathTraversalError, "traversal", id="traversal"),
+            pytest.param("", (ValueError, PathTraversalError), "empty", id="empty"),
         ],
     )
     async def test_invalid_file_query_resolves(
