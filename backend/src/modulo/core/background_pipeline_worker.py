@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.db.crud.run import update_run_status
@@ -42,15 +42,14 @@ class PipelineJob:
 class BackgroundPipelineWorker:
     """Manages background pipeline execution via a persistent consumer loop.
 
-    Owns its own database engine to isolate background execution from
-    request-scoped connections. Submissions go to an ``asyncio.Queue``
-    and are consumed by a single persistent ``asyncio.Task``.
+    Creates a fresh database engine per job to avoid sharing engine state
+    across concurrent background executions. Submissions go to an
+    ``asyncio.Queue`` and are consumed by a single persistent ``asyncio.Task``.
     """
 
     def __init__(self, database_url: str, checkpointer_conn_string: str) -> None:
         self._database_url = database_url
         self._checkpointer_conn_string = checkpointer_conn_string
-        self._engine: AsyncEngine | None = None
         self._queue: asyncio.Queue[PipelineJob] = asyncio.Queue()
         self._consumer_task: asyncio.Task[None] | None = None
         self._running_jobs: set[asyncio.Task[None]] = set()
@@ -58,21 +57,13 @@ class BackgroundPipelineWorker:
         self._semaphore: asyncio.Semaphore = asyncio.Semaphore(_POOL_SIZE)
 
     async def start(self) -> None:
-        """Create the database engine and start the consumer loop.
+        """Start the consumer loop.
 
         Idempotent — safe to call multiple times.
         """
         if self._started:
             _log.warning("Background pipeline worker already started — skipping")
             return
-        self._engine = create_async_engine(
-            self._database_url,
-            pool_size=_POOL_SIZE,
-            max_overflow=_MAX_OVERFLOW,
-            pool_pre_ping=True,
-            pool_timeout=_POOL_TIMEOUT,
-            connect_args={"ssl": False, "statement_cache_size": 0},
-        )
         self._consumer_task = asyncio.create_task(
             self._consumer_loop(),
             name="background-pipeline-worker",
@@ -95,8 +86,8 @@ class BackgroundPipelineWorker:
     async def stop(self) -> None:
         """Gracefully stop the worker.
 
-        Drains the queue, cancels in-flight jobs after a timeout,
-        then disposes the engine.
+        Drains the queue, cancels in-flight jobs after a timeout.
+        Each running job disposes its own engine upon completion.
         """
         self._started = False  # Reject new submissions immediately
         leftover = 0
@@ -132,10 +123,6 @@ class BackgroundPipelineWorker:
                 for t in pending:
                     t.cancel()
 
-        if self._engine is not None:
-            await self._engine.dispose()
-            _log.info("Background pipeline worker engine disposed")
-
         _log.info("Background pipeline worker stopped")
 
     async def _consumer_loop(self) -> None:
@@ -161,11 +148,14 @@ class BackgroundPipelineWorker:
     async def _execute_job(self, job: PipelineJob) -> None:
         """Execute a single pipeline run."""
         _log.info("Background worker executing run %s", job.run_id)
-        engine = self._engine
-        if engine is None:
-            _log.error("Background worker engine not available — run %s will not execute", job.run_id)
-            return
-
+        engine = create_async_engine(
+            self._database_url,
+            pool_size=2,
+            max_overflow=4,
+            pool_pre_ping=True,
+            pool_timeout=10,
+            connect_args={"ssl": False, "statement_cache_size": 0},
+        )
         try:
             executor = PipelineExecutor(
                 engine,
@@ -193,6 +183,8 @@ class BackgroundPipelineWorker:
                     )
             except Exception:
                 _log.exception("Background worker failed to mark run %s as failed", job.run_id)
+        finally:
+            await engine.dispose()
 
     async def _execute_job_with_semaphore(self, job: PipelineJob) -> None:
         async with self._semaphore:
