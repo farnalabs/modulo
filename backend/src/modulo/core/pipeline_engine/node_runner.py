@@ -48,6 +48,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from typing import Any
 
+import jinja2
 import jmespath
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
@@ -636,14 +637,25 @@ def make_sandbox_agent_fn(
         resolved = node_def.get("_resolved_parameters")
         if isinstance(resolved, dict):
             template_vars["parameter"] = resolved
-        rendered_prompt = template.render(**template_vars)
-
-        start_time = _time.monotonic()
-        sandbox: AsyncSandbox | None = None
 
         run_id: str = str(state.get("_run_id", ""))
         pipeline_id: str = str(state.get("_pipeline_id", ""))
         org_id: str = str(state.get("_org_id", ""))
+
+        try:
+            rendered_prompt = template.render(**template_vars)
+        except jinja2.UndefinedError as e:
+            _log.warning("Prompt template UndefinedError for run %s: %s", run_id, e)
+            return {
+                "status": "skipped",
+                "summary": f"Skipped: prompt template references missing input fields ({e})",
+                "agent_stdout": "",
+                "agent_stderr": "",
+                "exit_code": 0,
+            }
+
+        start_time = _time.monotonic()
+        sandbox: AsyncSandbox | None = None
 
         _stdout_len = 0
         _stderr_len = 0
