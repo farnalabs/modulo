@@ -161,7 +161,7 @@ class RemyRedisRegistry:
             return None
         finally:
             await pubsub.unsubscribe(f"remy:channel:permission:{request_id}")
-            await pubsub.aclose()
+            await pubsub.aclose()  # type: ignore[no-untyped-call]
 
     async def publish_ui_results(self, session_id: str) -> None:
         await _redis_result(self._redis.publish(f"remy:channel:ui_results:{session_id}", "ready"))
@@ -174,7 +174,7 @@ class RemyRedisRegistry:
             return message is not None
         finally:
             await pubsub.unsubscribe(f"remy:channel:ui_results:{session_id}")
-            await pubsub.aclose()
+            await pubsub.aclose()  # type: ignore[no-untyped-call]
 
     async def publish_resume(self, session_id: str) -> None:
         await _redis_result(self._redis.publish(f"remy:channel:resume:{session_id}", "resume"))
@@ -187,4 +187,4 @@ class RemyRedisRegistry:
             return message is not None
         finally:
             await pubsub.unsubscribe(f"remy:channel:resume:{session_id}")
-            await pubsub.aclose()
+            await pubsub.aclose()  # type: ignore[no-untyped-call]

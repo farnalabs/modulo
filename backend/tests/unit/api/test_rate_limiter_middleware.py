@@ -53,7 +53,8 @@ class TestConstructorOverrides:
 
     def test_accepts_explicit_registry(self):
         """Middleware should use the passed registry instead of creating one."""
-        registry = RateLimiterRegistry(redis_client=None)
+        mock_redis = MagicMock()
+        registry = RateLimiterRegistry(redis_client=mock_redis)
         app = _make_app(registry=registry)
         with TestClient(app) as client:
             resp = client.get("/health")
