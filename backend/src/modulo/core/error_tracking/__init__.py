@@ -8,7 +8,6 @@ import hmac
 import logging
 import re
 import secrets
-import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -166,64 +165,33 @@ class ErrorIngestionService:
 # ---------------------------------------------------------------------------
 
 
-class _SessionKeyEntry:
-    __slots__ = ("expires_at", "key")
-
-    def __init__(self, key: str, ttl: int = _HMAC_KEY_TTL) -> None:
-        if ttl <= 0:
-            raise ValueError(f"ttl must be positive, got {ttl}")
-        self.key = key
-        self.expires_at = time.time() + ttl
-
-    @property
-    def expired(self) -> bool:
-        return time.time() > self.expires_at
-
-
 class SessionKeyStore:
-    """In-memory HMAC key store (Redis-backed when ``redis_client`` provided).
+    """Redis-backed HMAC key store.
 
     Keys are identified by ``account_id`` (str). Each key has a 1-hour TTL.
     """
 
-    def __init__(self, redis_client: Redis | None = None) -> None:
-        self._redis = redis_client
-        self._memory: dict[str, _SessionKeyEntry] = {}
+    def __init__(self, redis_client: Redis) -> None:
         if redis_client is None:
-            _log.warning("No Redis client for HMAC session keys — using in-memory store (non-persistent)")
-
-    async def _cleanup_expired(self) -> None:
-        now = time.time()
-        expired = [k for k, v in self._memory.items() if v.expires_at <= now]
-        for k in expired[:10]:
-            self._memory.pop(k, None)
+            raise ValueError("SessionKeyStore requires a Redis client")
+        self._redis = redis_client
 
     async def generate_key(self, account_id: str) -> str:
-        await self._cleanup_expired()
         key = secrets.token_hex(32)
-        if self._redis is not None:
-            try:
-                await self._redis.setex(f"error_hmac_key:{account_id}", _HMAC_KEY_TTL, key)
-            except Exception:
-                _log.exception("session_key_store.redis_set_failed", extra={"account_id": account_id})
-                self._memory[account_id] = _SessionKeyEntry(key)
-        else:
-            self._memory[account_id] = _SessionKeyEntry(key)
+        try:
+            await self._redis.setex(f"error_hmac_key:{account_id}", _HMAC_KEY_TTL, key)
+        except Exception:
+            _log.exception("session_key_store.redis_set_failed", extra={"account_id": account_id})
+            raise
         return key
 
     async def get_key(self, account_id: str) -> str | None:
-        await self._cleanup_expired()
-        if self._redis is not None:
-            try:
-                val = await self._redis.get(f"error_hmac_key:{account_id}")
-                return val.decode() if isinstance(val, bytes) else val
-            except Exception:
-                _log.exception("session_key_store.redis_get_failed", extra={"account_id": account_id})
-        entry = self._memory.get(account_id)
-        if entry is None or entry.expired:
-            self._memory.pop(account_id, None)
-            return None
-        return entry.key
+        try:
+            val = await self._redis.get(f"error_hmac_key:{account_id}")
+            return val.decode() if isinstance(val, bytes) else val
+        except Exception:
+            _log.exception("session_key_store.redis_get_failed", extra={"account_id": account_id})
+            raise
 
     async def verify_hmac(self, account_id: str, body: bytes, signature: str) -> bool:
         key = await self.get_key(account_id)

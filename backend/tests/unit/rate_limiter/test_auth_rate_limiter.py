@@ -8,7 +8,7 @@ Covers:
 """
 
 from collections.abc import Generator
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -20,6 +20,21 @@ from modulo.api.middleware.rate_limiter import (
 )
 from modulo.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
 from modulo.settings import Settings
+
+
+@pytest.fixture
+def mock_redis():
+    client = MagicMock()
+    client.ttl = AsyncMock(return_value=0)
+    pipe = MagicMock()
+    pipe.zremrangebyscore = MagicMock(return_value=pipe)
+    pipe.zcard = MagicMock(return_value=pipe)
+    pipe.execute = AsyncMock(return_value=(None, 0))
+    client.pipeline = MagicMock(return_value=pipe)
+    client.zadd = AsyncMock()
+    client.expire = AsyncMock()
+    client.delete = AsyncMock()
+    return client
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +52,6 @@ def _make_settings(
     enabled: bool = True,
     max_attempts: int = 10,
     window_s: int = 60,
-    no_redis: bool = False,
 ) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -47,7 +61,7 @@ def _make_settings(
         modulo_auth_rate_limit_enabled=enabled,
         modulo_auth_max_attempts=max_attempts,
         modulo_auth_window_seconds=window_s,
-        redis_url="" if no_redis else "redis://localhost:6379/0",
+        redis_url="redis://localhost:6379/0",
     )
 
 
@@ -61,7 +75,7 @@ def _make_app(
     async def login():
         return {"token": "dummy"}
 
-    resolved = settings or _make_settings(no_redis=True)
+    resolved = settings or _make_settings()
     app.add_middleware(
         AuthRateLimitMiddleware,
         settings=resolved,
@@ -82,11 +96,18 @@ class TestGetAuthRateLimiter:
         assert limiter is not None
         assert isinstance(limiter, AuthRateLimiterCls)
 
-    def test_returns_in_memory_when_no_redis(self):
-        settings = _make_settings(enabled=True, no_redis=True)
-        limiter = get_auth_rate_limiter(settings)
-        assert limiter is not None
-        assert limiter._redis is None
+    def test_raises_when_no_redis(self):
+        """get_auth_rate_limiter raises if REDIS_URL is empty."""
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key="a" * 32,
+            fernet_key="a" * 32,
+            modulo_admin_password="testpass",
+            modulo_auth_rate_limit_enabled=True,
+            redis_url="",
+        )
+        with pytest.raises(RuntimeError, match="REDIS_URL is required"):
+            get_auth_rate_limiter(settings)
 
     def test_singleton_returns_same_instance(self):
         settings = _make_settings(enabled=True)
@@ -107,9 +128,9 @@ class TestAuthRateLimitMiddlewareDisabled:
 
 
 class TestAuthRateLimitMiddlewareEnabled:
-    def test_allows_within_limit(self):
+    def test_allows_within_limit(self, mock_redis):
         limiter = AuthRateLimiterCls(
-            redis_client=None,
+            redis_client=mock_redis,
             max_attempts=10,
             window_s=60,
         )
@@ -120,28 +141,29 @@ class TestAuthRateLimitMiddlewareEnabled:
 
         assert resp.status_code == 200
 
-    def test_blocks_when_exceeded(self):
+    def test_blocks_when_exceeded(self, mock_redis):
         """Pre-populate failures, then verify the middleware blocks."""
+        mock_redis.ttl = AsyncMock(return_value=30)
         limiter = AuthRateLimiterCls(
-            redis_client=None,
+            redis_client=mock_redis,
             max_attempts=1,
             window_s=60,
         )
-        limiter._record_failure_memory("testclient")
-        app = _make_app(rate_limiter=limiter, settings=_make_settings(no_redis=True))
+        app = _make_app(rate_limiter=limiter)
 
         with TestClient(app) as client:
             resp = client.post("/api/v1/auth/login")
 
         assert resp.status_code == 429
 
-    def test_429_has_retry_after_header(self):
+    def test_429_has_retry_after_header(self, mock_redis):
+        mock_redis.ttl = AsyncMock(return_value=30)
         limiter = AuthRateLimiterCls(
-            redis_client=None,
+            redis_client=mock_redis,
             max_attempts=0,
             window_s=60,
         )
-        app = _make_app(rate_limiter=limiter, settings=_make_settings(no_redis=True))
+        app = _make_app(rate_limiter=limiter)
 
         with TestClient(app) as client:
             resp = client.post("/api/v1/auth/login")
@@ -149,7 +171,7 @@ class TestAuthRateLimitMiddlewareEnabled:
         assert resp.status_code == 429
         assert "Retry-After" in resp.headers
 
-    def test_get_not_rate_limited(self):
+    def test_get_not_rate_limited(self, mock_redis):
         """GET requests to auth paths should not be rate limited."""
         app = FastAPI()
 
@@ -158,7 +180,7 @@ class TestAuthRateLimitMiddlewareEnabled:
             return {"token": "dummy"}
 
         limiter = AuthRateLimiterCls(
-            redis_client=None,
+            redis_client=mock_redis,
             max_attempts=0,
             window_s=60,
         )

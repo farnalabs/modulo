@@ -1,11 +1,10 @@
 """Unit tests for RedisSlidingWindowRateLimiter and RateLimiterRegistry."""
 
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.rate_limiter import RateLimiterRegistry, RedisSlidingWindowRateLimiter, TokenBucket
+from modulo.core.rate_limiter import RateLimiterRegistry, RedisSlidingWindowRateLimiter
 
 
 @pytest.fixture
@@ -19,29 +18,6 @@ def mock_redis():
     pipe.execute = AsyncMock(return_value=(None, None, 1, True))
     client.pipeline = MagicMock(return_value=pipe)
     return client
-
-
-class TestTokenBucket:
-    @pytest.mark.parametrize(
-        "max_requests,window_s,consume_count,expected_results",
-        [
-            (5, 1, 5, [True] * 5),
-            (2, 20, 3, [True, True, False]),
-            (2, 1, 4, [True, True, False, True]),
-            (3, 3, 4, [True, True, True, False]),
-        ],
-    )
-    async def test_token_bucket(self, max_requests, window_s, consume_count, expected_results):
-        if max_requests == 2 and window_s == 1:
-            times = iter([0.0, 0.0, 0.0, 0.0, 0.5])
-            with patch.object(time, "monotonic", side_effect=times):
-                bucket = TokenBucket(max_requests=max_requests, window_s=window_s)
-                for expected in expected_results:
-                    assert await bucket.consume() is expected
-        else:
-            bucket = TokenBucket(max_requests=max_requests, window_s=window_s)
-            for expected in expected_results:
-                assert await bucket.consume() is expected
 
 
 class TestRedisSlidingWindowRateLimiter:
@@ -71,18 +47,14 @@ class TestRedisSlidingWindowRateLimiter:
 
 class TestRateLimiterRegistry:
     @pytest.mark.parametrize(
-        "has_redis,redis_result,expected",
+        "redis_result,expected",
         [
-            (False, None, True),
-            (True, (None, None, 1, True), True),
-            (True, (None, None, 6, True), False),
+            ((None, None, 1, True), True),
+            ((None, None, 6, True), False),
         ],
     )
-    async def test_registry(self, has_redis, redis_result, expected):
-        if has_redis:
-            mock_redis = MagicMock()
-            mock_redis.pipeline.return_value.execute = AsyncMock(return_value=redis_result)
-            registry = RateLimiterRegistry(redis_client=mock_redis)
-        else:
-            registry = RateLimiterRegistry()
+    async def test_registry(self, redis_result, expected):
+        mock_redis = MagicMock()
+        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=redis_result)
+        registry = RateLimiterRegistry(redis_client=mock_redis)
         assert await registry.check("k", max_requests=5) is expected
