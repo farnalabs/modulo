@@ -36,12 +36,11 @@ except ImportError:
     Celery = Task = ScheduleEntry = Scheduler = object
 
 from croniter import croniter
-from sqlalchemy import desc, func, select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.db.crud.run import create_run
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
@@ -485,6 +484,27 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
                 rows = result.all()
 
                 triggers: list[dict[str, Any]] = []
+                pipelines_needing_snapshots: set[uuid.UUID] = set()
+                for row in rows:
+                    config = row.config_json or {}
+                    if not config.get("snapshot_id"):
+                        pipelines_needing_snapshots.add(row.pipeline_id)
+
+                latest_snapshots: dict[uuid.UUID, uuid.UUID] = {}
+                if pipelines_needing_snapshots:
+                    pids = list(pipelines_needing_snapshots)
+                    snap_result = await session.execute(
+                        text(
+                            "SELECT DISTINCT ON (pipeline_id) pipeline_id, id "
+                            "FROM pipeline_snapshots "
+                            "WHERE pipeline_id = ANY(:pids) "
+                            "ORDER BY pipeline_id, created_at DESC"
+                        ),
+                        {"pids": pids},
+                    )
+                    for pipeline_id, snapshot_id in snap_result:
+                        latest_snapshots[pipeline_id] = snapshot_id
+
                 for row in rows:
                     config = row.config_json or {}
                     snapshot_id_str = config.get("snapshot_id")
@@ -497,21 +517,9 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
                             )
                             snapshot_id = None
                     else:
-                        snap_result = await session.execute(
-                            select(PipelineSnapshot.id)
-                            .where(
-                                PipelineSnapshot.pipeline_id == row.pipeline_id,
-                                PipelineSnapshot.organisation_id == row.organisation_id,
-                            )
-                            .order_by(desc(PipelineSnapshot.created_at))
-                            .limit(1)
-                        )
-                        snap_row = snap_result.scalar_one_or_none()
-                        if snap_row is None:
+                        snapshot_id = latest_snapshots.get(row.pipeline_id)
+                        if snapshot_id is None:
                             _log.info("Cron trigger %s has no snapshots — will auto-create on fire", row.id)
-                            snapshot_id = None
-                        else:
-                            snapshot_id = snap_row
 
                     triggers.append(
                         {
