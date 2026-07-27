@@ -87,6 +87,11 @@ class PipelineCreate(BaseModel):
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
     max_duration_seconds: int | None = Field(None, ge=1)
+    stale_run_timeout_minutes: int | None = Field(
+        None,
+        ge=1,
+        description="Override the global stale-run timeout for this pipeline. Null = use global default (60 min).",
+    )
     folder_id: uuid.UUID | None = None
     rate_limit_config: dict[str, Any] | None = Field(
         None,
@@ -113,6 +118,11 @@ class PipelineUpdate(BaseModel):
     run_context_defaults: dict[str, Any] | None = None
     default_autonomy_level: str | None = None
     max_duration_seconds: int | None = Field(None, ge=1)
+    stale_run_timeout_minutes: int | None = Field(
+        None,
+        ge=1,
+        description="Override the global stale-run timeout for this pipeline. Null = use global default (60 min).",
+    )
     rate_limit_config: dict[str, Any] | None = Field(
         None,
         description="Rate limit config. Set to {} to clear.",
@@ -141,6 +151,7 @@ class PipelineResponse(BaseModel):
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
     max_duration_seconds: int | None = None
+    stale_run_timeout_minutes: int | None = None
     rate_limit_config: dict[str, Any] | None = None
     snapshot_count: int = 0
     archived_at: datetime | None = None
@@ -899,7 +910,7 @@ async def clone_pipeline_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            # Step 1 — validate source exists
+            # Step 1 -- validate source exists
             _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
             source = await get_pipeline(session, pipeline_id)
             if source is None:
@@ -909,7 +920,7 @@ async def clone_pipeline_endpoint(
                     detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
                 )
 
-            # Step 2 — validate name availability
+            # Step 2 -- validate name availability
             target_name = req.name or f"Copy of {source.name}"
             _log.info("Step 2/4: checking name '%s' is available", target_name)
             if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
@@ -921,7 +932,7 @@ async def clone_pipeline_endpoint(
                     ),
                 )
 
-            # Step 3 — execute copy
+            # Step 3 -- execute copy
             _log.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
             cloned = await clone_pipeline(
                 session,
@@ -939,7 +950,7 @@ async def clone_pipeline_endpoint(
                     ),
                 )
 
-            # Step 4 — audit event
+            # Step 4 -- audit event
             _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
             await append_audit_event(
                 session,
@@ -1455,7 +1466,7 @@ async def move_pipeline_to_folder_endpoint(
 
 
 # ---------------------------------------------------------------------------
-# Node conversion: manual â†” agent
+# Node conversion: manual <-> agent
 # ---------------------------------------------------------------------------
 
 
