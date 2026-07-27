@@ -220,7 +220,7 @@ class TestRegressionAlertsEndpoint:
         ]
 
     @pytest.fixture()
-    def _configure_session(self, _regression_rows):
+    def _configure_session(self, _regression_rows: list[MagicMock]) -> None:
         def _setup(mock_session: AsyncMock) -> None:
             mock_session.execute.side_effect = [
                 make_mock_result(scalar_value=None),

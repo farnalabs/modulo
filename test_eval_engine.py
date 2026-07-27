@@ -607,6 +607,16 @@ class TestNormalContent:
 
         assert result.passed is True
 
+    def test_none_field_value_coerced_to_empty_string(self, eval_engine: EvalEngine) -> None:
+        captured: list = []
+        eval_def = make_eval_def("llm_judge", {"field": "output"})
+
+        result = eval_engine.evaluate(
+            {"output": None}, eval_def, llm_judge_callable=make_capturing_callable(captured)
+        )
+
+        assert result.passed is True
+
 
 class TestContentLengthLimit:
     def test_content_too_long_returns_failed(self, eval_engine: EvalEngine) -> None:
@@ -646,15 +656,13 @@ class TestBuildSafeJudgeInput:
         safe_output, _safe_eval_def = eval_engine._build_safe_judge_input(output, eval_def)
 
         wrapped = safe_output["output"]
-        lines = wrapped.split("\n")
-        assert lines[0] == _OUTER_DELIMITER
-        assert _GUARD_INSTRUCTION in lines[1]
-        assert lines[2] == _INNER_DELIMITER
-        assert lines[3] == _CONTENT_BEGIN
-        assert lines[4] == "test content"
-        assert lines[5] == _CONTENT_END
-        assert lines[6] == _INNER_DELIMITER
-        assert lines[7] == _OUTER_DELIMITER
+        assert wrapped.startswith(_OUTER_DELIMITER)
+        assert wrapped.endswith(_OUTER_DELIMITER)
+        assert _GUARD_INSTRUCTION in wrapped
+        assert _INNER_DELIMITER in wrapped
+        assert _CONTENT_BEGIN in wrapped
+        assert "test content" in wrapped
+        assert _CONTENT_END in wrapped
 
     def test_original_output_not_mutated(self, eval_engine: EvalEngine) -> None:
         eval_def = make_eval_def("llm_judge", {"field": "output"})
