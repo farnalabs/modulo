@@ -75,7 +75,7 @@ async def fire_agent_signal(
             continue
 
         # Concurrency check — skip if too many active runs on child pipeline.
-        active_count = await _count_active_runs(session, trigger.pipeline_id)
+        active_count = await _count_active_runs(session, trigger.id)
         if active_count >= trigger.max_concurrent_runs:
             await _log_signal_event(
                 session,
@@ -192,12 +192,12 @@ async def fire_agent_signal(
     return results
 
 
-async def _count_active_runs(session: AsyncSession, pipeline_id: uuid.UUID) -> int:
+async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
     from sqlalchemy import func as sa_func
 
     result = await session.execute(
         select(sa_func.count()).where(
-            Run.pipeline_id == pipeline_id,
+            Run.trigger_id == trigger_id,
             Run.status.in_(_ACTIVE_STATUSES),
             Run.cancellation_requested == False,  # noqa: E712
         )
