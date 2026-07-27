@@ -47,10 +47,17 @@ async def create_run(
 ) -> Run:
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"
-    max_rn = await session.execute(
-        select(func.coalesce(func.max(Run.run_number), 0)).where(Run.organisation_id == org_id)
+    result = await session.execute(
+        text("""
+            INSERT INTO run_number_counters (organisation_id, next_run_number)
+            VALUES (:org_id, 1)
+            ON CONFLICT (organisation_id)
+            DO UPDATE SET next_run_number = run_number_counters.next_run_number + 1
+            RETURNING next_run_number
+        """),
+        {"org_id": org_id},
     )
-    next_run_number = max_rn.scalar_one() + 1
+    run_number = result.scalar_one()
 
     run = Run(
         id=run_id,
@@ -64,7 +71,7 @@ async def create_run(
         owner_team_id=owner_team_id,
         langgraph_thread_id=thread_id,
         parent_run_id=parent_run_id,
-        run_number=next_run_number,
+        run_number=run_number,
         rate_limit_key=rate_limit_key,
     )
     session.add(run)
