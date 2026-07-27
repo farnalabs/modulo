@@ -47,23 +47,13 @@ class _CooldownKey:
 class AlertEngine:
     """Evaluates error events against notification rules with cooldown.
 
-    Cooldown is in-memory by default. When ``redis_client`` is provided,
-    cooldown state is persisted to Redis for multi-process deployments.
+    Cooldown state is persisted to Redis for multi-process deployments.
     """
 
-    def __init__(self, redis_client: Any | None = None) -> None:
-        self._redis = redis_client
-        self._cooldowns: dict[_CooldownKey, float] = {}
+    def __init__(self, redis_client: Any) -> None:
         if redis_client is None:
-            _log.warning(
-                "AlertEngine: No Redis client — cooldown state is in-memory only (not shared across processes)",
-            )
-
-    def _evict_expired_cooldowns(self) -> None:
-        now = time.time()
-        expired = [k for k, v in self._cooldowns.items() if (now - v) >= _COOLDOWN_TTL]
-        for k in expired:
-            self._cooldowns.pop(k, None)
+            raise ValueError("AlertEngine requires a Redis client")
+        self._redis = redis_client
 
     async def evaluate(
         self,
@@ -82,7 +72,6 @@ class AlertEngine:
         period, it is skipped.  Returns a list of ``TriggeredAlert`` that
         the caller should dispatch.
         """
-        self._evict_expired_cooldowns()
         result = await session.execute(
             select(ErrorNotificationRule).where(
                 ErrorNotificationRule.organisation_id == org_id,
@@ -159,22 +148,19 @@ class AlertEngine:
                 )
 
     async def _get_last_fired(self, key: _CooldownKey) -> float | None:
-        if self._redis is not None:
-            try:
-                raw = await self._redis.get(str(key))
-                if raw:
-                    try:
-                        return float(json.loads(raw))
-                    except (ValueError, TypeError):
-                        return None
-            except Exception:
-                _log.exception("alert.cooldown_redis_get_failed", extra={"key": str(key)})
-        return self._cooldowns.get(key)
+        try:
+            raw = await self._redis.get(str(key))
+            if raw:
+                try:
+                    return float(json.loads(raw))
+                except (ValueError, TypeError):
+                    return None
+        except Exception:
+            _log.exception("alert.cooldown_redis_get_failed", extra={"key": str(key)})
+        return None
 
     async def _set_last_fired(self, key: _CooldownKey, value: float) -> None:
-        if self._redis is not None:
-            try:
-                await self._redis.setex(str(key), _COOLDOWN_TTL, json.dumps(value))
-            except Exception:
-                _log.exception("alert.cooldown_redis_set_failed", extra={"key": str(key)})
-        self._cooldowns[key] = value
+        try:
+            await self._redis.setex(str(key), _COOLDOWN_TTL, json.dumps(value))
+        except Exception:
+            _log.exception("alert.cooldown_redis_set_failed", extra={"key": str(key)})

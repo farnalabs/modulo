@@ -23,11 +23,8 @@ from modulo.auth.jwt import (
     create_refresh_token,
     decode_refresh_token_claims,
 )
-from modulo.auth.jwt import (
-    create_ws_token as create_jwt_ws_token,
-)
 from modulo.auth.passwords import authenticate_db_user
-from modulo.auth.ws_token import create_ws_token as create_opaque_ws_token
+from modulo.auth.ws_token import create_ws_token
 from modulo.db.crud.account import get_account_by_email, get_account_by_id, update_last_login
 from modulo.db.crud.org_membership import list_memberships_for_account
 from modulo.db.crud.token_family import advance_sequence, blacklist_family, create_family
@@ -379,43 +376,22 @@ async def ws_token(
             "org_role": current_user.org_role or "",
         }
 
-        if settings.redis_url:
-            redis = None
-            try:
-                from redis.asyncio import Redis
+        from redis.asyncio import Redis
 
-                redis = Redis.from_url(settings.redis_url, decode_responses=False)
-                token = await create_opaque_ws_token(
-                    redis,
-                    principal_json,
-                    ttl=settings.modulo_ws_token_ttl_seconds,
-                )
-                return WsTokenResponse(
-                    ws_token=token,
-                    token_type="ws-opaque",  # noqa: S106
-                    expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
-                )
-            except HTTPException:
-                raise
-            except Exception as exc:
-                _log.warning("ws_token.redis_fallback", extra={"error": str(exc)})
-            finally:
-                if redis is not None:
-                    await redis.aclose()
-
-        token = create_jwt_ws_token(
-            current_user.username,
-            settings.secret_key,
-            organisation_id=str(current_user.organisation_id) if current_user.organisation_id else "",
-            account_id=str(current_user.account_id),
-            org_role=current_user.org_role or "",
-            ttl_minutes=max(1, settings.modulo_ws_token_ttl_seconds // 60),
-        )
-        return WsTokenResponse(
-            ws_token=token,
-            token_type="ws-jwt",  # noqa: S106
-            expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
-        )
+        redis = Redis.from_url(settings.redis_url, decode_responses=False)
+        try:
+            token = await create_ws_token(
+                redis,
+                principal_json,
+                ttl=settings.modulo_ws_token_ttl_seconds,
+            )
+            return WsTokenResponse(
+                ws_token=token,
+                token_type="ws-opaque",  # noqa: S106
+                expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
+            )
+        finally:
+            await redis.aclose()
     except asyncio.CancelledError:
         raise
     except HTTPException:

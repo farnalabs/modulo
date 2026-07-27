@@ -23,23 +23,18 @@ import logging
 import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from jwt import InvalidTokenError as JWTError
+from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine
-from modulo.auth.jwt import AuthenticatedPrincipal, decode_principal
+from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.ws_token import WsTokenExpiredError, consume_ws_token
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.db.crud.run import get_run
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
-
-try:
-    from redis.asyncio import Redis
-except ImportError:
-    Redis = None  # type: ignore[assignment,misc]
 
 _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs-ws"])
@@ -69,34 +64,27 @@ async def run_websocket(
         return
     settings = get_settings()
 
-    # Try opaque single-use token first, fall back to JWT for backward compat.
-    principal: AuthenticatedPrincipal | None = None
-    if settings.redis_url and Redis is not None:
-        redis: Redis | None = None
-        try:
-            redis = Redis.from_url(settings.redis_url, decode_responses=False)
-            try:
-                payload = await consume_ws_token(redis, token)
-                principal = AuthenticatedPrincipal(
-                    username=payload["sub"],
-                    organisation_id=uuid.UUID(payload["org_id"]),
-                    account_id=uuid.UUID(payload["user_id"]),
-                    org_role=payload["org_role"],
-                )
-            except WsTokenExpiredError:
-                pass
-        except Exception as exc:
-            _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
-        finally:
-            if redis is not None:
-                await redis.aclose()
+    # Consume opaque single-use ws-token.
+    redis = Redis.from_url(settings.redis_url, decode_responses=False)
+    try:
+        payload = await consume_ws_token(redis, token)
+    except WsTokenExpiredError:
+        payload = None
+    except Exception as exc:
+        _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
+        payload = None
+    finally:
+        await redis.aclose()
 
-    if principal is None:
-        try:
-            principal = decode_principal(token, settings.secret_key, allowed_purposes=["ws"])
-        except JWTError:
-            await ws.close(code=4001)
-            return
+    if payload is None:
+        await ws.close(code=4001)
+        return
+    principal = AuthenticatedPrincipal(
+        username=payload["sub"],
+        organisation_id=uuid.UUID(payload["org_id"]),
+        account_id=uuid.UUID(payload["user_id"]),
+        org_role=payload["org_role"],
+    )
 
     # Guard against absurd replay-range values.
     if since_event_seq < 0:

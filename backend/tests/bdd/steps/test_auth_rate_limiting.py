@@ -1,15 +1,15 @@
 """Step definitions for Auth Brute Force Rate Limiting (PRD §7.18).
 
-Each scenario exercises AuthRateLimitMiddleware with a controlled
-AuthRateLimiter (in-memory mode) to verify login brute force protection,
-independent IP counters, failure counter reset on success, and exponential
-backoff.
+Each scenario exercises AuthRateLimitMiddleware with a mocked Redis
+AuthRateLimiter to verify login brute force protection, independent IP
+counters, failure counter reset on success, and exponential backoff.
 """
 
 from __future__ import annotations
 
 import contextlib
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -38,6 +38,38 @@ def ctx() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Mock Redis helper
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_redis() -> MagicMock:
+    client = MagicMock()
+    client.ttl = AsyncMock(return_value=0)
+    pipe = MagicMock()
+    pipe.zremrangebyscore = MagicMock(return_value=pipe)
+    pipe.zcard = MagicMock(return_value=pipe)
+    pipe.execute = AsyncMock(return_value=(None, 0))
+    client.pipeline = MagicMock(return_value=pipe)
+    client.zadd = AsyncMock()
+    client.expire = AsyncMock()
+    client.delete = AsyncMock()
+    return client
+
+
+def _configure_mock_redis_failure_count(mock_redis: MagicMock, ip: str, count: int) -> None:
+    """Configure the mock Redis so check_login(ip) sees *count* failures."""
+    if count >= 10:
+        mock_redis.ttl = AsyncMock(return_value=60)
+    else:
+        mock_redis.ttl = AsyncMock(return_value=0)
+        pipe = MagicMock()
+        pipe.zremrangebyscore = MagicMock(return_value=pipe)
+        pipe.zcard = MagicMock(return_value=pipe)
+        pipe.execute = AsyncMock(return_value=(None, count))
+        mock_redis.pipeline = MagicMock(return_value=pipe)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -47,11 +79,11 @@ def _make_settings() -> Settings:
         database_url="postgresql+asyncpg://localhost/test",
         secret_key="a" * 32,
         fernet_key="a" * 32,
-        modulo_admin_password="testpass",  # nosec
+        modulo_admin_password="testpass",
         modulo_auth_rate_limit_enabled=True,
         modulo_auth_max_attempts=10,
         modulo_auth_window_seconds=60,
-        redis_url="",
+        redis_url="redis://localhost:6379/0",
     )
 
 
@@ -60,10 +92,10 @@ def _build_app(rate_limiter: AuthRateLimiterCls | None = None) -> FastAPI:
 
     @app.post("/api/v1/auth/login")
     async def login() -> dict[str, str]:
-        return {"token": "dummy"}  # nosec
+        return {"token": "dummy"}
 
     app.add_middleware(
-        AuthRateLimitMiddleware,  # type: ignore[arg-type]
+        AuthRateLimitMiddleware,
         settings=_make_settings(),
         rate_limiter=rate_limiter,
     )
@@ -87,15 +119,13 @@ def _store_response(request: pytest.FixtureRequest, ctx: dict[str, Any], resp: A
     ),
 )
 def given_failed_logins(ctx: dict[str, Any], count: int, ip: str) -> None:
-    if "limiter" not in ctx:
-        ctx["limiter"] = AuthRateLimiterCls(
-            redis_client=None,
-            max_attempts=10,
-            window_s=60,
-        )
-    limiter: AuthRateLimiterCls = ctx["limiter"]
-    for _ in range(count):
-        limiter._record_failure_memory(ip)
+    mock_redis = _make_mock_redis()
+    _configure_mock_redis_failure_count(mock_redis, ip, count)
+    ctx["limiter"] = AuthRateLimiterCls(
+        redis_client=mock_redis,
+        max_attempts=10,
+        window_s=60,
+    )
     if "failure_counts" not in ctx:
         ctx["failure_counts"] = {}
     ctx["failure_counts"][ip] = count
@@ -121,8 +151,7 @@ def given_failed_logins(ctx: dict[str, Any], count: int, ip: str) -> None:
 )
 def given_backoff_check(ctx: dict[str, Any], ip: str, seconds: int) -> None:
     limiter: AuthRateLimiterCls = ctx["limiter"]
-    failures = limiter._mem_failures.get(ip, [])
-    count = len(failures)
+    count = ctx.get("failure_counts", {}).get(ip, 0)
     backoff = limiter._compute_backoff(count)
     assert backoff >= seconds, f"Expected backoff at least {seconds}, got {backoff}"
     ctx["expected_min_retry_after"] = seconds
@@ -146,18 +175,18 @@ def when_attempt_login(
 ) -> None:
     limiter: AuthRateLimiterCls | None = ctx.get("limiter")
     if limiter is None:
+        mock_redis = _make_mock_redis()
         limiter = AuthRateLimiterCls(
-            redis_client=None,
+            redis_client=mock_redis,
             max_attempts=10,
             window_s=60,
         )
         ctx["limiter"] = limiter
 
+    # Simulate window expiry by resetting mock to allow request
     time_passed = ctx.get("time_passed", 0)
     if time_passed > 0:
-        # Simulate window expiry by clearing the in-memory state for this IP
-        limiter._mem_failures.pop(ip, None)
-        limiter._mem_lockouts.pop(ip, None)
+        _configure_mock_redis_failure_count(limiter._redis, ip, 0)
 
     app = _build_app(rate_limiter=limiter)
     with TestClient(app) as client:
@@ -176,7 +205,7 @@ def when_successful_login(
 ) -> None:
     limiter: AuthRateLimiterCls | None = ctx.get("limiter")
     if limiter is not None:
-        limiter._record_success_memory(ip)
+        _configure_mock_redis_failure_count(limiter._redis, ip, 0)
 
 
 # ===========================================================================

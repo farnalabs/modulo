@@ -200,31 +200,27 @@ def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCl
         _auth_rate_limiter = None
         return None
 
-    if resolved.redis_url:
-        try:
-            from redis.asyncio import Redis
+    if not resolved.redis_url:
+        raise RuntimeError("REDIS_URL is required for auth rate limiting")
 
-            client: Any = Redis.from_url(
-                resolved.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10
-            )
-            _redis_clients.add(client)
-            _auth_rate_limiter = AuthRateLimiterCls(
-                redis_client=client,
-                max_attempts=max_attempts,
-                window_s=window_s,
-            )
-            return _auth_rate_limiter
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            _log.warning("auth_ratelimit.redis_fallback", extra={"error": str(exc)})
+    try:
+        from redis.asyncio import Redis
 
-    _auth_rate_limiter = AuthRateLimiterCls(
-        redis_client=None,
-        max_attempts=max_attempts,
-        window_s=window_s,
-    )
-    return _auth_rate_limiter
+        client: Any = Redis.from_url(
+            resolved.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10
+        )
+        _redis_clients.add(client)
+        _auth_rate_limiter = AuthRateLimiterCls(
+            redis_client=client,
+            max_attempts=max_attempts,
+            window_s=window_s,
+        )
+        return _auth_rate_limiter
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("auth_ratelimit.redis_connect_failed")
+        raise
 
 
 class AuthRateLimitMiddleware(BaseHTTPMiddleware):

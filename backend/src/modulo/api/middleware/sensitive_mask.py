@@ -193,14 +193,10 @@ async def reveal_sensitive_value(
         ) from None
 
     token = str(uuid.uuid4())
-    redis: Redis | None = None
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
-        redis = Redis.from_url(settings.redis_url, decode_responses=True)
         await redis.setex(f"sensitive_reveal:{token}", 30, actual_value)
-    except Exception:
-        _log.warning("Redis unavailable for sensitive reveal token", exc_info=True)
     finally:
-        if redis is not None:
-            await redis.aclose()
+        await redis.aclose()
 
     return RevealResponse(token=token, value=actual_value, expires_in_seconds=30)

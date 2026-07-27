@@ -104,20 +104,15 @@ _SESSION_APPROVAL_TTL = timedelta(minutes=30)
 # ── Redis registry (lazy-init, multi-worker capable) ─────────────────────
 
 _redis_registry: Any | None = None
-_SENTINEL: Any = object()
 
 
 def _get_registry() -> Any | None:
     global _redis_registry
     if _redis_registry is None:
-        try:
-            from modulo.core.remy.redis_registry import RemyRedisRegistry
+        from modulo.core.remy.redis_registry import RemyRedisRegistry
 
-            _redis_registry = RemyRedisRegistry(get_settings().redis_url)
-        except Exception:
-            logger.warning("remy.redis_unavailable — falling back to in-memory registries")
-            _redis_registry = _SENTINEL  # don't retry
-    return _redis_registry if _redis_registry is not _SENTINEL else None
+        _redis_registry = RemyRedisRegistry(get_settings().redis_url)
+    return _redis_registry
 
 
 # ── Action rate limiter ──────────────────────────────────────────────────

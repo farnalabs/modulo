@@ -2,7 +2,6 @@
 
 import json
 import logging
-import time as _time
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -57,53 +56,45 @@ def _safe_float(value: object, default: float = 0.0) -> float:
 
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
 
-_DASHBOARD_CACHE_TTL = 60  # seconds — dashboard summary cached to avoid repeated aggregate queries
-_in_memory_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_DASHBOARD_CACHE_TTL = 60  # seconds — dashboard summary cached via Redis
 
 
 async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
-    """Try Redis then in-memory cache."""
+    """Read cached dashboard summary from Redis."""
     settings = get_settings()
-    if settings.redis_url:
-        redis: Any = None
-        try:
-            redis = Redis.from_url(
-                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-            )
-            key = f"dashboard:summary:{org_id}"
-            cached = await redis.get(key)
-            if cached:
-                cached_data: dict[str, Any] = json.loads(cached)
-                return cached_data
-        except Exception:
-            _log.warning("dashboard.cache_read_failed", exc_info=True)
-        finally:
-            if redis is not None:
-                await redis.aclose()
-    entry = _in_memory_cache.get(org_id)
-    if entry is not None and (_time.monotonic() - entry[0]) < _DASHBOARD_CACHE_TTL:
-        cached_data = json.loads(json.dumps(entry[1], default=str))
-        return cached_data if isinstance(cached_data, dict) else None
+    redis: Redis | None = None
+    try:
+        redis = Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+        )
+        key = f"dashboard:summary:{org_id}"
+        cached = await redis.get(key)
+        if cached:
+            cached_data: dict[str, Any] = json.loads(cached)
+            return cached_data
+    except Exception:
+        _log.warning("dashboard.cache_read_failed", exc_info=True)
+    finally:
+        if redis is not None:
+            await redis.aclose()
     return None
 
 
 async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
+    """Write dashboard summary to Redis cache."""
     settings = get_settings()
-    if settings.redis_url:
-        redis: Any = None
-        try:
-            redis = Redis.from_url(
-                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-            )
-            key = f"dashboard:summary:{org_id}"
-            await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))
-            return
-        except Exception:
-            _log.warning("dashboard.cache_write_failed", exc_info=True)
-        finally:
-            if redis is not None:
-                await redis.aclose()
-    _in_memory_cache[org_id] = (_time.monotonic(), data)
+    redis: Redis | None = None
+    try:
+        redis = Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+        )
+        key = f"dashboard:summary:{org_id}"
+        await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))
+    except Exception:
+        _log.warning("dashboard.cache_write_failed", exc_info=True)
+    finally:
+        if redis is not None:
+            await redis.aclose()
 
 
 @handle_db_errors("dashboard.dashboard_summary")

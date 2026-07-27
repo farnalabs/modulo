@@ -36,8 +36,7 @@ _celery_app_instance = None
 def get_celery_app() -> Any:
     """Return a configured Celery application instance (lazily built).
 
-    Returns ``None`` when Celery is not installed or when ``redis_url``
-    is not configured.
+    Requires Celery to be installed and ``REDIS_URL`` to be configured.
     """
     global _celery_app_instance
 
@@ -45,15 +44,13 @@ def get_celery_app() -> Any:
         return _celery_app_instance
 
     if Celery is None:
-        _log.warning("Celery is not installed — Celery-based scheduler and workers are unavailable")
-        return None
+        raise ImportError("Celery is not installed — Celery-based scheduler and workers are unavailable")
 
     from modulo.settings import get_settings
 
     settings = get_settings()
     if not settings.redis_url:
-        _log.info("redis_url is not configured — Celery-based scheduler disabled, using in-process scheduler")
-        return None
+        raise RuntimeError("REDIS_URL is required for Celery — Celery-based scheduler cannot start")
 
     app = Celery(
         "modulo",
