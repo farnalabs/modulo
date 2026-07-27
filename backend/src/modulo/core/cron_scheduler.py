@@ -218,7 +218,7 @@ async def fire_cron_trigger(
                 return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
 
             # Concurrency check
-            active_count = await _count_active_runs(session, pipeline_id)
+            active_count = await _count_active_runs(session, trigger_id)
             if active_count >= trigger.max_concurrent_runs:
                 await _log_event(
                     session,
@@ -556,12 +556,12 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
         session.info["organisation_id"] = org_id
 
 
-async def _count_active_runs(session: AsyncSession, pipeline_id: uuid.UUID) -> int:
+async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
     from sqlalchemy import func
 
     result = await session.execute(
         select(func.count()).where(
-            Run.pipeline_id == pipeline_id,
+            Run.trigger_id == trigger_id,
             Run.status.in_(_ACTIVE_STATUSES),
             Run.cancellation_requested == False,  # noqa: E712
         )
