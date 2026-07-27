@@ -267,6 +267,7 @@ class TriggerEngine:
                 await log_trigger_event(
                     session,
                     trigger=trigger,
+                    trigger_type="webhook",
                     org_id=org_id,
                     payload_hash=payload_hash,
                     result="hmac_failed",
@@ -303,6 +304,7 @@ class TriggerEngine:
                 await log_trigger_event(
                     session,
                     trigger=trigger,
+                    trigger_type="webhook",
                     org_id=org_id,
                     payload_hash=payload_hash,
                     result="deduplicated",
@@ -321,6 +323,7 @@ class TriggerEngine:
                 await log_trigger_event(
                     session,
                     trigger=trigger,
+                    trigger_type="webhook",
                     org_id=org_id,
                     payload_hash=payload_hash,
                     result="concurrency_limit_reached",
@@ -359,6 +362,7 @@ class TriggerEngine:
                     await log_trigger_event(
                         session,
                         trigger=trigger,
+                        trigger_type="webhook",
                         org_id=org_id,
                         payload_hash=payload_hash,
                         result="rate_limited",
@@ -383,6 +387,7 @@ class TriggerEngine:
             trigger_event = await log_trigger_event(
                 session,
                 trigger=trigger,
+                trigger_type="webhook",
                 org_id=org_id,
                 payload_hash=payload_hash,
                 result="accepted",
@@ -503,6 +508,7 @@ class TriggerEngine:
                 await log_trigger_event(
                     session,
                     trigger=trigger,
+                    trigger_type="webhook",
                     org_id=org_id,
                     payload_hash=payload_hash,
                     result="concurrency_limit_reached",
@@ -541,6 +547,7 @@ class TriggerEngine:
                     await log_trigger_event(
                         session,
                         trigger=trigger,
+                        trigger_type="webhook",
                         org_id=org_id,
                         payload_hash=payload_hash,
                         result="rate_limited",
@@ -564,6 +571,7 @@ class TriggerEngine:
             trigger_event = await log_trigger_event(
                 session,
                 trigger=trigger,
+                trigger_type="webhook",
                 org_id=org_id,
                 payload_hash=payload_hash,
                 result="accepted",
