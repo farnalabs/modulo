@@ -14,7 +14,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.cleanup_jobs.webhook_dedup_cleanup import cleanup_scheduler_loop
@@ -140,6 +140,26 @@ async def _fetch_due_cron_triggers(factory: async_sessionmaker[AsyncSession]) ->
                 Trigger.cron_expression.isnot(None),
             )
         )
+        pipelines_needing_snapshots: set[uuid.UUID] = set()
+        for row in result.all():
+            config = row.config_json or {}
+            if not config.get("snapshot_id"):
+                pipelines_needing_snapshots.add(row.pipeline_id)
+
+        latest_snapshots: dict[uuid.UUID, uuid.UUID] = {}
+        if pipelines_needing_snapshots:
+            snap_result = await session.execute(
+                select(
+                    PipelineSnapshot.pipeline_id,
+                    PipelineSnapshot.id,
+                )
+                .where(PipelineSnapshot.pipeline_id.in_(pipelines_needing_snapshots))
+                .distinct(PipelineSnapshot.pipeline_id)
+                .order_by(PipelineSnapshot.pipeline_id, PipelineSnapshot.created_at.desc())
+            )
+            for row in snap_result:
+                latest_snapshots[row.pipeline_id] = row.id
+
         for row in result.all():
             config = row.config_json or {}
             snapshot_id_str = config.get("snapshot_id")
@@ -150,22 +170,10 @@ async def _fetch_due_cron_triggers(factory: async_sessionmaker[AsyncSession]) ->
                     _log.warning("Cron trigger %s has invalid snapshot_id in config — will auto-create on fire", row.id)
                     snapshot_id = None
             else:
-                # Look up the latest snapshot for this pipeline
-                snap_result = await session.execute(
-                    select(PipelineSnapshot.id)
-                    .where(
-                        PipelineSnapshot.pipeline_id == row.pipeline_id,
-                        PipelineSnapshot.organisation_id == row.organisation_id,
-                    )
-                    .order_by(desc(PipelineSnapshot.created_at))
-                    .limit(1)
-                )
-                snap_row = snap_result.scalar_one_or_none()
-                if snap_row is None:
+                snapshot_id = latest_snapshots.get(row.pipeline_id)
+                if snapshot_id is None:
                     _log.info("Cron trigger %s has no snapshots — will auto-create on fire", row.id)
-                    snapshot_id = None
-                else:
-                    snapshot_id = snap_row
+
             triggers.append(
                 {
                     "id": row.id,
