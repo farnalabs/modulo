@@ -272,6 +272,29 @@ class TriggerEngine:
                 )
                 raise HmacValidationError()
 
+            # Event type filtering — skip if payload doesn't contain any accepted event
+            accepted_events: list[str] | None = cfg.get("accepted_events")
+            if accepted_events:
+                has_accepted_event = any(isinstance(raw_payload.get(event), dict) for event in accepted_events)
+                if not has_accepted_event:
+                    _log.info(
+                        "Webhook event type not accepted for trigger %s (accepted=%s, payload_keys=%s)",
+                        trigger_id,
+                        accepted_events,
+                        list(raw_payload.keys()),
+                    )
+                    await self._log_event(
+                        session,
+                        trigger=trigger,
+                        org_id=org_id,
+                        payload_hash=payload_hash,
+                        result="event_type_not_accepted",
+                    )
+                    raise RuntimeError(
+                        f"Trigger {trigger_id}: none of the accepted event types {accepted_events} "
+                        f"found in webhook payload (keys: {list(raw_payload.keys())})"
+                    )
+
             # Deduplication
             is_new = await self._try_insert_dedup(session, trigger_id, org_id, payload_hash)
             if not is_new:
@@ -447,6 +470,32 @@ class TriggerEngine:
             # No dedup check for replays — this is an intentional re-fire.
             # The original event already went through dedup validation.
 
+            # Event type filtering — skip if payload doesn't contain any accepted event
+            cfg = trigger.config_json or {}
+            accepted_events: list[str] | None = cfg.get("accepted_events")
+            if accepted_events:
+                has_accepted_event = any(
+                    isinstance(_extract_field(raw_payload, event), dict) for event in accepted_events
+                )
+                if not has_accepted_event:
+                    _log.info(
+                        "Replay event type not accepted for trigger %s (accepted=%s, payload_keys=%s)",
+                        trigger.id,
+                        accepted_events,
+                        list(raw_payload.keys()),
+                    )
+                    await self._log_event(
+                        session,
+                        trigger=trigger,
+                        org_id=org_id,
+                        payload_hash=payload_hash,
+                        result="event_type_not_accepted",
+                    )
+                    raise RuntimeError(
+                        f"Trigger {trigger.id}: none of the accepted event types {accepted_events} "
+                        f"found in replayed webhook payload (keys: {list(raw_payload.keys())})"
+                    )
+
             # Flood protection
             active_count = await self._count_active_runs(session, trigger.id)
             if active_count >= trigger.max_concurrent_runs:
@@ -460,7 +509,6 @@ class TriggerEngine:
                 raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
 
             # Payload mapping
-            cfg = trigger.config_json or {}
             mapping: dict[str, str] = cfg.get("payload_mapping", {})
             input_payload = _apply_payload_mapping(raw_payload, mapping)
 
