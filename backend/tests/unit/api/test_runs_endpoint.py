@@ -614,14 +614,18 @@ async def test_background_worker_marks_run_failed_on_executor_error() -> None:
     from modulo.core.background_pipeline_worker import BackgroundPipelineWorker, PipelineJob
 
     worker = BackgroundPipelineWorker("sqlite+aiosqlite://", "sqlite+aiosqlite://")
-    worker._engine = AsyncMock()
 
     with (
         patch("modulo.core.background_pipeline_worker.PipelineExecutor", return_value=mock_executor),
         patch("modulo.core.background_pipeline_worker.async_sessionmaker") as mock_factory_cls,
         patch("modulo.core.background_pipeline_worker.update_run_status") as mock_update,
         patch("modulo.core.background_pipeline_worker.set_rls_org") as mock_rls,
+        patch("modulo.core.background_pipeline_worker.create_async_engine") as mock_engine_factory,
     ):
+        mock_engine = AsyncMock()
+        mock_engine.dispose = AsyncMock()
+        mock_engine_factory.return_value = mock_engine
+
         mock_factory = MagicMock()
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -630,6 +634,7 @@ async def test_background_worker_marks_run_failed_on_executor_error() -> None:
         job = PipelineJob(run_id=run_id, org_id=org_id, input_payload={})
         await worker._execute_job(job)
 
+        mock_engine.dispose.assert_awaited_once()
         mock_rls.assert_awaited_once_with(mock_session, org_id)
         mock_update.assert_awaited_once_with(mock_session, run_id, "failed", error_code="internal_error")
 
