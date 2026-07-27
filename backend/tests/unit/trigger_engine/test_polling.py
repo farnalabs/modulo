@@ -9,13 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.connectors.base import ConnectorResult
+from modulo.core.trigger_engine.constants import log_trigger_event
 from modulo.core.trigger_engine.polling import (
     DatabasePollingEntry,
     DatabasePollingScheduler,
     PollingFireTask,
     _build_polling_connector,
     _fire_polling_trigger,
-    _log_poll_event,
     evaluate_condition,
 )
 from modulo.db.models.trigger import Trigger
@@ -587,7 +587,7 @@ class TestPollingFireTask:
         if "no_create_run" in extra_patches:
             extra_mocks["create_run"] = patch("modulo.core.trigger_engine.polling.create_run")
         if "log_poll_event" in extra_patches:
-            extra_mocks["log_poll_event"] = patch("modulo.core.trigger_engine.polling._log_poll_event")
+            extra_mocks["log_poll_event"] = patch("modulo.core.trigger_engine.constants.log_trigger_event")
         if "build_connector_error" in extra_patches:
             extra_mocks["build"] = patch("modulo.core.trigger_engine.polling._build_polling_connector")
         if "evaluate_condition_error" in extra_patches:
@@ -722,10 +722,12 @@ class TestPollingLogging:
         trigger.id = uuid.uuid4()
         org_id = uuid.uuid4()
 
-        event = await _log_poll_event(
+        event = await log_trigger_event(
             session,
             trigger=trigger,
             org_id=org_id,
+            trigger_type="polling",
+            payload_hash=hashlib.sha256(f"polling:{trigger.id}:condition_met".encode()).hexdigest(),
             result="condition_met",
         )
 

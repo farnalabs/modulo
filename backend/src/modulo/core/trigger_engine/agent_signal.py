@@ -1,4 +1,4 @@
-"""Agent signal trigger — cross-pipeline signal on node completion.
+﻿"""Agent signal trigger â€” cross-pipeline signal on node completion.
 
 When a source pipeline's designated node completes execution, fires a child
 pipeline run with the completed node's output as input.
@@ -21,14 +21,11 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.trigger_engine.constants import count_active_runs, log_trigger_event
 from modulo.db.crud.run import create_run
-from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
-from modulo.db.models.trigger_event import TriggerEvent
 
 _log = logging.getLogger(__name__)
-
-_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
 
 
 async def fire_agent_signal(
@@ -74,13 +71,15 @@ async def fire_agent_signal(
         if str(source_nid) != completed_node_id:
             continue
 
-        # Concurrency check — skip if too many active runs on child pipeline.
-        active_count = await _count_active_runs(session, trigger.id)
+        # Concurrency check â€” skip if too many active runs on child pipeline.
+
         if active_count >= trigger.max_concurrent_runs:
-            await _log_signal_event(
+            await log_trigger_event(
                 session,
-                trigger,
-                org_id,
+                trigger=trigger,
+                org_id=org_id,
+                trigger_type="agent_signal",
+                payload_hash=hashlib.sha256(f"agent_signal:{trigger.id}".encode()).hexdigest(),
                 result="concurrency_limit_reached",
                 error_detail=f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}",
             )
@@ -110,14 +109,16 @@ async def fire_agent_signal(
                 snapshot_id = uuid.UUID(snapshot_id_str)
             except (ValueError, TypeError):
                 _log.warning(
-                    "Agent signal trigger %s has invalid snapshot_id: %s — skipping",
+                    "Agent signal trigger %s has invalid snapshot_id: %s â€” skipping",
                     trigger.id,
                     snapshot_id_str,
                 )
-                await _log_signal_event(
+                await log_trigger_event(
                     session,
-                    trigger,
-                    org_id,
+                    trigger=trigger,
+                    org_id=org_id,
+                    trigger_type="agent_signal",
+                    payload_hash=hashlib.sha256(f"agent_signal:{trigger.id}".encode()).hexdigest(),
                     result="poll_error",
                     error_detail=f"Invalid snapshot_id: {snapshot_id_str}",
                 )
@@ -148,10 +149,12 @@ async def fire_agent_signal(
             raise
         except Exception as exc:
             _log.exception("Failed to create child run for agent signal trigger %s", trigger.id)
-            await _log_signal_event(
+            await log_trigger_event(
                 session,
-                trigger,
-                org_id,
+                trigger=trigger,
+                org_id=org_id,
+                trigger_type="agent_signal",
+                payload_hash=hashlib.sha256(f"agent_signal:{trigger.id}".encode()).hexdigest(),
                 result="error",
                 error_detail=str(exc)[:200],
             )
@@ -165,10 +168,12 @@ async def fire_agent_signal(
             continue
 
         # Log TriggerEvent.
-        await _log_signal_event(
+        await log_trigger_event(
             session,
-            trigger,
-            org_id,
+            trigger=trigger,
+            org_id=org_id,
+            trigger_type="agent_signal",
+            payload_hash=hashlib.sha256(f"agent_signal:{trigger.id}".encode()).hexdigest(),
             result="signal_fired",
             run_id=child_run.id,
         )
@@ -190,6 +195,7 @@ async def fire_agent_signal(
         )
 
     return results
+<<<<<<< HEAD
 
 
 async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
@@ -228,3 +234,6 @@ async def _log_signal_event(
     session.add(event)
     await session.flush()
     return event
+=======
+>>>>>>> 7d4d3066d (refactor: centralize _ACTIVE_STATUSES, _count_active_runs, _set_rls_org, _log_event into shared modules)
+

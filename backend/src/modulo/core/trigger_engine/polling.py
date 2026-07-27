@@ -16,17 +16,18 @@ from typing import Any
 
 import jmespath
 import jmespath.exceptions
-from sqlalchemy import func, select, text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorResult
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.secrets_backend import create_secrets_backend
+from modulo.core.trigger_engine.constants import count_active_runs, log_trigger_event
 from modulo.db.crud.run import create_run
 from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
 
 try:
@@ -41,8 +42,6 @@ except ImportError:
     Celery = Task = ScheduleEntry = Scheduler = object
 
 _log = logging.getLogger(__name__)
-
-_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
 
 _engine: Any = None
 _engine_lock = threading.Lock()
@@ -201,7 +200,7 @@ async def fire_polling_trigger(
     factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
 
     async with factory() as session, session.begin():
-        await _set_rls_org(session, org_id)
+        await set_rls_org(session, org_id)
 
         # Re-read trigger with pg_try_advisory_lock to serialise concurrent fires
         key1, key2 = _uuid_to_lock_keys(trigger_id)
@@ -222,12 +221,14 @@ async def fire_polling_trigger(
                 return {"status": "skipped", "reason": "already_fired_this_cycle"}
 
             # Concurrency check
-            active_count = await _count_active_runs(session, trigger_id)
+            active_count = await count_active_runs(session, trigger_id=trigger_id)
             if active_count >= trigger.max_concurrent_runs:
-                await _log_poll_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
+                    trigger_type="polling",
+                    payload_hash=hashlib.sha256(f"polling:{trigger.id}:concurrency_limit_reached".encode()).hexdigest(),
                     result="concurrency_limit_reached",
                     error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
                 )
@@ -249,10 +250,12 @@ async def fire_polling_trigger(
                 _log.warning(
                     "Connector instance %s not found for polling trigger %s", connector_instance_id, trigger_id
                 )
-                await _log_poll_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
+                    trigger_type="polling",
+                    payload_hash=hashlib.sha256(f"polling:{trigger.id}:poll_error".encode()).hexdigest(),
                     result="poll_error",
                     error_detail=f"Connector instance {connector_instance_id} not found",
                 )
@@ -278,10 +281,12 @@ async def fire_polling_trigger(
                     str(exc)[:200],
                     exc_info=True,
                 )
-                await _log_poll_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
+                    trigger_type="polling",
+                    payload_hash=hashlib.sha256(f"polling:{trigger.id}:poll_error".encode()).hexdigest(),
                     result="poll_error",
                     error_detail=f"Failed to initialise connector: {str(exc)[:200]}",
                 )
@@ -294,10 +299,12 @@ async def fire_polling_trigger(
                 query_result = await asyncio.wait_for(connector.query(query), timeout=60)
             except TimeoutError:
                 _log.warning("Poll query timed out for trigger %s", trigger_id, exc_info=True)
-                await _log_poll_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
+                    trigger_type="polling",
+                    payload_hash=hashlib.sha256(f"polling:{trigger.id}:poll_error".encode()).hexdigest(),
                     result="poll_error",
                     error_detail="Poll query timed out after 60s",
                 )
@@ -307,10 +314,12 @@ async def fire_polling_trigger(
                 raise
             except Exception as exc:
                 _log.warning("Poll query failed for trigger %s: %s", trigger_id, str(exc)[:200], exc_info=True)
-                await _log_poll_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
+                    trigger_type="polling",
+                    payload_hash=hashlib.sha256(f"polling:{trigger.id}:poll_error".encode()).hexdigest(),
                     result="poll_error",
                     error_detail=f"Poll query failed: {str(exc)[:200]}",
                 )
@@ -324,10 +333,12 @@ async def fire_polling_trigger(
                 raise
             except Exception as exc:
                 _log.warning("Condition evaluation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
-                await _log_poll_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
+                    trigger_type="polling",
+                    payload_hash=hashlib.sha256(f"polling:{trigger.id}:poll_error".encode()).hexdigest(),
                     result="poll_error",
                     error_detail=f"Condition evaluation failed: {str(exc)[:200]}",
                 )
@@ -336,10 +347,12 @@ async def fire_polling_trigger(
 
             if not condition_met:
                 # Log no_match — condition not satisfied this cycle
-                await _log_poll_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
+                    trigger_type="polling",
+                    payload_hash=hashlib.sha256(f"polling:{trigger.id}:no_match".encode()).hexdigest(),
                     result="no_match",
                 )
                 # Update next_fire_at on no-match (separate function avoids setting
@@ -381,10 +394,12 @@ async def fire_polling_trigger(
             )
 
             # Log TriggerEvent — condition_met
-            event = await _log_poll_event(
+            event = await log_trigger_event(
                 session,
                 trigger=trigger,
                 org_id=org_id,
+                trigger_type="polling",
+                payload_hash=hashlib.sha256(f"polling:{trigger.id}:condition_met".encode()).hexdigest(),
                 result="condition_met",
                 run_id=run.id,
             )
@@ -627,57 +642,6 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
         except Exception:
             _log.exception("Failed to fetch polling triggers from database")
             return []
-
-
-# ---------------------------------------------------------------------------
-# RLS + helpers (standalone copies, same pattern as cron_scheduler.py)
-# ---------------------------------------------------------------------------
-
-
-async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
-    dialect = session.get_bind().dialect.name
-    if dialect == "postgresql":
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :val, true)"),
-            {"val": str(org_id)},
-        )
-    else:
-        session.info["organisation_id"] = org_id
-
-
-async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
-    result = await session.execute(
-        select(func.count()).where(
-            Run.trigger_id == trigger_id,
-            Run.status.in_(_ACTIVE_STATUSES),
-            Run.cancellation_requested == False,  # noqa: E712
-        )
-    )
-    return int(result.scalar_one() or 0)
-
-
-async def _log_poll_event(
-    session: AsyncSession,
-    *,
-    trigger: Trigger,
-    org_id: uuid.UUID,
-    result: str,
-    run_id: uuid.UUID | None = None,
-    error_detail: str | None = None,
-) -> TriggerEvent:
-    payload_hash = hashlib.sha256(f"polling:{trigger.id}:{result}".encode()).hexdigest()
-    event = TriggerEvent(
-        organisation_id=org_id,
-        trigger_id=trigger.id,
-        trigger_type="polling",
-        raw_payload_hash=payload_hash,
-        validation_result=result,
-        run_id=run_id,
-        error_detail=error_detail,
-    )
-    session.add(event)
-    await session.flush()
-    return event
 
 
 # Backward-compatible alias — tests import the old private name.

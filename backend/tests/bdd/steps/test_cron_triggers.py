@@ -183,14 +183,14 @@ def fire_cron_trigger(request, client):
     with (
         patch("modulo.core.cron_scheduler._get_engine"),
         patch("modulo.core.cron_scheduler.async_sessionmaker", return_value=mock_factory),
-        patch("modulo.core.cron_scheduler._set_rls_org", new_callable=AsyncMock),
+        patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.cron_scheduler._count_active_runs",
+            "modulo.core.trigger_engine.constants.count_active_runs",
             new_callable=AsyncMock,
             return_value=0,
         ),
         patch("modulo.core.cron_scheduler.create_run", new_callable=AsyncMock, return_value=run_mock),
-        patch("modulo.core.cron_scheduler._log_event", new_callable=AsyncMock) as mock_event,
+        patch("modulo.core.trigger_engine.constants.log_trigger_event", new_callable=AsyncMock) as mock_event,
     ):
         mock_event.return_value = MagicMock(id=uuid.uuid4())
 

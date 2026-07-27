@@ -138,9 +138,9 @@ class TestFireCronTrigger:
         with (
             patch("modulo.core.cron_scheduler._get_engine"),
             patch("modulo.core.cron_scheduler.async_sessionmaker", return_value=_MockSessionFactory(session)),
-            patch("modulo.core.cron_scheduler._set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.cron_scheduler._count_active_runs", new_callable=AsyncMock, return_value=0),
-            patch("modulo.core.cron_scheduler._log_event", new_callable=AsyncMock),
+            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.trigger_engine.constants.count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch("modulo.core.trigger_engine.constants.log_trigger_event", new_callable=AsyncMock),
         ):
             result = await fire_cron_trigger(
                 trigger_id=trigger_id,
@@ -186,9 +186,9 @@ class TestFireCronTrigger:
         with (
             patch("modulo.core.cron_scheduler._get_engine"),
             patch("modulo.core.cron_scheduler.async_sessionmaker", return_value=_MockSessionFactory(session)),
-            patch("modulo.core.cron_scheduler._set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.cron_scheduler._count_active_runs", new_callable=AsyncMock, return_value=0),
-            patch("modulo.core.cron_scheduler._log_event", new_callable=AsyncMock) as mock_log_event,
+            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.trigger_engine.constants.count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch("modulo.core.trigger_engine.constants.log_trigger_event", new_callable=AsyncMock) as mock_log_event,
         ):
             mock_log_event.return_value = MagicMock(id=uuid.uuid4())
             await fire_cron_trigger(

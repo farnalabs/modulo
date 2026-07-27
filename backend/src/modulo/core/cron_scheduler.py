@@ -1,4 +1,4 @@
-"""Celery beat scheduler that reads cron trigger rows from the database.
+﻿"""Celery beat scheduler that reads cron trigger rows from the database.
 
 Architecture
 ------------
@@ -15,10 +15,11 @@ firing a task that:
   5. Updates ``last_fired_at`` and ``next_fire_at``
 
 The scheduler runs inside the ``celery beat`` process and does **not** hold
-an open DB session between ticks — it opens a new connection per tick.
+an open DB session between ticks â€” it opens a new connection per tick.
 """
 
 import datetime
+import hashlib
 import logging
 import uuid
 from typing import Any
@@ -40,10 +41,11 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+from modulo.core.trigger_engine.constants import count_active_runs, log_trigger_event
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
-from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -60,9 +62,6 @@ def _get_engine() -> AsyncEngine:
             kw["connect_args"] = {"timeout": 10, "ssl": False}
         _ENGINE = create_async_engine(**kw)
     return _ENGINE
-
-
-_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +115,7 @@ def compute_next_fire(
 
 
 # ---------------------------------------------------------------------------
-# Celery task — fire one cron trigger
+# Celery task â€” fire one cron trigger
 # ---------------------------------------------------------------------------
 
 _celery_app_global: Any = None
@@ -132,7 +131,7 @@ def get_celery_app() -> Any:
 
 
 class CronFireTask(Task):  # type: ignore[misc]
-    """Task that fires a single cron trigger — creates a Run and logs a TriggerEvent.
+    """Task that fires a single cron trigger â€” creates a Run and logs a TriggerEvent.
 
     Runs inside a Celery worker process.
     """
@@ -150,7 +149,7 @@ class CronFireTask(Task):  # type: ignore[misc]
         cron_expression: str,
         snapshot_id: str = "",
     ) -> dict[str, Any]:
-        """Fire a cron trigger — creates a run in the database.
+        """Fire a cron trigger â€” creates a run in the database.
 
         Handles both sync Celery classic pool (``asyncio.run()``) and
         async Celery pool (``asyncio.run_coroutine_threadsafe()``),
@@ -192,13 +191,13 @@ async def fire_cron_trigger(
     cron_expression: str,
     factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> dict[str, Any]:
-    """Core fire logic — runs inside asyncio.run() inside the Celery task."""
+    """Core fire logic â€” runs inside asyncio.run() inside the Celery task."""
     if factory is None:
         engine = _get_engine()
         factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with factory() as session, session.begin():
-        await _set_rls_org(session, org_id)
+        await set_rls_org(session, org_id)
 
         # Re-read trigger with pg_try_advisory_lock to serialise concurrent fires
         key1, key2 = _uuid_to_lock_keys(trigger_id)
@@ -217,12 +216,15 @@ async def fire_cron_trigger(
                 return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
 
             # Concurrency check
-            active_count = await _count_active_runs(session, trigger_id)
+            cron_payload_hash = hashlib.sha256(b"cron").hexdigest()
+            active_count = await count_active_runs(session, trigger_id=trigger_id)
             if active_count >= trigger.max_concurrent_runs:
-                await _log_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
+                    trigger_type="cron",
+                    payload_hash=cron_payload_hash,
                     result="concurrency_limit_reached",
                     error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
                 )
@@ -247,10 +249,12 @@ async def fire_cron_trigger(
                 )
                 today_cost = cost_result.scalar_one()
                 if today_cost >= spend_limit:  # type: ignore[operator]
-                    await _log_event(
+                    await log_trigger_event(
                         session,
                         trigger=trigger,
                         org_id=org_id,
+                        trigger_type="cron",
+                        payload_hash=cron_payload_hash,
                         result="spend_limit_reached",
                         error_detail=(f"Daily spend limit {trigger.daily_spend_limit} reached (today: {today_cost})"),
                     )
@@ -261,7 +265,7 @@ async def fire_cron_trigger(
                         "today_cost": str(today_cost),
                     }
 
-            # Resolve snapshot_id — auto-create from live graph if not provided
+            # Resolve snapshot_id â€” auto-create from live graph if not provided
             if snapshot_id is None:
                 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
@@ -271,10 +275,12 @@ async def fire_cron_trigger(
                     account_id=None,
                 )
                 if new_snapshot is None:
-                    await _log_event(
+                    await log_trigger_event(
                         session,
                         trigger=trigger,
                         org_id=org_id,
+                        trigger_type="cron",
+                        payload_hash=cron_payload_hash,
                         result="no_pipeline",
                         error_detail="Pipeline not found when trying to auto-create snapshot",
                     )
@@ -298,10 +304,12 @@ async def fire_cron_trigger(
             )
 
             # Log TriggerEvent
-            event = await _log_event(
+            event = await log_trigger_event(
                 session,
                 trigger=trigger,
                 org_id=org_id,
+                trigger_type="cron",
+                payload_hash=cron_payload_hash,
                 result="accepted",
                 run_id=run.id,
             )
@@ -318,7 +326,7 @@ async def fire_cron_trigger(
             )
 
             _log.info(
-                "Cron trigger %s fired → run %s (next fire: %s)",
+                "Cron trigger %s fired â†’ run %s (next fire: %s)",
                 trigger_id,
                 run.id,
                 next_fire.isoformat(),
@@ -513,13 +521,13 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
                             snapshot_id = uuid.UUID(snapshot_id_str)
                         except (ValueError, TypeError):
                             _log.warning(
-                                "Cron trigger %s has invalid snapshot_id in config — will auto-create on fire", row.id
+                                "Cron trigger %s has invalid snapshot_id in config â€” will auto-create on fire", row.id
                             )
                             snapshot_id = None
                     else:
                         snapshot_id = latest_snapshots.get(row.pipeline_id)
                         if snapshot_id is None:
-                            _log.info("Cron trigger %s has no snapshots — will auto-create on fire", row.id)
+                            _log.info("Cron trigger %s has no snapshots â€” will auto-create on fire", row.id)
 
                     triggers.append(
                         {
@@ -538,8 +546,9 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
 
     @property
     def max_interval(self) -> int:
-        """Maximum sleep between ticks — 30 seconds."""
+        """Maximum sleep between ticks â€” 30 seconds."""
         return 30
+<<<<<<< HEAD
 
 
 # ---------------------------------------------------------------------------
@@ -551,7 +560,7 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
     """Set RLS organisation context inside the current transaction.
 
     Uses ``set_config`` on Postgres (native RLS) and falls back to
-    ``session.info`` for SQLite/MariaDB backends — matching the pattern
+    ``session.info`` for SQLite/MariaDB backends â€” matching the pattern
     in ``polling.py:_set_rls_org``.
     """
     dialect = session.get_bind().dialect.name
@@ -601,3 +610,6 @@ async def _log_event(
     session.add(event)
     await session.flush()
     return event
+=======
+>>>>>>> 7d4d3066d (refactor: centralize _ACTIVE_STATUSES, _count_active_runs, _set_rls_org, _log_event into shared modules)
+

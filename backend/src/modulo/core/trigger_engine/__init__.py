@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.connectors.base import ConnectorQuery
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.secrets_backend import create_secrets_backend
+from modulo.core.trigger_engine.constants import count_active_runs, log_trigger_event
 from modulo.db.crud.run import create_run
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.run import Run
@@ -111,7 +112,6 @@ class TriggerBusyError(RuntimeError):
 
 _DEDUP_TTL_SECONDS = 300  # 5 minutes
 _REPLAY_WINDOW_SECONDS = 300  # ±300s for X-Modulo-Timestamp
-_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
 
 
 # ---------------------------------------------------------------------------
@@ -249,10 +249,11 @@ class TriggerEngine:
                 ts = _verify_timestamp(modulo_timestamp)
             except TimestampExpiredError as exc:
                 _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
-                await self._log_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
+                    trigger_type="webhook",
                     payload_hash=payload_hash,
                     result="timestamp_expired",
                 )
@@ -263,7 +264,7 @@ class TriggerEngine:
             hmac_secret: str | None = cfg.get("hmac_secret")
             if hmac_secret is not None and not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
                 _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
-                await self._log_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
@@ -299,7 +300,7 @@ class TriggerEngine:
             is_new = await self._try_insert_dedup(session, trigger_id, org_id, payload_hash)
             if not is_new:
                 _log.warning("Webhook deduplicated for trigger %s (hash=%s)", trigger_id, payload_hash[:16])
-                await self._log_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
@@ -309,7 +310,7 @@ class TriggerEngine:
                 raise DuplicateWebhookError(payload_hash)
 
             # Flood / concurrency protection
-            active_count = await self._count_active_runs(session, trigger.id)
+            active_count = await count_active_runs(session, trigger_id=trigger.id)
             if active_count >= trigger.max_concurrent_runs:
                 _log.warning(
                     "Webhook concurrency limit reached for trigger %s (%d active >= %d limit)",
@@ -317,7 +318,7 @@ class TriggerEngine:
                     active_count,
                     trigger.max_concurrent_runs,
                 )
-                await self._log_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
@@ -355,7 +356,7 @@ class TriggerEngine:
                         max_triggers,
                         rate_limit_key,
                     )
-                    await self._log_event(
+                    await log_trigger_event(
                         session,
                         trigger=trigger,
                         org_id=org_id,
@@ -379,7 +380,7 @@ class TriggerEngine:
             )
 
             # Audit log
-            trigger_event = await self._log_event(
+            trigger_event = await log_trigger_event(
                 session,
                 trigger=trigger,
                 org_id=org_id,
@@ -497,9 +498,9 @@ class TriggerEngine:
                     )
 
             # Flood protection
-            active_count = await self._count_active_runs(session, trigger.id)
+            active_count = await count_active_runs(session, trigger_id=trigger.id)
             if active_count >= trigger.max_concurrent_runs:
-                await self._log_event(
+                await log_trigger_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
@@ -537,7 +538,7 @@ class TriggerEngine:
                         max_triggers,
                         rate_limit_key,
                     )
-                    await self._log_event(
+                    await log_trigger_event(
                         session,
                         trigger=trigger,
                         org_id=org_id,
@@ -560,7 +561,7 @@ class TriggerEngine:
                 rate_limit_key=rate_limit_key,
             )
 
-            trigger_event = await self._log_event(
+            trigger_event = await log_trigger_event(
                 session,
                 trigger=trigger,
                 org_id=org_id,
@@ -789,16 +790,6 @@ class TriggerEngine:
             raise TriggerInactiveError(trigger_id)
         return trigger
 
-    async def _count_active_runs(self, session: AsyncSession, trigger_id: uuid.UUID) -> int:
-        result = await session.execute(
-            select(func.count()).where(
-                Run.trigger_id == trigger_id,
-                Run.status.in_(_ACTIVE_STATUSES),
-                Run.cancellation_requested == False,  # noqa: E712
-            )
-        )
-        return int(result.scalar_one() or 0)
-
     async def _store_raw_payload(
         self,
         session: AsyncSession,
@@ -867,27 +858,3 @@ class TriggerEngine:
                 return False
             raise
         return True
-
-    async def _log_event(
-        self,
-        session: AsyncSession,
-        *,
-        trigger: Trigger,
-        org_id: uuid.UUID,
-        payload_hash: str,
-        result: str,
-        run_id: uuid.UUID | None = None,
-        error_detail: str | None = None,
-    ) -> TriggerEvent:
-        event = TriggerEvent(
-            organisation_id=org_id,
-            trigger_id=trigger.id,
-            trigger_type="webhook",
-            raw_payload_hash=payload_hash,
-            validation_result=result,
-            run_id=run_id,
-            error_detail=error_detail,
-        )
-        session.add(event)
-        await session.flush()
-        return event
