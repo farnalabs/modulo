@@ -28,9 +28,7 @@ def encrypt_stored_secret(value: str, fernet_key: str) -> bytes:
     try:
         f = Fernet(fernet_key.encode())
     except (ValueError, TypeError) as exc:
-        raise InvalidFernetKeyError(
-            "Provided Fernet key is not valid"
-        ) from exc
+        raise InvalidFernetKeyError("Provided Fernet key is not valid") from exc
     return f.encrypt(value.encode())
 
 
@@ -44,21 +42,15 @@ def decode_stored_secret(value: object, fernet_key: str) -> str:
     try:
         f = Fernet(fernet_key.encode())
     except (ValueError, TypeError) as exc:
-        raise InvalidFernetKeyError(
-            "Provided Fernet key is not valid"
-        ) from exc
+        raise InvalidFernetKeyError("Provided Fernet key is not valid") from exc
 
     try:
         plaintext = f.decrypt(value)
     except InvalidToken as exc:
         if value.startswith(b"gAAAA"):
-            raise DecryptionError(
-                "Stored encrypted secret cannot be decrypted"
-            ) from exc
+            raise DecryptionError("Stored encrypted secret cannot be decrypted") from exc
         plaintext = value
     try:
         return plaintext.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise CorruptSecretError(
-            "Stored secret is not valid encrypted or UTF-8 data"
-        ) from exc
+        raise CorruptSecretError("Stored secret is not valid encrypted or UTF-8 data") from exc
