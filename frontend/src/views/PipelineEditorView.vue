@@ -270,7 +270,31 @@
           </div>
           <div>
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.label_field') }}</dt>
-            <dd>{{ selectedNodeData.label || '-' }}</dd>
+            <dd>
+              <div v-if="editingLabel">
+                <input
+                  v-model="editLabelValue"
+                  type="text"
+                  class="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                  @blur="saveLabel"
+                  @keydown.enter="saveLabel"
+                  @keydown.escape="cancelEditLabel"
+                  ref="labelInputRef"
+                  data-testid="node-label-edit-input"
+                />
+              </div>
+              <div v-else class="flex items-center gap-1">
+                <span>{{ selectedNodeData.label || '-' }}</span>
+                <button
+                  @click="startEditLabel"
+                  class="text-muted-foreground hover:text-foreground"
+                  :aria-label="'Edit label'"
+                  data-testid="node-label-edit-btn"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                </button>
+              </div>
+            </dd>
           </div>
 
           <!-- Manual node: Output Schema -->
@@ -284,14 +308,16 @@
             <div>
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.agent') }}</dt>
               <dd class="font-medium">{{ agentName(selectedNodeData.agent_id) || shortId(selectedNodeData.agent_id) }}</dd>
-              <router-link
+              <a
                 v-if="selectedNodeData.agent_id"
-                :to="`/admin/agents/${selectedNodeData.agent_id}`"
+                :href="`/admin/agents/${selectedNodeData.agent_id}`"
+                target="_blank"
+                rel="noopener noreferrer"
                 class="mt-0.5 inline-flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-400"
               >
                 {{ $t('views.PipelineEditorView.view_agent') }}
                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-              </router-link>
+              </a>
             </div>
             <div v-if="agentModelBackendId(selectedNodeData.agent_id)">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.model_backend') }}</dt>
@@ -433,24 +459,7 @@
             </div>
           </template>
 
-          <template v-if="selectedNodeData.node_type === 'sandbox_agent'">
-            <div v-if="selectedNodeData.template_id">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Template</dt>
-              <dd class="font-mono text-xs">{{ selectedNodeData.template_id }}</dd>
-            </div>
-            <div v-if="selectedNodeData.agent_command">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Command</dt>
-              <dd class="font-mono text-xs break-all">{{ selectedNodeData.agent_command }}</dd>
-            </div>
-            <div v-if="selectedNodeData.timeout_seconds">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Timeout</dt>
-              <dd>{{ selectedNodeData.timeout_seconds }}s</dd>
-            </div>
-            <div v-if="selectedNodeData.agent_prompt">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Prompt</dt>
-              <dd class="text-xs text-muted-foreground italic">{{ selectedNodeData.agent_prompt.substring(0, 200) }}{{ selectedNodeData.agent_prompt.length > 200 ? '...' : '' }}</dd>
-            </div>
-          </template>
+
 
           <!-- Lifecycle maps -->
           <div v-if="linkedLifecycleMaps.length > 0">
@@ -887,7 +896,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -925,7 +934,43 @@ const selectedNodeData = ref<any | null>(null)
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
 const nodeTypes = { agent: 'agent', manual: 'manual' }
-const { fitView } = useVueFlow()
+const { fitView, setViewport, viewportRef } = useVueFlow()
+let savedViewport: { x: number; y: number; zoom: number } | null = null
+
+function onVisibilityChange() {
+  if (document.hidden) {
+    savedViewport = viewportRef.value ? { ...viewportRef.value } : null
+  } else if (savedViewport) {
+    const current = viewportRef.value
+    if (current && Math.abs(current.x) < 10 && Math.abs(current.y) < 10) {
+      setViewport(savedViewport)
+    }
+  }
+}
+
+onMounted(() => document.addEventListener('visibilitychange', onVisibilityChange))
+onUnmounted(() => document.removeEventListener('visibilitychange', onVisibilityChange))
+
+const editingLabel = ref(false)
+const editLabelValue = ref('')
+const labelInputRef = ref<HTMLInputElement | null>(null)
+
+function startEditLabel() {
+  editLabelValue.value = selectedNodeData.value?.label || ''
+  editingLabel.value = true
+  nextTick(() => labelInputRef.value?.focus())
+}
+
+async function saveLabel() {
+  editingLabel.value = false
+  if (!selectedNodeData.value || editLabelValue.value === selectedNodeData.value.label) return
+  selectedNodeData.value.label = editLabelValue.value
+  await saveGraph()
+}
+
+function cancelEditLabel() {
+  editingLabel.value = false
+}
 
 const agents = ref<any[]>([])
 const connectors = ref<any[]>([])

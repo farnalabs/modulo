@@ -54,6 +54,8 @@
             ]"
             :style="{ paddingLeft: `${12 + element.depth * 16}px` }"
             @click="$emit('select-folder', element.folder.id)"
+            @dragover.prevent
+            @drop="onFolderDrop(element.folder.id, $event)"
           >
             <!-- Drag handle -->
             <span class="drag-handle cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-muted-foreground hover:text-foreground">
@@ -198,6 +200,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'select-folder', folderId: string | null): void
   (e: 'folders-changed'): void
+  (e: 'move-pipeline', payload: { pipelineId: string; folderId: string }): void
 }>()
 
 const { get, post, patch, delete: deleteRequest } = useApi()
@@ -276,6 +279,13 @@ async function loadFolders() {
 watch(allFolders, () => {
   draggableItems.value = [...flatTree.value]
 }, { immediate: true })
+
+function onFolderDrop(folderId: string, event: DragEvent) {
+  const pipelineId = event.dataTransfer?.getData('text/plain')
+  if (pipelineId) {
+    emit('move-pipeline', { pipelineId, folderId })
+  }
+}
 
 async function onDragEnd() {
   try {
