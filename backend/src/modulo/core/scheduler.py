@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -25,11 +26,18 @@ async def run_scheduler(
     """Poll for due cron triggers and fire them, submitting created runs to the background worker."""
     try:
         settings = get_settings()
+        db_type = settings.modulo_db.lower()
+        connect_args: dict[str, Any] = {"timeout": 10}
+        if db_type == "postgres":
+            connect_args["ssl"] = False
+            connect_args["statement_cache_size"] = 0
+
         engine = create_async_engine(
             settings.database_url,
             pool_size=1,
             max_overflow=2,
             pool_pre_ping=True,
+            connect_args=connect_args,
         )
     except Exception as exc:
         _log.error("Cron scheduler failed to create engine: %s", exc)
