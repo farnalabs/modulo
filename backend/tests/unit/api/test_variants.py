@@ -1,4 +1,4 @@
-"""Unit tests for variant group API â€” pure function tests (no DB, no auth)."""
+"""Unit tests for variant group API — pure function tests (no DB, no auth)."""
 
 import uuid
 from datetime import UTC

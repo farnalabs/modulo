@@ -608,7 +608,7 @@ def step_github_write_returns_error(status_code, reason, ctx):
 
 
 # ============================================================================
-# connectors/jira_connector.feature  â€"  7 scenarios
+# connectors/jira_connector.feature  —"  7 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/jira_connector.feature")
@@ -791,7 +791,7 @@ def step_jira_write_empty_data(resource, ctx):
 
 
 # ============================================================================
-# connectors/linear_connector.feature  â€"  5 scenarios
+# connectors/linear_connector.feature  —"  5 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/linear_connector.feature")

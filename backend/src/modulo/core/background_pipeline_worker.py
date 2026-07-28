@@ -59,10 +59,10 @@ class BackgroundPipelineWorker:
     async def start(self) -> None:
         """Start the consumer loop.
 
-        Idempotent â€” safe to call multiple times.
+        Idempotent — safe to call multiple times.
         """
         if self._started:
-            _log.warning("Background pipeline worker already started â€” skipping")
+            _log.warning("Background pipeline worker already started — skipping")
             return
         self._consumer_task = asyncio.create_task(
             self._consumer_loop(),
@@ -74,10 +74,10 @@ class BackgroundPipelineWorker:
     def submit(self, run_id: uuid.UUID, org_id: uuid.UUID, input_payload: dict[str, Any]) -> None:
         """Submit a pipeline run for background execution.
 
-        Never blocks â€” pushes to the internal queue immediately.
+        Never blocks — pushes to the internal queue immediately.
         """
         if not self._started or (self._consumer_task and self._consumer_task.done()):
-            _log.warning("Background worker not available â€” run %s rejected", run_id)
+            _log.warning("Background worker not available — run %s rejected", run_id)
             return
         job = PipelineJob(run_id=run_id, org_id=org_id, input_payload=input_payload)
         self._queue.put_nowait(job)

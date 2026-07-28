@@ -1,7 +1,7 @@
-"""LocalRuntimeProvider â€” in-process agent execution with a concurrency cap.
+"""LocalRuntimeProvider — in-process agent execution with a concurrency cap.
 
 This provider runs commands as subprocesses on the host machine. It is **not
-sandboxed** â€” agents have full access to the filesystem, network, and
+sandboxed** — agents have full access to the filesystem, network, and
 environment of the host process. Suitable for:
   - Solo dev / demo deployments (Fly.io, Railway, single VPS)
   - Proving out pipelines before investing in scaled infra
@@ -11,7 +11,7 @@ Concurrency is capped by a module-level ``asyncio.Semaphore`` (default 2)
 configurable via ``MODULO_MAX_LOCAL_CONCURRENCY``.
 
 **When you outgrow it:** add an E2B API key (or any other RuntimeProvider)
-and your pipelines continue to work unchanged â€” the RuntimeProvider ABC
+and your pipelines continue to work unchanged — the RuntimeProvider ABC
 hides the backend.
 """
 
@@ -39,7 +39,7 @@ class LocalRuntimeProvider(RuntimeProvider):
 
     Workspaces are temp directories on the host filesystem. The concurrency
     semaphore limits how many ``exec_command`` calls may run simultaneously
-    across all workspaces â€” agents waiting on the semaphore are queued.
+    across all workspaces — agents waiting on the semaphore are queued.
     """
 
     provider_id = "local"

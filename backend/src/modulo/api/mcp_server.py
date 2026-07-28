@@ -808,7 +808,7 @@ async def trigger_pipeline(
                 verify_run = await get_run(vs, run_id)
             if verify_run and verify_run.status == "pending" and _bg_worker.is_alive:
                 _log.info(
-                    "MCP: Run %s still pending after submit â€” spawning fallback execution",
+                    "MCP: Run %s still pending after submit — spawning fallback execution",
                     run_id,
                 )
                 settings = get_settings()
@@ -847,7 +847,7 @@ async def trigger_pipeline(
                 )
             elif verify_run and verify_run.status == "pending" and not _bg_worker.is_alive:
                 _log.warning(
-                    "MCP: Run %s has no active worker â€” marking as failed",
+                    "MCP: Run %s has no active worker — marking as failed",
                     run_id,
                 )
                 async with _session(org_id) as fs:
@@ -866,8 +866,8 @@ async def trigger_pipeline(
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
         except SnapshotLockNotAvailableError:
-            _log.info("trigger_pipeline queued â€” snapshot lock not available for pipeline %s", pipeline_id)
-            return {"pipeline_id": pipeline_id, "status": "queued", "detail": "Pipeline busy â€” queued for retry"}
+            _log.info("trigger_pipeline queued — snapshot lock not available for pipeline %s", pipeline_id)
+            return {"pipeline_id": pipeline_id, "status": "queued", "detail": "Pipeline busy — queued for retry"}
         except ProgrammingError:
             _log.exception("trigger_pipeline failed")
             return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}

@@ -1,6 +1,6 @@
 """Add parameter_schemas and parameter_sets tables.
 
-Implements RFC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§10 Phase 1: Parameter Schema + Parameter Sets data model.
+Implements RFC §10 Phase 1: Parameter Schema + Parameter Sets data model.
 
 Changes:
   - Create parameter_schemas table
