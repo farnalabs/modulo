@@ -1,9 +1,9 @@
 # Normalize line endings to LF in the repo; checkout as LF on all platforms.
-# This prevents the LF↔CRLF churn that breaks diffs and pre-commit hooks.
+# This prevents the LF???CRLF churn that breaks diffs and pre-commit hooks.
 
 * text=auto eol=lf
 
-# Explicitly binary — never touch line endings
+# Explicitly binary ??? never touch line endings
 *.png binary
 *.jpg binary
 *.jpeg binary
@@ -19,3 +19,6 @@
 # Windows scripts get CRLF (only if added later)
 *.bat text eol=crlf
 *.cmd text eol=crlf
+# Shell scripts must have LF line endings (CRLF breaks Linux execution)
+*.sh text eol=lf
+
