@@ -128,7 +128,7 @@ class BackgroundPipelineWorker:
     async def cleanup_stale_runs(self) -> int:
         """Kill runs stuck in pending/running for longer than their pipeline's configured timeout.
 
-        Uses per-pipeline ``stale_run_timeout_minutes`` if set, otherwise defaults to 15 minutes.
+        Uses per-pipeline ``stale_run_timeout_minutes`` if set, otherwise defaults to 30 minutes.
         Called automatically at the start of each consumer loop iteration.
 
         Iterates over all orgs (``organisations`` has no RLS) so the cleanup
@@ -163,7 +163,7 @@ class BackgroundPipelineWorker:
                                 JOIN pipelines p ON p.id = r.pipeline_id
                                 WHERE r.status IN ('running', 'pending')
                                   AND r.updated_at < NOW()
-                                    - COALESCE(p.stale_run_timeout_minutes, 15) * INTERVAL '1 minute'
+                                    - COALESCE(p.stale_run_timeout_minutes, 30) * INTERVAL '1 minute'
                                   AND (r.outputs_json IS NULL OR r.outputs_json::jsonb = '{}'::jsonb)
                             """)
                         )
