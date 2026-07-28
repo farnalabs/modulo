@@ -661,7 +661,10 @@ def make_sandbox_agent_fn(
         _stderr_len = 0
 
         try:
-            sandbox = await AsyncSandbox.create(template=template_id, timeout=sandbox_timeout)
+            sandbox = await asyncio.wait_for(
+                AsyncSandbox.create(template=template_id),
+                timeout=min(sandbox_timeout, 120),
+            )
 
             for path, content in context_files.items():
                 if path.endswith(".b64"):
