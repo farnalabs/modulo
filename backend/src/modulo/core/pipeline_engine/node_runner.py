@@ -662,8 +662,6 @@ def make_sandbox_agent_fn(
                 AsyncSandbox.create(template=template_id, timeout=sandbox_timeout),
                 timeout=min(sandbox_timeout, 120),
             )
-            assert sandbox is not None
-
             assert sandbox is not None, "Sandbox was not created before use"
             for path, content in context_files.items():
                 if path.endswith(".b64"):

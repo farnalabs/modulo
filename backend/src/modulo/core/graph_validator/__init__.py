@@ -1489,11 +1489,11 @@ class GraphValidator:
             # 6. output_schema_json basic structure.
             schema_json = node.get("output_schema_json")
             if isinstance(schema_json, dict) and "type" not in schema_json and "$ref" not in schema_json:
-                    result.warning(
-                        "SANDBOX_SCHEMA_INCOMPLETE",
-                        f"Sandbox agent node '{nid}' output_schema_json lacks 'type' or '$ref'",
-                        node_id=nid,
-                    )
+                result.warning(
+                    "SANDBOX_SCHEMA_INCOMPLETE",
+                    f"Sandbox agent node '{nid}' output_schema_json lacks 'type' or '$ref'",
+                    node_id=nid,
+                )
 
     # ------------------------------------------------------------------
     # Edge validation
