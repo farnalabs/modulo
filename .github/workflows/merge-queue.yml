@@ -15,7 +15,7 @@ env:
 
 jobs:
   queue:
-    name: Merge queue → main
+    name: Merge queue -> main
     permissions:
       contents: write
       pull-requests: write
