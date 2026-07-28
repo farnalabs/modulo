@@ -58,6 +58,11 @@ echo "=== Running DB migrations ==="
 
 echo "=== Admin user seeding handled by backend lifespan startup (_seed_modulo_users) ==="
 
+echo "=== Starting Celery beat scheduler ==="
+.venv/bin/celery -A modulo.core.celery_app beat --loglevel=info &
+BEAT_PID=$!
+echo "Celery beat started (PID: $BEAT_PID)"
+
 echo "=== Starting uvicorn ==="
 exec .venv/bin/uvicorn modulo.api.main:app \
     --host 0.0.0.0 --port ${PORT:-8000} \
