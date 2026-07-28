@@ -1,5 +1,6 @@
 ﻿"""Minimal in-process cron scheduler — fires due triggers in an asyncio loop."""
 import asyncio
+from datetime import datetime, timezone
 import logging
 
 from sqlalchemy import select
@@ -30,7 +31,7 @@ async def run_scheduler(stop_event: asyncio.Event) -> None:
                 factory = async_sessionmaker(engine, expire_on_commit=False)
                 async with factory() as session, session.begin():
                     await set_rls_org(session, "00000000-0000-0000-0000-000000000000")
-                    now = asyncio.get_event_loop().time()
+                    now = datetime.now(timezone.utc)
                     result = await session.execute(
                         select(Trigger).where(
                             Trigger.trigger_type == "cron",
@@ -49,3 +50,4 @@ async def run_scheduler(stop_event: asyncio.Event) -> None:
     finally:
         await engine.dispose()
         _log.info("Cron scheduler stopped")
+
