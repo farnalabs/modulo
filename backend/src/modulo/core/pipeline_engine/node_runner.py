@@ -662,7 +662,7 @@ def make_sandbox_agent_fn(
 
         try:
             sandbox = await asyncio.wait_for(
-                AsyncSandbox.create(template=template_id),
+                AsyncSandbox.create(template=template_id, timeout=sandbox_timeout),
                 timeout=min(sandbox_timeout, 120),
             )
 
@@ -699,6 +699,14 @@ def make_sandbox_agent_fn(
             except asyncio.CancelledError:
                 raise
             except Exception as _cee:
+                _log.exception(
+                    "sandbox_agent.command_failed",
+                    extra={
+                        "node_id": node_id,
+                        "exc_type": type(_cee).__name__,
+                        "exc_msg": str(_cee)[:_MAX_ERROR_MSG],
+                    },
+                )
                 cmd_result = getattr(_cee, "result", None) or _cee
 
             elapsed = _time.monotonic() - start_time
