@@ -1,0 +1,57 @@
+rules:
+  - id: sandbox-kill-without-wait-for
+    patterns:
+      - pattern: await $S.kill(...)
+      - pattern-not-inside: await asyncio.wait_for(...)
+    message: "sandbox.kill() hangs if E2B API is slow — wrap in await asyncio.wait_for(sandbox.kill(request_timeout=30), timeout=30)"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]
+
+  - id: sandbox-commands-run-without-wait-for
+    patterns:
+      - pattern: await $S.commands.run(...)
+      - pattern-not-inside: await asyncio.wait_for(...)
+    message: "sandbox.commands.run() may hang — wrap in await asyncio.wait_for(sandbox.commands.run(...), timeout=sandbox_timeout)"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]
+
+  - id: sandbox-files-read-without-request-timeout
+    patterns:
+      - pattern: await $S.files.read($PATH)
+      - pattern-not-regex: 'request_timeout\s*='
+    message: "sandbox.files.read() may hang — add request_timeout=30 or a dynamic remaining-time value"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]
+
+  - id: env-vars-extra-at-end
+    pattern: "**env_vars_extra"
+    message: "`**env_vars_extra` must precede system env vars (GITHUB_TOKEN, APP_MODULO_OPENCODE_API_KEY, etc.) to prevent pipeline from overriding them — move `**env_vars_extra` before system vars"
+    languages: [python]
+    severity: WARNING
+    paths:
+      include: ["**/backend/src/**"]
+
+  - id: agent-prompt-empty-default
+    patterns:
+      - pattern-either:
+          - pattern: $NODE.get("agent_prompt") or ""
+          - pattern: $NODE.get("agent_prompt", "")
+    message: "empty agent_prompt causes opencode to hang with no instructions — always provide a non-empty prompt template. If optional, validate before dispatch."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]
+
+  - id: agent-prompt-empty-literal
+    pattern: '"agent_prompt": ""'
+    message: "empty agent_prompt in pipeline config causes opencode to hang — provide a non-empty prompt template"
+    languages: [json]
+    severity: ERROR
+    paths:
+      include: ["**/backend/**", "**/tests/**"]
