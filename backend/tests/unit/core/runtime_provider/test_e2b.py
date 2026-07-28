@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -60,13 +59,10 @@ def test_constructor_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> N
     assert provider._api_key == "sk-from-env"
 
 
-def test_constructor_env_var_overrides_none() -> None:
-    os.environ["MODULO_E2B_API_KEY"] = "sk-env"
-    try:
-        provider = E2BRuntimeProvider()
-        assert provider._api_key == "sk-env"
-    finally:
-        del os.environ["MODULO_E2B_API_KEY"]
+def test_constructor_env_var_overrides_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "sk-env")
+    provider = E2BRuntimeProvider()
+    assert provider._api_key == "sk-env"
 
 
 # ---------------------------------------------------------------------------
