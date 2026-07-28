@@ -2,10 +2,9 @@ import smtplib
 from unittest.mock import MagicMock, patch
 
 import pytest
+from modulo.core.email_service import EmailSendingError, send_email
 
 from conftest import MockSettings, MockSettingsNoSMTP
-
-from modulo.core.email_service import EmailSendingError, send_email
 
 
 class TestSendEmail:

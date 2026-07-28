@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prune old Modulo backups based on retention policy.
+"""Prune old Modulo backups based on retention policy.  # noqa: N999
 
 Retention:
   - Keep 7 most recent daily backups
@@ -18,6 +18,7 @@ import sys
 from datetime import date
 from typing import NamedTuple
 
+# ruff: noqa: N999
 
 BACKUP_RE = re.compile(
     r"modulo-backup-(?P<org>[a-f0-9]+)-(?P<ts>\d{8})T.*\.tar\.gz\.enc$"
@@ -63,7 +64,7 @@ def classify_backups(backups: list[BackupFile]) -> set[str]:
     for b in backups:
         by_org.setdefault(b.org, []).append(b)
 
-    for org, org_backups in by_org.items():
+    for org_backups in by_org.values():
         sorted_backups = sorted(org_backups, key=lambda x: x.date, reverse=True)
 
         daily_count = 0
@@ -79,16 +80,14 @@ def classify_backups(backups: list[BackupFile]) -> set[str]:
             is_first = day == 1
 
             reason = None
-            if monthly_count < 12 and is_first:
-                if (year, month) not in seen_months:
-                    seen_months.add((year, month))
-                    reason = "monthly"
-                    monthly_count += 1
-            if reason is None and weekly_count < 4 and is_sunday:
-                if (iso_year, iso_week) not in seen_weeks:
-                    seen_weeks.add((iso_year, iso_week))
-                    reason = "weekly"
-                    weekly_count += 1
+            if monthly_count < 12 and is_first and (year, month) not in seen_months:
+                seen_months.add((year, month))
+                reason = "monthly"
+                monthly_count += 1
+            if reason is None and weekly_count < 4 and is_sunday and (iso_year, iso_week) not in seen_weeks:
+                seen_weeks.add((iso_year, iso_week))
+                reason = "weekly"
+                weekly_count += 1
             if reason is None and daily_count < 7:
                 reason = "daily"
                 daily_count += 1
@@ -104,13 +103,12 @@ def classify_backups(backups: list[BackupFile]) -> set[str]:
 def prune_backups(backup_dir: str, keep: set[str], dry_run: bool) -> None:
     for entry in os.listdir(backup_dir):
         path = os.path.join(backup_dir, entry)
-        if os.path.isfile(path) and BACKUP_RE.match(entry):
-            if path not in keep:
-                if dry_run:
-                    print(f"Would delete: {entry}")
-                else:
-                    os.unlink(path)
-                    print(f"Deleted: {entry}")
+        if os.path.isfile(path) and BACKUP_RE.match(entry) and path not in keep:
+            if dry_run:
+                print(f"Would delete: {entry}")
+            else:
+                os.unlink(path)
+                print(f"Deleted: {entry}")
 
 
 def main() -> None:

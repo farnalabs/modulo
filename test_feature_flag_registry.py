@@ -1,6 +1,8 @@
-from conftest import make_mock_session
+from unittest.mock import patch
 
 from modulo.core.feature_flags import FeatureFlagRegistry
+
+from conftest import make_mock_session
 
 
 class TestInit:

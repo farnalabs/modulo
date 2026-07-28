@@ -1,7 +1,11 @@
 """Connector contract conformance suite."""
 import pytest
-
-from modulo.connectors.base import ConnectorBase, ConnectorPayload, ConnectorQuery, ConnectorType
+from modulo.connectors.base import (
+    ConnectorBase,
+    ConnectorPayload,
+    ConnectorQuery,
+    ConnectorType,
+)
 from tests.connectors._conformance import assert_health_shape
 
 pytestmark = pytest.mark.connector_conformance

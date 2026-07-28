@@ -1,5 +1,4 @@
 import pytest
-
 from modulo.core.feature_flags import FeatureFlagRegistry
 
 

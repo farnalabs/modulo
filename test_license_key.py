@@ -4,7 +4,6 @@ import re
 from collections.abc import Generator
 
 import pytest
-
 from modulo.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
     _validate_public_key_hex,

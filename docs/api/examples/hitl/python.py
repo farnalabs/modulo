@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Modulo API Example: Human-in-the-Loop (HITL) Gate Management
 

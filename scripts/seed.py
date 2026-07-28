@@ -31,7 +31,7 @@ if not os.path.isdir(_SRC):
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from modulo.db.session import AsyncSessionLocal
+from modulo.core.audit_logger import append_audit_event
 from modulo.db.models import (
     Agent,
     ConnectorInstance,
@@ -39,8 +39,8 @@ from modulo.db.models import (
     EvalResult,
     LibraryPrimitive,
     ModelBackend,
-    OrgApiKey,
     Organisation,
+    OrgApiKey,
     Pipeline,
     PipelineEdge,
     PipelineSnapshot,
@@ -53,7 +53,7 @@ from modulo.db.models import (
     TeamMembership,
     User,
 )
-from modulo.core.audit_logger import append_audit_event
+from modulo.db.session import AsyncSessionLocal
 
 SEED_PASSWORD = os.environ.get("MODULO_SEED_PASSWORD", "admin123")
 SEED_ORG_NAME = os.environ.get("MODULO_SEED_ORG_NAME", "Demo Corp")
@@ -531,7 +531,7 @@ async def seed() -> None:
             await session.commit()
             print(f"[seed] Done — {SEED_ORG_NAME} seeded with rich demo data")
 
-        except Exception:
+        except Exception:  # noqa: BLE001
             await session.rollback()
             print("[seed] Fatal error — rolling back", file=sys.stderr)
             import traceback
