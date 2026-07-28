@@ -1,0 +1,22 @@
+rules:
+  - id: module-level-mutable-default
+    patterns:
+      - pattern-either:
+          - pattern: |
+              class $CLASS:
+                  ...
+                  $ATTR = []
+          - pattern: |
+              class $CLASS:
+                  ...
+                  $ATTR = {}
+      - pattern-not-inside: |
+          class $CLASS:
+              ...
+              def __init__(self):
+                  ...
+    message: "Module-level mutable lists/dicts as defaults are shared across all instances — use `list(source)` or `None` + init"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/modulo/**"]

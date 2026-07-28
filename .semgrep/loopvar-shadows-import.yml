@@ -1,0 +1,8 @@
+rules:
+  - id: loopvar-shadows-import
+    pattern-regex: from fastapi import status
+    message: "This file imports `status` from fastapi — beware of `for status in` loops that shadow the import"
+    languages: [python]
+    severity: WARNING
+    paths:
+      include: ["**/backend/src/modulo/**"]

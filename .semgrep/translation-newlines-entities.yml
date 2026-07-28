@@ -1,0 +1,8 @@
+rules:
+  - id: translation-newlines-entities
+    pattern-regex: '"\\n"|&amp;|&#\d+;'
+    message: "Translation values must not contain literal newlines or HTML entities — split into separate translation keys instead"
+    languages: [json]
+    severity: ERROR
+    paths:
+      include: ["**/frontend/src/locales/**", "**/frontend/src/i18n/**"]
