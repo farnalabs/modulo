@@ -1,7 +1,7 @@
 ﻿"""Minimal in-process cron scheduler — fires due triggers in an asyncio loop."""
 import asyncio
-from datetime import datetime, timezone
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -40,14 +40,20 @@ async def run_scheduler(stop_event: asyncio.Event) -> None:
                         )
                     )
                     for trigger in result.scalars():
-                        await fire_cron_trigger(session, trigger)
+                        await fire_cron_trigger(
+                            trigger_id=trigger.id,
+                            org_id=trigger.organisation_id,
+                            pipeline_id=trigger.pipeline_id,
+                            cron_expression=trigger.cron_expression,
+                            snapshot_id=trigger.config_json.get("snapshot_id") if trigger.config_json else None,
+                            factory=factory,
+                        )
             except Exception:
                 _log.exception("Scheduler iteration failed")
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=_POLL_INTERVAL)
             except asyncio.TimeoutError:
-                pass  # Expected — time to poll again
+                pass
     finally:
         await engine.dispose()
         _log.info("Cron scheduler stopped")
-
