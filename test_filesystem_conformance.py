@@ -1,7 +1,11 @@
 """FilesystemConnector-specific tests beyond the shared conformance suite."""
 import pytest
-
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, ConnectorType
+from modulo.connectors.base import (
+    ConnectorPayload,
+    ConnectorQuery,
+    ConnectorResult,
+    ConnectorType,
+)
 from modulo.connectors.filesystem import FilesystemConnector, PathTraversalError
 
 

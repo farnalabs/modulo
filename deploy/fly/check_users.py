@@ -1,6 +1,8 @@
 import asyncio
-import asyncpg
 import os
+
+import asyncpg
+
 url = os.environ.get("DATABASE_URL", "")
 url = url.replace("postgresql+asyncpg://", "postgres://").split("?")[0]
 print(f"URL: {url[:60]}...")
@@ -14,7 +16,7 @@ async def main():
             rows = await conn.fetch("SELECT email, org_role FROM users ORDER BY email")
             for row in rows:
                 print(f"  {row['email']} ({row['org_role']})")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error: {e}")
     finally:
         await conn.close()

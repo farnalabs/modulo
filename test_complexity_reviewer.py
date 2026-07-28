@@ -1,7 +1,6 @@
 from typing import Any
 
 import pytest
-
 from modulo.core.library.complexity_reviewer import COMPLEXITY_REVIEWER
 from modulo.core.pipeline_engine.decorator import (
     ContextSetterViolationError,
@@ -109,7 +108,7 @@ class TestContextSetterRole:
     async def test_context_setter_with_missing_run_context_defaults(self):
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
-            ctx = state.get("run_context", {})
+            state.get("run_context", {})
             return {"run_context": {"model_tier": "tier-1", "estimated_tokens": 0, "complexity_reason": "No context"}}
 
         result = await context_setter_node({"run_context": {"cancelled": False, "input": {}}})

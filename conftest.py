@@ -2,9 +2,12 @@
 from pathlib import Path
 
 import pytest
-
 from modulo.connectors.base import ConnectorBase
-from tests.connectors._conformance import get_registered_fixture, get_registered_types, register_conformance_connector
+from tests.connectors._conformance import (
+    get_registered_fixture,
+    get_registered_types,
+    register_conformance_connector,
+)
 
 
 @pytest.fixture

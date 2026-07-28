@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Modulo API Example: Library Primitive Management
 
@@ -97,10 +96,7 @@ def main():
         resp = client.post(f"/api/v1/libraries/{prim_id}/adapt", json={
             # Optionally specify a target team; omit for personal copy
         }, headers=headers)
-        if resp.status_code == 201:
-            cloned = resp.json()
-            print(f"  Cloned! New primitive: {cloned['name']} ({cloned['id']})")
-        elif resp.status_code == 200:
+        if resp.status_code == 201 or resp.status_code == 200:
             cloned = resp.json()
             print(f"  Cloned! New primitive: {cloned['name']} ({cloned['id']})")
         else:

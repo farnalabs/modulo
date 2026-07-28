@@ -17,7 +17,7 @@ def safe_nonempty_tuple() -> bool:
 
 def safe_nonempty_list() -> bool:
     # ok: all-empty-iterable
-    return all([value > 0 for value in [1, 2]])
+    return all(value > 0 for value in [1, 2])
 
 
 def unsafe_empty_literal() -> bool:

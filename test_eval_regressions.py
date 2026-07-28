@@ -4,16 +4,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.unit.api.mock_session import configure_mock_session
-
-from conftest import make_mock_result, make_mock_row, make_mock_session, make_settings
-
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.eval_engine.regression import detect_regressions
 from modulo.settings import get_settings
+
+from conftest import make_mock_result, make_mock_row, make_mock_session, make_settings
 
 _EVAL_ID_1 = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _EVAL_ID_2 = uuid.UUID("00000000-0000-0000-0000-000000000002")
