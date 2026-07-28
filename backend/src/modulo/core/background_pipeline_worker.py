@@ -1,4 +1,4 @@
-"""Application-level background worker for pipeline execution.
+﻿"""Application-level background worker for pipeline execution.
 
 Started during the FastAPI lifespan and lives outside any request's ASGI
 scope, so background pipeline execution is never cancelled by scope teardown.
@@ -59,10 +59,10 @@ class BackgroundPipelineWorker:
     async def start(self) -> None:
         """Start the consumer loop.
 
-        Idempotent — safe to call multiple times.
+        Idempotent â€” safe to call multiple times.
         """
         if self._started:
-            _log.warning("Background pipeline worker already started — skipping")
+            _log.warning("Background pipeline worker already started â€” skipping")
             return
         self._consumer_task = asyncio.create_task(
             self._consumer_loop(),
@@ -74,10 +74,10 @@ class BackgroundPipelineWorker:
     def submit(self, run_id: uuid.UUID, org_id: uuid.UUID, input_payload: dict[str, Any]) -> None:
         """Submit a pipeline run for background execution.
 
-        Never blocks — pushes to the internal queue immediately.
+        Never blocks â€” pushes to the internal queue immediately.
         """
         if not self._started or (self._consumer_task and self._consumer_task.done()):
-            _log.warning("Background worker not available — run %s rejected", run_id)
+            _log.warning("Background worker not available â€” run %s rejected", run_id)
             return
         job = PipelineJob(run_id=run_id, org_id=org_id, input_payload=input_payload)
         self._queue.put_nowait(job)
@@ -131,13 +131,13 @@ class BackgroundPipelineWorker:
         Uses per-pipeline ``stale_run_timeout_minutes`` if set, otherwise defaults to 60 minutes.
         Called automatically at the start of each consumer loop iteration.
         """
-        engine = self._engine
-        if engine is None:
-            return 0
-        factory = async_sessionmaker(engine, expire_on_commit=False)
-        killed = 0
-        try:
-            async with factory() as session, session.begin():
+        engine = create_async_engine(
+            self._database_url,
+            pool_size=1,
+            max_overflow=2,
+            pool_pre_ping=True,
+            pool_timeout=10,
+            connect_args={"ssl": False, "statement_cache_size": 0},
                 from sqlalchemy import text
 
                 rows = await session.execute(
@@ -156,7 +156,7 @@ class BackgroundPipelineWorker:
                     timeout = row[2]
                     await cancel_run(session, run_id, error_code="stale_run_killed")
                     _log.warning(
-                        "Killed stale run %s (%s) — stuck >%s min with no node progress",
+                        "Killed stale run %s (%s) â€” stuck >%s min with no node progress",
                         run_id,
                         status,
                         timeout or 60,
@@ -164,6 +164,10 @@ class BackgroundPipelineWorker:
                     killed += 1
         except Exception:
             _log.exception("cleanup_stale_runs failed")
+        finally:
+            await engine.dispose()
+        finally:
+            await engine.dispose()
         if killed:
             _log.info("cleanup_stale_runs: killed %d stale run(s)", killed)
         return killed
