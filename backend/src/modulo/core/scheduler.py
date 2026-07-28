@@ -18,16 +18,23 @@ _POLL_INTERVAL = 30
 
 async def run_scheduler(stop_event: asyncio.Event) -> None:
     """Poll for due cron triggers and fire them."""
-    settings = get_settings()
-    engine = create_async_engine(
-        settings.database_url,
-        pool_size=1,
-        max_overflow=2,
-        pool_pre_ping=True,
-    )
     try:
-        while not stop_event.is_set():
+        settings = get_settings()
+        engine = create_async_engine(
+            settings.database_url,
+            pool_size=1,
+            max_overflow=2,
+            pool_pre_ping=True,
+        )
+    except Exception as exc:
+        _log.error("Cron scheduler failed to create engine: %s", exc)
+        return
+
+    try:
+        while True:
             try:
+                if stop_event.is_set():
+                    break
                 factory = async_sessionmaker(engine, expire_on_commit=False)
                 async with factory() as session, session.begin():
                     await set_rls_org(session, "00000000-0000-0000-0000-000000000000")
@@ -48,12 +55,19 @@ async def run_scheduler(stop_event: asyncio.Event) -> None:
                             snapshot_id=trigger.config_json.get("snapshot_id") if trigger.config_json else None,
                             factory=factory,
                         )
+            except asyncio.CancelledError:
+                _log.info("Cron scheduler cancelled")
+                break
             except Exception:
-                _log.exception("Scheduler iteration failed")
+                _log.exception("Cron scheduler iteration failed")
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=_POLL_INTERVAL)
+                if stop_event.is_set():
+                    break
+                await asyncio.wait_for(asyncio.sleep(_POLL_INTERVAL), timeout=_POLL_INTERVAL)
             except asyncio.TimeoutError:
                 pass
+    except Exception as exc:
+        _log.error("Cron scheduler unexpected error: %s", exc)
     finally:
         await engine.dispose()
         _log.info("Cron scheduler stopped")
