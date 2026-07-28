@@ -632,6 +632,20 @@ async def update_pipeline_graph(
                             "field": "agent_prompt",
                             "detail": f"sandbox_agent node '{node.get('id')}' requires a non-empty agent_prompt",
                         }
+                    command = node.get("agent_command")
+                    if not command or not str(command).strip():
+                        return {
+                            "error": "validation_failed",
+                            "field": "agent_command",
+                            "detail": f"sandbox_agent node '{node.get('id')}' requires a non-empty agent_command",
+                        }
+                    template_id = node.get("template_id")
+                    if not template_id or not str(template_id).strip():
+                        return {
+                            "error": "validation_failed",
+                            "field": "template_id",
+                            "detail": f"sandbox_agent node '{node.get('id')}' requires a template_id (e.g. 'opencode')",
+                        }
 
             async with _session(org_id) as s:
                 result = await replace_pipeline_graph(

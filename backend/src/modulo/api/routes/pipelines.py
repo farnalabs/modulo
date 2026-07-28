@@ -256,16 +256,15 @@ class PipelineGraphNode(BaseModel):
         elif self.node_type == "sandbox_agent":
             if not self.agent_prompt or not self.agent_prompt.strip():
                 raise ValueError("sandbox_agent nodes require a non-empty agent_prompt")
-        elif self.node_type == "agent":
-            if self.agent_id is None:
-                raise ValueError("Agent nodes require an agent")
-        elif self.node_type == "sandbox_agent":
             if not self.agent_command or not self.agent_command.strip():
                 raise ValueError("Sandbox agent nodes require a non-empty agent_command")
             if not self.template_id:
                 raise ValueError("Sandbox agent nodes require a template_id (e.g. 'opencode')")
             self._validate_sandbox_env_vars()
             self._validate_sandbox_context_files()
+        elif self.node_type == "agent":
+            if self.agent_id is None:
+                raise ValueError("Agent nodes require an agent")
         if self.node_type != "agent" and self.parameter_set_id is not None:
             raise ValueError("Only agent nodes can have parameter_set_id")
         if (

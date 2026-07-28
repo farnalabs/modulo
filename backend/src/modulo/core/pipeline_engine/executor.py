@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -278,13 +279,11 @@ class PipelineExecutor:
         """
         global _RETRY_SEMAPHORE
         if _RETRY_SEMAPHORE is None:
-            import asyncio
-
             _RETRY_SEMAPHORE = asyncio.Semaphore(2)
         async with _RETRY_SEMAPHORE:
             current_delay = delay
             while current_delay <= max_delay:
-                await asyncio.sleep(current_delay + __import__("random").uniform(0, 30))
+                await asyncio.sleep(current_delay + random.uniform(0, 30))  # noqa: S311 — non-cryptographic jitter
                 try:
                     result = await self.execute(
                         run_id=run_id,
@@ -380,7 +379,13 @@ class PipelineExecutor:
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.warning("pipeline.model_backend_hub_init_failed", exc_info=True)
+            _log.exception("pipeline.model_backend_hub_init_failed")
+            if hub is not None:
+                try:
+                    await hub.__aexit__(None, None, None)
+                except Exception:
+                    _log.exception("pipeline.model_backend_hub_cleanup_failed")
+            hub = None
         return hub
 
     async def _init_connector_hub(self, org_id: uuid.UUID) -> Any | None:
@@ -432,7 +437,13 @@ class PipelineExecutor:
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.warning("pipeline.connector_hub_init_failed", exc_info=True)
+            _log.exception("pipeline.connector_hub_init_failed")
+            if hub is not None:
+                try:
+                    await hub.__aexit__(None, None, None)
+                except Exception:
+                    _log.exception("pipeline.connector_hub_cleanup_failed")
+            hub = None
         return hub
 
     def _check_db_cancellation(
