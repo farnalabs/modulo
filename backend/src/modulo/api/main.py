@@ -828,6 +828,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     with suppress(NameError):
         _scheduler_stop.set()
     with suppress(NameError):
+        _scheduler_task.cancel()
+    with suppress(asyncio.CancelledError, NameError):
+        await _scheduler_task
+    with suppress(NameError):
         await _bg_worker.stop()
     await _shutdown_manager.shutdown()
 

@@ -31,6 +31,51 @@ _log = logging.getLogger(__name__)
 _redis_clients: set[Any] = set()
 
 
+def _make_noop_registry() -> RateLimiterRegistry:
+    """Return a no-op registry that never rate-limits."""
+    return RateLimiterRegistry(redis_client=_NOOP_REDIS)
+
+
+class _NoopRedisClient:
+    """Stand-in for a Redis client when Redis is unavailable.
+
+    Satisfies the protocol expected by ``RateLimiterRegistry``
+    and ``RedisSlidingWindowRateLimiter`` (pipeline / zadd / zremrangebyscore
+    / zcard / expire) but discards every call — rate limits are never enforced.
+    """
+
+    async def pipeline(self, transaction: bool = True) -> "_NoopPipeline":
+        return _NoopPipeline()
+
+    async def aclose(self) -> None:
+        pass
+
+
+class _NoopPipeline:
+    """Fake Redis pipeline that records operations and returns zeros / empty."""
+
+    def __init__(self) -> None:
+        self._commands: list[str] = []
+
+    def zremrangebyscore(self, name: Any, min: Any, max: Any) -> None:
+        self._commands.append("zremrangebyscore")
+
+    def zadd(self, name: Any, mapping: Any) -> None:
+        self._commands.append("zadd")
+
+    def zcard(self, name: Any) -> None:
+        self._commands.append("zcard")
+
+    def expire(self, name: Any, time: Any) -> None:
+        self._commands.append("expire")
+
+    async def execute(self) -> list[int]:
+        return [0, 0, 0, 0]
+
+
+_NOOP_REDIS = _NoopRedisClient()
+
+
 def _create_registry(settings: Settings) -> RateLimiterRegistry:
     """Create a rate limiter registry, connecting to Redis if configured."""
     global redis_available
@@ -38,7 +83,7 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry:
     if settings.modulo_db.lower() == "sqlite":
         _log.info("ratelimit.sqlite_disabled")
         redis_available = False
-        return RateLimiterRegistry(redis_client=None)
+        return _make_noop_registry()
 
     if settings.redis_url:
         try:
@@ -59,7 +104,7 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry:
 
     redis_available = False
     _log.warning("ratelimit.in_memory_mode")
-    return RateLimiterRegistry(redis_client=None)
+    return _make_noop_registry()
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
