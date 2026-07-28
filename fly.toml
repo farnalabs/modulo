@@ -49,3 +49,22 @@ primary_region = 'lhr'
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
+
+# Celery beat scheduler for cron triggers (required since in-process scheduler was removed)
+[[processes]]
+  name = "beat"
+  internal_port = 8080
+
+  [processes.env]
+    MODULO_DB = "postgres"
+    MODULO_PUBLIC_URL = "https://app.modulo.run"
+    MODULO_DEMO_MODE = "true"
+    CORS_ORIGINS = "https://modulo.run,https://app.modulo.run"
+
+  [[processes.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "120s"
+    method = "GET"
+    path = "/healthz"
+    protocol = "http"
