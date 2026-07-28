@@ -622,6 +622,17 @@ async def update_pipeline_graph(
             except ValueError:
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
+            # Validate sandbox_agent nodes have non-empty agent_prompt
+            for node in nodes:
+                if node.get("node_type") == "sandbox_agent":
+                    prompt = node.get("agent_prompt")
+                    if not prompt or not str(prompt).strip():
+                        return {
+                            "error": "validation_failed",
+                            "field": "agent_prompt",
+                            "detail": f"sandbox_agent node '{node.get('id')}' requires a non-empty agent_prompt",
+                        }
+
             async with _session(org_id) as s:
                 result = await replace_pipeline_graph(
                     s,

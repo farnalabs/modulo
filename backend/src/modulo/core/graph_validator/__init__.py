@@ -125,6 +125,7 @@ class GraphValidator:
         await self._check_node_categories(graph_json, session, result)
         await self._check_composite_nodes(graph_json, session, result)
         await self._check_parameter_references(graph_json, session, result)
+        self._check_sandbox_agent_config(graph_json, result)
 
         return result
 
@@ -552,6 +553,61 @@ class GraphValidator:
                         f"LLM routing node '{nid}' default_target '{default_target}' is not a node",
                         node_id=nid,
                     )
+
+    # ------------------------------------------------------------------
+    # Sandbox agent config
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_sandbox_agent_config(graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """Validate sandbox_agent node configuration.
+
+        Checks:
+        1. Every sandbox_agent node has a non-empty ``agent_prompt``.
+        2. Warn if ``env_vars`` contains ``GITHUB_TOKEN`` (should use system env resolution).
+        3. Warn if ``template_id`` is ``"base"`` (should be ``"opencode"``).
+        4. Warn if ``timeout_seconds`` is missing or < 60.
+        """
+        for node in graph_json.get("nodes", []):
+            if node.get("node_type") != "sandbox_agent":
+                continue
+            nid = _string_or_default(node.get("id"))
+
+            prompt: object = node.get("agent_prompt")
+            if not isinstance(prompt, str) or not prompt.strip():
+                result.error(
+                    "SANDBOX_MISSING_PROMPT",
+                    f"sandbox_agent node '{nid}' requires a non-empty agent_prompt",
+                    node_id=nid,
+                )
+
+            env_vars: dict[str, Any] | None = node.get("env_vars")
+            if isinstance(env_vars, dict) and "GITHUB_TOKEN" in env_vars:
+                result.warning(
+                    "SANDBOX_ENV_GITHUB_TOKEN",
+                    f"sandbox_agent node '{nid}': env_vars contains GITHUB_TOKEN "
+                    f"— use system env resolution instead of embedding tokens in graph config",
+                    node_id=nid,
+                )
+
+            template_id: object = node.get("template_id")
+            if template_id == "base":
+                result.warning(
+                    "SANDBOX_TEMPLATE_BASE",
+                    f"sandbox_agent node '{nid}': template_id is 'base' which lacks the opencode CLI. "
+                    f"Use template_id 'opencode' instead.",
+                    node_id=nid,
+                )
+
+            timeout: object = node.get("timeout_seconds")
+            if timeout is None or not isinstance(timeout, (int, float)) or timeout < 60:
+                result.warning(
+                    "SANDBOX_TIMEOUT_TOO_LOW",
+                    f"sandbox_agent node '{nid}': timeout_seconds is {timeout!r}. "
+                    f"Set to at least 1200 (20 min) for sandbox operations that include "
+                    f"provisioning + opencode execution.",
+                    node_id=nid,
+                )
 
     # ------------------------------------------------------------------
     # Schema compatibility

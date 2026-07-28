@@ -240,6 +240,9 @@ class PipelineGraphNode(BaseModel):
                 raise ValueError("Composite nodes cannot reference an agent")
             if self.connector_binding is not None:
                 raise ValueError("Composite nodes cannot have connector bindings")
+        elif self.node_type == "sandbox_agent":
+            if not self.agent_prompt or not self.agent_prompt.strip():
+                raise ValueError("sandbox_agent nodes require a non-empty agent_prompt")
         elif self.node_type == "agent":
             if self.agent_id is None:
                 raise ValueError("Agent nodes require an agent")
