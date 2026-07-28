@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -762,8 +762,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("startup.redis_configured - Celery beat available for distributed scheduling")
         # Start in-process cron trigger scheduler
         from modulo.core.scheduler import run_scheduler
+
         _scheduler_stop = asyncio.Event()
-        _scheduler_task = asyncio.create_task(run_scheduler(_scheduler_stop), name="cron-scheduler")
+        _scheduler_task = asyncio.create_task(
+            run_scheduler(_scheduler_stop, bg_worker=_bg_worker),
+            name="cron-scheduler",
+        )
         logger.info("started in-process cron scheduler")
     except Exception:
         logger.warning("startup.background_worker_init_failed", exc_info=True)
@@ -821,6 +825,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _claim_expiry_job.stop()
     with suppress(asyncio.CancelledError):
         await retention_task
+    with suppress(NameError):
+        _scheduler_stop.set()
     with suppress(NameError):
         await _bg_worker.stop()
     await _shutdown_manager.shutdown()

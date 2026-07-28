@@ -1,9 +1,11 @@
-﻿"""Minimal in-process cron scheduler — fires due triggers in an asyncio loop."""
+"""Minimal in-process cron scheduler — fires due triggers in an asyncio loop."""
+
 import asyncio
 import logging
-from datetime import datetime, timezone
+import uuid
+from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.cron_scheduler import fire_cron_trigger
@@ -16,8 +18,11 @@ _log = logging.getLogger(__name__)
 _POLL_INTERVAL = 30
 
 
-async def run_scheduler(stop_event: asyncio.Event) -> None:
-    """Poll for due cron triggers and fire them."""
+async def run_scheduler(
+    stop_event: asyncio.Event,
+    bg_worker: object | None = None,
+) -> None:
+    """Poll for due cron triggers and fire them, submitting created runs to the background worker."""
     try:
         settings = get_settings()
         engine = create_async_engine(
@@ -38,16 +43,16 @@ async def run_scheduler(stop_event: asyncio.Event) -> None:
                 factory = async_sessionmaker(engine, expire_on_commit=False)
                 async with factory() as session, session.begin():
                     await set_rls_org(session, "00000000-0000-0000-0000-000000000000")
-                    now = datetime.now(timezone.utc)
+                    now = datetime.now(UTC)
                     result = await session.execute(
                         select(Trigger).where(
                             Trigger.trigger_type == "cron",
                             Trigger.active.is_(True),
-                            Trigger.next_fire_at <= now,
+                            or_(Trigger.next_fire_at.is_(None), Trigger.next_fire_at <= now),
                         )
                     )
                     for trigger in result.scalars():
-                        await fire_cron_trigger(
+                        result_dict = await fire_cron_trigger(
                             trigger_id=trigger.id,
                             org_id=trigger.organisation_id,
                             pipeline_id=trigger.pipeline_id,
@@ -55,6 +60,20 @@ async def run_scheduler(stop_event: asyncio.Event) -> None:
                             snapshot_id=trigger.config_json.get("snapshot_id") if trigger.config_json else None,
                             factory=factory,
                         )
+                        if bg_worker is not None and result_dict.get("status") == "fired":
+                            run_id_str = result_dict.get("run_id")
+                            if run_id_str:
+                                try:
+                                    bg_worker.submit(
+                                        run_id=uuid.UUID(run_id_str),
+                                        org_id=trigger.organisation_id,
+                                        input_payload=result_dict.get("input_payload", {}),
+                                    )
+                                except Exception:
+                                    _log.exception(
+                                        "Failed to submit cron-triggered run %s to background worker",
+                                        run_id_str,
+                                    )
             except asyncio.CancelledError:
                 _log.info("Cron scheduler cancelled")
                 break
@@ -64,7 +83,7 @@ async def run_scheduler(stop_event: asyncio.Event) -> None:
                 if stop_event.is_set():
                     break
                 await asyncio.wait_for(asyncio.sleep(_POLL_INTERVAL), timeout=_POLL_INTERVAL)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
     except Exception as exc:
         _log.error("Cron scheduler unexpected error: %s", exc)

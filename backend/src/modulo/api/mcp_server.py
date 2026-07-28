@@ -3466,5 +3466,3 @@ def build_mcp_asgi_app() -> Starlette:
         # Note: lifespan is managed by the parent FastAPI app's _lifespan
         # to ensure it is called — Starlette does not invoke sub-app lifespans.
     )
-
-

@@ -1,4 +1,4 @@
-﻿"""Application-level background worker for pipeline execution.
+"""Application-level background worker for pipeline execution.
 
 Started during the FastAPI lifespan and lives outside any request's ASGI
 scope, so background pipeline execution is never cancelled by scope teardown.
@@ -175,6 +175,7 @@ class BackgroundPipelineWorker:
         if killed:
             _log.info("cleanup_stale_runs: killed %d stale run(s)", killed)
         return killed
+
     async def _consumer_loop(self) -> None:
         """Consume jobs from the queue and spawn sub-tasks for each."""
         backoff = 0.1
