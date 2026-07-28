@@ -36,10 +36,8 @@
           </router-link>
         </div>
 
-        <div class="flex items-center justify-between pb-2 mb-1">
+        <div class="flex items-center justify-between pb-2 mb-1 gap-2">
           <NotificationBell />
-        </div>
-        <div class="flex items-center justify-between pb-2 mb-1">
           <label for="applayout-field-2" class="toggle-switch" :class="isLight ? 'light' : 'dark'">
             <span class="track">
               <span class="thumb" />
@@ -88,12 +86,6 @@
           </label>
         </div>
 
-        <ViewModeToggle
-          :model-value="viewMode"
-          :options="viewModeOptions"
-          @update:model-value="setViewMode"
-        />
-
         <SidebarNav class="flex-1" :is-system-admin="isSystemAdmin" :user-role="userRole" />
       </div>
 
@@ -140,7 +132,18 @@
           <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       </button>
-      <NotificationBell class="ml-auto mr-2" />
+      <NotificationBell class="ml-auto" />
+      <label for="applayout-field-1" class="toggle-switch ml-2" :class="isLight ? 'light' : 'dark'">
+        <span class="track">
+          <span class="thumb" />
+        </span>
+        <input id="applayout-field-1"
+          type="checkbox"
+          class="sr-only"
+          @change="toggleTheme"
+          :checked="isLight"
+        />
+      </label>
       <router-link to="/" class="flex items-center gap-2.5">
         <div
           class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5"
@@ -190,60 +193,7 @@
         </router-link>
       </div>
 
-      <div class="flex items-center justify-between pb-2 mb-1">
-        <label for="applayout-field-1" class="toggle-switch" :class="isLight ? 'light' : 'dark'">
-          <span class="track">
-            <span class="thumb" />
-          </span>
-          <span class="flex items-center gap-1">
-            <svg
-              v-if="isLight"
-              xmlns="http://www.w3.org/2000/svg"
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <circle cx="12" cy="12" r="5" />
-              <line x1="12" y1="1" x2="12" y2="3" />
-              <line x1="12" y1="21" x2="12" y2="23" />
-              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-              <line x1="1" y1="12" x2="3" y2="12" />
-              <line x1="21" y1="12" x2="23" y2="12" />
-              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-            </svg>
-            <svg
-              v-else
-              xmlns="http://www.w3.org/2000/svg"
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-            </svg>
-            <span>{{ isLight ? $t('common.light') : $t('common.dark') }}</span>
-          </span>
-          <input id="applayout-field-1"
-            type="checkbox"
-            class="sr-only"
-            @change="toggleTheme"
-            :checked="isLight"
-          />
-        </label>
-      </div>
 
-      <ViewModeToggle
-        :model-value="viewMode"
-        :options="viewModeOptions"
-        @update:model-value="setViewMode"
-      />
 
       <SidebarNav class="flex-1"
         :is-system-admin="isSystemAdmin"
@@ -295,21 +245,14 @@ import NotificationBell from "./NotificationBell.vue";
 import RemyPanel from "./remy/RemyPanel.vue";
 import SidebarFooter from "./SidebarFooter.vue";
 import SidebarNav from "./SidebarNav.vue";
-import ViewModeToggle from "./ViewModeToggle.vue";
 import { TooltipProvider } from "./ui/tooltip";
-import { useSidebar } from "../composables/useSidebar";
 import { useRemyStore } from "../composables/useRemyStore";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
 import CommandPalette from "./CommandPalette.vue";
 import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
 
-const viewModeOptions = [
-  { label: 'Essentials', value: 'simple' },
-  { label: 'All Features', value: 'advanced' },
-] as const;
 
-const { viewMode, setViewMode } = useSidebar();
 
 const planStore = usePlanStore();
 const remyStore = useRemyStore();

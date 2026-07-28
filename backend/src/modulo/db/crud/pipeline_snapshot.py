@@ -93,6 +93,8 @@ async def create_snapshot_from_live_graph(
                     node["model_backend_id"] = str(agent.model_backend_id)
                 if agent.agent_command is not None:
                     node["agent_command"] = agent.agent_command
+                if agent.agent_commands is not None:
+                    node["agent_commands"] = agent.agent_commands
                 if agent.parameter_schema_id is not None:
                     node["parameter_schema_id"] = str(agent.parameter_schema_id)
                     parameter_schema_ids.add(agent.parameter_schema_id)
