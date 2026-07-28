@@ -31,14 +31,21 @@ _log = logging.getLogger(__name__)
 _redis_clients: set[Any] = set()
 
 
-def _create_registry(settings: Settings) -> RateLimiterRegistry:
+class _NoopRateLimiter:
+    """No-op rate limiter used when Redis is unavailable — allows all requests."""
+
+    async def check(self, key: str, max_requests: int, window_s: int = 60) -> bool:
+        return True
+
+
+def _create_registry(settings: Settings) -> RateLimiterRegistry | _NoopRateLimiter:
     """Create a rate limiter registry, connecting to Redis if configured."""
     global redis_available
 
     if settings.modulo_db.lower() == "sqlite":
         _log.info("ratelimit.sqlite_disabled")
         redis_available = False
-        return RateLimiterRegistry(redis_client=None)
+        return _NoopRateLimiter()
 
     if settings.redis_url:
         try:
@@ -59,7 +66,7 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry:
 
     redis_available = False
     _log.warning("ratelimit.in_memory_mode")
-    return RateLimiterRegistry(redis_client=None)
+    return _NoopRateLimiter()
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -201,7 +208,8 @@ def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCl
         return None
 
     if not resolved.redis_url:
-        raise RuntimeError("REDIS_URL is required for auth rate limiting")
+        _log.warning("auth_ratelimit.no_redis_url")
+        return None
 
     try:
         from redis.asyncio import Redis
@@ -219,8 +227,8 @@ def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCl
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.exception("auth_ratelimit.redis_connect_failed")
-        raise
+        _log.warning("auth_ratelimit.redis_connect_failed", exc_info=True)
+        return None
 
 
 class AuthRateLimitMiddleware(BaseHTTPMiddleware):

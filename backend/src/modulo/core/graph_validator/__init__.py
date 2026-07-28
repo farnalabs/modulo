@@ -562,75 +562,6 @@ class GraphValidator:
                     )
 
     # ------------------------------------------------------------------
-    # Sandbox agent config
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _check_sandbox_agent_config(graph_json: dict[str, Any], result: ValidationResult) -> None:
-        """Validate sandbox_agent node configuration.
-
-        Checks:
-        1. Every sandbox_agent node has a non-empty ``agent_prompt``.
-        2. Warn if ``env_vars`` contains ``GITHUB_TOKEN`` (should use system env resolution).
-        3. Warn if ``template_id`` is ``"base"`` (should be ``"opencode"``).
-        4. Warn if ``timeout_seconds`` is missing or < 60.
-        """
-        for node in graph_json.get("nodes", []):
-            if node.get("node_type") != "sandbox_agent":
-                continue
-            nid = _string_or_default(node.get("id"))
-
-            prompt: object = node.get("agent_prompt")
-            if not isinstance(prompt, str) or not prompt.strip():
-                result.error(
-                    "SANDBOX_MISSING_PROMPT",
-                    f"sandbox_agent node '{nid}' requires a non-empty agent_prompt",
-                    node_id=nid,
-                )
-
-            command: object = node.get("agent_command")
-            if not isinstance(command, str) or not command.strip():
-                result.error(
-                    "SANDBOX_MISSING_COMMAND",
-                    f"sandbox_agent node '{nid}' requires a non-empty agent_command",
-                    node_id=nid,
-                )
-
-            tpl_id: object = node.get("template_id")
-            if not isinstance(tpl_id, str) or not tpl_id.strip():
-                result.error(
-                    "SANDBOX_MISSING_TEMPLATE",
-                    f"sandbox_agent node '{nid}' requires a template_id (e.g. 'opencode')",
-                    node_id=nid,
-                )
-            elif tpl_id == "base":
-                result.warning(
-                    "SANDBOX_TEMPLATE_BASE",
-                    f"sandbox_agent node '{nid}': template_id is 'base' which lacks the opencode CLI. "
-                    f"Use template_id 'opencode' instead.",
-                    node_id=nid,
-                )
-
-            env_vars: dict[str, Any] | None = node.get("env_vars")
-            if isinstance(env_vars, dict) and "GITHUB_TOKEN" in env_vars:
-                result.warning(
-                    "SANDBOX_ENV_GITHUB_TOKEN",
-                    f"sandbox_agent node '{nid}': env_vars contains GITHUB_TOKEN "
-                    f"— use system env resolution instead of embedding tokens in graph config",
-                    node_id=nid,
-                )
-
-            timeout: object = node.get("timeout_seconds")
-            if timeout is None or not isinstance(timeout, (int, float)) or timeout < 60:
-                result.warning(
-                    "SANDBOX_TIMEOUT_TOO_LOW",
-                    f"sandbox_agent node '{nid}': timeout_seconds is {timeout!r}. "
-                    f"Set to at least 1200 (20 min) for sandbox operations that include "
-                    f"provisioning + opencode execution.",
-                    node_id=nid,
-                )
-
-    # ------------------------------------------------------------------
     # Schema compatibility
     # ------------------------------------------------------------------
 
@@ -1486,7 +1417,7 @@ class GraphValidator:
         5. env_vars keys avoid reserved prefixes.
         6. output_schema_json has valid JSON Schema structure if present.
         """
-        _RESERVED_ENV_PREFIXES = ("MODULO_", "OPENCODE_API_KEY")
+        _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
         for node in graph_json.get("nodes", []):
             if node.get("node_type") != "sandbox_agent":
@@ -1546,7 +1477,7 @@ class GraphValidator:
             env_vars = node.get("env_vars")
             if isinstance(env_vars, dict):
                 for key in env_vars:
-                    for prefix in _RESERVED_ENV_PREFIXES:
+                    for prefix in _reserved_env_prefixes:
                         if key.startswith(prefix):
                             result.warning(
                                 "SANDBOX_RESERVED_ENV_VAR",
@@ -1557,13 +1488,12 @@ class GraphValidator:
 
             # 6. output_schema_json basic structure.
             schema_json = node.get("output_schema_json")
-            if isinstance(schema_json, dict):
-                if "type" not in schema_json and "$ref" not in schema_json:
-                    result.warning(
-                        "SANDBOX_SCHEMA_INCOMPLETE",
-                        f"Sandbox agent node '{nid}' output_schema_json lacks 'type' or '$ref'",
-                        node_id=nid,
-                    )
+            if isinstance(schema_json, dict) and "type" not in schema_json and "$ref" not in schema_json:
+                result.warning(
+                    "SANDBOX_SCHEMA_INCOMPLETE",
+                    f"Sandbox agent node '{nid}' output_schema_json lacks 'type' or '$ref'",
+                    node_id=nid,
+                )
 
     # ------------------------------------------------------------------
     # Edge validation
@@ -1598,13 +1528,13 @@ class GraphValidator:
             seen_ids.add(nid_str)
 
         # Check node ID format (warn on non-UUID-like values).
-        _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+        _uuid_re = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
         for n in nodes:
             nid = n.get("id")
             if nid is None:
                 continue
             nid_str = str(nid)
-            if not _UUID_RE.match(nid_str):
+            if not _uuid_re.match(nid_str):
                 result.warning(
                     "GRAPH_NODE_ID_FORMAT",
                     f"Node ID '{nid_str}' does not look like a standard UUID format",
