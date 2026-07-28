@@ -1,4 +1,4 @@
-﻿name: "CI: PR Validation"
+name: "CI: PR Validation"
 
 on:
   pull_request:
