@@ -131,6 +131,8 @@ class BackgroundPipelineWorker:
         Uses per-pipeline ``stale_run_timeout_minutes`` if set, otherwise defaults to 60 minutes.
         Called automatically at the start of each consumer loop iteration.
         """
+        from sqlalchemy import text
+
         engine = create_async_engine(
             self._database_url,
             pool_size=1,
@@ -138,8 +140,12 @@ class BackgroundPipelineWorker:
             pool_pre_ping=True,
             pool_timeout=10,
             connect_args={"ssl": False, "statement_cache_size": 0},
-                from sqlalchemy import text
-
+        )
+        killed = 0
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as session, session.begin():
+                await set_rls_org(session, job.org_id)
                 rows = await session.execute(
                     text("""
                         SELECT r.id, r.status, p.stale_run_timeout_minutes
@@ -156,7 +162,7 @@ class BackgroundPipelineWorker:
                     timeout = row[2]
                     await cancel_run(session, run_id, error_code="stale_run_killed")
                     _log.warning(
-                        "Killed stale run %s (%s) â€” stuck >%s min with no node progress",
+                        "Killed stale run %s (%s) — stuck >%s min with no node progress",
                         run_id,
                         status,
                         timeout or 60,
@@ -166,12 +172,9 @@ class BackgroundPipelineWorker:
             _log.exception("cleanup_stale_runs failed")
         finally:
             await engine.dispose()
-        finally:
-            await engine.dispose()
         if killed:
             _log.info("cleanup_stale_runs: killed %d stale run(s)", killed)
         return killed
-
     async def _consumer_loop(self) -> None:
         """Consume jobs from the queue and spawn sub-tasks for each."""
         backoff = 0.1
