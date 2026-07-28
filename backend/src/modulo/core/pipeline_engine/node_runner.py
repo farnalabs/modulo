@@ -681,23 +681,35 @@ def make_sandbox_agent_fn(
                 )
 
             try:
-                cmd_result = await sandbox.commands.run(
-                    agent_command,
+                cmd_result = await asyncio.wait_for(
+                    sandbox.commands.run(
+                        agent_command,
+                        timeout=sandbox_timeout,
+                        envs={
+                            "MODULO_RUN_ID": run_id,
+                            "MODULO_PIPELINE_ID": pipeline_id,
+                            "MODULO_ORG_ID": org_id,
+                            "MODULO_INPUT_PAYLOAD": _input_json,
+                            "APP_MODULO_OPENCODE_API_KEY": os.environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
+                            "GITHUB_TOKEN": os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
+                            or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
+                            or os.environ.get("GITHUB_TOKEN", ""),
+                            **env_vars_extra,
+                        },
+                    ),
                     timeout=sandbox_timeout,
-                    envs={
-                        "MODULO_RUN_ID": run_id,
-                        "MODULO_PIPELINE_ID": pipeline_id,
-                        "MODULO_ORG_ID": org_id,
-                        "MODULO_INPUT_PAYLOAD": _input_json,
-                        "APP_MODULO_OPENCODE_API_KEY": os.environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
-                        "GITHUB_TOKEN": os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
-                        or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
-                        or os.environ.get("GITHUB_TOKEN", ""),
-                        **env_vars_extra,
-                    },
                 )
             except asyncio.CancelledError:
                 raise
+            except TimeoutError:
+                _log.warning(
+                    "sandbox_agent.command_timed_out",
+                    extra={
+                        "node_id": node_id,
+                        "timeout": sandbox_timeout,
+                    },
+                )
+                cmd_result = None
             except Exception as _cee:
                 _log.exception(
                     "sandbox_agent.command_failed",
@@ -721,7 +733,11 @@ def make_sandbox_agent_fn(
             raw_output: str = ""
             output_json: Any = None
             try:
-                raw_output = await sandbox.files.read("/home/user/output.json")
+                _remaining_after_cmd = max(30.0, sandbox_timeout - (_time.monotonic() - start_time))
+                raw_output = await sandbox.files.read(
+                    "/home/user/output.json",
+                    request_timeout=_remaining_after_cmd,
+                )
                 output_json = json.loads(raw_output)
             except Exception:
                 _log.info(
@@ -871,7 +887,7 @@ def make_sandbox_agent_fn(
         finally:
             if sandbox is not None:
                 try:
-                    await sandbox.kill()
+                    await sandbox.kill(request_timeout=30)
                 except Exception:
                     _log.exception(
                         "sandbox_agent.kill_failed",
