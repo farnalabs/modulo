@@ -1486,7 +1486,7 @@ class GraphValidator:
         5. env_vars keys avoid reserved prefixes.
         6. output_schema_json has valid JSON Schema structure if present.
         """
-        _RESERVED_ENV_PREFIXES = ("MODULO_", "OPENCODE_API_KEY")
+        _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
         for node in graph_json.get("nodes", []):
             if node.get("node_type") != "sandbox_agent":
@@ -1546,7 +1546,7 @@ class GraphValidator:
             env_vars = node.get("env_vars")
             if isinstance(env_vars, dict):
                 for key in env_vars:
-                    for prefix in _RESERVED_ENV_PREFIXES:
+                    for prefix in _reserved_env_prefixes:
                         if key.startswith(prefix):
                             result.warning(
                                 "SANDBOX_RESERVED_ENV_VAR",
@@ -1557,8 +1557,7 @@ class GraphValidator:
 
             # 6. output_schema_json basic structure.
             schema_json = node.get("output_schema_json")
-            if isinstance(schema_json, dict):
-                if "type" not in schema_json and "$ref" not in schema_json:
+            if isinstance(schema_json, dict) and "type" not in schema_json and "$ref" not in schema_json:
                     result.warning(
                         "SANDBOX_SCHEMA_INCOMPLETE",
                         f"Sandbox agent node '{nid}' output_schema_json lacks 'type' or '$ref'",
@@ -1598,13 +1597,13 @@ class GraphValidator:
             seen_ids.add(nid_str)
 
         # Check node ID format (warn on non-UUID-like values).
-        _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+        _uuid_re = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
         for n in nodes:
             nid = n.get("id")
             if nid is None:
                 continue
             nid_str = str(nid)
-            if not _UUID_RE.match(nid_str):
+            if not _uuid_re.match(nid_str):
                 result.warning(
                     "GRAPH_NODE_ID_FORMAT",
                     f"Node ID '{nid_str}' does not look like a standard UUID format",
