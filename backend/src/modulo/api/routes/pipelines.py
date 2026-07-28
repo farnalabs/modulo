@@ -197,6 +197,9 @@ class SchemaPin(BaseModel):
         return v
 
 
+_RESERVED_ENV_PREFIXES = ("MODULO_", "OPENCODE_API_KEY")
+
+
 class PipelineGraphNode(BaseModel):
     id: uuid.UUID
     node_type: Literal["agent", "manual", "composite", "sandbox_agent"] = "agent"
@@ -220,6 +223,16 @@ class PipelineGraphNode(BaseModel):
     agent_prompt: str | None = None
     env_vars: dict[str, str] | None = None
     context_files: dict[str, str] | None = None
+    timeout_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=3600,
+        description="Per-node timeout override (60-3600s). Overrides pipeline node_timeout_seconds.",
+    )
+    output_schema_json: dict[str, Any] | None = Field(
+        default=None,
+        description="Inline JSON Schema defining the node's output shape.",
+    )
 
     @model_validator(mode="after")
     def validate_node_type(self) -> PipelineGraphNode:
@@ -246,6 +259,13 @@ class PipelineGraphNode(BaseModel):
         elif self.node_type == "agent":
             if self.agent_id is None:
                 raise ValueError("Agent nodes require an agent")
+        elif self.node_type == "sandbox_agent":
+            if not self.agent_command or not self.agent_command.strip():
+                raise ValueError("Sandbox agent nodes require a non-empty agent_command")
+            if not self.template_id:
+                raise ValueError("Sandbox agent nodes require a template_id (e.g. 'opencode')")
+            self._validate_sandbox_env_vars()
+            self._validate_sandbox_context_files()
         if self.node_type != "agent" and self.parameter_set_id is not None:
             raise ValueError("Only agent nodes can have parameter_set_id")
         if (
@@ -258,6 +278,26 @@ class PipelineGraphNode(BaseModel):
                 f"does not match output_schema_id ({self.output_schema_id})"
             )
         return self
+
+    def _validate_sandbox_env_vars(self) -> None:
+        if not self.env_vars:
+            return
+        for key in self.env_vars:
+            for prefix in _RESERVED_ENV_PREFIXES:
+                if key.startswith(prefix):
+                    raise ValueError(
+                        f"Sandbox agent env var '{key}' uses reserved prefix '{prefix}'. "
+                        "System-reserved env vars are set automatically."
+                    )
+
+    def _validate_sandbox_context_files(self) -> None:
+        if not self.context_files:
+            return
+        for source_path in self.context_files:
+            if not source_path.startswith("/"):
+                raise ValueError(
+                    f"Sandbox agent context_files source '{source_path}' must be an absolute path (starting with /)"
+                )
 
 
 class EvalCondition(BaseModel):
