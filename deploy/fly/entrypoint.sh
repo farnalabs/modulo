@@ -1,4 +1,4 @@
-#!/bin/sh
+﻿#!/bin/sh
 set -e
 
 echo "=== Writing frontend runtime configuration ==="
@@ -54,7 +54,7 @@ echo "=== Bootstrapping modulo_app role ==="
 .venv/bin/python3 -m modulo.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
 
 echo "=== Running DB migrations ==="
-.venv/bin/alembic upgrade head && echo "  Migrations complete" || echo "  WARNING: migrations failed (will retry in lifespan)"
+.venv/bin/alembic upgrade heads && echo "  Migrations complete" || echo "  WARNING: migrations failed (will retry in lifespan)"
 
 echo "=== Admin user seeding handled by backend lifespan startup (_seed_modulo_users) ==="
 
@@ -65,3 +65,4 @@ exec .venv/bin/uvicorn modulo.api.main:app \
     --timeout-keep-alive 30 \
     --timeout-graceful-shutdown 30 \
     --limit-concurrency 100
+
