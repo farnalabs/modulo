@@ -1,10 +1,13 @@
 ﻿rules:
   - id: model-dump-exclude-none-in-patch
     patterns:
-      - pattern: |
-          $MODEL.model_dump(exclude_none=True)
+      - pattern: $MODEL.model_dump(exclude_none=True)
       - pattern-inside: |
-          def patch_$X(...): ...
+          def $FUNC(...):
+            ...
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: 'patch_.*'
     message: "PATCH endpoint uses `model_dump(exclude_none=True)` which prevents clearing nullable fields. Use `exclude_unset=True` instead so None values can be sent as NULL."
     languages: [python]
     severity: ERROR

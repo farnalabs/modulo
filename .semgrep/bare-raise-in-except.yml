@@ -2,16 +2,14 @@
   - id: bare-raise-in-except
     patterns:
       - pattern-inside: |
-          except $EXC_TYPE:
+          except $EXC:
             ...
-          $CODE
       - pattern: raise
+      - pattern-not: raise $X from $Y
       - metavariable-regex:
-          metavariable: $EXC_TYPE
-          regex: 'Exception|BaseException|HTTPException'
-      - pattern-not: raise $EXC from $X
-      - pattern-not: raise $EXC from None
-    message: "Bare `raise` inside `except Exception:` propagates the original traceback confusingly. Use `raise ... from None` or `raise HTTPException(...) from None` to produce a clean error response."
+          metavariable: $EXC
+          regex: '.*Exception|.*Error'
+    message: "Bare `raise` inside `except Exception:` is ambiguous — use `raise ... from None` to produce a clean error trace, or provide the specific exception context."
     languages: [python]
     severity: ERROR
     paths:
