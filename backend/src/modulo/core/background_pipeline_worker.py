@@ -130,6 +130,9 @@ class BackgroundPipelineWorker:
 
         Uses per-pipeline ``stale_run_timeout_minutes`` if set, otherwise defaults to 60 minutes.
         Called automatically at the start of each consumer loop iteration.
+
+        Iterates over all orgs (``organisations`` has no RLS) so the cleanup
+        catches runs across every tenant despite strict RLS on the ``runs`` table.
         """
         from sqlalchemy import text
 
@@ -144,30 +147,40 @@ class BackgroundPipelineWorker:
         killed = 0
         try:
             factory = async_sessionmaker(engine, expire_on_commit=False)
+            org_ids: list[uuid.UUID] = []
             async with factory() as session, session.begin():
-                await set_rls_org(session, job.org_id)
-                rows = await session.execute(
-                    text("""
-                        SELECT r.id, r.status, p.stale_run_timeout_minutes
-                        FROM runs r
-                        JOIN pipelines p ON p.id = r.pipeline_id
-                        WHERE r.status IN ('running', 'pending')
-                          AND r.updated_at < NOW() - COALESCE(p.stale_run_timeout_minutes, 60) * INTERVAL '1 minute'
-                          AND (r.outputs_json IS NULL OR r.outputs_json = '{}'::jsonb)
-                    """)
-                )
-                for row in rows:
-                    run_id = row[0]
-                    status = row[1]
-                    timeout = row[2]
-                    await cancel_run(session, run_id, error_code="stale_run_killed")
-                    _log.warning(
-                        "Killed stale run %s (%s) — stuck >%s min with no node progress",
-                        run_id,
-                        status,
-                        timeout or 60,
-                    )
-                    killed += 1
+                org_result = await session.execute(text("SELECT id FROM organisations"))
+                org_ids = [row[0] for row in org_result]
+
+            for org_id in org_ids:
+                try:
+                    async with factory() as session, session.begin():
+                        await set_rls_org(session, org_id)
+                        rows = await session.execute(
+                            text("""
+                                SELECT r.id, r.status, p.stale_run_timeout_minutes
+                                FROM runs r
+                                JOIN pipelines p ON p.id = r.pipeline_id
+                                WHERE r.status IN ('running', 'pending')
+                                  AND r.updated_at < NOW()
+                                    - COALESCE(p.stale_run_timeout_minutes, 60) * INTERVAL '1 minute'
+                                  AND (r.outputs_json IS NULL OR r.outputs_json = '{}'::jsonb)
+                            """)
+                        )
+                        for row in rows:
+                            run_id = row[0]
+                            status = row[1]
+                            timeout = row[2]
+                            await cancel_run(session, run_id, error_code="stale_run_killed")
+                            _log.warning(
+                                "Killed stale run %s (%s) \u2014 stuck >%s min with no node progress",
+                                run_id,
+                                status,
+                                timeout or 60,
+                            )
+                            killed += 1
+                except Exception:
+                    _log.exception("cleanup_stale_runs failed for org %s", org_id)
         except Exception:
             _log.exception("cleanup_stale_runs failed")
         finally:
