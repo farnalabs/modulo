@@ -887,7 +887,10 @@ def make_sandbox_agent_fn(
         finally:
             if sandbox is not None:
                 try:
-                    await sandbox.kill(request_timeout=30)
+                    await asyncio.wait_for(
+                        sandbox.kill(request_timeout=30),
+                        timeout=30,
+                    )
                 except Exception:
                     _log.exception(
                         "sandbox_agent.kill_failed",
