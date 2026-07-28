@@ -222,3 +222,50 @@ async def test_connector_query_error_returns_error_in_sample():
     errored = [s for s in samples if s.error]
     assert len(errored) == 1
     assert "500" in errored[0].error
+
+
+@respx.mock
+async def test_connector_initialisation_error_returns_no_samples():
+    ci = _fake_ci("github", creds={"token": "ghp_test"})
+    hub = _hub(ci)
+    await hub.initialise([ci])
+
+    respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
+    respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[]))
+
+    samples = await run_scan(hub)
+    assert len(samples) >= 1
+    resources = {s.resource for s in samples}
+    assert "repos" in resources
+
+
+@respx.mock
+async def test_multiple_connectors_scanned_independently():
+    ci1 = _fake_ci("github", creds={"token": "ghp_one"})
+    ci2 = _fake_ci("github", creds={"token": "ghp_two"})
+    hub = _hub(ci1)
+    await hub.initialise([ci1, ci2])
+
+    respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
+    respx.get(f"{_GITHUB_API}/user/repos").mock(
+        httpx.Response(200, json=[{"full_name": "owner/repo1"}])
+    )
+    respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(httpx.Response(200, json=[]))
+
+    samples = await run_scan(hub)
+    assert len(samples) >= 1
+    assert all(s.error is None for s in samples)
+
+
+@respx.mock
+async def test_all_health_checks_fail_returns_no_samples():
+    ci = _fake_ci("github", creds={"token": "bad_token"})
+    hub = _hub(ci)
+    await hub.initialise([ci])
+
+    respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(401, text="Unauthorized"))
+    respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(401, text="Unauthorized"))
+
+    samples = await run_scan(hub)
+    assert len(samples) > 0
+    assert any(s.error for s in samples)

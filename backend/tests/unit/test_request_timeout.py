@@ -97,3 +97,33 @@ class TestRequestTimeoutMiddlewareEdgeCases:
         body = resp.json()
         assert "error" in body
         assert "detail" in body
+
+    def test_timeout_response_is_json(self) -> None:
+        app = _build_app(timeout=1)
+        client = TestClient(app)
+        resp = client.get("/slow")
+        assert resp.headers["content-type"] == "application/json"
+
+    def test_negative_timeout_disables_timeout(self) -> None:
+        app = FastAPI()
+
+        @app.get("/neg")
+        async def neg() -> dict[str, str]:
+            return {"status": "ok"}
+
+        app.add_middleware(RequestTimeoutMiddleware, timeout_seconds=-1)
+        client = TestClient(app)
+        resp = client.get("/neg")
+        assert resp.status_code == 200
+
+    def test_path_override_for_non_matching_path_uses_default(self) -> None:
+        app = _build_app(timeout=1, overrides={"/other": 10})
+        client = TestClient(app)
+        resp = client.get("/slow")
+        assert resp.status_code == 504
+
+    def test_empty_overrides_does_not_crash(self) -> None:
+        app = _build_app(timeout=2, overrides={})
+        client = TestClient(app)
+        resp = client.get("/fast")
+        assert resp.status_code == 200
