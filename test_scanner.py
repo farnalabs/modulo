@@ -64,7 +64,7 @@ _LINEAR_API = "https://api.linear.app/graphql"
 
 
 @respx.mock
-async def test_github_scan():
+async def test_github_scan() -> None:
     ci = _fake_ci("github", creds={"token": "ghp_test"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -79,7 +79,7 @@ async def test_github_scan():
     respx.get(f"{_GITHUB_API}/repos/owner/repo2/pulls").mock(httpx.Response(200, json=[]))
 
     samples = await run_scan(hub)
-    assert len(samples) >= 2  # repos + pulls
+    assert len(samples) >= 2
     resources = {s.resource for s in samples}
     assert "repos" in resources
     assert "pulls" in resources
@@ -87,7 +87,7 @@ async def test_github_scan():
 
 
 @respx.mock
-async def test_gitlab_scan():
+async def test_gitlab_scan() -> None:
     ci = _fake_ci("gitlab", creds={"token": "glpat_test"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -103,7 +103,7 @@ async def test_gitlab_scan():
 
 
 @respx.mock
-async def test_jira_scan():
+async def test_jira_scan() -> None:
     ci = _fake_ci(
         "jira",
         creds={"email": "user@test.com", "api_token": "token"},
@@ -126,7 +126,7 @@ async def test_jira_scan():
 
 
 @respx.mock
-async def test_linear_scan():
+async def test_linear_scan() -> None:
     ci = _fake_ci("linear", creds={"api_key": "lin_key"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -174,7 +174,7 @@ async def test_linear_scan():
 
 
 @respx.mock
-async def test_filesystem_connector_skipped():
+async def test_filesystem_connector_skipped() -> None:
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -182,34 +182,31 @@ async def test_filesystem_connector_skipped():
         hub = _hub(ci)
         await hub.initialise([ci])
         samples = await run_scan(hub)
-    assert len(samples) == 0  # filesystem is not sampled
+    assert len(samples) == 0
 
 
 @respx.mock
-async def test_health_check_failure_still_attempts_queries():
+async def test_health_check_failure_still_attempts_queries() -> None:
     ci = _fake_ci("github", creds={"token": "bad_token"})
     hub = _hub(ci)
     await hub.initialise([ci])
 
-    # Health check returns 401 but doesn't raise; scanner proceeds to attempt queries
     respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(401, text="Unauthorized"))
 
     samples = await run_scan(hub)
-    # Scanner attempts queries despite health check failure — individual query errors
-    # are captured as error samples, not as an unhandled exception
     resources = {s.resource for s in samples}
     assert len(resources) > 0
 
 
 @respx.mock
-async def test_empty_hub_returns_no_samples():
+async def test_empty_hub_returns_no_samples() -> None:
     hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     samples = await run_scan(hub)
     assert len(samples) == 0
 
 
 @respx.mock
-async def test_connector_query_error_returns_error_in_sample():
+async def test_connector_query_error_returns_error_in_sample() -> None:
     ci = _fake_ci("github", creds={"token": "ghp_test"})
     hub = _hub(ci)
     await hub.initialise([ci])

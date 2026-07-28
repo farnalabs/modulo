@@ -11,7 +11,7 @@ class TestSavedViewsFlag:
 
     def test_flag_is_registered(self, registry: FeatureFlagRegistry) -> None:
         flag = registry.get_flag("saved_views")
-        assert flag is not None, "saved_views flag must be registered in _KNOWN_FLAGS"
+        assert flag is not None
 
     def test_flag_tier_is_free(self, registry: FeatureFlagRegistry) -> None:
         flag = registry.get_flag("saved_views")

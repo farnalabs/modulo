@@ -17,7 +17,7 @@ def _reset_singleton():
 
 
 class TestEventBus:
-    async def test_subscribe_and_receive(self):
+    async def test_subscribe_and_receive(self) -> None:
         bus = EventBus()
         org_id = "org-123"
         queue = await bus.subscribe(org_id)
@@ -30,7 +30,7 @@ class TestEventBus:
         assert event["action"] == "created"
         assert event["org_id"] == org_id
 
-    async def test_multiple_subscribers_all_receive(self):
+    async def test_multiple_subscribers_all_receive(self) -> None:
         bus = EventBus()
         org_id = "org-123"
         q1 = await bus.subscribe(org_id)
@@ -43,7 +43,7 @@ class TestEventBus:
         assert event1["id"] == "pipe-1"
         assert event2["id"] == "pipe-1"
 
-    async def test_unsubscribe_removes_from_fan_out(self):
+    async def test_unsubscribe_removes_from_fan_out(self) -> None:
         bus = EventBus()
         org_id = "org-123"
         q1 = await bus.subscribe(org_id)
@@ -57,7 +57,7 @@ class TestEventBus:
         event2 = await asyncio.wait_for(q2.get(), timeout=1.0)
         assert event2["id"] == "agent-1"
 
-    async def test_org_isolation(self):
+    async def test_org_isolation(self) -> None:
         bus = EventBus()
         q_a = await bus.subscribe("org-a")
         q_b = await bus.subscribe("org-b")
@@ -69,7 +69,7 @@ class TestEventBus:
         event_a = await asyncio.wait_for(q_a.get(), timeout=1.0)
         assert event_a["org_id"] == "org-a"
 
-    async def test_slow_consumer_removed(self):
+    async def test_slow_consumer_removed(self) -> None:
         bus = EventBus()
         org_id = "org-123"
         q = await bus.subscribe(org_id)
@@ -83,12 +83,12 @@ class TestEventBus:
 
         assert limited_q not in bus._subscribers.get(org_id, [])
 
-    async def test_singleton_get_event_bus(self):
+    async def test_singleton_get_event_bus(self) -> None:
         bus1 = get_event_bus()
         bus2 = get_event_bus()
         assert bus1 is bus2
 
-    async def test_configure_event_bus_sets_redis(self):
+    async def test_configure_event_bus_sets_redis(self) -> None:
         mock_redis = MagicMock(spec=["publish"])
         mock_redis.publish = AsyncMock()
 
@@ -96,7 +96,7 @@ class TestEventBus:
         bus = get_event_bus()
         assert bus._redis_broker is mock_redis
 
-    async def test_configure_event_bus_lazy_init(self):
+    async def test_configure_event_bus_lazy_init(self) -> None:
         import modulo.core.events.event_bus as eb
 
         eb._event_bus = None
@@ -107,7 +107,7 @@ class TestEventBus:
         bus = get_event_bus()
         assert bus._redis_broker is mock_redis
 
-    async def test_publish_to_multiple_orgs(self):
+    async def test_publish_to_multiple_orgs(self) -> None:
         bus = EventBus()
         q_a = await bus.subscribe("org-a")
         q_b = await bus.subscribe("org-b")
@@ -120,7 +120,7 @@ class TestEventBus:
         assert event_a["type"] == "schema"
         assert event_b["type"] == "team"
 
-    async def test_no_subscribers_does_not_raise(self):
+    async def test_no_subscribers_does_not_raise(self) -> None:
         bus = EventBus()
         await bus.publish("org-empty", "run", "r1", "created", version=0)
 
