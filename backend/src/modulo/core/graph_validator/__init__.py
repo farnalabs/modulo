@@ -127,7 +127,6 @@ class GraphValidator:
         await self._check_node_categories(graph_json, session, result)
         await self._check_composite_nodes(graph_json, session, result)
         await self._check_parameter_references(graph_json, session, result)
-        self._check_sandbox_agent_config(graph_json, result)
 
         return result
 
@@ -589,21 +588,35 @@ class GraphValidator:
                     node_id=nid,
                 )
 
+            command: object = node.get("agent_command")
+            if not isinstance(command, str) or not command.strip():
+                result.error(
+                    "SANDBOX_MISSING_COMMAND",
+                    f"sandbox_agent node '{nid}' requires a non-empty agent_command",
+                    node_id=nid,
+                )
+
+            tpl_id: object = node.get("template_id")
+            if not isinstance(tpl_id, str) or not tpl_id.strip():
+                result.error(
+                    "SANDBOX_MISSING_TEMPLATE",
+                    f"sandbox_agent node '{nid}' requires a template_id (e.g. 'opencode')",
+                    node_id=nid,
+                )
+            elif tpl_id == "base":
+                result.warning(
+                    "SANDBOX_TEMPLATE_BASE",
+                    f"sandbox_agent node '{nid}': template_id is 'base' which lacks the opencode CLI. "
+                    f"Use template_id 'opencode' instead.",
+                    node_id=nid,
+                )
+
             env_vars: dict[str, Any] | None = node.get("env_vars")
             if isinstance(env_vars, dict) and "GITHUB_TOKEN" in env_vars:
                 result.warning(
                     "SANDBOX_ENV_GITHUB_TOKEN",
                     f"sandbox_agent node '{nid}': env_vars contains GITHUB_TOKEN "
                     f"— use system env resolution instead of embedding tokens in graph config",
-                    node_id=nid,
-                )
-
-            template_id: object = node.get("template_id")
-            if template_id == "base":
-                result.warning(
-                    "SANDBOX_TEMPLATE_BASE",
-                    f"sandbox_agent node '{nid}': template_id is 'base' which lacks the opencode CLI. "
-                    f"Use template_id 'opencode' instead.",
                     node_id=nid,
                 )
 
