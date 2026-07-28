@@ -227,10 +227,15 @@ async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run 
 async def count_active_runs_for_pipeline(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
+    exclude_run_id: uuid.UUID | None = None,
 ) -> int:
-    """Count runs in non-terminal states for a given pipeline."""
+    """Count runs in non-terminal states for a given pipeline.
+
+    Optionally excludes a specific *run_id* from the count so a pending/pending
+    run does not count itself when checking capacity.
+    """
     active_statuses = {"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"}
-    result = await session.execute(
+    stmt = (
         select(func.count())
         .select_from(Run)
         .where(
@@ -239,6 +244,9 @@ async def count_active_runs_for_pipeline(
             Run.cancellation_requested == False,  # noqa: E712
         )
     )
+    if exclude_run_id is not None:
+        stmt = stmt.where(Run.id != exclude_run_id)
+    result = await session.execute(stmt)
     return int(result.scalar_one_or_none() or 0)
 
 
