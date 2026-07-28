@@ -1,8 +1,7 @@
 """add agent_commands column"""
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "0026_add_agent_commands"
 down_revision = ("0025_add_run_number_counters", "0025_add_pipeline_stale_run_timeout")
