@@ -1,8 +1,4 @@
-﻿"""Minimal in-process cron scheduler — fires due triggers in an asyncio loop.
-
-Replaced the full in_process_scheduler.py that was removed in PR #297.
-Runs every 30 seconds in the app lifespan. Single-replica safe.
-"""
+﻿"""Minimal in-process cron scheduler — fires due triggers in an asyncio loop."""
 import asyncio
 import logging
 
@@ -32,22 +28,24 @@ async def run_scheduler(stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
             try:
                 factory = async_sessionmaker(engine, expire_on_commit=False)
-                async with factory() as session:
+                async with factory() as session, session.begin():
                     await set_rls_org(session, "00000000-0000-0000-0000-000000000000")
+                    now = asyncio.get_event_loop().time()
                     result = await session.execute(
                         select(Trigger).where(
                             Trigger.trigger_type == "cron",
                             Trigger.active.is_(True),
-                            Trigger.next_fire_at <= asyncio.get_event_loop().time(),
+                            Trigger.next_fire_at <= now,
                         )
                     )
-                    triggers = list(result.scalars())
-                    for trigger in triggers:
+                    for trigger in result.scalars():
                         await fire_cron_trigger(session, trigger)
-                    await session.commit()
             except Exception:
                 _log.exception("Scheduler iteration failed")
-            await asyncio.wait_for(stop_event.wait(), timeout=_POLL_INTERVAL)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=_POLL_INTERVAL)
+            except asyncio.TimeoutError:
+                pass  # Expected — time to poll again
     finally:
         await engine.dispose()
-        _log.info("Scheduler stopped")
+        _log.info("Cron scheduler stopped")
