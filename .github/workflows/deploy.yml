@@ -1,4 +1,4 @@
-﻿name: "Deploy: Staging + Prod"
+name: "Deploy: Staging + Prod"
 
 on:
   push:
@@ -90,7 +90,7 @@ jobs:
               EXIT_CODE=$?
               if [ $attempt -lt $MAX_RETRIES ]; then
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
-                echo "Deploy failed (exit $EXIT_CODE) â€” retrying in ${DELAY}s..."
+                echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
               else
                 echo "Deploy failed after $MAX_RETRIES attempts"
@@ -244,7 +244,7 @@ jobs:
               EXIT_CODE=$?
               if [ $attempt -lt $MAX_RETRIES ]; then
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
-                echo "Deploy failed (exit $EXIT_CODE) â€” retrying in ${DELAY}s..."
+                echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
               else
                 echo "Deploy failed after $MAX_RETRIES attempts"
@@ -271,4 +271,3 @@ jobs:
             exit 1
           }
           Write-Host "app.modulo.run SHA match: $deployedSha"
-

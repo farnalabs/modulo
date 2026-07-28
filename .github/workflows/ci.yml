@@ -11,7 +11,7 @@ env:
   FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
 
 jobs:
-  # ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ Fast jobs ÃƒÂ¢Ã¢â€šÂ¬Ã¯Â¿Â½ run on ALL events (PR + push + manual) ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬
+  # Fast jobs run on ALL events (PR + push + manual)
 
   backend-lint:
     name: Lint (Backend)
@@ -147,7 +147,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ Full jobs ÃƒÂ¢Ã¢â€šÂ¬Ã¯Â¿Â½ run ONLY on push (not PRs) ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬
+  # Full jobs run ONLY on push (not PRs) -- expensive CI (Docker/build minutes)
 
   backend-integration:
     name: Integration tests
@@ -445,13 +445,13 @@ jobs:
           fi
           uv --directory backend run --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error .
 
-  # ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ Failure notifications ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬ÃƒÂ¢Ã¯Â¿Â½Ã¢â€šÂ¬
+  # Failure notifications
 
   # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
   # Runs in merge queue (merge-queue.yml) instead. Trigger manually via
   # workflow_dispatch when needed.
   notify-merge-group-failure:
-    name: Notify Modulo fixer ÃƒÂ¢Ã¢â€šÂ¬Ã¯Â¿Â½ queue CI failure
+    name: Notify Modulo fixer -- queue CI failure
     if: false
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks, backend-integration, bdd-e2e, docker-build, security-audit]
     runs-on: ubicloud-standard-2
@@ -508,12 +508,12 @@ jobs:
             --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | length' 2>/dev/null || echo "0")
 
           echo "fix_attempts=$FIX_COUNT" >> "$GITHUB_OUTPUT"
-          echo "PR #${PR_NUM} on '${BRANCH}' ÃƒÂ¢Ã¢â€šÂ¬Ã¯Â¿Â½ branch fixer has pushed $FIX_COUNT fix commit(s)."
+          echo "PR #${PR_NUM} on '${BRANCH}' -- branch fixer has pushed $FIX_COUNT fix commit(s)."
 
           if [ "$FIX_COUNT" -ge 3 ]; then
             echo "exhausted=true" >> "$GITHUB_OUTPUT"
             echo "::warning::Branch fixer exhausted after $FIX_COUNT attempts against PR #${PR_NUM}."
-            gh pr comment "$PR_NUM" --body "## ÃƒÂ¢Ã‚Â¹ÃƒÂ¯Ã‚Â¸ Branch Fixer Exhausted
+            gh pr comment "$PR_NUM" --body "## Branch Fixer Exhausted
 
             The automated branch fixer has attempted $FIX_COUNT fixes against this PR but CI is still failing. Manual intervention is required.
 
@@ -542,7 +542,7 @@ jobs:
           }
           ENDJSON
           )
-          echo "PR #${PR_NUM} on branch '${BRANCH}' Ã¢â‚¬â€ CI checks failed."
+          echo "PR #${PR_NUM} on branch '${BRANCH}' -- CI checks failed."
           echo "Sending to Modulo Branch Fixer pipeline..."
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
@@ -555,7 +555,7 @@ jobs:
           if [ "$HTTP_CODE" = "202" ]; then
             echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
           elif [ "$HTTP_CODE" = "429" ]; then
-            echo "::warning::Modulo Branch Fixer rate-limited Ã¢â‚¬â€ $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
+            echo "::warning::Modulo Branch Fixer rate-limited -- $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
           else
             echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
           fi
@@ -633,7 +633,7 @@ jobs:
             STATUS=$(echo "${STATUS_RESP}" | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"status\",\"\"))")
             ERROR=$(echo "${STATUS_RESP}" | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"error_code\",\"\"))")
             echo "  status=${STATUS} error=${ERROR}"
-            if [ "${STATUS}" = "complete" ]; then echo "✅ Smoke test passed!"; exit 0; fi
+            if [ "${STATUS}" = "complete" ]; then echo "- Smoke test passed!"; exit 0; fi
             if [ "${STATUS}" = "failed" ]; then echo "::error::Failed: ${ERROR}"; exit 1; fi
           done
           echo "::error::Timed out"; exit 1
