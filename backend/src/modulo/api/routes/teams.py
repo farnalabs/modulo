@@ -145,6 +145,7 @@ async def list_teams_endpoint(
             detail="Database temporarily unavailable. Please try again.",
         ) from None
     except Exception:
+        _log.exception("list_teams unexpected error", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching teams.",

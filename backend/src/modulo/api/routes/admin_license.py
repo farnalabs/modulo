@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -104,7 +106,6 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
     return LicenseStatusResponse(has_license=False, tier="community")
 
 
-@router.get("", response_model=LicenseStatusResponse)
 @handle_db_errors("admin.license.get_license_status")
 @router.get("", response_model=LicenseStatusResponse)
 async def get_license_status(
@@ -114,13 +115,44 @@ async def get_license_status(
 ) -> LicenseStatusResponse:
     _require_admin(current_user)
 
+    # Attempt Redis cache read
+    redis: Redis | None = None
+    try:
+        redis = Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+        )
+        cache_key = f"license:{current_user.organisation_id}"
+        cached = await redis.get(cache_key)
+        if cached:
+            return LicenseStatusResponse(**json.loads(cached))
+    except Exception:
+        logger.warning("license.cache_read_failed", exc_info=True)
+    finally:
+        if redis is not None:
+            await redis.aclose()
+
     try:
         org = None
         if current_user.organisation_id is not None:
             async with session.begin():
                 org = await get_organisation(session, current_user.organisation_id)
 
-        return _resolve_effective_license(settings, org=org)
+        response = _resolve_effective_license(settings, org=org)
+
+        # Write to Redis cache (best-effort, 60s TTL)
+        try:
+            redis = Redis.from_url(
+                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+            )
+            cache_key = f"license:{current_user.organisation_id}"
+            await redis.setex(cache_key, 60, response.model_dump_json())
+        except Exception:
+            logger.warning("license.cache_write_failed", exc_info=True)
+        finally:
+            if redis is not None:
+                await redis.aclose()
+
+        return response
     except ProgrammingError:
         logger.exception("license.get_failed")
         raise HTTPException(
@@ -143,7 +175,6 @@ async def get_license_status(
         ) from None
 
 
-@router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
 @handle_db_errors("admin.license.upload_license")
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
 async def upload_license(

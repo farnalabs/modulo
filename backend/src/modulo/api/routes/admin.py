@@ -488,6 +488,7 @@ async def admin_create_team(
     except HTTPException:
         raise
     except IntegrityError:
+        logger.exception("admin_create_team IntegrityError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A team with this name already exists in your organisation",
@@ -499,7 +500,7 @@ async def admin_create_team(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.warning("admin_create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        logger.exception("admin_create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
@@ -591,16 +592,19 @@ async def admin_get_org(
                     detail="Organisation not found",
                 )
     except IntegrityError:
+        logger.exception("admin_get_org IntegrityError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin_get_org ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_get_org SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org profile.",
@@ -655,16 +659,19 @@ async def admin_update_org(
                 if updated is not None:
                     org = updated
     except IntegrityError:
+        logger.exception("admin_update_org IntegrityError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin_update_org ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_update_org SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating org profile.",
@@ -707,16 +714,25 @@ async def admin_regenerate_api_key(
                 role="operator",
             )
     except IntegrityError:
+        logger.exception("admin_regenerate_api_key IntegrityError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception(
+            "admin_regenerate_api_key ProgrammingError",
+            extra={"org_id": str(current_user.organisation_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception(
+            "admin_regenerate_api_key SQLAlchemyError",
+            extra={"org_id": str(current_user.organisation_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while regenerating API key.",
@@ -1249,11 +1265,13 @@ async def admin_list_teams(
                     if row.team_id is not None:
                         member_counts[row.team_id] = row.cnt
     except IntegrityError:
+        logger.exception("admin_list_teams IntegrityError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin_list_teams ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1264,6 +1282,8 @@ async def admin_list_teams(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("admin_list_teams unexpected error", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
@@ -1329,7 +1349,7 @@ async def admin_update_team(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.warning(
+        logger.exception(
             "admin_update_team SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
@@ -1446,7 +1466,7 @@ async def admin_delete_team(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.warning(
+        logger.exception(
             "admin_delete_team SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
@@ -1491,6 +1511,20 @@ async def admin_delete_team(
         ) from None
     except ProgrammingError:
         logger.warning("Failed to record team_deleted audit event for team %s", team_id)
+
+
+# ── Dashboard Summary Alias ──────────────────────────────────
+
+
+@handle_db_errors("admin.dashboard_summary")
+@router.get("/dashboard/summary")
+async def admin_dashboard_summary(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, object]:
+    from modulo.api.routes.dashboard import dashboard_summary as _dashboard_summary
+
+    return await _dashboard_summary(session=session, principal=current_user)
 
 
 # ── Billing Overview ─────────────────────────────────────────

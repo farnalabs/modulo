@@ -90,14 +90,13 @@ async def get_costs(
                 period=period,
             )
     except ProgrammingError:
+        _log.exception("get_costs ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "Costs report failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("get_costs SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -137,14 +136,13 @@ async def get_spend_limits(
 
             teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
     except ProgrammingError:
+        _log.exception("get_spend_limits ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "Get spend limits failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("get_spend_limits SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -194,14 +192,13 @@ async def set_org_spend_limit(
             org.daily_spend_limit = Decimal(str(req.daily_spend_limit)) if req.daily_spend_limit is not None else None
             await session.flush()
     except ProgrammingError:
+        _log.exception("set_org_spend_limit ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "Set org spend limit failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("set_org_spend_limit SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -244,12 +241,13 @@ async def set_team_spend_limit(
             team.daily_spend_limit = Decimal(str(req.daily_spend_limit)) if req.daily_spend_limit is not None else None
             await session.flush()
     except ProgrammingError:
+        _log.exception("set_team_spend_limit ProgrammingError (team_id=%s)", team_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("Set team spend limit failed with SQLAlchemyError (team_id=%s)", team_id, exc_info=True)
+        _log.exception("set_team_spend_limit SQLAlchemyError (team_id=%s)", team_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -303,14 +301,13 @@ async def get_cost_controls(
             teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
             org = await get_organisation(session, current_user.organisation_id)
     except ProgrammingError:
+        _log.exception("get_cost_controls ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "Get cost controls failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("get_cost_controls SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -363,14 +360,13 @@ async def update_cost_controls(
             teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
             org = await get_organisation(session, current_user.organisation_id)
     except ProgrammingError:
+        _log.exception("update_cost_controls ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "Update cost controls failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("update_cost_controls SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -433,14 +429,13 @@ async def export_costs(
                 period=period_map.get(period, "month"),
             )
     except ProgrammingError:
+        _log.exception("export_costs ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "Export costs failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("export_costs SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -534,14 +529,13 @@ async def create_report(
                 account_id=current_user.account_id,
             )
     except ProgrammingError:
+        _log.exception("create_report ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "Create report failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("create_report SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -578,14 +572,13 @@ async def list_reports(
                 organisation_id=current_user.organisation_id,
             )
     except ProgrammingError:
+        _log.exception("list_reports ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "List reports failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("list_reports SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -624,14 +617,13 @@ async def delete_report(
                 organisation_id=current_user.organisation_id,
             )
     except ProgrammingError:
+        _log.exception("delete_report ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "Delete report failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("delete_report SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -754,14 +746,13 @@ async def get_anomalies(
 
             return [AnomalyResponse(**a) for a in anomalies]
     except ProgrammingError:
+        _log.exception("get_anomalies ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "Get anomalies failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("get_anomalies SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
@@ -798,14 +789,13 @@ async def dismiss_anomaly_endpoint(
                 organisation_id=current_user.organisation_id,
             )
     except ProgrammingError:
+        _log.exception("dismiss_anomaly ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
-            "Dismiss anomaly failed with SQLAlchemyError (org_id=%s)", current_user.organisation_id, exc_info=True
-        )
+        _log.exception("dismiss_anomaly SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
