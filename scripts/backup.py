@@ -141,8 +141,7 @@ def write_checksums(manifest_dir: str, files: list[str]) -> str:
         checksums[rel] = hash_file(f)
     cs_path = os.path.join(manifest_dir, "checksums.sha256")
     with open(cs_path, "w") as f:
-        for name, h in sorted(checksums.items()):
-            f.write(f"{h}  {name}\n")
+        f.writelines(f"{h}  {name}\n" for name, h in sorted(checksums.items()))
     return cs_path
 
 
@@ -167,7 +166,7 @@ def encrypt_archive(tar_path: str, passphrase: str) -> None:
     result = subprocess.run(
         ["openssl", "enc", "-aes-256-cbc", "-salt", "-pbkdf2", "-iter", "600000",
          "-in", tar_path, "-out", enc_path, "-pass", f"pass:{passphrase}"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
         print(f"Encryption failed: {result.stderr}")
@@ -180,14 +179,14 @@ def get_org_id(db_url: str) -> str:
     try:
         import urllib.parse
         parsed = urllib.parse.urlparse(db_url)
-        dbname = parsed.path.lstrip("/")
+        parsed.path.lstrip("/")
         result = subprocess.run(
             ["psql", "-d", db_url, "-t", "-A", "-c", "SELECT id FROM organisations ORDER BY created_at LIMIT 1"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, check=False,
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
     return uuid.uuid4().hex[:8]
 

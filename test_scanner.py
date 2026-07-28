@@ -9,7 +9,6 @@ import httpx
 import pytest
 import respx
 from cryptography.fernet import Fernet
-
 from modulo.core.connector_hub import ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.determination.scanner import run_scan

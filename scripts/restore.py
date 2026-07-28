@@ -53,7 +53,7 @@ def decrypt_archive(enc_path: str, passphrase: str, output_path: str) -> None:
     result = subprocess.run(
         ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "600000",
          "-in", enc_path, "-out", output_path, "-pass", f"pass:{passphrase}"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
         print(f"Decryption failed: {result.stderr}")
@@ -146,12 +146,6 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     db_name = pg_database_name(db_url)
     print(f"Restoring Postgres to database '{db_name}'...")
 
-    conn_str = " ".join(
-        f"--dbname={db_url}"
-        if "--dbname=" in db_url
-        else f"--dbname={db_url}"
-    )
-
     admin_db = "postgres"
     admin_url = db_url.rsplit("/", 1)[0] + f"/{admin_db}"
 
@@ -159,13 +153,13 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     subprocess.run(
         ["psql", "-d", admin_url, "-c",
          f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
 
     print("  Dropping existing database...")
     result = subprocess.run(
         ["dropdb", "--if-exists", "-f", db_name, f"--maintenance-db={admin_url}"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
         print(f"  dropdb warning: {result.stderr}")
@@ -173,7 +167,7 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     print("  Recreating database...")
     result = subprocess.run(
         ["createdb", db_name, f"--maintenance-db={admin_url}"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
         print(f"  createdb failed: {result.stderr}")
@@ -182,7 +176,7 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     print("  Importing data (this may take a while)...")
     result = subprocess.run(
         [pg_restore, "--no-owner", "--no-acl", "--dbname", db_url, dump_path],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
         print(f"  pg_restore warning/output: {result.stderr}")

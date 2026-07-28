@@ -4,7 +4,6 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from modulo.core.events.event_bus import EventBus, configure_event_bus, get_event_bus
 
 

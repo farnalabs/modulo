@@ -1,5 +1,6 @@
-﻿from e2b import Template
-import os
+﻿import os
+
+from e2b import Template
 
 t = Template(file_context_path=os.path.dirname(os.path.abspath(__file__)))
 b = t.from_template("base")
