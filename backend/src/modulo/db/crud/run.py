@@ -48,16 +48,10 @@ async def create_run(
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"
     result = await session.execute(
-        text("""
-            INSERT INTO run_number_counters (organisation_id, next_run_number)
-            VALUES (:org_id, 1)
-            ON CONFLICT (organisation_id)
-            DO UPDATE SET next_run_number = run_number_counters.next_run_number + 1
-            RETURNING next_run_number
-        """),
+        text("SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id"),
         {"org_id": org_id},
     )
-    run_number = result.scalar_one()
+    run_number = int(result.scalar_one() or 1)
 
     run = Run(
         id=run_id,
@@ -467,4 +461,5 @@ async def cancel_run(
         _log.warning("CRUD cancelled run %s with error_code=%s", run_id, error_code)
         return uuid.UUID(str(row[0]))
     return None
+
 
