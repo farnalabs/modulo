@@ -721,7 +721,11 @@ def make_sandbox_agent_fn(
             raw_output: str = ""
             output_json: Any = None
             try:
-                raw_output = await sandbox.files.read("/home/user/output.json")
+                _remaining_after_cmd = max(30.0, sandbox_timeout - (_time.monotonic() - start_time))
+                raw_output = await sandbox.files.read(
+                    "/home/user/output.json",
+                    request_timeout=_remaining_after_cmd,
+                )
                 output_json = json.loads(raw_output)
             except Exception:
                 _log.info(
@@ -871,7 +875,7 @@ def make_sandbox_agent_fn(
         finally:
             if sandbox is not None:
                 try:
-                    await sandbox.kill()
+                    await sandbox.kill(request_timeout=30)
                 except Exception:
                     _log.exception(
                         "sandbox_agent.kill_failed",
