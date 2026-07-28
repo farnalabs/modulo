@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
 from modulo.core.cron_scheduler import fire_cron_trigger
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org
@@ -21,7 +22,7 @@ _POLL_INTERVAL = 30
 
 async def run_scheduler(
     stop_event: asyncio.Event,
-    bg_worker: object | None = None,
+    bg_worker: BackgroundPipelineWorker | None = None,
 ) -> None:
     """Poll for due cron triggers and fire them, submitting created runs to the background worker."""
     try:
@@ -50,7 +51,7 @@ async def run_scheduler(
                     break
                 factory = async_sessionmaker(engine, expire_on_commit=False)
                 async with factory() as session, session.begin():
-                    await set_rls_org(session, "00000000-0000-0000-0000-000000000000")
+                    await set_rls_org(session, uuid.UUID("00000000-0000-0000-0000-000000000000"))
                     now = datetime.now(UTC)
                     result = await session.execute(
                         select(Trigger).where(
@@ -60,11 +61,14 @@ async def run_scheduler(
                         )
                     )
                     for trigger in result.scalars():
+                        cron_expr = trigger.cron_expression
+                        if cron_expr is None:
+                            continue
                         result_dict = await fire_cron_trigger(
                             trigger_id=trigger.id,
                             org_id=trigger.organisation_id,
                             pipeline_id=trigger.pipeline_id,
-                            cron_expression=trigger.cron_expression,
+                            cron_expression=cron_expr,
                             snapshot_id=trigger.config_json.get("snapshot_id") if trigger.config_json else None,
                             factory=factory,
                         )
