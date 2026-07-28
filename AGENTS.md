@@ -1,18 +1,18 @@
-# Modulo ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Agent & Developer Guidance
+﻿# Modulo ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Agent & Developer Guidance
 
-Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ fix the conflict.
+Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ fix the conflict.
 
-## Diagnostic Order (MANDATORY ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â database/connection issues)
+## Diagnostic Order (MANDATORY ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â database/connection issues)
 
 When encountering ANY database connection error (`ConnectionResetError`, `ConnectionDoesNotExistError`, timeout, 503), follow this order BEFORE making code changes:
 
-1. **Check DB health** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `fly checks list --app modulo-app-db` (or the relevant DB app). If `pg` or `role` checks are critical/passing, the DB is fine. If critical, SSH in and restart: `fly ssh console --app <db-app> --machine <id> --command "su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'"`. The `check-db-health.ps1` watchdog runs every 5 minutes as a scheduled task ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â check its log first.
+1. **Check DB health** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `fly checks list --app modulo-app-db` (or the relevant DB app). If `pg` or `role` checks are critical/passing, the DB is fine. If critical, SSH in and restart: `fly ssh console --app <db-app> --machine <id> --command "su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'"`. The `check-db-health.ps1` watchdog runs every 5 minutes as a scheduled task ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â check its log first.
 
-2. **Check app health** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `fly status --app app-modulo`. Look at VERSION and CHECKS columns. Machines on the latest version with "passing" are healthy. Machines on old versions are stale and can be cleaned up.
+2. **Check app health** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `fly status --app app-modulo`. Look at VERSION and CHECKS columns. Machines on the latest version with "passing" are healthy. Machines on old versions are stale and can be cleaned up.
 
-3. **Check machine logs** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `fly logs --app app-modulo --no-tail | Select-Object -Last 20`. Look for the actual exception type ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â this determines the root cause.
+3. **Check machine logs** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `fly logs --app app-modulo --no-tail | Select-Object -Last 20`. Look for the actual exception type ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â this determines the root cause.
 
-4. **Check whether the handover framed the issue** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the previous handover may contain diagnostic bias. Always verify the DB is healthy before accepting "SSL issue" or "network issue" diagnoses.
+4. **Check whether the handover framed the issue** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the previous handover may contain diagnostic bias. Always verify the DB is healthy before accepting "SSL issue" or "network issue" diagnoses.
 
 The most common root cause (July 2026): Postgres process crashes silently, new connection pools can't form, but old pools keep serving. Health check passes on old machines, fails on new ones. Fix is always: restart Postgres + bluegreen deploy.
 
@@ -22,7 +22,7 @@ The following enforcement mechanisms are STRUCTURALLY PROTECTED. Any agent obser
 
 ### Gate rules (modify only with explicit human approval)
 1. **`continue-on-error: true` is FORBIDDEN** in all CI workflow files (`.github/workflows/*.yml`). Every job must fail CI when it fails. Legitimate uses require a post-step `if: failure()` aggregate that reports the collected failure.
-2. **`verify-main.ps1` must use `Fail` (not `Warn`) for all test, lint, type-check, and audit checks.** No check may log a warning and continue ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â every check must block with `$script:exitCode = 1`.
+2. **`verify-main.ps1` must use `Fail` (not `Warn`) for all test, lint, type-check, and audit checks.** No check may log a warning and continue ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â every check must block with `$script:exitCode = 1`.
 3. **`gate.ps1` must run Playwright @smoke E2E tests** after the merge, from the main worktree. No merge completes without browser-level verification.
 4. **`gate.ps1` integration tests must run by default** (no `-SkipIntegration` opt-out). Integration tests may only be skipped when Docker is unavailable, and the skip must be documented.
 5. **`-SkipTests` in `gate.ps1` may ONLY be used for frontend-only changes where node_modules is unavailable in a worktree.** The Conductor must verify post-merge via `gate.ps1` without `-SkipTests`.
@@ -36,13 +36,13 @@ The following enforcement mechanisms are STRUCTURALLY PROTECTED. Any agent obser
 
 ### How to verify gates are intact
 Run these checks before completing any session:
-- `Select-String -Pattern "continue-on-error: true" -Path ".github/workflows/*.yml"` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â must not match product-map-validate or manifest-validate jobs
-- `Select-String -Pattern "Warn ""vue-tsc""" -Path "../devtools/harness/tools/verify-main.ps1"` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â must not find it (should be `Fail`)
-- `Select-String -Pattern "playwright|@smoke" -Path "../devtools/harness/tools/gate.ps1"` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â must find at least one match
+- `Select-String -Pattern "continue-on-error: true" -Path ".github/workflows/*.yml"` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â must not match product-map-validate or manifest-validate jobs
+- `Select-String -Pattern "Warn ""vue-tsc""" -Path "../devtools/harness/tools/verify-main.ps1"` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â must not find it (should be `Fail`)
+- `Select-String -Pattern "playwright|@smoke" -Path "../devtools/harness/tools/gate.ps1"` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â must find at least one match
 
 ## Git Workflow
 
-**Always use `git worktree` when branching.** Never check out branches in the main working tree ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it must stay on `main`. Worktrees live under `.agents/worktrees/<branch-name>/`.
+**Always use `git worktree` when branching.** Never check out branches in the main working tree ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â it must stay on `main`. Worktrees live under `.agents/worktrees/<branch-name>/`.
 
 ```powershell
 # From Product/
@@ -83,7 +83,7 @@ If you see a CI failure on main, fix it immediately - do not merge on top of it.
 
 ### Subagent pattern (mandatory)
 
-All code changes MUST be implemented by a subagent in a worktree branch ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never directly by the parent session. The parent orchestrates, the subagent implements.
+All code changes MUST be implemented by a subagent in a worktree branch ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never directly by the parent session. The parent orchestrates, the subagent implements.
 
 | Scenario | How |
 |---|---|
@@ -92,16 +92,16 @@ All code changes MUST be implemented by a subagent in a worktree branch ÃƒÂ¢
 | Multi-task delivery sprint | Use the `deliver` skill (`.agents/skills/deliver/SKILL.md`) which orchestrates parallel subagents autonomously. |
 | QA fix | Spawn a subagent in its own worktree branch. Never apply a fix directly from the QA session. |
 
-The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: All Code Goes Through Subagents** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â read it for the rationale and enforcement details.
+The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: All Code Goes Through Subagents** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â read it for the rationale and enforcement details.
 
 ## Skills
 
-- **`qa`** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Multi-lens quality review. Invoke with `qa <target-path>`. Runs 7 lenses (correctness, bugs, maintainability, SOLID, DRY, simplification, deps) via parallel subagents, validates findings, and applies fixes. Auto-invokes `lessons-learned` on fixed findings. Path: `.agents/skills/qa/SKILL.md`.
-- **`lessons-learned`** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Extracts recurring patterns from QA findings and codifies them as AGENTS.md guidance at the most specific level of the hierarchy (auto-invoked by `qa` / `qa-iterate`). Standalone: `/lessons-learned <target> <findings>`. Path: `.agents/skills/lessons-learned/SKILL.md`.
+- **`qa`** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Multi-lens quality review. Invoke with `qa <target-path>`. Runs 7 lenses (correctness, bugs, maintainability, SOLID, DRY, simplification, deps) via parallel subagents, validates findings, and applies fixes. Auto-invokes `lessons-learned` on fixed findings. Path: `.agents/skills/qa/SKILL.md`.
+- **`lessons-learned`** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Extracts recurring patterns from QA findings and codifies them as AGENTS.md guidance at the most specific level of the hierarchy (auto-invoked by `qa` / `qa-iterate`). Standalone: `/lessons-learned <target> <findings>`. Path: `.agents/skills/lessons-learned/SKILL.md`.
 
 ## Delivery Workflow for QA
 
-1. Check `docs/delivery-tracker.md` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â QA Reviews section.
+1. Check `docs/delivery-tracker.md` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â QA Reviews section.
 2. Run each QA review using the `qa` skill.
 3. After finishing a review, toggle its checkbox and add the date + outcome.
 4. Do not start QA #N+1 until QA #N is complete.
@@ -111,13 +111,13 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 ## Definition of Done
 
 ### Manifest updated
-- [ ] **Manifest updated** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â if the delivery adds or modifies a page route, the corresponding entry in `frontend/src/manifest.yaml` was created or updated
+- [ ] **Manifest updated** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â if the delivery adds or modifies a page route, the corresponding entry in `frontend/src/manifest.yaml` was created or updated
 
 ---
 
 ## Task Tracker
 
-The authoritative task list lives at `../harness/delivery/delivery-plan.json`. Do not edit it directly ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â use the task script:
+The authoritative task list lives at `../harness/delivery/delivery-plan.json`. Do not edit it directly ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â use the task script:
 
 ```powershell
 ../devtools/harness/tools/task.ps1 list                          # show all tasks and current status
@@ -127,7 +127,7 @@ The authoritative task list lives at `../harness/delivery/delivery-plan.json`. D
 ../devtools/harness/tools/task.ps1 block <id> -Evidence "..."    # record a concrete external blocker
 ```
 
-The conductor picks the first `pending` task whose entire `dependsOn` array is `completed`. Tasks span phases 0ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“9 (alpha through v2). Run `/deliver` from the project root to start an autonomous delivery sprint ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â this invokes the `deliver` skill at `.agents/skills/deliver/SKILL.md`.
+The conductor picks the first `pending` task whose entire `dependsOn` array is `completed`. Tasks span phases 0ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ9 (alpha through v2). Run `/deliver` from the project root to start an autonomous delivery sprint ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â this invokes the `deliver` skill at `.agents/skills/deliver/SKILL.md`.
 
 ---
 
@@ -161,8 +161,8 @@ modulo/
       model_backends/base.py  # BaseChatModel-compatible ABC
       model_backends/anthropic/
       model_backends/openai/
-      model_backends/stub/    # StubModelBackend ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â test double
-      otel_bridge/            # LangGraphÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢OTel callback handler
+      model_backends/stub/    # StubModelBackend ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â test double
+      otel_bridge/            # LangGraphÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢OTel callback handler
       auth/                   # JWT, Basic Auth, API key validation
       db/models/              # SQLAlchemy models (one file per entity)
       db/migrations/          # Alembic versions/
@@ -190,7 +190,7 @@ modulo/
 
 - **Backend**: Python 3.12, uv, FastAPI, LangGraph, SQLAlchemy 2 async + asyncpg/aiosqlite/aiomysql, Alembic
 - **Frontend**: Vue 3 (Composition API), Pinia, shadcn-vue + Radix Vue, Vue Flow, Tailwind, Playwright
-- **API types**: FastAPI OpenAPI ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `openapi-typescript` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ typed `openapi-fetch` client at `src/lib/api/schema.d.ts`
+- **API types**: FastAPI OpenAPI ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ `openapi-typescript` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ typed `openapi-fetch` client at `src/lib/api/schema.d.ts`
 - **Lint**: ruff, mypy --strict, bandit, semgrep, import-linter, gitleaks
 - **Tests**: pytest + pytest-cov, pytest-bdd, testcontainers, factory-boy, pytest-xdist
 
@@ -199,7 +199,7 @@ modulo/
 ## Key Implementation Constraints (non-negotiable)
 
 ### Database
-- `SET LOCAL app.organisation_id = :org_id` **inside a transaction** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never bare `SET`. Semgrep-enforced.
+- `SET LOCAL app.organisation_id = :org_id` **inside a transaction** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never bare `SET`. Semgrep-enforced.
 - All async DB uses `asyncpg` (Postgres), `aiosqlite` (SQLite), or `aiomysql` (MariaDB/MySQL). No `psycopg2`/`sqlite3` in async path. Semgrep-enforced.
 - Alembic `upgrade head` runs before `AsyncPostgresSaver.setup()` on startup. Postgres advisory lock for multi-worker startup.
 
@@ -215,15 +215,15 @@ Modulo nominally supports three database backends, configurable via `MODULO_DB` 
 | MariaDB/MySQL | `mariadb` / `mysql` | `aiomysql` | `mysql+aiomysql://modulo:modulo@localhost:5435/modulo` |
 | SQLite | `sqlite` | `aiosqlite` | `sqlite+aiosqlite:///./modulo.db` |
 
-On non-Postgres backends, tenant isolation works via an auto-injected `WHERE organisation_id = :oid` clause instead of Postgres RLS (`set_config`). The `do_orm_execute` listener in `db/rls.py` handles this transparently ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â **zero changes** needed to CRUD functions or route handlers.
+On non-Postgres backends, tenant isolation works via an auto-injected `WHERE organisation_id = :oid` clause instead of Postgres RLS (`set_config`). The `do_orm_execute` listener in `db/rls.py` handles this transparently ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â **zero changes** needed to CRUD functions or route handlers.
 
 **Key differences between backends:**
 
 | Feature | Postgres | MariaDB | SQLite |
 |---|---|---|---|
-| RLS (`SET LOCAL`) | ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Native | ÃƒÂ¢Ã‚ÂÃ…â€™ (app-level filter) | ÃƒÂ¢Ã‚ÂÃ…â€™ (app-level filter) |
-| Advisory locks | ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ `pg_advisory_lock` | ÃƒÂ¢Ã‚ÂÃ…â€™ (in-memory lock) | ÃƒÂ¢Ã‚ÂÃ…â€™ (in-memory lock) |
-| Alembic batch mode | ÃƒÂ¢Ã‚ÂÃ…â€™ | ÃƒÂ¢Ã‚ÂÃ…â€™ | ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ |
+| RLS (`SET LOCAL`) | ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Native | ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ (app-level filter) | ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ (app-level filter) |
+| Advisory locks | ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ `pg_advisory_lock` | ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ (in-memory lock) | ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ (in-memory lock) |
+| Alembic batch mode | ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ | ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ | ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ |
 | Migration DDL | Native PG | Conditional DDL needed | `render_as_batch` |
 
 To run with MariaDB locally:
@@ -235,7 +235,7 @@ docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
 Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 
 ### LangGraph
-- State type is `dict[str, Any]` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no dynamic TypedDicts.
+- State type is `dict[str, Any]` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no dynamic TypedDicts.
 - `run_context` and `artifact` are sibling keys in state. Non-context-setter agents must not write to `run_context`.
 - `StateGraph` cached keyed by `(pipeline_id, snapshot_id)` with LRU eviction.
 
@@ -247,8 +247,8 @@ Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 ### Security
 - Jinja2: always `SandboxedEnvironment`. Semgrep-enforced.
 - YAML: always `yaml.safe_load()`. Semgrep-enforced.
-- Sensitive DOM values (API keys, secrets): never plaintext ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `ÃƒÂ¢Ã¢â‚¬â€Ã‚ÂÃƒÂ¢Ã¢â‚¬â€Ã‚ÂÃƒÂ¢Ã¢â‚¬â€Ã‚ÂÃƒÂ¢Ã¢â‚¬â€Ã‚ÂÃƒÂ¢Ã¢â‚¬â€Ã‚Â` default, 30-second server-authenticated reveal.
-- JWT: `algorithms=["HS256"]` explicitly ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `none` algorithm rejected.
+- Sensitive DOM values (API keys, secrets): never plaintext ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â` default, 30-second server-authenticated reveal.
+- JWT: `algorithms=["HS256"]` explicitly ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `none` algorithm rejected.
 
 ### Async
 - All DB access in async path uses async drivers. Sync DB calls block the event loop.
@@ -263,15 +263,15 @@ Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 
 - **rls_set_local**: bans bare `SET app.organisation_id` without `LOCAL`
 - **credential_in_state**: bans credential field names in LangGraph state assignments
-- **sandboxed_jinja2**: bans `jinja2.Environment(` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â must use `SandboxedEnvironment`
-- **yaml_safe_load**: bans `yaml.load(` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â must use `yaml.safe_load()`
+- **sandboxed_jinja2**: bans `jinja2.Environment(` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â must use `SandboxedEnvironment`
+- **yaml_safe_load**: bans `yaml.load(` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â must use `yaml.safe_load()`
 - **async_db_driver**: bans `import psycopg2` / `import sqlite3` in async code
-- **bare_raise_in_except**: bans bare `raise` inside `except Exception:` â€” use `raise ... from None`
-- **model_dump_exclude_none**: bans `model_dump(exclude_none=True)` in PATCH endpoints â€” use `exclude_unset=True`
-- **pytest_raises_too_broad**: bans `pytest.raises(Exception)` â€” narrow to specific exception type
+- **bare_raise_in_except**: bans bare `raise` inside `except Exception:` Ã¢â‚¬â€ use `raise ... from None`
+- **model_dump_exclude_none**: bans `model_dump(exclude_none=True)` in PATCH endpoints Ã¢â‚¬â€ use `exclude_unset=True`
+- **pytest_raises_too_broad**: bans `pytest.raises(Exception)` Ã¢â‚¬â€ narrow to specific exception type
 - **requests_without_timeout**: bans HTTP requests without explicit `timeout=`
-- **environ_mutation_without_monkeypatch**: bans `os.environ` mutation in tests â€” use `monkeypatch.setenv()`
-- **fastapi_dependency_override_vs_patch**: bans `@patch` for FastAPI deps â€” use `app.dependency_overrides`: bans `import psycopg2` / `import sqlite3` in async code
+- **environ_mutation_without_monkeypatch**: bans `os.environ` mutation in tests Ã¢â‚¬â€ use `monkeypatch.setenv()`
+- **fastapi_dependency_override_vs_patch**: bans `@patch` for FastAPI deps Ã¢â‚¬â€ use `app.dependency_overrides`: bans `import psycopg2` / `import sqlite3` in async code
 
 ---
 
@@ -279,7 +279,7 @@ Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 
 **Unit** (`tests/unit/`): no DB, no Docker, `StubModelBackend` for all LLM calls, run in < 30s.
 **Integration** (`tests/integration/`): real Postgres via testcontainers, Alembic migrations applied first, Factory Boy for entities. Cross-tenant isolation test is mandatory.
-**BDD/E2E** (`tests/bdd/features/`, `tests/bdd/steps/`): pytest-bdd + Playwright. All Playwright against `?theme=agent`. Use `waitForSelector('[data-loading="false"]')` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never `waitForTimeout()`. Every interactive element needs `data-testid`.
+**BDD/E2E** (`tests/bdd/features/`, `tests/bdd/steps/`): pytest-bdd + Playwright. All Playwright against `?theme=agent`. Use `waitForSelector('[data-loading="false"]')` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never `waitForTimeout()`. Every interactive element needs `data-testid`.
 
 Coverage minimums: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overall 80%.
 
@@ -296,45 +296,45 @@ Coverage minimums: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overa
 
 ## Implementation Order
 
-### Phase 0 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Foundation
-1. Alembic schema ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â all tables with `organisation_id`, `owner_team_id` (nullable), `visibility`, `evals JSON`, pipeline edges, `hitl_claims`, `org_api_keys`
-2. `db/rls.py` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `SET LOCAL` helper, SQLAlchemy event hook, isolation integration test
-3. `StubModelBackend` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â implements `BaseChatModel` async interface, fixture map, `UnexpectedInputError`
+### Phase 0 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Foundation
+1. Alembic schema ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â all tables with `organisation_id`, `owner_team_id` (nullable), `visibility`, `evals JSON`, pipeline edges, `hitl_claims`, `org_api_keys`
+2. `db/rls.py` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `SET LOCAL` helper, SQLAlchemy event hook, isolation integration test
+3. `StubModelBackend` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â implements `BaseChatModel` async interface, fixture map, `UnexpectedInputError`
 
-### Phase 1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Core runtime
-4. **LangGraphÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢OTel bridge** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â BLOCKING DEPENDENCY for all OTel span assertions
-5. Basic auth + `SECRET_KEY` enforcement ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â JWT `algorithms=["HS256"]`, startup check
-6. Core entity CRUD ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Pipeline, Agent, Schema, ConnectorInstance, ModelBackend with RLS
+### Phase 1 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Core runtime
+4. **LangGraphÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢OTel bridge** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â BLOCKING DEPENDENCY for all OTel span assertions
+5. Basic auth + `SECRET_KEY` enforcement ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â JWT `algorithms=["HS256"]`, startup check
+6. Core entity CRUD ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Pipeline, Agent, Schema, ConnectorInstance, ModelBackend with RLS
 
-### Phase 2 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Pipeline execution
-7. ConnectorHub ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `FilesystemConnector` (base_path chroot), `GitHubConnector`
-8. ModelBackendHub ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Anthropic + OpenAI + StubModelBackend, health check, rotation
-9. `@cancellable_node` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â cancellation check, per-node timeout, run_context write guard
-10. Sequential pipeline execution ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â StateGraph compile + cache, AsyncPostgresSaver, manual trigger
-11. Graph validator ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â topology, schema compat, connector capability, model backend health
+### Phase 2 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Pipeline execution
+7. ConnectorHub ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `FilesystemConnector` (base_path chroot), `GitHubConnector`
+8. ModelBackendHub ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Anthropic + OpenAI + StubModelBackend, health check, rotation
+9. `@cancellable_node` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â cancellation check, per-node timeout, run_context write guard
+10. Sequential pipeline execution ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â StateGraph compile + cache, AsyncPostgresSaver, manual trigger
+11. Graph validator ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â topology, schema compat, connector capability, model backend health
 
-### Phase 3 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â HITL + events
-12. HITL mechanics ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `interrupt()`, atomic claim, `claim_token` (15-min TTL), expiry, approve/reject
-13. WebSocket event broker ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â per-run broker, `astream_events()` fan-out, 100-event ring buffer
-14. Webhook trigger ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â HMAC-SHA256, `payload_mapping`, flood protection, deduplication, `TriggerEvent` log
+### Phase 3 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â HITL + events
+12. HITL mechanics ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `interrupt()`, atomic claim, `claim_token` (15-min TTL), expiry, approve/reject
+13. WebSocket event broker ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â per-run broker, `astream_events()` fan-out, 100-event ring buffer
+14. Webhook trigger ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â HMAC-SHA256, `payload_mapping`, flood protection, deduplication, `TriggerEvent` log
 
-### Phase 4 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â API + MCP
-15. ViewModel REST API ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â full CRUD, paginated lists
-16. Remote MCP server ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `/mcp` HTTP+SSE, API key bearer auth, dual-layer scope enforcement
+### Phase 4 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â API + MCP
+15. ViewModel REST API ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â full CRUD, paginated lists
+16. Remote MCP server ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `/mcp` HTTP+SSE, API key bearer auth, dual-layer scope enforcement
 
-### Phase 5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Frontend
-17. shadcn-vue init ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â radix-vue, lucide-vue-next, cvÃƒÂÃ‚Â°, baseline primitives in `src/components/ui/`
-18. Vue 3 + Pinia scaffold ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â org context, planStore, theme system (`data-theme`, standard + agent), sidebar
+### Phase 5 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Frontend
+17. shadcn-vue init ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â radix-vue, lucide-vue-next, cvÃƒÆ’Ã‚ÂÃƒâ€šÃ‚Â°, baseline primitives in `src/components/ui/`
+18. Vue 3 + Pinia scaffold ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â org context, planStore, theme system (`data-theme`, standard + agent), sidebar
 19. `/settings/license` page
-20. Pipeline canvas ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Vue Flow, node/edge serialisation
-21. HITL review UI ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â claim, approve, reject, overdue badge
-22. Run inspection UI ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â per-node IO, sensitive masking, "Copy as test fixture"
-23. Stage board ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â search, filter, `awaiting_human` quick filter
-24. Library browser ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â list, preview, copy-to-adapt
-25. Demo pipeline + first-run walkthrough ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `MODULO_DEMO_MODE`
+20. Pipeline canvas ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Vue Flow, node/edge serialisation
+21. HITL review UI ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â claim, approve, reject, overdue badge
+22. Run inspection UI ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â per-node IO, sensitive masking, "Copy as test fixture"
+23. Stage board ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â search, filter, `awaiting_human` quick filter
+24. Library browser ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â list, preview, copy-to-adapt
+25. Demo pipeline + first-run walkthrough ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `MODULO_DEMO_MODE`
 
-### Phase 6 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Alpha exit checklist
-All six criteria from PRD Ãƒâ€šÃ‚Â§10.3b must be met explicitly.
+### Phase 6 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Alpha exit checklist
+All six criteria from PRD ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§10.3b must be met explicitly.
 
 ---
 
@@ -413,18 +413,18 @@ Before merging any worktree branch to `main`, run the smoke test:
 ```
 
 This checks:
-1. **All route component files exist** on disk ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â catches missing `.vue` files that the router imports
+1. **All route component files exist** on disk ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â catches missing `.vue` files that the router imports
 2. **Vitest smoke tests pass** (`app-bootstrap.spec.ts` imports the router module and checks every import resolves)
-3. **Playwright @smoke E2E tests** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â runs 5 critical tests (login error, login redirect, dashboard auth guard, sidebar, bootstrap) via `--grep "@smoke"`
+3. **Playwright @smoke E2E tests** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â runs 5 critical tests (login error, login redirect, dashboard auth guard, sidebar, bootstrap) via `--grep "@smoke"`
 4. **Vue type-check** (`vue-tsc --noEmit` catches type errors)
 
 The `@smoke` tag is set per-test via `{ tag: '@smoke' }` in `frontend/tests/e2e/`. Add it to any critical test that should gate merges. Run just the smoke subset with `npm run test:e2e:smoke`.
 
-The history of this rule: `SchemaBuilderView.vue` existed as an untracked file, was deleted during cleanup, and the router still imported it ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â causing a 500 on every page load. The smoke test would have caught it.
+The history of this rule: `SchemaBuilderView.vue` existed as an untracked file, was deleted during cleanup, and the router still imported it ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â causing a 500 on every page load. The smoke test would have caught it.
 
 ### OpenAPI type generation
 
-`npm run dev` auto-generates TypeScript types from the backend's OpenAPI spec (`http://localhost:8000/openapi.json` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `frontend/src/lib/api/schema.d.ts`). The backend must be running for this to work.
+`npm run dev` auto-generates TypeScript types from the backend's OpenAPI spec (`http://localhost:8000/openapi.json` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ `frontend/src/lib/api/schema.d.ts`). The backend must be running for this to work.
 
 To generate types manually without starting the dev server:
 
@@ -436,7 +436,7 @@ npm run generate:api
 
 Two API access patterns coexist:
 
-**1. `useApi` composable** (legacy, 46 existing files ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no migration needed)
+**1. `useApi` composable** (legacy, 46 existing files ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no migration needed)
 ```typescript
 import { useApi } from '../composables/useApi'
 const { get, post } = useApi()
@@ -444,12 +444,12 @@ const data = await get<SomeType>('/api/v1/me')
 ```
 Throws on error. Same API surface, works unchanged.
 
-**2. `api` typed client** (NEW ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â preferred for new code)
+**2. `api` typed client** (NEW ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â preferred for new code)
 ```typescript
 import { api } from '../lib/api/client'
 import type { paths, components } from '../lib/api/client'
 
-// Fully typed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â path, body, query, and response are all inferred
+// Fully typed ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â path, body, query, and response are all inferred
 const { data, error } = await api.GET('/api/v1/me')
 if (data) console.log(data.display_name)
 
@@ -463,7 +463,7 @@ type UserPrefs = components['schemas']['SettingsResponse']
 type Pipeline = components['schemas']['PipelineResponse']
 ```
 
-Returns `{ data, error }` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no throw. Guard with `if (data)` or `if (error)`.
+Returns `{ data, error }` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no throw. Guard with `if (data)` or `if (error)`.
 
 #### Commit policy
 
@@ -493,23 +493,23 @@ npm run generate:api
 This runs `scripts/generate-api-types.ps1` which imports the backend, dumps the OpenAPI
 schema as JSON, and feeds it to `openapi-typescript` to produce the typed client.
 
-There is no pre-commit hook for this ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the pre-commit framework runs `generate-api-types` as a manual-stage hook only (`gate.ps1` Phase 1d). You must regenerate manually or run `pre-commit run generate-api-types` when the backend API changes. If CI fails because `schema.ts` is out of date, run `npm run generate:api`, commit the updated file, and retry.
+There is no pre-commit hook for this ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the pre-commit framework runs `generate-api-types` as a manual-stage hook only (`gate.ps1` Phase 1d). You must regenerate manually or run `pre-commit run generate-api-types` when the backend API changes. If CI fails because `schema.ts` is out of date, run `npm run generate:api`, commit the updated file, and retry.
 
 ---
 
 ### Local frontend dev (fastest loop)
 
 Start the frontend-only dev server that proxies API calls to app.modulo.run.
-No local backend, DB, or Docker needed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â just the frontend source code.
+No local backend, DB, or Docker needed ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â just the frontend source code.
 
-**Caveat ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â backend changes:** The local-frontend proxies `/api` and `/ws` to
+**Caveat ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â backend changes:** The local-frontend proxies `/api` and `/ws` to
 `https://app.modulo.run` (production). Backend code changes (Python, DB
-migrations, API routes, Pydantic models) are NOT picked up by this loop ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
+migrations, API routes, Pydantic models) are NOT picked up by this loop ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â
 the proxy hits the deployed backend, not your local code.
 
 Two options when your change touches the backend:
-1. **Deploy to app.modulo.run** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â merge to `main`, then run `/deploy` (canary rollout through staging). Fastest if you're confident.
-2. **Run full local stack** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `docker compose -f docker-compose.local.yml up -d` (Postgres + Redis), then start the backend locally (`uv run uvicorn modulo.api.main:app --reload --port 8000`), and point Vite at it (`VITE_API_URL=http://localhost:8000`).
+1. **Deploy to app.modulo.run** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â merge to `main`, then run `/deploy` (canary rollout through staging). Fastest if you're confident.
+2. **Run full local stack** ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `docker compose -f docker-compose.local.yml up -d` (Postgres + Redis), then start the backend locally (`uv run uvicorn modulo.api.main:app --reload --port 8000`), and point Vite at it (`VITE_API_URL=http://localhost:8000`).
 
 Rule of thumb: if you're only changing frontend code (`.vue`, `.ts`, CSS),
 use the local-frontend loop. If you're changing backend code, deploy to
@@ -521,11 +521,11 @@ $env:VITE_API_URL = "https://app.modulo.run"
 Start-Process -WindowStyle Hidden -FilePath "C:\nvm4w\nodejs\node.exe" -ArgumentList "node_modules\vite\bin\vite.js --port 5174 --host 0.0.0.0"
 ```
 
-Access at `http://local-frontend.modulo.run:5174` (add hosts entry first ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â see root AGENTS.md).
+Access at `http://local-frontend.modulo.run:5174` (add hosts entry first ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â see root AGENTS.md).
 
 **IMPORTANT:** Node.js is at `C:\nvm4w\nodejs\node.exe` (not `node` in PATH on Windows).
 Use the full path in `Start-Process` because the background service has a different PATH.
-`npx` / `npm run dev` don't work for backgrounding ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â always use `node.exe` with the full path to `vite/bin/vite.js`.
+`npx` / `npm run dev` don't work for backgrounding ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â always use `node.exe` with the full path to `vite/bin/vite.js`.
 
 **`vue-i18n` pre-bundling fix:** If the page fails to load with `ReferenceError: init_runtime_dom_esm_bundler is not defined`, Vite's dep optimizer is breaking `vue-i18n`. Add it to `optimizeDeps.exclude` in `vite.config.ts`:
 
@@ -560,40 +560,40 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 | Test | File/Command | What it catches |
 |---|---|---|
 | Unit | `tests/unit/app-bootstrap.spec.ts` | Missing route component files, module-level import errors |
-| Playwright @smoke | `--grep "@smoke"` across all `tests/e2e/` | Login, auth, navigation, golden path ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â critical browser flows |
+| Playwright @smoke | `--grep "@smoke"` across all `tests/e2e/` | Login, auth, navigation, golden path ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â critical browser flows |
 | Route file check | Part of `smoke-test.ps1` | Every `.vue` imported by the router exists on disk |
 
 ---
 
 ## What Agents Must NOT Do
 
-- `yaml.load()` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ use `yaml.safe_load()`
-- `jinja2.Environment()` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ use `jinja2.sandbox.SandboxedEnvironment()`
+- `yaml.load()` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ use `yaml.safe_load()`
+- `jinja2.Environment()` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ use `jinja2.sandbox.SandboxedEnvironment()`
 - Decrypted credentials in LangGraph state, logs, or OTel spans
 - `SET app.organisation_id` without `LOCAL` inside a transaction
 - `import psycopg2` or `import sqlite3` in async code
-- `page.waitForTimeout()` in Playwright ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ use `waitForSelector('[data-loading="false"]')`
-- Import LangGraph from `modulo.api` directly ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ go through `modulo.core.pipeline_engine`
+- `page.waitForTimeout()` in Playwright ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ use `waitForSelector('[data-loading="false"]')`
+- Import LangGraph from `modulo.api` directly ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ go through `modulo.core.pipeline_engine`
 - Import `modulo_cloud` from anywhere in core
 - `outline: none` on interactive elements without `--focus-ring` replacement
-- Dynamic TypedDicts for LangGraph state ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ use `dict[str, Any]`
+- Dynamic TypedDicts for LangGraph state ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ use `dict[str, Any]`
 - Commit `.env` files or any file containing secrets
-- Implement admin API keys ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only `operator` and `runner` roles
-- Treat a task as "blocked" because it needs both frontend + backend changes ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â fix both sides in the same session. The worktree + subagent workflow supports cross-cutting fixes. Agents are expected to be comfortable fixing Python and TypeScript/Vue in the same task.
+- Implement admin API keys ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â only `operator` and `runner` roles
+- Treat a task as "blocked" because it needs both frontend + backend changes ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â fix both sides in the same session. The worktree + subagent workflow supports cross-cutting fixes. Agents are expected to be comfortable fixing Python and TypeScript/Vue in the same task.
 
 ## Lessons Learned
 
 ### Branch-fixer / opencode coder agent
 
-- **opencode auth step runs before fetch-ci** Ã¢â€ â€™ `Configure opencode auth` references `steps.fetch-ci.outputs.ci_failures` but must run AFTER `Fetch CI failures`. GitHub Actions evaluates `if:` conditions at step execution time, and the referenced step's outputs are empty/false if it hasn't run yet. Always verify step ordering when a step's condition depends on another step's output.
+- **opencode auth step runs before fetch-ci** ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `Configure opencode auth` references `steps.fetch-ci.outputs.ci_failures` but must run AFTER `Fetch CI failures`. GitHub Actions evaluates `if:` conditions at step execution time, and the referenced step's outputs are empty/false if it hasn't run yet. Always verify step ordering when a step's condition depends on another step's output.
 
-- **opencode version must be modern** Ã¢â€ â€™ Installing opencode from GitHub releases (v0.0.55 from June 2025) gives an ancient version that doesn't support the coder agent's file-editing tools. Always install from npm: `npm install -g opencode-ai` (current: v1.18.4). The `opencode run --agent coder` command requires a version that supports tool-using agents.
+- **opencode version must be modern** ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Installing opencode from GitHub releases (v0.0.55 from June 2025) gives an ancient version that doesn't support the coder agent's file-editing tools. Always install from npm: `npm install -g opencode-ai` (current: v1.18.4). The `opencode run --agent coder` command requires a version that supports tool-using agents.
 
-- **Use `repository_dispatch` instead of `workflow_dispatch` for triggering workflows** Ã¢â€ â€™ GitHub has a known caching bug where `workflow_dispatch` triggers are not recognized for recently-modified workflow files, returning HTTP 422 "Workflow does not have 'workflow_dispatch' trigger". Use `repository_dispatch` via `gh api repos/.../dispatches` which is not affected by this bug. Both the sender (CI) and receiver (branch-fixer) need to support it.
+- **Use `repository_dispatch` instead of `workflow_dispatch` for triggering workflows** ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ GitHub has a known caching bug where `workflow_dispatch` triggers are not recognized for recently-modified workflow files, returning HTTP 422 "Workflow does not have 'workflow_dispatch' trigger". Use `repository_dispatch` via `gh api repos/.../dispatches` which is not affected by this bug. Both the sender (CI) and receiver (branch-fixer) need to support it.
 
-- **`gh run view --log-failed` returns only the last failed step's output** Ã¢â€ â€™ For CI workflows that run scripts (coverage thresholds, post-processing) after the actual tests, `--log-failed` returns the post-processing step's output Ã¢â‚¬â€ not the test failures. Use `gh run view --log | grep "FAILED"` to extract actual test failure lines.
+- **`gh run view --log-failed` returns only the last failed step's output** ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ For CI workflows that run scripts (coverage thresholds, post-processing) after the actual tests, `--log-failed` returns the post-processing step's output ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not the test failures. Use `gh run view --log | grep "FAILED"` to extract actual test failure lines.
 
-- **GitHub Actions step ordering: `Configure opencode auth` must precede `Run opencode fix`** Ã¢â€ â€™ The auth step writes the API key to `~/.local/share/opencode/auth.json`. Without it, opencode runs without credentials and cannot call the LLM, so it produces no file edits. Both steps need identical `if:` conditions referencing `steps.fetch-ci.outputs.ci_failures`.
+- **GitHub Actions step ordering: `Configure opencode auth` must precede `Run opencode fix`** ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ The auth step writes the API key to `~/.local/share/opencode/auth.json`. Without it, opencode runs without credentials and cannot call the LLM, so it produces no file edits. Both steps need identical `if:` conditions referencing `steps.fetch-ci.outputs.ci_failures`.
 
 #
 ## Pre-commit hooks (appended from root AGENTS.md)
@@ -631,9 +631,9 @@ pre-commit (when migration files staged) and in gate.ps1 Phase 0 (even
 with `-SkipTests`). If blocked: renumber your migration to the next free
 sequential number and fix its `down_revision` to point at the current head.
 
-### Rebasing: only when another branch merged first Ã¢â‚¬â€ and how to resolve conflicts
+### Rebasing: only when another branch merged first ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and how to resolve conflicts
 
-In general, **no pre-rebase is needed** Ã¢â‚¬â€ the worktree branch is based on
+In general, **no pre-rebase is needed** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the worktree branch is based on
 main and the PR flow handles merging. If another PR merged first (changing
 shared files), rebase to catch up.
 
@@ -641,7 +641,7 @@ If the rebase produces conflicts, resolve them inline:
 
 1. Read all three versions: base, main (ours), worktree (theirs)
 2. Understand the intent of each side's change
-3. Produce a merged version that satisfies both intents Ã¢â‚¬â€ never silently
+3. Produce a merged version that satisfies both intents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never silently
    discard either side
 4. `git add` the resolved file and `git rebase --continue`
 
@@ -657,11 +657,11 @@ After a successful rebase (all conflicts resolved), push and create a PR:
 
 ### Test suites
 
-**Backend** Ã¢â‚¬â€ from `Repos/modulo/backend/`:
+**Backend** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â from `Repos/modulo/backend/`:
 ```
 pytest tests/unit/ --tb=short -q --timeout=120
 ```
-The backend suite takes ~35-40 min (14700+ tests). Frontend Ã¢â‚¬â€ from `Repos/modulo/frontend/`:
+The backend suite takes ~35-40 min (14700+ tests). Frontend ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â from `Repos/modulo/frontend/`:
 ```
 npm run test:unit
 ```
@@ -695,11 +695,11 @@ Conductor will resolve the conflict. When resolving, never silently discard
 either side's changes.
 ### Deployment: health check `finally` block `conn.close()` can override inner `return`
 
-In `_check_checkpointer()`, the inner `try/except` catches query failures and returns "degraded". But the `finally` block runs `conn.close()` before the return completes. If `conn.close()` raises, the exception propagates to the outer `except Exception`, overrides the "degraded" result, and produces "unavailable" with empty detail ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â even though the query failure was the real issue.
+In `_check_checkpointer()`, the inner `try/except` catches query failures and returns "degraded". But the `finally` block runs `conn.close()` before the return completes. If `conn.close()` raises, the exception propagates to the outer `except Exception`, overrides the "degraded" result, and produces "unavailable" with empty detail ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â even though the query failure was the real issue.
 
 Fix: wrap `conn.close()` in a nested `try/except` so a close() failure can never override the inner result.
 
-### Deployment: any unavailability blocks bluegreen ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â return "degraded" for non-critical checks
+### Deployment: any unavailability blocks bluegreen ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â return "degraded" for non-critical checks
 
 Fly.io's bluegreen strategy waits for ALL health checks to return non-"unavailable" before cutting over. A single non-critical check (like checkpointer tables missing) returning "unavailable" blocks the entire deployment. Change any check that the app can function without to return "degraded" instead of "unavailable".
 
@@ -713,94 +713,95 @@ Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-ms
 
 ### Database / Multi-backend
 
-- `GenericRepository.set_org_context` no-op (`pass`) on non-Postgres backends ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ must call `set_rls_org(session, org_id)` so that `session.info` is populated for the `do_orm_execute` tenant-filter listener
-- `_inject_tenant_filter` breaking after first entity in JOIN queries ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ iterate ALL entities with `organisation_id`, not just the first match
-- `column_descriptions` not available on ORM `UPDATE`/`DELETE` statements ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ use `execute_state.all_mapper_classes` to extract entities for tenant filtering on DML
-- `func.now()` with `DateTime(timezone=True)` on SQLite ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ use `func.current_timestamp()` instead (SQLite's `func.now()` returns naive datetime)
-- Backend type strings differ across sources: `dialect.name` returns `"postgresql"` but settings key returns `"postgres"` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ always normalize with `.lower()` and compare against the settings canonical form; document the two sources
+- `GenericRepository.set_org_context` no-op (`pass`) on non-Postgres backends ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ must call `set_rls_org(session, org_id)` so that `session.info` is populated for the `do_orm_execute` tenant-filter listener
+- `_inject_tenant_filter` breaking after first entity in JOIN queries ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ iterate ALL entities with `organisation_id`, not just the first match
+- `column_descriptions` not available on ORM `UPDATE`/`DELETE` statements ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ use `execute_state.all_mapper_classes` to extract entities for tenant filtering on DML
+- `func.now()` with `DateTime(timezone=True)` on SQLite ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ use `func.current_timestamp()` instead (SQLite's `func.now()` returns naive datetime)
+- Backend type strings differ across sources: `dialect.name` returns `"postgresql"` but settings key returns `"postgres"` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ always normalize with `.lower()` and compare against the settings canonical form; document the two sources
 
 ### Locking
 
-- `pg_advisory_lock` with `asyncio.wait_for` creates a race between server-side lock acquisition and client timeout ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ use `pg_try_advisory_lock` in a polling loop for timeout-based acquisition
-- `asyncio.Lock` timeout via `wait_for` can trigger a caller's `finally` block that calls `release()` on another task's lock ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ always track lock ownership (e.g. by task ID) and guard `release_lock` with an ownership check
+- `pg_advisory_lock` with `asyncio.wait_for` creates a race between server-side lock acquisition and client timeout ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ use `pg_try_advisory_lock` in a polling loop for timeout-based acquisition
+- `asyncio.Lock` timeout via `wait_for` can trigger a caller's `finally` block that calls `release()` on another task's lock ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ always track lock ownership (e.g. by task ID) and guard `release_lock` with an ownership check
 - In-memory locks (`GenericLock`) must use module-level (shared) state so multiple `RepositoryHub` instances coordinate on the same lock namespace
 
 ### Frontend / Layout
 
-- Every list/table page must have an empty-state message when data is empty ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never leave a blank content area. Use the existing pattern: a centered card with title + description.
-- Enterprise-gated pages (`FeatureGate` component) must never render infinite spinners ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â hide the sidebar link entirely on Free tier, or show a clear upgrade CTA with a link to `/settings/license`. A locked overlay with a permanent spinner beneath it is worse than showing nothing.
+- Every list/table page must have an empty-state message when data is empty ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never leave a blank content area. Use the existing pattern: a centered card with title + description.
+- Enterprise-gated pages (`FeatureGate` component) must never render infinite spinners ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â hide the sidebar link entirely on Free tier, or show a clear upgrade CTA with a link to `/settings/license`. A locked overlay with a permanent spinner beneath it is worse than showing nothing.
 
 ### Frontend / API & Errors
 
-- API failures must not trigger full-page redirects ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â show an in-page `ErrorAlert` with retry button instead. This is especially critical for the feature-flags API called by `planStore.fetchPlan()`, which runs on every page mount.
-- The 401 interceptor in `client.ts` does a hard `window.location.href = '/login'` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ensure the auth token is still valid before the interceptor fires. A single expired-token or failed feature-flags call can cascade into an unusable redirect loop.
+- API failures must not trigger full-page redirects ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â show an in-page `ErrorAlert` with retry button instead. This is especially critical for the feature-flags API called by `planStore.fetchPlan()`, which runs on every page mount.
+- The 401 interceptor in `client.ts` does a hard `window.location.href = '/login'` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ensure the auth token is still valid before the interceptor fires. A single expired-token or failed feature-flags call can cascade into an unusable redirect loop.
 
 ### Frontend / Security
 
-- Runtime Config values matching sensitive key patterns (`SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|ENCRYPTION|SIGNING|PRIVATE`, case-insensitive) must be masked by default with `"********"` and a per-key "Reveal" toggle ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never displayed in plaintext. Non-sensitive keys (e.g. `APP_NAME`, `LOG_LEVEL`) display normally.
-- Sidebar nav links for Enterprise-only features should be conditionally rendered based on the plan tier, not just visually dimmed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a visible-but-broken link is worse than no link.
+- Runtime Config values matching sensitive key patterns (`SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|ENCRYPTION|SIGNING|PRIVATE`, case-insensitive) must be masked by default with `"********"` and a per-key "Reveal" toggle ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never displayed in plaintext. Non-sensitive keys (e.g. `APP_NAME`, `LOG_LEVEL`) display normally.
+- Sidebar nav links for Enterprise-only features should be conditionally rendered based on the plan tier, not just visually dimmed ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â a visible-but-broken link is worse than no link.
 
 ### Frontend / Layout (continued)
 
-- Mobile dropdown menus (`v-if="mobileOpen"`) inside a `flex` (row-direction) container get laid out as skinny horizontal columns instead of full-width panels below the header. Always position mobile dropdowns with `fixed top-14 left-0 right-0 z-40` to take them out of flex flow ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never rely on the natural document flow inside a horizontal flex container for overlay-style elements.
-- `pt-14` (56px) is a fragile approximation of a fixed header's height. The header's actual height varies with padding (`py-3` = 24px vertical), content (20px SVG), and border (1px) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â real height is ~63px. Use `sticky` positioning for the mobile header instead of `fixed` + `pt-14`, or measure the actual height precisely. The gap between `pt-14` and true header height causes content to peek behind or leave a visible strip.
-- The mobile layout has oscillated between `fixed` header + `pt-14` and in-flow/`sticky` header approaches multiple times (commits e3028c2, 8f36188, a080bfa, 393605d). Neither approach is inherently better ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the choice depends on whether the dropdown/menu panel needs to push content down or overlay it. **Decide upfront:** overlay (fixed header, z-index stacking) vs. push (sticky header, content reflow). Don't flip-flop.
-- When both the mobile menu panel and main content need scrolling, avoid nesting `overflow-auto`/`overflow-hidden` on multiple flex layers ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it creates scroll-snapping issues where one layer traps scroll. Use a single scroll container (`overflow-y-auto` on `main`) and let the menu panel scroll within itself if needed.
-- Commit `393605d` gutted the mobile layout (removed LogoMark, dynamic nav items with sections/icons, theme toggle, user profile, logout button) to work around a Vite 8 SFC parsing issue. If functionality needs to be restored, build it back incrementally rather than doing another full rewrite ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the layout fundamentals are now stable.
-- Remy panel default position (`window.innerWidth - 460`) must be clamped to `Math.max(8, ...)` to prevent off-screen rendering on viewports < 460px wide. Default size (`440ÃƒÆ’Ã¢â‚¬â€600`) must also be clamped to `Math.min(440, window.innerWidth - 16)` and `Math.min(600, window.innerHeight - 120)` so the panel fits mobile viewports. **Always clamp absolute-positioned UI defaults against viewport dimensions.**
+- Mobile dropdown menus (`v-if="mobileOpen"`) inside a `flex` (row-direction) container get laid out as skinny horizontal columns instead of full-width panels below the header. Always position mobile dropdowns with `fixed top-14 left-0 right-0 z-40` to take them out of flex flow ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never rely on the natural document flow inside a horizontal flex container for overlay-style elements.
+- `pt-14` (56px) is a fragile approximation of a fixed header's height. The header's actual height varies with padding (`py-3` = 24px vertical), content (20px SVG), and border (1px) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â real height is ~63px. Use `sticky` positioning for the mobile header instead of `fixed` + `pt-14`, or measure the actual height precisely. The gap between `pt-14` and true header height causes content to peek behind or leave a visible strip.
+- The mobile layout has oscillated between `fixed` header + `pt-14` and in-flow/`sticky` header approaches multiple times (commits e3028c2, 8f36188, a080bfa, 393605d). Neither approach is inherently better ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the choice depends on whether the dropdown/menu panel needs to push content down or overlay it. **Decide upfront:** overlay (fixed header, z-index stacking) vs. push (sticky header, content reflow). Don't flip-flop.
+- When both the mobile menu panel and main content need scrolling, avoid nesting `overflow-auto`/`overflow-hidden` on multiple flex layers ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â it creates scroll-snapping issues where one layer traps scroll. Use a single scroll container (`overflow-y-auto` on `main`) and let the menu panel scroll within itself if needed.
+- Commit `393605d` gutted the mobile layout (removed LogoMark, dynamic nav items with sections/icons, theme toggle, user profile, logout button) to work around a Vite 8 SFC parsing issue. If functionality needs to be restored, build it back incrementally rather than doing another full rewrite ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the layout fundamentals are now stable.
+- Remy panel default position (`window.innerWidth - 460`) must be clamped to `Math.max(8, ...)` to prevent off-screen rendering on viewports < 460px wide. Default size (`440ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â600`) must also be clamped to `Math.min(440, window.innerWidth - 16)` and `Math.min(600, window.innerHeight - 120)` so the panel fits mobile viewports. **Always clamp absolute-positioned UI defaults against viewport dimensions.**
 
 ### Product Map / improve-architecture
 
-- When running `improve-architecture` on a feature entry, always check that `bdd:` and `unit-tests:` frontmatter fields are populated ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â **especially `bdd:`** which is commonly missing even when feature files exist.
+- When running `improve-architecture` on a feature entry, always check that `bdd:` and `unit-tests:` frontmatter fields are populated ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â **especially `bdd:`** which is commonly missing even when feature files exist.
 - **Frontmatter YAML**: Never set `delivery-tasks: []` (flow empty list) on a line followed by orphaned indented list items. The `[]` terminates the value; subsequent `- item` lines become parse errors. Either keep `[]` empty with nothing after it, or use a block list without `[]` and add the proper parent key (e.g. `bdd:`).
 - **`bdd:` field**: Every connector product map entry must have a `bdd:` field listing its BDD feature files. File paths like `backend/tests/bdd/features/connectors/foo.feature` belong in `bdd:`, never in `delivery-tasks:` (which holds delivery-plan task IDs, not file paths).
 - **`depends-on` field**: Every connector file must declare `feat-connectors-hub` as a dependency. Features that use the connector hub's sampling/query interface (e.g. schema-inference) must also declare it. `graph-validate.ps1` will flag missing `depends-on` as orphaned refs.
 - **`delivery-tasks` contains task IDs, not file paths**: The `delivery-tasks` field links to delivery-plan task IDs (e.g. `task-connector-hub-01`), not file paths. File paths for BDD features, unit tests, and code paths belong in their respective frontmatter fields (`bdd:`, `unit-tests:`, `code:`).
-- **Known Gaps with `[x]` (checked) items**: The "Known Gaps" section must only list genuine gaps ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â items that are missing or incomplete. Do not list accomplished items (BDD scenarios that exist, unit tests that exist, working features) with `[x]` checkboxes in Known Gaps. Those belong in the Behaviours section or as plain prose notes.
+- **Known Gaps with `[x]` (checked) items**: The "Known Gaps" section must only list genuine gaps ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â items that are missing or incomplete. Do not list accomplished items (BDD scenarios that exist, unit tests that exist, working features) with `[x]` checkboxes in Known Gaps. Those belong in the Behaviours section or as plain prose notes.
 - **`status: gap` vs `status: partial`**: If a feature has zero implemented behaviours (all `[ ]`), no tests, and "No implementation exists" in Known Gaps, use `status: gap`, not `status: partial`. `partial` implies some work is done.
 - **Boilerplate deduplication**: Cross-cutting concerns that apply identically to all connectors (Credential Lifetime lifecycle, capability-based graph validation, token rotation, rate-limit handling, ConnectorHub pre-run health check) should be documented in `connector-hub.md` only, not duplicated across every individual connector file. Individual files should only document connector-specific behaviour.
-- The HTTPBearer FastAPI dependency with `auto_error=False` returns `None` for missing credentials (not 403). The handler must raise 401 explicitly. Product map entries commonly claim 403 for missing bearer ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â verify against the actual code.
+- The HTTPBearer FastAPI dependency with `auto_error=False` returns `None` for missing credentials (not 403). The handler must raise 401 explicitly. Product map entries commonly claim 403 for missing bearer ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â verify against the actual code.
 - SCIM CRUD functions (`scim_create_group`, `scim_create_user`) call Team/Account CRUD directly, bypassing REST API validation. Any validation gap in the underlying CRUD (e.g. duplicate name enforcement) is inherited by SCIM. Document this cross-module concern in the product map entry's Known Gaps.
-- When auditing behaviours in the product map, do NOT assume an unchecked `[ ]` means "not implemented" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it often means "not verified." Read the test files and run `grep` for each behaviour before deciding status.
-- The `prd:` frontmatter field must contain only the bare section number (e.g. `8.17`), never wrapped in quotes or prefixed with `Ãƒâ€šÃ‚Â§`. The `Ãƒâ€šÃ‚Â§` prefix or quotes cause `graph-validate.ps1` to fail section matching because `TrimStart('Ãƒâ€šÃ‚Â§')` cannot strip quotes, leaving a `"8.17"` string that doesn't match the PRD index.
+- When auditing behaviours in the product map, do NOT assume an unchecked `[ ]` means "not implemented" ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â it often means "not verified." Read the test files and run `grep` for each behaviour before deciding status.
+- The `prd:` frontmatter field must contain only the bare section number (e.g. `8.17`), never wrapped in quotes or prefixed with `ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§`. The `ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§` prefix or quotes cause `graph-validate.ps1` to fail section matching because `TrimStart('ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§')` cannot strip quotes, leaving a `"8.17"` string that doesn't match the PRD index.
 - **`graph-validate.ps1 -Fix` can corrupt `_index.md` with literal `\n` strings.** The `-Fix` flag's PowerShell string replacement can produce raw `\n` (backslash-n) text instead of actual newlines. If `_index.md` shows visible `\n` in the rendered file, re-run `graph-validate.ps1` without `-Fix` to regenerate a clean index. File a bug against `deploy/harness/tools/graph-validate.ps1` if `-Fix` remains broken.
 
 ### Backend / API Schema Migrations
 
-- When a DB column is renamed in a migration (e.g. `created_by` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `account_id`), every Pydantic response schema that references the old name must use `Field(validation_alias="account_id")` and add `"populate_by_name": True` to `model_config`. Without this, `model_validate(pipeline)` fails because the ORM model's attribute is `account_id` but the response schema expects `created_by`.
-- After a column rename migration, grep ALL response schemas in `backend/src/modulo/api/routes/` for the old column name ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it's common to miss several files.
+- When a DB column is renamed in a migration (e.g. `created_by` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ `account_id`), every Pydantic response schema that references the old name must use `Field(validation_alias="account_id")` and add `"populate_by_name": True` to `model_config`. Without this, `model_validate(pipeline)` fails because the ORM model's attribute is `account_id` but the response schema expects `created_by`.
+- After a column rename migration, grep ALL response schemas in `backend/src/modulo/api/routes/` for the old column name ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â it's common to miss several files.
 
 ### Backend / Models
 
 - When a new column is added to a table via deployment schema patch (e.g. `ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS default_autonomy_level`), the SQLAlchemy ORM model MUST have the corresponding `mapped_column`. Without it, any CRUD function that passes the field to the model constructor raises `TypeError: 'default_autonomy_level' is an invalid keyword argument for Pipeline`.
 - Keep `__table_args__` check constraints and ORM mapped columns in sync: if a check constraint references a column, the ORM must map it.
-- For optional Pydantic fields in graph/JSON schemas (`PipelineGraphNode.agent_id`, etc.), always add `= None` default ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â otherwise dicts that omit the key entirely fail `model_validate` with `Field required`.
+- For optional Pydantic fields in graph/JSON schemas (`PipelineGraphNode.agent_id`, etc.), always add `= None` default ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â otherwise dicts that omit the key entirely fail `model_validate` with `Field required`.
 
 ### Ops / Deploy
 
 - `flyctl deploy` direct invocation without `--build-arg` flags leaves all git metadata fields (`git_sha`, `git_branch`, `git_commit_message`, `git_commit_timestamp`, `build_timestamp`) empty in the `/api/v1/deployment` endpoint. Always use `deploy.ps1` (which reads and passes build args automatically) instead of calling `flyctl deploy` directly.
-- The `/deployments` page on modulo.run reads this endpoint. If git metadata is missing, the page shows blank fields ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not a backend model change.
+- The `/deployments` page on modulo.run reads this endpoint. If git metadata is missing, the page shows blank fields ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â not a backend model change.
 - `fly.toml` Python version hardcodes (e.g. `python3.12` in SSH commands) must match the project's actual Python version in `.python-version` and `pyproject.toml` `requires-python`. A mismatch causes the SSH command to fail silently. Search `fly.toml` for all hardcoded version strings when upgrading Python.
 
 ### Frontend / Resilient Rendering
 
-- When displaying API data that may be temporarily empty (e.g. between redeploys), use `{{ value || 'ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â' }}` fallback instead of `v-if="value"` conditional rendering. Empty strings are falsy in JS ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `v-if` hides the entire field, making it look like the model changed. Always show the field label with a fallback value.
+- When displaying API data that may be temporarily empty (e.g. between redeploys), use `{{ value || 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â' }}` fallback instead of `v-if="value"` conditional rendering. Empty strings are falsy in JS ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `v-if` hides the entire field, making it look like the model changed. Always show the field label with a fallback value.
 
 ### Backend / Error Tracking & Observability
 
+- **Redis async calls from sync context: always await the coroutine.** _get_last_fired and _set_last_fired in alert evaluation were defined as sync def but called without wait - the coroutine object was silently discarded, the cooldown never persisted to Redis, and the method returned True (non-None coroutine) so cooldowns appeared perpetually active. Never discard an sync coroutine without wait.
 - **Error tracking API endpoints that read from DB must fetch all data inside the `session.begin()` transaction block.** If a query like `get_error_group()` is made inside the transaction (for RLS context) but a subsequent `get_error_events_by_group()` call is made outside it, the second call runs without RLS context and can leak cross-org data or return stale results. Wrap all DB reads/writes in the same `async with session.begin():` block that contains the auth/RLS setup.
 - **Error forwarders must isolate failures per-forwarder.** A single forwarder's HTTP failure (network error, bad API key) must not prevent other forwarders from delivering, and must not crash the error ingestion pipeline. Wrap each `forward()` call in `try/except` and log the failure.
-- **Alert evaluation cooldown keys should include both rule_id and fingerprint.** Without the fingerprint in the cooldown key, all errors matching a rule share a single cooldown ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the first error that fires an alert suppresses alerts for entirely different errors. The key format should be `alert_cooldown:{org_id}:{rule_id}:{fingerprint}`.
+- **Alert evaluation cooldown keys should include both rule_id and fingerprint.** Without the fingerprint in the cooldown key, all errors matching a rule share a single cooldown ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the first error that fires an alert suppresses alerts for entirely different errors. The key format should be `alert_cooldown:{org_id}:{rule_id}:{fingerprint}`.
 
 ### Backend / CLI Tools
 
-- **Click decorators must decorate the command function directly.** Applying `@click.option()` to a wrapper function instead of the actual `@click.command()` function means the CLI never registers the options ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the command accepts no arguments at runtime. The decorator chain must be: `@click.command()`, `@click.option(...)`, `def my_command(...)` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â stacked in that order on the same function.
+- **Click decorators must decorate the command function directly.** Applying `@click.option()` to a wrapper function instead of the actual `@click.command()` function means the CLI never registers the options ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the command accepts no arguments at runtime. The decorator chain must be: `@click.command()`, `@click.option(...)`, `def my_command(...)` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â stacked in that order on the same function.
 
 ### Backend / Caching & Init Ordering
 
 - In-memory caches that store mutable dicts must return a defensive copy (`json.loads(json.dumps(data))` or `copy.deepcopy(data)`) rather than the original reference. Returning the raw reference allows concurrent callers to mutate the cached data, corrupting the cache for subsequent requests within the TTL window.
-- Initialization flags (`initialized = true`) must be set AFTER the init logic completes, not before. Setting `initialized = true` before `await loadLocaleMessages()` or `await setLocale()` means a failure in those async calls leaves the app in a half-initialized state where no retry is possible ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the flag already blocks re-entry.
-- When DB migration errors need to be caught for 501 responses, use `except ProgrammingError` (not `except SQLAlchemyError`). `ProgrammingError` indicates a missing table/column (migration not yet applied), while `SQLAlchemyError` is the base class that also catches `IntegrityError`, `DataError`, etc. ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â real data errors should surface as 500, not as misleading "Run database migrations" messages.
+- Initialization flags (`initialized = true`) must be set AFTER the init logic completes, not before. Setting `initialized = true` before `await loadLocaleMessages()` or `await setLocale()` means a failure in those async calls leaves the app in a half-initialized state where no retry is possible ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the flag already blocks re-entry.
+- When DB migration errors need to be caught for 501 responses, use `except ProgrammingError` (not `except SQLAlchemyError`). `ProgrammingError` indicates a missing table/column (migration not yet applied), while `SQLAlchemyError` is the base class that also catches `IntegrityError`, `DataError`, etc. ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â real data errors should surface as 500, not as misleading "Run database migrations" messages.
 
 ### Backend / Dashboard & Aggregations
 
@@ -810,42 +811,42 @@ Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-ms
 ### Frontend / Internationalization
 
 - `en-US.json` can accumulate non-user-facing artifacts (SVG path data, JS expressions with `??`/`||`, template literals, function calls) from the auto-extraction script. After extraction, verify all JSON values are human-readable text. Remove keys containing `??`, `${`, `||`, function calls, or SVG path data.
-- When adding locale sync between frontend and backend, verify the Pinia store's payload shape matches the API model. `PUT /api/v1/me/settings` expects `{ locale: "..." }` at top level (flat), not `{ preferences: { locale: "..." } }` (nested). Misaligned shapes silently fail ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the locale is never persisted. Verify both the send direction (`syncToBackend`) and the read direction (`initLocale`) match the backend's `SettingsResponse`/`SettingsUpdate` Pydantic models.
+- When adding locale sync between frontend and backend, verify the Pinia store's payload shape matches the API model. `PUT /api/v1/me/settings` expects `{ locale: "..." }` at top level (flat), not `{ preferences: { locale: "..." } }` (nested). Misaligned shapes silently fail ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the locale is never persisted. Verify both the send direction (`syncToBackend`) and the read direction (`initLocale`) match the backend's `SettingsResponse`/`SettingsUpdate` Pydantic models.
 
 ### Frontend / Store & View Patterns
 
 - Do not duplicate computed properties across a Pinia store and a Vue view. Define the computed once in the store and reference it from the view via `storeName.propertyName`.
-- Runtime validation of API responses from the app's own backend should be minimal (top-level null/type checks or Zod schema), not 100+ lines of per-field manual type-checking. TypeScript and tests catch shape mismatches at build/test time ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â full field-level validation is over-engineering for internal endpoints.
-- Keep store fetch methods consistent across the same store. Both `fetchSummary` and `fetchTrends` should follow the same error-handling pattern ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no `console.warn` in production code, both should set `error.value` on failure.
+- Runtime validation of API responses from the app's own backend should be minimal (top-level null/type checks or Zod schema), not 100+ lines of per-field manual type-checking. TypeScript and tests catch shape mismatches at build/test time ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â full field-level validation is over-engineering for internal endpoints.
+- Keep store fetch methods consistent across the same store. Both `fetchSummary` and `fetchTrends` should follow the same error-handling pattern ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no `console.warn` in production code, both should set `error.value` on failure.
 - Event handler type guards (`if (event.type !== 'run' && event.type !== 'pipeline') return;`) must precede state mutations (`syncingIds.add`). Adding an ID before the type check means unhandled event types permanently block future events with the same ID.
 - Inline markup duplicated between desktop and mobile variants (view mode toggles, brand headers) must be extracted to a shared component. If both sidebars render the same UI element, it belongs in a single `.vue` file.
 
 ### Backend / Async & Concurrency
 
-- Lazy-init side effects in dual-channel classes (pub/sub, read/write) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ each method should only create its own channel. `publish()` must not create subscription connections and `subscribe()` must not create publishing connections. Use the shared `connect()` method for full initialization.
+- Lazy-init side effects in dual-channel classes (pub/sub, read/write) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ each method should only create its own channel. `publish()` must not create subscription connections and `subscribe()` must not create publishing connections. Use the shared `connect()` method for full initialization.
 
 ### Backend / BDD Feature Tests
 
-- **Feature file API paths are step-text matching keys, not just documentation.** Changing a path in a `.feature` file (e.g. `/api/pipelines` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `/api/v1/pipelines`) breaks the pytest-bdd step matching unless the corresponding step definition `parsers.parse` pattern is updated in the same change. Fixes must be coordinated between `tests/bdd/features/` and `tests/bdd/steps/` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never change one without the other.
-- **Background blocks reduce duplication without changing behavior.** When 6+ scenarios in a feature file start with the same `Given I am authenticated as an admin in org "acme"`, promote it to a `Background:` section. Scenarios needing different auth (e.g. viewer role) override the Background by repeating the same step text inline ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pytest-bdd uses the scenario-level step, not the Background's.
+- **Feature file API paths are step-text matching keys, not just documentation.** Changing a path in a `.feature` file (e.g. `/api/pipelines` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ `/api/v1/pipelines`) breaks the pytest-bdd step matching unless the corresponding step definition `parsers.parse` pattern is updated in the same change. Fixes must be coordinated between `tests/bdd/features/` and `tests/bdd/steps/` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never change one without the other.
+- **Background blocks reduce duplication without changing behavior.** When 6+ scenarios in a feature file start with the same `Given I am authenticated as an admin in org "acme"`, promote it to a `Background:` section. Scenarios needing different auth (e.g. viewer role) override the Background by repeating the same step text inline ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â pytest-bdd uses the scenario-level step, not the Background's.
 - **Avoid module-level imports of `modulo.api.main` in conftest files.** Importing `modulo.api.main` at module level triggers MCP server startup and database connection pooling, which can hang the test suite. Use lazy imports inside the `client` fixture instead.
 - **No two test modules should call `scenarios()` for the same .feature file.** This causes duplicate test registration and `StepDefinitionAlreadyRegistered` errors. Each `.feature` file should have exactly one `scenarios()` caller. If steps need to be shared, define them in a helper module that the single scenarios()-owning module imports.
 - **Shared step text patterns must be defined only once.** The step `@given(parsers.parse('I am authenticated as an admin in org "{org}"'))` should live in `bdd/conftest.py` and not be duplicated in domain-specific conftests like `features/agents/conftest.py`. pytest-bdd silently uses whichever registration was last, making behavior non-deterministic.
-- **`BasicScenario` (Gherkin) status code expectations must match the actual FastAPI route mapping.** Before adding a `Then the response status is NNN` to a `.feature` file, verify the actual route handler's exception-to-status mapping. HITL approve status codes were wrong in 3 scenarios (403ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢422 for missing token, 403ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢410 for expired token, 409ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢403 for wrong user's token). Check the route's `except` blocks, not assumptions.
+- **`BasicScenario` (Gherkin) status code expectations must match the actual FastAPI route mapping.** Before adding a `Then the response status is NNN` to a `.feature` file, verify the actual route handler's exception-to-status mapping. HITL approve status codes were wrong in 3 scenarios (403ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢422 for missing token, 403ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢410 for expired token, 409ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢403 for wrong user's token). Check the route's `except` blocks, not assumptions.
 
 ### Ops / Deploy Workflow
 
 - **Deploy scripts must refuse to deploy with a dirty working tree.** The old auto-stash pattern (`git stash -u -m "auto-stash before deploy"` in `deploy.ps1` and `deploy-all.ps1`) caused stash collisions and data loss when multiple scripts or trap handlers popped stashes out of order. Both scripts now check `git status --porcelain` at the start and exit with an error if the working tree is dirty. The caller is responsible for committing, branching, or stashing before deploying.
 
-- **Use `deploy.ps1` or `deploy-all.ps1` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never `fly deploy` directly.** The scripts pass `--build-arg GIT_SHA`, `GIT_BRANCH`, `GIT_COMMIT_TIMESTAMP`, `GIT_COMMIT_MESSAGE`, and `BUILD_TIMESTAMP` automatically. Direct `fly deploy` invocations leave all metadata fields blank in `/api/v1/deployment`, causing the deployments page to show `?` for commit, branch, message, and dates. The branch guard (`main` or `deploy/*`) also prevents accidental deploys from worktree branches.
+- **Use `deploy.ps1` or `deploy-all.ps1` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never `fly deploy` directly.** The scripts pass `--build-arg GIT_SHA`, `GIT_BRANCH`, `GIT_COMMIT_TIMESTAMP`, `GIT_COMMIT_MESSAGE`, and `BUILD_TIMESTAMP` automatically. Direct `fly deploy` invocations leave all metadata fields blank in `/api/v1/deployment`, causing the deployments page to show `?` for commit, branch, message, and dates. The branch guard (`main` or `deploy/*`) also prevents accidental deploys from worktree branches.
 
-- **Lost git stashes can be recovered via `git reflog` + `git stash store`.** The `git stash drop` command (or a trap handler that pops the wrong stash) only removes the `refs/stash` reference ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the commit object remains in `.git/objects/` until garbage collection. Find the stash commit SHA via `git reflog --all | Select-String "stash"`, verify with `git cat-file -t <SHA>`, then restore with `git stash store <SHA>`. The stash will reappear at `stash@{0}`.
+- **Lost git stashes can be recovered via `git reflog` + `git stash store`.** The `git stash drop` command (or a trap handler that pops the wrong stash) only removes the `refs/stash` reference ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the commit object remains in `.git/objects/` until garbage collection. Find the stash commit SHA via `git reflog --all | Select-String "stash"`, verify with `git cat-file -t <SHA>`, then restore with `git stash store <SHA>`. The stash will reappear at `stash@{0}`.
 
-- **Wrap every lifespan seed/init call in try/except ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no single boot-time failure should block the app from starting.** The FastAPI lifespan runs migrations, seeds default data, and initialises the checkpointer. Any of these can crash from transient DB issues (SSL param changes, connection timeouts, schema drift from parallel branch merges). A single failed seed function in the lifespan crashes uvicorn at startup, which makes bluegreen deployments fail health checks and keeps stale machines running. Each call that isn't a hard prerequisite for the app to function (user seeds, demo data, environment profiles, checkpointer init, SSO providers, runtime config store) must be wrapped in `try/except` with `exc_info=True` logging so it's debuggable without blocking the deploy. Found during the ADR 001 staging deploy where `_seed_environment_profiles()` crashed from a DATABASE_URL SSL param issue.
+- **Wrap every lifespan seed/init call in try/except ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no single boot-time failure should block the app from starting.** The FastAPI lifespan runs migrations, seeds default data, and initialises the checkpointer. Any of these can crash from transient DB issues (SSL param changes, connection timeouts, schema drift from parallel branch merges). A single failed seed function in the lifespan crashes uvicorn at startup, which makes bluegreen deployments fail health checks and keeps stale machines running. Each call that isn't a hard prerequisite for the app to function (user seeds, demo data, environment profiles, checkpointer init, SSO providers, runtime config store) must be wrapped in `try/except` with `exc_info=True` logging so it's debuggable without blocking the deploy. Found during the ADR 001 staging deploy where `_seed_environment_profiles()` crashed from a DATABASE_URL SSL param issue.
 
 - **Before deploying, run `npm run build` locally to catch frontend build errors early.** The Docker build lacks interactivity and hides errors behind 10-minute retries. Common issues caught: Rolldown parser errors from Vue template syntax, missing dependencies imported but not in `package.json`, duplicate manifest.yaml keys from parallel distributed work. The local frontend build may fail due to a corrupted `lightningcss.win32-x64-msvc.node` binary (native module, Windows-specific). If that happens, delete `node_modules` and re-run `npm install` to regenerate the native binary.
 
-- **`package-lock.json` must be regenerated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `npm install <package> --save` and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â this is a manual check. For CI, add a step that runs `node -e "require('./package.json').dependencies"` and cross-references against imports in `src/`.
+- **`package-lock.json` must be regenerated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `npm install <package> --save` and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â this is a manual check. For CI, add a step that runs `node -e "require('./package.json').dependencies"` and cross-references against imports in `src/`.
 
 ### entrypoint.sh: migration revision IDs must match actual Alembic filenames
 
@@ -857,21 +858,21 @@ The fix/pipelines-copy Worker touched files that were already modified by other 
 
 ### Eval Engine / Error Handling Audit
 
-- **StrEnum validates at the Pydantic model level, not at the engine level.** `EvalType` is a `StrEnum`, so passing `"nonexistent_type"` to `EvalDefinition(eval_type="nonexistent_type")` raises `ValidationError` at construction, never reaching the `UnknownEvalTypeError` handler in the engine's `match/case` dispatch. The `UnknownEvalTypeError` is dead code for normal usage through the Pydantic model ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it would only trigger if someone bypasses Pydantic (e.g. `object.__setattr__(eval_def, "eval_type", "bad")`). Tests for unknown-type dispatch must bypass Pydantic validation with `object.__setattr__`.
-- **ReDoS detection pattern only catches nested quantifiers with `+` or `*` INSIDE the group before the outer quantifier.** `(a|b)+` is NOT caught because there's no `+` or `*` between `(` and `)` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only an alternation `|`. The `_RE_NESTED_QUANTIFIER` regex (`\(\s*[^)]*[+*][^)]*\s*\)[+*]`) requires a quantifier character inside the group. `(a|b)+` is still a potential ReDoS vector in Python's `re` module, but the current detection is conservative (only catches clear nested quantifiers like `(a+)+`, `(a*)*`).
-- **Regex `None` field values are coerced to empty string `""`** via the `str(None)` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `"None"` issue. The code explicitly handles this: `value = "" if raw_value is None else str(raw_value)`. Always verify that `None` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ empty string coercion is used in eval field extraction ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `str(None)` produces `"None"` which falsely matches patterns like `r"^None$"`.
+- **StrEnum validates at the Pydantic model level, not at the engine level.** `EvalType` is a `StrEnum`, so passing `"nonexistent_type"` to `EvalDefinition(eval_type="nonexistent_type")` raises `ValidationError` at construction, never reaching the `UnknownEvalTypeError` handler in the engine's `match/case` dispatch. The `UnknownEvalTypeError` is dead code for normal usage through the Pydantic model ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â it would only trigger if someone bypasses Pydantic (e.g. `object.__setattr__(eval_def, "eval_type", "bad")`). Tests for unknown-type dispatch must bypass Pydantic validation with `object.__setattr__`.
+- **ReDoS detection pattern only catches nested quantifiers with `+` or `*` INSIDE the group before the outer quantifier.** `(a|b)+` is NOT caught because there's no `+` or `*` between `(` and `)` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â only an alternation `|`. The `_RE_NESTED_QUANTIFIER` regex (`\(\s*[^)]*[+*][^)]*\s*\)[+*]`) requires a quantifier character inside the group. `(a|b)+` is still a potential ReDoS vector in Python's `re` module, but the current detection is conservative (only catches clear nested quantifiers like `(a+)+`, `(a*)*`).
+- **Regex `None` field values are coerced to empty string `""`** via the `str(None)` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ `"None"` issue. The code explicitly handles this: `value = "" if raw_value is None else str(raw_value)`. Always verify that `None` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ empty string coercion is used in eval field extraction ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `str(None)` produces `"None"` which falsely matches patterns like `r"^None$"`.
 - **Custom function `functions` config must be validated as `dict`**, not assumed. The eval engine already handles this (`isinstance(fn_registry_raw, dict) else {}`) but it's untested. When audit-testing eval error paths, always check non-dict config values for optional dict-typed config keys.
-- **JSON Schema "field not in output" is a separate error path from "field not in output for scoped validation."** The code checks `field not in output` when a field is configured (non-empty) but absent from the output dict ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â this is distinct from an empty field (validates whole output) or a mismatched schema.
+- **JSON Schema "field not in output" is a separate error path from "field not in output for scoped validation."** The code checks `field not in output` when a field is configured (non-empty) but absent from the output dict ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â this is distinct from an empty field (validates whole output) or a mismatched schema.
 
 ### Ops / Staging Environment
 
-- **Fly.io staging machine size:** `shared-cpu-1x:1024MB` is too small for E2E test load Ã¢â‚¬â€ returns 504 Gateway Timeout under concurrent test workers. Scale staging to `shared-cpu-2x:2048MB` minimum when running E2E tests against it. In `fly.staging.toml`, set `[vm] size = "shared-cpu-2x:2048MB"` and scale with `flyctl scale vm shared-cpu-2x:2048MB --app modulo-staging`.
+- **Fly.io staging machine size:** `shared-cpu-1x:1024MB` is too small for E2E test load ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â returns 504 Gateway Timeout under concurrent test workers. Scale staging to `shared-cpu-2x:2048MB` minimum when running E2E tests against it. In `fly.staging.toml`, set `[vm] size = "shared-cpu-2x:2048MB"` and scale with `flyctl scale vm shared-cpu-2x:2048MB --app modulo-staging`.
 
 ### Ops / Database (Fly Postgres)
 
 - **Unmanaged Fly Postgres (`fly postgres create`) does NOT auto-restart on crash.** When PostgreSQL on a Flex Postgres machine crashes (e.g. OOM, disk full, segfault), the monitoring agent and `repmgrd` keep running but the `postgres` process stays down. There is no systemd unit to restart it. To recover: SSH into the DB machine (`fly ssh console --app <db-app>`) and run `su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'`. Consider adding a cron job or health check that restarts PostgreSQL if the process is missing. For production-critical DBs, migrate to Managed Postgres (`fly mpg create`).
 
-### ADR 003 supersedes ADR 001 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Modulo dispatches, it doesn't run agents
+### ADR 003 supersedes ADR 001 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Modulo dispatches, it doesn't run agents
 
 The original ADR 001 "Agent Execution Environment" assumed Modulo agents would
 run inside sandboxed environments (E2B, Docker) with shell access via
@@ -886,7 +887,7 @@ ADR 003 establishes the **Agent Dispatch Model**:
 - Modulo owns: dispatch, auth, audit, cost tracking, eval gates, HITL
 - The external agent runtime owns: the tool-using loop, file operations, git
 - Wall-clock time and exit code are captured natively on every dispatch
-- ShellConnector is deprecated ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Modulo agents don't run inside sandboxes
+- ShellConnector is deprecated ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Modulo agents don't run inside sandboxes
 - Post-hoc eval of agent output is a separate Modulo pipeline (code review, etc.)
 
 When creating new pipeline features, prefer the `sandbox_agent` node type for
@@ -903,7 +904,7 @@ valid for non-coding tasks (classification, summarization, analysis).
 - Individual restarts (\lyctl machine restart\, \lyctl apps restart\) do NOT fix it
 - The error message hints: "are you using the 'immediate' strategy?"
 
-**Fix Ã¢â‚¬â€ scale-to-zero then scale-up:**
+**Fix ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â scale-to-zero then scale-up:**
 \\\powershell
 flyctl scale count 0 --yes -a app-modulo
 flyctl scale count 2 --yes -a app-modulo
@@ -912,8 +913,8 @@ This destroys all machines and creates fresh ones that register correctly with t
 
 **Prevention:**
 - \[deploy] strategy = 'rolling'\ is set in \ly.toml\ and \ly.staging.toml\
-- Always use the deploy pipeline or \deploy.ps1\ Ã¢â‚¬â€ never \lyctl deploy\ directly
-- Never pass \--strategy immediate\ Ã¢â‚¬â€ rolling/canary/bluegreen are the safe options
+- Always use the deploy pipeline or \deploy.ps1\ ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never \lyctl deploy\ directly
+- Never pass \--strategy immediate\ ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â rolling/canary/bluegreen are the safe options
 
 ### Playwright E2E: use `storageState` for shared login on staging
 
@@ -930,7 +931,7 @@ Pattern:
 - Individual tests skip the login step because `loginAsAdmin` detects the
   existing session via `localStorage.getItem('modulo_access_token')`
 
-**Caveat Ã¢â‚¬â€ login page tests:** When `storageState` is loaded, navigating to
+**Caveat ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â login page tests:** When `storageState` is loaded, navigating to
 `/login` redirects to `/` (dashboard) because the persisted session is still
 valid. Tests that expect login page elements (error messages, password fields)
 will fail because they're redirected before assertions run.
@@ -957,13 +958,13 @@ Exception: trivial documentation-only changes (typos, formatting) may be merged 
 
 In rontend/src/manifest.yaml, preview: true on a route or element means it is ONLY visible when MODULO_DEV_MODE=true (dev mode). It does NOT mean "beta" or "coming soon." Routes with preview: true are hidden in normal mode via SidebarNav.vue:94: if (item.preview && !planStore.devMode) return false.
 
-Remy was descoped from MVP and gated behind dev mode. BOTH /admin/remy and /settings/remy have preview: true for this reason â€” Remy is intentionally invisible in production until dev mode is enabled. Never remove preview: true from a dev-mode-only feature without explicit product direction.
+Remy was descoped from MVP and gated behind dev mode. BOTH /admin/remy and /settings/remy have preview: true for this reason Ã¢â‚¬â€ Remy is intentionally invisible in production until dev mode is enabled. Never remove preview: true from a dev-mode-only feature without explicit product direction.
 
 Sidebar tests that check group header counts must account for preview-hidden groups. In simple mode with dev mode off, only core and settings groups are guaranteed visible. Test assertions should use 	oBeGreaterThanOrEqual(2) not 3.
 
 ## Modulo Pipeline Configuration (E2B Sandbox Agents)
 
-All Modulo agent pipelines (Branch Fixer, PR Reviewer, Improve Tests, Improve Architecture, Codebase Improver, Daily Watcher) use a single `sandbox_agent` node type that runs an opencode agent inside an E2B sandbox. The sandbox is ephemeral â€” created per-run, destroyed after completion.
+All Modulo agent pipelines (Branch Fixer, PR Reviewer, Improve Tests, Improve Architecture, Codebase Improver, Daily Watcher) use a single `sandbox_agent` node type that runs an opencode agent inside an E2B sandbox. The sandbox is ephemeral Ã¢â‚¬â€ created per-run, destroyed after completion.
 
 ### E2B Sandbox Configuration
 
@@ -985,7 +986,7 @@ The system uses two distinct GitHub identities:
 | **Bot** | `farnalabs` | `github-dogfood-pat-all` | Creates PRs (automation pipelines, improve-* agents) |
 | **Reviewer** | `modulo-reviewbot` | `github-reviewbot-pat` | Reviews and approves PRs (PR Reviewer pipeline), posts formal GitHub reviews |
 
-The reviewer identity CANNOT be the same as the bot identity â€” GitHub does not allow self-approval of PRs. Always use `modulo-reviewbot` for posting reviews.
+The reviewer identity CANNOT be the same as the bot identity Ã¢â‚¬â€ GitHub does not allow self-approval of PRs. Always use `modulo-reviewbot` for posting reviews.
 
 ### Git Operations in E2B Sandbox
 
@@ -1010,7 +1011,7 @@ The sandbox has Python 3.11 but the project requires Python 3.12+. Tell uv to in
 uv python install 3.12 2>&1 | tail -3
 ```
 
-After this, uv run works normally — it uses Python 3.12 instead of downloading CPython 3.14. Pre-commit hooks (which use uv run for ruff, semgrep, etc.) fire correctly on git commit:
+After this, uv run works normally â€” it uses Python 3.12 instead of downloading CPython 3.14. Pre-commit hooks (which use uv run for ruff, semgrep, etc.) fire correctly on git commit:
 
 ```bash
 uv python install 3.12 2>&1 | tail -3

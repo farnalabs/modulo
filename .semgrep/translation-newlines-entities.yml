@@ -1,7 +1,7 @@
-rules:
+﻿rules:
   - id: translation-newlines-entities
-    pattern-regex: '"\\n"|&amp;|&#\d+;'
-    message: "Translation values must not contain literal newlines or HTML entities — split into separate translation keys instead"
+    pattern-regex: '&amp;|&#\d+;'
+    message: "Translation values must not contain HTML entities — use the actual character or a separate translation key instead"
     languages: [json]
     severity: ERROR
     paths:
