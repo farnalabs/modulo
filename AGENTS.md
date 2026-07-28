@@ -1,4 +1,4 @@
-﻿# Modulo ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Agent & Developer Guidance
+# Modulo ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Agent & Developer Guidance
 
 Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ fix the conflict.
 
@@ -693,12 +693,6 @@ When using `/distribute` with parallel Workers, check if any two groups'
 file footprints overlap. If they do, merge the groups or accept that the
 Conductor will resolve the conflict. When resolving, never silently discard
 either side's changes.
-## Deployment: checkpointer init silently fails when pg_connection_string strips sslmode
-
-`pg_connection_string()` had `.split("?")[0]` which stripped `?sslmode=require` from Fly.io's DATABASE_URL. psycopg's `AsyncConnection.connect()` needs SSL on Fly.io Postgres, so without sslmode the connection fails silently (exception is caught and logged as a warning). This means the `checkpoint_migrations` table is never created, which causes the health check to fail, which blocks bluegreen deployments.
-
-Fix: never strip query params from DATABASE_URL. `asyncpg.connect()` and `psycopg.AsyncConnection.connect()` both accept standard Postgres query params like `sslmode=require`.
-
 ### Deployment: health check `finally` block `conn.close()` can override inner `return`
 
 In `_check_checkpointer()`, the inner `try/except` catches query failures and returns "degraded". But the `finally` block runs `conn.close()` before the return completes. If `conn.close()` raises, the exception propagates to the outer `except Exception`, overrides the "degraded" result, and produces "unavailable" with empty detail ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â even though the query failure was the real issue.
@@ -738,7 +732,6 @@ Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-ms
 
 ### Frontend / API & Errors
 
-- `openapi-fetch` returns error objects (not strings) on non-2xx responses ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never embed bare `${err}` in template literals. Always use `formatApiError(err)` (see `frontend/src/lib/api/formatError.ts`) to extract a readable `error.detail` or `error.message`.
 - API failures must not trigger full-page redirects ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â show an in-page `ErrorAlert` with retry button instead. This is especially critical for the feature-flags API called by `planStore.fetchPlan()`, which runs on every page mount.
 - The 401 interceptor in `client.ts` does a hard `window.location.href = '/login'` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ensure the auth token is still valid before the interceptor fires. A single expired-token or failed feature-flags call can cascade into an unusable redirect loop.
 
@@ -796,7 +789,6 @@ Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-ms
 ### Backend / Error Tracking & Observability
 
 - **Error tracking API endpoints that read from DB must fetch all data inside the `session.begin()` transaction block.** If a query like `get_error_group()` is made inside the transaction (for RLS context) but a subsequent `get_error_events_by_group()` call is made outside it, the second call runs without RLS context and can leak cross-org data or return stale results. Wrap all DB reads/writes in the same `async with session.begin():` block that contains the auth/RLS setup.
-- **Redis async calls from sync context: always `await` the coroutine.** `_get_last_fired` and `_set_last_fired` in alert evaluation were defined as `async def` but called without `await` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the coroutine object was silently discarded, the cooldown never persisted to Redis, and the method returned `True` (non-None coroutine) so cooldowns appeared perpetually active. Never discard an `async` coroutine without `await` unless intentionally fire-and-forget (and even then, `asyncio.create_task` is preferred).
 - **Error forwarders must isolate failures per-forwarder.** A single forwarder's HTTP failure (network error, bad API key) must not prevent other forwarders from delivering, and must not crash the error ingestion pipeline. Wrap each `forward()` call in `try/except` and log the failure.
 - **Alert evaluation cooldown keys should include both rule_id and fingerprint.** Without the fingerprint in the cooldown key, all errors matching a rule share a single cooldown ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the first error that fires an alert suppresses alerts for entirely different errors. The key format should be `alert_cooldown:{org_id}:{rule_id}:{fingerprint}`.
 
@@ -820,17 +812,6 @@ Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-ms
 - `en-US.json` can accumulate non-user-facing artifacts (SVG path data, JS expressions with `??`/`||`, template literals, function calls) from the auto-extraction script. After extraction, verify all JSON values are human-readable text. Remove keys containing `??`, `${`, `||`, function calls, or SVG path data.
 - When adding locale sync between frontend and backend, verify the Pinia store's payload shape matches the API model. `PUT /api/v1/me/settings` expects `{ locale: "..." }` at top level (flat), not `{ preferences: { locale: "..." } }` (nested). Misaligned shapes silently fail ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the locale is never persisted. Verify both the send direction (`syncToBackend`) and the read direction (`initLocale`) match the backend's `SettingsResponse`/`SettingsUpdate` Pydantic models.
 
-### Translation values must not contain newlines or HTML entities
-
-Translation values in `en-US.js` (and all locale JSON files) must NEVER contain:
-- Literal newlines (`\n`)
-- HTML entities like `&#10;`, `&amp;`, etc.
-
-If a UI element needs multi-line text (like a textarea placeholder with multiple lines), split it into separate translation keys and concatenate them in the template with `+ '\n' +`. This ensures:
-1. Translation files stay machine-parseable and diffable
-2. No encoding issues between JSON values and HTML attribute bindings
-3. Translators see clean, single-line strings
-
 ### Frontend / Store & View Patterns
 
 - Do not duplicate computed properties across a Pinia store and a Vue view. Define the computed once in the store and reference it from the view via `storeName.propertyName`.
@@ -841,8 +822,6 @@ If a UI element needs multi-line text (like a textarea placeholder with multiple
 
 ### Backend / Async & Concurrency
 
-- `asyncio.create_task()` called from sync code (SQLAlchemy listeners, signal handlers) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ guard with `try: asyncio.get_running_loop(); except RuntimeError: log_warning(...) else: create_task(...)`. Without this guard, calling sync code without a running event loop crashes with `RuntimeError: no running event loop`.
-- Monkey-patching stdlib types (`asyncio.Queue._user_id = ...`) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ use a separate tracking structure (`dict[int, str]` keyed by `id(queue)`). Stdlib types are not guaranteed to have dunder-namespace stability and future CPython versions may add internal `_`-prefixed attributes that collide.
 - Lazy-init side effects in dual-channel classes (pub/sub, read/write) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ each method should only create its own channel. `publish()` must not create subscription connections and `subscribe()` must not create publishing connections. Use the shared `connect()` method for full initialization.
 
 ### Backend / BDD Feature Tests
@@ -935,31 +914,6 @@ This destroys all machines and creates fresh ones that register correctly with t
 - \[deploy] strategy = 'rolling'\ is set in \ly.toml\ and \ly.staging.toml\
 - Always use the deploy pipeline or \deploy.ps1\ Ã¢â‚¬â€ never \lyctl deploy\ directly
 - Never pass \--strategy immediate\ Ã¢â‚¬â€ rolling/canary/bluegreen are the safe options
-
-### Playwright E2E: never use `waitForLoadState('networkidle')`
-
-`page.waitForLoadState('networkidle')` never fires on staging because the app
-has ongoing polling (WebSocket connections, feature flag checks, price checks).
-`networkidle` waits for zero network activity for 500ms, which never happens
-on a live deployment with persistent connections.
-
-**Correct pattern:** Use targeted selector waits on the element the test needs:
-
-```
-// Instead of:
-await page.goto('/pipelines')
-await page.waitForLoadState('networkidle')
-await expect(page.locator('h1')).toContainText('Pipelines')
-
-// Use:
-await page.goto('/pipelines')
-await expect(page.locator('h1')).toContainText('Pipelines')  // expect() already retries
-```
-
-The `expect().toContainText()`, `expect().toBeVisible()`, and
-`page.waitForURL()` all have built-in retry/timeout Ã¢â‚¬â€ they implicitly wait
-for the condition to be met. Adding `waitForLoadState('networkidle')` before
-them is always redundant and often harmful (adds 500ms+ per call).
 
 ### Playwright E2E: use `storageState` for shared login on staging
 
