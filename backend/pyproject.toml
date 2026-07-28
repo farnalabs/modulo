@@ -149,7 +149,7 @@ packages = ["src/modulo"]
 line-length = 120
 target-version = "py312"
 src = ["src"]
-exclude = ["*.feature", "tests/connectors/__init__.py"]
+exclude = ["*.feature", "tests/connectors/__init__.py", ".semgrep/tests/"]
 
 [tool.ruff.lint]
 select = [

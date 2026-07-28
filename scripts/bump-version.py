@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bump the project version across all relevant files."""
+"""Bump the project version across all relevant files."""  # noqa: N999
 
 import re
 import sys

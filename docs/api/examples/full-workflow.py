@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Modulo API Example: Complete Workflow
 
@@ -78,7 +77,6 @@ def main():
     connector_id = None
     schema_id = None
     run_id = None
-    claim_token = None
 
     # httpx supports both sync and async; we use sync for simplicity
     # and only use asyncio for the WebSocket monitor.

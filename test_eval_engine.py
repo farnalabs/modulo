@@ -1,14 +1,5 @@
-from uuid import uuid4
 
 import pytest
-
-from conftest import (
-    make_capturing_callable,
-    make_eval_def,
-    make_llm_callable,
-    make_result,
-)
-
 from modulo.core.eval_engine import (
     _CONTENT_BEGIN,
     _CONTENT_END,
@@ -23,6 +14,13 @@ from modulo.core.eval_engine import (
     SuiteEvalResult,
     UnknownEvalTypeError,
     evaluate_suite,
+)
+
+from conftest import (
+    make_capturing_callable,
+    make_eval_def,
+    make_llm_callable,
+    make_result,
 )
 
 

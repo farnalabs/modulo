@@ -50,7 +50,7 @@ async def _bootstrap():
 
 try:
     asyncio.run(_bootstrap())
-except Exception as exc:
+except Exception as exc:  # noqa: BLE001
     print(
         f"WARNING: Could not bootstrap alembic_version: [{type(exc).__name__}] {exc}",
         file=sys.stderr,
