@@ -759,7 +759,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         from modulo.api.routes.health import set_worker_ref as set_health_bg_worker
 
         set_health_bg_worker(_bg_worker)
-        logger.info("startup.redis_configured â€” Celery beat available for distributed scheduling")
+        logger.info("startup.redis_configured - Celery beat available for distributed scheduling")
+        # Start in-process cron trigger scheduler
+        from modulo.core.scheduler import run_scheduler
+        _scheduler_stop = asyncio.Event()
+        _scheduler_task = asyncio.create_task(run_scheduler(_scheduler_stop), name="cron-scheduler")
+        logger.info("started in-process cron scheduler")
     except Exception:
         logger.warning("startup.background_worker_init_failed", exc_info=True)
 
@@ -973,4 +978,3 @@ app.mount("/mcp", build_mcp_asgi_app())
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)
-
