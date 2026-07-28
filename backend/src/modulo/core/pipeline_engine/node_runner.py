@@ -686,6 +686,7 @@ def make_sandbox_agent_fn(
                         agent_command,
                         timeout=sandbox_timeout,
                         envs={
+                            **env_vars_extra,
                             "MODULO_RUN_ID": run_id,
                             "MODULO_PIPELINE_ID": pipeline_id,
                             "MODULO_ORG_ID": org_id,
@@ -694,7 +695,6 @@ def make_sandbox_agent_fn(
                             "GITHUB_TOKEN": os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
                             or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
                             or os.environ.get("GITHUB_TOKEN", ""),
-                            **env_vars_extra,
                         },
                     ),
                     timeout=sandbox_timeout,
