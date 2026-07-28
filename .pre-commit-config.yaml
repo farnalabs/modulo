@@ -148,6 +148,12 @@
         language: system
         files: ^backend/pyproject\.toml$
         pass_filenames: false
+      - id: validate-pipeline-configs
+        name: validate pipeline configs (agent_prompt, timeout_seconds, template_id)
+        entry: uv run --directory backend --no-sync python scripts/validate-pipeline-configs.py
+        language: system
+        files: ^(backend/src/modulo/core/pipeline_engine/node_runner\.py|backend/src/modulo/api/mcp_server\.py|scripts/validate-pipeline-configs\.py)$
+        pass_filenames: false
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
