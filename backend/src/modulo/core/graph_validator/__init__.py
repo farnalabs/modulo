@@ -112,6 +112,8 @@ class GraphValidator:
         if not result.is_valid:
             return result
 
+        self._check_edges(graph_json, result)
+        self._check_sandbox_agent_config(graph_json, result)
         self._check_schema_compatibility(graph_json, result)
         await self._check_connector_bindings(connector_bindings or [], session, result)
         await self._check_model_backends(model_backend_pins or [], session, result)
@@ -189,6 +191,12 @@ class GraphValidator:
             )
         elif not result.is_valid:
             return self._strip_warnings(result)
+
+        # Sandbox agent config check.
+        self._check_sandbox_agent_config(snapshot.graph_json, result)
+
+        # Edge validation.
+        self._check_edges(snapshot.graph_json, result)
 
         # Connector and backend checks.
         await self._check_connector_bindings(snapshot.connector_bindings_json, session, result)
@@ -1392,3 +1400,144 @@ class GraphValidator:
                 f"Node '{node_id}', eval '{eval_name}': json_schema eval requires 'schema' or 'schema_ref' in config",
                 node_id=node_id,
             )
+
+    # ------------------------------------------------------------------
+    # Sandbox agent config
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_sandbox_agent_config(graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """Validate sandbox_agent node configurations.
+
+        Checks:
+        1. agent_command is non-empty.
+        2. template_id is set.
+        3. timeout_seconds within bounds (60-3600) if set.
+        4. context_files source paths start with /.
+        5. env_vars keys avoid reserved prefixes.
+        6. output_schema_json has valid JSON Schema structure if present.
+        """
+        _RESERVED_ENV_PREFIXES = ("MODULO_", "OPENCODE_API_KEY")
+
+        for node in graph_json.get("nodes", []):
+            if node.get("node_type") != "sandbox_agent":
+                continue
+            nid = _string_or_default(node.get("id"))
+
+            # 1. agent_command must be non-empty.
+            cmd = node.get("agent_command", "")
+            if not cmd or not str(cmd).strip():
+                result.warning(
+                    "SANDBOX_MISSING_COMMAND",
+                    f"Sandbox agent node '{nid}' has empty agent_command",
+                    node_id=nid,
+                )
+
+            # 2. template_id must be set.
+            template_id = node.get("template_id")
+            if not template_id:
+                result.warning(
+                    "SANDBOX_MISSING_TEMPLATE",
+                    f"Sandbox agent node '{nid}' has no template_id (expected 'opencode')",
+                    node_id=nid,
+                )
+
+            # 3. timeout_seconds bounds.
+            timeout = node.get("timeout_seconds")
+            if timeout is not None:
+                try:
+                    t = int(timeout) if not isinstance(timeout, int) else timeout
+                    if t < 60 or t > 3600:
+                        result.warning(
+                            "SANDBOX_TIMEOUT_BOUNDS",
+                            f"Sandbox agent node '{nid}' timeout_seconds={t} is outside recommended "
+                            f"range 60-3600s",
+                            node_id=nid,
+                        )
+                except (ValueError, TypeError):
+                    result.warning(
+                        "SANDBOX_TIMEOUT_INVALID",
+                        f"Sandbox agent node '{nid}' timeout_seconds is not a valid integer",
+                        node_id=nid,
+                    )
+
+            # 4. context_files paths must be absolute.
+            context_files = node.get("context_files")
+            if isinstance(context_files, dict):
+                for source_path in context_files:
+                    if not source_path.startswith("/"):
+                        result.warning(
+                            "SANDBOX_CONTEXT_PATH_RELATIVE",
+                            f"Sandbox agent node '{nid}' context_files source '{source_path}' "
+                            f"is not an absolute path (should start with /)",
+                            node_id=nid,
+                        )
+
+            # 5. env_vars must not use reserved prefixes.
+            env_vars = node.get("env_vars")
+            if isinstance(env_vars, dict):
+                for key in env_vars:
+                    for prefix in _RESERVED_ENV_PREFIXES:
+                        if key.startswith(prefix):
+                            result.warning(
+                                "SANDBOX_RESERVED_ENV_VAR",
+                                f"Sandbox agent node '{nid}' env var '{key}' uses reserved "
+                                f"prefix '{prefix}'. System-reserved env vars are set automatically.",
+                                node_id=nid,
+                            )
+
+            # 6. output_schema_json basic structure.
+            schema_json = node.get("output_schema_json")
+            if isinstance(schema_json, dict):
+                if "type" not in schema_json and "$ref" not in schema_json:
+                    result.warning(
+                        "SANDBOX_SCHEMA_INCOMPLETE",
+                        f"Sandbox agent node '{nid}' output_schema_json lacks 'type' or '$ref'",
+                        node_id=nid,
+                    )
+
+    # ------------------------------------------------------------------
+    # Edge validation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_edges(graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """Validate edge-related graph configuration."""
+        nodes = graph_json.get("nodes", [])
+        edges = graph_json.get("edges", [])
+
+        if nodes and not edges:
+            result.warning(
+                "GRAPH_NO_EDGES",
+                f"Graph has {len(nodes)} nodes but no edges. Single-node pipeline? "
+                "If the graph should have flow connections, add edges between nodes.",
+            )
+
+        # Check for duplicate node IDs (belt-and-suspenders with Pydantic/MCP layer).
+        seen_ids: set[str] = set()
+        for n in nodes:
+            nid = n.get("id")
+            if nid is None:
+                continue
+            nid_str = str(nid)
+            if nid_str in seen_ids:
+                result.error(
+                    "GRAPH_DUPLICATE_NODE_ID",
+                    f"Duplicate node ID '{nid_str}' found in graph",
+                    node_id=nid_str,
+                )
+            seen_ids.add(nid_str)
+
+        # Check node ID format (warn on non-UUID-like values).
+        _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+        for n in nodes:
+            nid = n.get("id")
+            if nid is None:
+                continue
+            nid_str = str(nid)
+            if not _UUID_RE.match(nid_str):
+                result.warning(
+                    "GRAPH_NODE_ID_FORMAT",
+                    f"Node ID '{nid_str}' does not look like a standard UUID format",
+                    node_id=nid_str,
+                )

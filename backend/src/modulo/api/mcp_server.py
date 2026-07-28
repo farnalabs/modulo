@@ -622,6 +622,45 @@ async def update_pipeline_graph(
             except ValueError:
                 return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
+            # --- Graph-level validation ---
+            if not nodes:
+                return {
+                    "error": "validation_error",
+                    "detail": "Graph must have at least one node",
+                }
+
+            node_ids = [n.get("id") for n in nodes]
+            if len(node_ids) != len(set(node_ids)):
+                return {
+                    "error": "validation_error",
+                    "detail": "Duplicate node IDs detected in graph",
+                }
+
+            if edges:
+                edge_ids = [e.get("id") for e in edges]
+                if len(edge_ids) != len(set(edge_ids)):
+                    return {
+                        "error": "validation_error",
+                        "detail": "Duplicate edge IDs detected in graph",
+                    }
+
+            for node in nodes:
+                node_type = node.get("node_type")
+                if node_type == "sandbox_agent":
+                    agent_command = node.get("agent_command", "")
+                    if not agent_command or not str(agent_command).strip():
+                        return {
+                            "error": "validation_error",
+                            "node_id": str(node.get("id", "")),
+                            "detail": "Sandbox agent nodes require a non-empty agent_command",
+                        }
+                    if not node.get("template_id"):
+                        return {
+                            "error": "validation_error",
+                            "node_id": str(node.get("id", "")),
+                            "detail": "Sandbox agent nodes require a template_id",
+                        }
+
             async with _session(org_id) as s:
                 result = await replace_pipeline_graph(
                     s,
