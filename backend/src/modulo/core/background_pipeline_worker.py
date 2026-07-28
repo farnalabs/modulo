@@ -164,7 +164,7 @@ class BackgroundPipelineWorker:
                                 WHERE r.status IN ('running', 'pending')
                                   AND r.updated_at < NOW()
                                     - COALESCE(p.stale_run_timeout_minutes, 60) * INTERVAL '1 minute'
-                                  AND (r.outputs_json IS NULL OR r.outputs_json = '{}'::jsonb)
+                                  AND (r.outputs_json IS NULL OR r.outputs_json::jsonb = '{}'::jsonb)
                             """)
                         )
                         for row in rows:
