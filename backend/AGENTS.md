@@ -253,3 +253,23 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 ### Route auth: admin-only routes must use `get_current_user`, not `get_current_tenant_user`
 
 - When a route checks admin permissions internally (via `_require_admin` or `is_system_admin`), use `Depends(get_current_user)` for the auth dependency — NOT `Depends(get_current_tenant_user)`. The tenant user dependency requires `organisation_id` and `org_role` to be non-None, which system admins may not have (they can be admin without org membership). Using `get_current_tenant_user` causes a 403 "Organisation membership required" before the admin check even runs. The `_require_admin` guard is the sole gate needed for system-admin routes. Found in the feature-flag org-override endpoints.
+
+### `agent_prompt` must always be non-empty for sandbox_agent nodes
+
+- Every `sandbox_agent` node in a pipeline graph must have a non-empty `agent_prompt`. This is enforced at three levels: (1) Pydantic model validation on `PipelineGraphNode` raises 422 if `agent_prompt` is missing/empty when `node_type == "sandbox_agent"`, (2) the `update_pipeline_graph` MCP tool validates all nodes before calling `replace_pipeline_graph`, and (3) the `GraphValidator._check_sandbox_agent_config` method emits an error at both save-time and pre-run validation. An agent running inside the sandbox without a prompt is a no-op — always provide the full instruction text.
+
+### Always wrap E2B SDK calls in `asyncio.wait_for()`
+
+- Every call to the E2B Sandbox SDK (creating a sandbox, running commands, reading files, closing) must be wrapped in `asyncio.wait_for()` with a realistic timeout. The E2B API can hang indefinitely under network congestion, upstream provider issues, or resource exhaustion. Without a timeout, a hung SDK call blocks the entire pipeline node indefinitely, consuming the node's timeout budget without making progress. Use 30s for sandbox creation, 300s for command execution, and 10s for teardown operations as baseline timeouts.
+
+### `**env_vars_extra` must precede system env vars in sandbox command construction
+
+- When constructing the shell command for a sandbox agent, environment variables from user config (`env_vars_extra`) must be placed BEFORE system-injected env vars (`OPENCODE_API_KEY`, `GITHUB_TOKEN`, etc.) in the shell command prefix. If system vars come first and a user-provided `GITHUB_TOKEN` is in `env_vars_extra`, the system value is silently overwritten — the user's token may have narrower permissions. Putting user vars first means the system vars win on conflict, providing a guaranteed baseline capability. Pattern: `env_vars_extra kv pairs` then `system env vars` then `opencode run ...`.
+
+### Stale cleanup `outputs_json` comparison needs `::jsonb` cast in PostgreSQL
+
+- When comparing JSONB columns in cleanup queries (e.g. deleting stale runs where `outputs_json` matches known patterns), the comparison must include an explicit `::jsonb` cast on the parameter value. Without the cast, PostgreSQL may compare JSON to JSONB using text equality, which fails for semantically identical JSON that differs in key ordering or whitespace. Pattern: `text("outputs_json != :clean::jsonb").bindparams(clean=json.dumps(result))`. Without the cast, cleanup queries silently skip rows whose JSON is semantically equal but textually different.
+
+### Pipeline timeout should account for sandbox provisioning + opencode execution time
+
+- Setting `timeout_seconds` on a pipeline node that runs a sandbox agent must account for: (1) E2B sandbox provisioning (~5-15s), (2) dependency installation in the sandbox (~30-120s for pip/uv sync), (3) the opencode agent's own execution loop (varies by task complexity — simple lint fixes take 60-180s, complex rebase + fix cycles take 300-900s), and (4) output collection and sandbox teardown (~5-10s). The recommended minimum for code-generation tasks is 1200s (20 min). Values below 60s are flagged by `GraphValidator._check_sandbox_agent_config` as too short.
