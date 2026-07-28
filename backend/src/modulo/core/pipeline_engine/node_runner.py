@@ -41,8 +41,11 @@ Eval-before-interrupt (Ã,Â§8.17):
 """
 
 import asyncio
+import base64
 import json
 import logging
+import os
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from contextlib import suppress
@@ -50,6 +53,7 @@ from typing import Any
 
 import jinja2
 import jmespath
+from jinja2.sandbox import SandboxedEnvironment
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
@@ -144,9 +148,6 @@ def make_node_fn(
         # (connector_binding nodes, manual nodes routed through wrong path, etc.).
         if not model_backend_id_str:
             return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
-
-        # Render prompt template against state using SandboxedEnvironment.
-        from jinja2.sandbox import SandboxedEnvironment
 
         env = SandboxedEnvironment()
         template = env.from_string(prompt_template)
@@ -614,15 +615,11 @@ def make_sandbox_agent_fn(
     sandbox_timeout: int = node_def.get("timeout_seconds", 600)
     context_files: dict[str, str] = node_def.get("context_files") or {}
 
+    from e2b import AsyncSandbox  # type: ignore[import-untyped]
+    from opentelemetry import trace as _otel_trace
+
     @cancellable_node(timeout=timeout or sandbox_timeout, role="sandbox_agent")
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
-        import base64 as _b64
-        import os
-        import time as _time
-
-        from e2b import AsyncSandbox  # type: ignore[import-untyped]
-        from jinja2.sandbox import SandboxedEnvironment
-        from opentelemetry import trace as _otel_trace
 
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input: Any = run_context.get("input", {})
@@ -654,7 +651,7 @@ def make_sandbox_agent_fn(
                 "exit_code": 0,
             }
 
-        start_time = _time.monotonic()
+        start_time = time.monotonic()
         sandbox: AsyncSandbox | None = None
 
         _stdout_len = 0
@@ -668,7 +665,7 @@ def make_sandbox_agent_fn(
 
             for path, content in context_files.items():
                 if path.endswith(".b64"):
-                    content = _b64.b64decode(content).decode()
+                    content = base64.b64decode(content).decode()
                     path = path[:-4]
                 await sandbox.files.write(path, content)
 
@@ -721,7 +718,7 @@ def make_sandbox_agent_fn(
                 )
                 cmd_result = getattr(_cee, "result", None) or _cee
 
-            elapsed = _time.monotonic() - start_time
+            elapsed = time.monotonic() - start_time
             exit_code: int = getattr(cmd_result, "exit_code", -1)
             agent_stdout_raw: str = getattr(cmd_result, "stdout", "") or ""
             agent_stderr_raw: str = getattr(cmd_result, "stderr", "") or ""
@@ -733,7 +730,7 @@ def make_sandbox_agent_fn(
             raw_output: str = ""
             output_json: Any = None
             try:
-                _remaining_after_cmd = max(30.0, sandbox_timeout - (_time.monotonic() - start_time))
+                _remaining_after_cmd = max(30.0, sandbox_timeout - (time.monotonic() - start_time))
                 raw_output = await sandbox.files.read(
                     "/home/user/output.json",
                     request_timeout=_remaining_after_cmd,
@@ -765,7 +762,7 @@ def make_sandbox_agent_fn(
                         "sandbox_agent.schema_validation_failed",
                         extra={"node_id": node_id},
                     )
-                    elapsed = _time.monotonic() - start_time
+                    elapsed = time.monotonic() - start_time
                     return {
                         "artifacts": [
                             {
@@ -831,7 +828,7 @@ def make_sandbox_agent_fn(
         except asyncio.CancelledError:
             raise
         except Exception as _exc:
-            elapsed = _time.monotonic() - start_time
+            elapsed = time.monotonic() - start_time
             import traceback as _tb
 
             _exc_type = type(_exc).__name__
