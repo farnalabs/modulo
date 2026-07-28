@@ -23,7 +23,7 @@ def _sample(
     )
 
 
-def test_empty_samples_returns_findings():
+def test_empty_samples_returns_findings() -> None:
     findings = infer([])
     assert len(findings) >= 1
     # Should indicate no data was available
@@ -31,7 +31,7 @@ def test_empty_samples_returns_findings():
     assert "automation" in categories
 
 
-def test_repos_detect_development_stage():
+def test_repos_detect_development_stage() -> None:
     samples = [_sample("repos", [{"name": "backend"}, {"name": "frontend"}])]
     findings = infer(samples)
     stages = [f for f in findings if f.category == "stage" and "Development" in f.finding]
@@ -39,14 +39,14 @@ def test_repos_detect_development_stage():
     assert "2 repositories" in stages[0].evidence
 
 
-def test_pull_requests_detect_code_review():
+def test_pull_requests_detect_code_review() -> None:
     samples = [_sample("pulls", [{"number": 1, "created_at": "2026-06-20T00:00:00Z"}])]
     findings = infer(samples)
     review = [f for f in findings if f.category == "stage" and "Code review" in f.finding]
     assert len(review) == 1
 
 
-def test_stale_pr_bottleneck():
+def test_stale_pr_bottleneck() -> None:
     old_date = "2026-06-01T00:00:00Z"
     recent_date = "2026-06-22T00:00:00Z"
     samples = [
@@ -91,7 +91,7 @@ def test_planning_stage_from_jira_issues():
     assert "1 issues in planning statuses" in planning[0].evidence
 
 
-def test_planning_stage_from_linear_issues():
+def test_planning_stage_from_linear_issues() -> None:
     samples = [
         _sample(
             "issues",
@@ -107,7 +107,7 @@ def test_planning_stage_from_linear_issues():
     assert len(planning) == 1
 
 
-def test_issue_lifecycle_transition():
+def test_issue_lifecycle_transition() -> None:
     samples = [
         _sample(
             "issues",
@@ -125,7 +125,7 @@ def test_issue_lifecycle_transition():
     assert "Issue lifecycle" in transitions[0].finding
 
 
-def test_confidence_levels_present():
+def test_confidence_levels_present() -> None:
     samples = [
         _sample("repos", [{"name": "repo"}]),
         _sample("pulls", [{"number": 1, "created_at": "2026-06-22T00:00:00Z"}]),
@@ -135,7 +135,7 @@ def test_confidence_levels_present():
     assert confidences.issubset({"high", "medium", "low"})
 
 
-def test_each_finding_has_evidence():
+def test_each_finding_has_evidence() -> None:
     samples = [
         _sample("repos", [{"name": "repo"}]),
         _sample("issues", [{"fields": {"status": {"name": "Backlog"}}}], connector_type=ConnectorType.JIRA),
@@ -146,7 +146,7 @@ def test_each_finding_has_evidence():
         assert f.category, "Finding has no category"
 
 
-def test_linear_search_results():
+def test_linear_search_results() -> None:
     samples = [
         _sample(
             "issues",
@@ -162,7 +162,7 @@ def test_linear_search_results():
     assert any("Planning" in s for s in stages)
 
 
-def test_finding_model():
+def test_finding_model() -> None:
     f = Finding(
         category="stage",
         finding="Test finding",
@@ -175,7 +175,7 @@ def test_finding_model():
     assert f.uncertainty == "Some uncertainty"
 
 
-def test_related_connector_in_finding():
+def test_related_connector_in_finding() -> None:
     cid = uuid.uuid4()
     f = Finding(
         category="stage",
