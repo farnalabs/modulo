@@ -2,7 +2,7 @@ name: "Merge: Queue"
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -116,7 +116,7 @@ jobs:
 
               # Check CI status - only include PRs with passing CI
               CI_BRANCH=$(echo "$pr" | jq -r ".headRefName")
-              CI_CONCLUSION=$(gh run list --branch "$CI_BRANCH" --workflow "CI: PR Validation" --limit 1 --json conclusion --jq ".[0].conclusion" 2>/dev/null || echo "unknown")
+              CI_CONCLUSION=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --limit 1 --json conclusion --jq ".[0].conclusion" 2>/dev/null || echo "unknown")
               if [ "$CI_CONCLUSION" != "success" ]; then
                 echo "  skipping - CI not passing (latest: $CI_CONCLUSION)"
               else
@@ -202,6 +202,30 @@ jobs:
           echo "Merged: $merged_prs"
           echo "Conflicts: $conflict_prs"
 
+      - name: Notify fixer of conflicts
+        if: steps.merge.outputs.conflict_count != '0' && steps.merge.outputs.conflict_count != ''
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
+          CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg phase "merge-conflict" \
+            --arg conflictPrs "$CONFLICTS" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{repository: $repo, phase: $phase, conflictPrs: $conflictPrs, runUrl: $run_url}')
+          PAYLOAD="${TIMESTAMP}.${BODY}"
+          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "$BODY"
+          echo "Fixer notified of conflicts in PRs: $CONFLICTS"
       - name: Exit if nothing to merge
         if: steps.merge.outputs.merged_count == '0'
         run: |
@@ -353,27 +377,3 @@ jobs:
             -d "$BODY"
           echo "Fixer notified of CI failure"
 
-      - name: Notify fixer of conflicts
-        if: success() && steps.merge.outputs.conflict_count != '0' && steps.merge.outputs.conflict_count != ''
-        env:
-          WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
-        shell: bash
-        run: |
-          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
-          CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
-          TIMESTAMP=$(date +%s)
-          BODY=$(jq -n \
-            --arg repo "${{ github.repository }}" \
-            --arg phase "merge-conflict" \
-            --arg conflictPrs "$CONFLICTS" \
-            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            '{repository: $repo, phase: $phase, conflictPrs: $conflictPrs, runUrl: $run_url}')
-          PAYLOAD="${TIMESTAMP}.${BODY}"
-          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
-          curl -s -X POST "$WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-            -d "$BODY"
-          echo "Fixer notified of conflicts in PRs: $CONFLICTS"
