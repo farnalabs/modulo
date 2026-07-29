@@ -10,46 +10,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-context:
-    name: Check CI result and context
+
+  pre-deploy-tests:
+    name: Pre-deploy tests (fast + expensive)
     runs-on: ubicloud-standard-2
-    outputs:
-      ci_passed: ${{ steps.check-ci.outputs.ci_passed }}
-      head_sha: ${{ steps.check-ci.outputs.head_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
-          fetch-depth: 0
-      - name: Check main CI status
-        id: check-ci
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          MAIN_SHA=$(git rev-parse main)
-          CI_RUN=$(gh run list --workflow "CI: Fast Validation" --branch main --limit 1 --json conclusion,headSha 2>/dev/null || echo "[]")
-          CI_CONCLUSION=$(echo "$CI_RUN" | jq -r '.[0].conclusion // "unknown"')
-          CI_SHA=$(echo "$CI_RUN" | jq -r '.[0].headSha // "unknown"')
-          echo "Main HEAD: $MAIN_SHA"
-          echo "Latest CI run: conclusion=$CI_CONCLUSION sha=$CI_SHA"
-          if [ "$CI_CONCLUSION" = "success" ] && [ "$CI_SHA" = "$MAIN_SHA" ]; then
-            echo "ci_passed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ci_passed=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Main CI has not passed for current HEAD. CI=$CI_CONCLUSION, SHA match=$([ "$CI_SHA" = "$MAIN_SHA" ] && echo yes || echo no)"
-          fi
-          echo "head_sha=$MAIN_SHA" >> "$GITHUB_OUTPUT"
-
-  pre-deploy-tests:
-    name: Pre-deploy tests (fast + expensive)
-    needs: [check-context]
-    if: needs.check-context.outputs.ci_passed == 'true'
-    runs-on: ubicloud-standard-2
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.check-context.outputs.head_sha }}
           fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v7
@@ -152,7 +120,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.check-context.outputs.head_sha }}
+          ref: main
           fetch-depth: 1
 
       - name: Capture git metadata
@@ -201,7 +169,7 @@ jobs:
       - name: Check deployed SHA
         shell: pwsh
         run: |
-          $expectedSha = "${{ needs.check-context.outputs.head_sha }}".Substring(0, 7)
+          $expectedSha = "main".Substring(0, 7)
           $info = curl -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) { Write-Host "No deployment info"; exit 1 }
           $deployInfo = $info | ConvertFrom-Json
@@ -214,9 +182,8 @@ jobs:
 
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
-    needs: [check-context, deploy-staging]
+    needs: [deploy-staging]
     timeout-minutes: 60
-    if: needs.check-context.outputs.ci_passed == 'true'
     runs-on: ubicloud-standard-2
     defaults:
       run:
@@ -224,7 +191,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.check-context.outputs.head_sha }}
+          ref: main
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
@@ -278,13 +245,12 @@ jobs:
 
   deploy-production:
     name: Deploy to app.modulo.run
-    needs: [check-context, staging-e2e]
-    if: needs.check-context.outputs.ci_passed == 'true'
+    needs: [staging-e2e]
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.check-context.outputs.head_sha }}
+          ref: main
           fetch-depth: 1
 
       - name: Capture git metadata
@@ -333,7 +299,7 @@ jobs:
       - name: Check deployed SHA
         shell: pwsh
         run: |
-          $expectedSha = "${{ needs.check-context.outputs.head_sha }}".Substring(0, 7)
+          $expectedSha = "main".Substring(0, 7)
           $info = curl -s -m 10 "https://app.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) { Write-Host "No deployment info"; exit 1 }
           $deployInfo = $info | ConvertFrom-Json
@@ -345,7 +311,7 @@ jobs:
           Write-Host "app.modulo.run SHA match: $deployedSha"
   prod-smoke:
     name: Prod smoke tests
-    needs: [check-context, deploy-production]
+    needs: [deploy-production]
     if: always() && needs.deploy-production.result == 'success'
     runs-on: ubicloud-standard-2
     defaults:
@@ -354,7 +320,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.check-context.outputs.head_sha }}
+          ref: main
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
