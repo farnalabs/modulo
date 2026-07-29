@@ -1,4 +1,4 @@
-"""Integration tests for VariantGroup CRUD.
+﻿"""Integration tests for VariantGroup CRUD.
 
 RLS is set to test_org; all inserts are rolled back after each test.
 Requires Postgres via testcontainers.
@@ -14,10 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from modulo.db.crud.variant_group import (
     check_pipeline_run_quota,
     create_variant_group,
-    soft_delete_variant_group,
     get_coverage_gaps,
     get_variant_group,
     list_variant_groups,
+    soft_delete_variant_group,
     update_variant_group,
 )
 from modulo.db.models.variant_group import VariantGroup
@@ -304,3 +304,4 @@ async def test_no_coverage_gaps_when_all_evals_present(
 
     gaps = await get_coverage_gaps(rls_session, group)
     assert len(gaps) == 0
+
