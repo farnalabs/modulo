@@ -192,11 +192,15 @@ async def reveal_sensitive_value(
             detail="This feature is not available. Run database migrations to enable it.",
         ) from None
 
-    token = str(uuid.uuid4())
-    redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
-        await redis.setex(f"sensitive_reveal:{token}", 30, actual_value)
+        redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    except Exception:
+        return RevealResponse(token="", value=actual_value, expires_in_seconds=30)
+
+    reveal_token = str(uuid.uuid4())
+    try:
+        await redis.setex(f"sensitive_reveal:{reveal_token}", 30, actual_value)
     finally:
         await redis.aclose()
 
-    return RevealResponse(token=token, value=actual_value, expires_in_seconds=30)
+    return RevealResponse(token=reveal_token, value=actual_value, expires_in_seconds=30)

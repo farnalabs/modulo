@@ -84,7 +84,7 @@ class TestAlertEngineEvaluate:
         expected_alerts: int,
         expected_action_type: str | None,
     ) -> None:
-        engine = AlertEngine()
+        engine = AlertEngine(redis_client=MagicMock())
         session = _make_session_with_rules(rules)
 
         alerts = await engine.evaluate(
@@ -107,7 +107,7 @@ class TestAlertEngineEvaluate:
 
 class TestAlertEngineCooldown:
     async def test_same_rule_group_does_not_duplicate_within_cooldown(self) -> None:
-        engine = AlertEngine()
+        engine = AlertEngine(redis_client=MagicMock())
         session = _make_session_with_rules([_make_rule()])
 
         alerts1 = await engine.evaluate(
@@ -131,7 +131,7 @@ class TestAlertEngineCooldown:
         assert len(alerts2) == 0
 
     async def test_different_group_not_affected_by_cooldown(self) -> None:
-        engine = AlertEngine()
+        engine = AlertEngine(redis_client=MagicMock())
         session = _make_session_with_rules([_make_rule()])
         other_group_id = uuid.UUID("00000000-0000-0000-0000-000000000099")
 
@@ -157,7 +157,7 @@ class TestAlertEngineCooldown:
     async def test_different_rule_not_affected_by_cooldown(self) -> None:
         r1 = _make_rule(name="Rule A", condition_min_count=1)
         r2 = _make_rule(name="Rule B", condition_min_count=5)
-        engine = AlertEngine()
+        engine = AlertEngine(redis_client=MagicMock())
         session = _make_session_with_rules([r1, r2])
 
         await engine.evaluate(

@@ -63,12 +63,15 @@ def _model_backend(
     return m
 
 
+_UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+_UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
 _SIMPLE_GRAPH: dict[str, Any] = {
-    "nodes": [{"id": "a"}, {"id": "b"}],
-    "edges": [{"source": "a", "target": "b", "type": "normal"}],
+    "nodes": [{"id": _UUID_A}, {"id": _UUID_B}],
+    "edges": [{"source": _UUID_A, "target": _UUID_B, "type": "normal"}],
 }
 
-_SINGLE_NODE: dict[str, Any] = {"nodes": [{"id": "a"}], "edges": []}
+_SINGLE_NODE: dict[str, Any] = {"nodes": [{"id": _UUID_A}], "edges": []}
 
 
 # ---------------------------------------------------------------------------

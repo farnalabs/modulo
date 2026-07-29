@@ -251,7 +251,12 @@ class TestAuthEndpointSchemas:
         validate_shape(resp.json(), MeResponse)
 
     def test_ws_token_schema(self, client: TestClient) -> None:
-        resp = client.post("/api/v1/auth/ws-token")
+        with patch("modulo.api.routes.auth.Redis.from_url") as mock_redis_factory:
+            mock_redis = AsyncMock()
+            mock_redis.setex = AsyncMock()
+            mock_redis.aclose = AsyncMock()
+            mock_redis_factory.return_value = mock_redis
+            resp = client.post("/api/v1/auth/ws-token")
         assert resp.status_code == 200
         from modulo.api.routes.auth import WsTokenResponse
 

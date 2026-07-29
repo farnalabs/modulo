@@ -171,27 +171,31 @@ class SessionKeyStore:
     Keys are identified by ``account_id`` (str). Each key has a 1-hour TTL.
     """
 
-    def __init__(self, redis_client: Redis) -> None:
-        if redis_client is None:
-            raise ValueError("SessionKeyStore requires a Redis client")
+    def __init__(self, redis_client: Redis | None = None) -> None:
         self._redis = redis_client
+        self._in_memory: dict[str, str] = {}
 
     async def generate_key(self, account_id: str) -> str:
         key = secrets.token_hex(32)
-        try:
-            await self._redis.setex(f"error_hmac_key:{account_id}", _HMAC_KEY_TTL, key)
-        except Exception:
-            _log.exception("session_key_store.redis_set_failed", extra={"account_id": account_id})
-            raise
+        if self._redis is not None:
+            try:
+                await self._redis.setex(f"error_hmac_key:{account_id}", _HMAC_KEY_TTL, key)
+            except Exception:
+                _log.exception("session_key_store.redis_set_failed", extra={"account_id": account_id})
+                raise
+        else:
+            self._in_memory[account_id] = key
         return key
 
     async def get_key(self, account_id: str) -> str | None:
-        try:
-            val = await self._redis.get(f"error_hmac_key:{account_id}")
-            return val.decode() if isinstance(val, bytes) else val
-        except Exception:
-            _log.exception("session_key_store.redis_get_failed", extra={"account_id": account_id})
-            raise
+        if self._redis is not None:
+            try:
+                val = await self._redis.get(f"error_hmac_key:{account_id}")
+                return val.decode() if isinstance(val, bytes) else val
+            except Exception:
+                _log.exception("session_key_store.redis_get_failed", extra={"account_id": account_id})
+                raise
+        return self._in_memory.get(account_id)
 
     async def verify_hmac(self, account_id: str, body: bytes, signature: str) -> bool:
         key = await self.get_key(account_id)
