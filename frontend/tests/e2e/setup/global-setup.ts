@@ -1,5 +1,6 @@
 import { type FullConfig, chromium } from '@playwright/test'
 import { getTarget, getBaseUrl, getTestEnv } from './env'
+import { seedTargetEnvironment } from './seeder'
 
 async function globalSetup(_config: FullConfig) {
   const target = getTarget()
@@ -21,11 +22,14 @@ async function globalSetup(_config: FullConfig) {
     )
   }
 
+  const env = getTestEnv()
+  console.log(`[global-setup] Seeding data for ${target}...`)
+  const ctx = await seedTargetEnvironment(env)
+  console.log(`[global-setup] Seeder result: pipelineId=${ctx.pipelineId}, pipelineName=${ctx.pipelineName}`)
+
   console.log(`[global-setup] Logging in once for ${target}...`)
   const browser = await chromium.launch()
   const page = await browser.newPage()
-
-  const env = getTestEnv()
 
   await page.goto(baseURL + '/login')
   await page.waitForSelector('button[type="submit"]', { timeout: 30000 })
