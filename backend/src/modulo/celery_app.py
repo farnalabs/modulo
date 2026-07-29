@@ -19,7 +19,7 @@ from typing import Any
 try:
     from celery import Celery
     from celery.signals import task_failure
-    from kombu import Queue
+    from kombu import Queue  # type: ignore
 except ImportError:
     import typing
 

@@ -8,9 +8,9 @@ and SAML Response parsing with full XML digital signature verification.
 import logging
 from typing import Any
 
-from onelogin.saml2.auth import OneLogin_Saml2_Auth
-from onelogin.saml2.idp_metadata_parser import OneLogin_Saml2_IdPMetadataParser
-from onelogin.saml2.settings import OneLogin_Saml2_Settings
+from onelogin.saml2.auth import OneLogin_Saml2_Auth  # type: ignore
+from onelogin.saml2.idp_metadata_parser import OneLogin_Saml2_IdPMetadataParser  # type: ignore
+from onelogin.saml2.settings import OneLogin_Saml2_Settings  # type: ignore
 
 _log = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class ModuloSamlAuth:
             self._get_request_data(),
             self._settings_dict,
         )
-        return auth.login(stay=True)
+        return auth.login(stay=True)  # type: ignore[no-any-return]
 
     def process_response(self, saml_response: str) -> dict[str, Any]:
         """Validate a SAML Response including XML signature verification.
@@ -162,4 +162,4 @@ class ModuloSamlAuth:
     def get_sp_metadata(self) -> str:
         """Return SP metadata XML for IdP configuration."""
         saml_settings = OneLogin_Saml2_Settings(self._settings_dict)
-        return saml_settings.get_sp_metadata()
+        return saml_settings.get_sp_metadata()  # type: ignore[no-any-return]
