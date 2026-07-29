@@ -83,14 +83,16 @@ async def get_monitor_config(
     try:
         entry = await get_config(session, _CONFIG_KEY)
     except ProgrammingError:
+        _log.exception("admin.monitor_config.get_monitor_config - table missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("admin.monitor_config.get_monitor_config - SQL error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while fetching monitor config.",
+            detail="Database temporarily unavailable — this may be a transient issue. Try refreshing the page.",
         ) from None
     except HTTPException:
         raise
@@ -120,14 +122,16 @@ async def set_monitor_config(
             updated_by=current_user.account_id,
         )
     except ProgrammingError:
+        _log.exception("admin.monitor_config.set_monitor_config - table missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("admin.monitor_config.set_monitor_config - SQL error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while setting monitor config.",
+            detail="Database temporarily unavailable — this may be a transient issue. Try refreshing the page.",
         ) from None
     except HTTPException:
         raise
