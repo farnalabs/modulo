@@ -151,6 +151,7 @@ the field with the `SensitiveValue` type from `sensitive_mask.py`:
 ```python
 from modulo.api.middleware.sensitive_mask import SensitiveValue
 
+
 class MyResponse(BaseModel):
     public_data: str
     secret_value: SensitiveValue | None = None
@@ -169,9 +170,17 @@ Sensitive key patterns are defined in two locations:
 File: `backend/src/modulo/api/middleware/sensitive_mask.py`
 
 ```python
-_SENSITIVE_KEY_PATTERNS = frozenset({
-    "token", "secret", "api_key", "password", "passwd", "key", "credential",
-})
+_SENSITIVE_KEY_PATTERNS = frozenset(
+    {
+        "token",
+        "secret",
+        "api_key",
+        "password",
+        "passwd",
+        "key",
+        "credential",
+    }
+)
 ```
 
 To add a new pattern, edit this set and verify tests pass. The function
@@ -183,12 +192,28 @@ adding `"pwd"` would catch `db_pwd`, `ldap_pwd`, etc.
 File: `backend/src/modulo/core/logging_config.py`
 
 ```python
-_SENSITIVE_KEYS: frozenset[str] = frozenset({
-    "api_key", "api_secret", "access_key", "secret_key", "token",
-    "password", "passwd", "secret", "private_key", "credential",
-    "fernet_key", "auth_token", "bearer_token", "refresh_token",
-    "client_secret", "client_id", "session_key", "encryption_key",
-})
+_SENSITIVE_KEYS: frozenset[str] = frozenset(
+    {
+        "api_key",
+        "api_secret",
+        "access_key",
+        "secret_key",
+        "token",
+        "password",
+        "passwd",
+        "secret",
+        "private_key",
+        "credential",
+        "fernet_key",
+        "auth_token",
+        "bearer_token",
+        "refresh_token",
+        "client_secret",
+        "client_id",
+        "session_key",
+        "encryption_key",
+    }
+)
 ```
 
 For log redaction, each key is matched **exactly** (case-insensitive) — not

@@ -28,9 +28,7 @@ class ModelBackendBase(ABC):
         """Send a messages list and return a single response."""
 
     @abstractmethod
-    async def stream(
-        self, messages: list[BaseMessage]
-    ) -> AsyncIterator[str]:
+    async def stream(self, messages: list[BaseMessage]) -> AsyncIterator[str]:
         """Stream response tokens."""
 ```
 
@@ -48,6 +46,7 @@ class ModelBackendBase(ABC):
 
 ```python
 from modulo.model_backends.base import ModelBackendBase
+
 
 class MyCustomBackend(ModelBackendBase):
     def __init__(self, api_key: str, model_id: str, **kwargs):
@@ -101,6 +100,7 @@ Or programmatically:
 
 ```python
 from modulo.core.plugin_registry import get_plugin_registry
+
 registry = get_plugin_registry()
 registry.register_model_backend("custom", MyCustomBackend)
 ```

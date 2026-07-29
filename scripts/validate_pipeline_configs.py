@@ -12,8 +12,6 @@ from __future__ import annotations
 import ast
 import glob
 import json
-import os
-import re
 import sys
 from pathlib import Path
 
@@ -154,8 +152,7 @@ def _check_node_config(path: Path, obj: dict, prefix: str = "") -> None:
         extra_idx = keys.index("env_vars_extra")
         # Flag if env_vars_extra is not the first entry (it should be first to prevent overrides)
         for idx, key in enumerate(keys):
-            if key in ("GITHUB_TOKEN", "APP_MODULO_OPENCODE_API_KEY", "GITHUB_REVIEWBOT_PAT"):
-                if extra_idx > idx:
+            if key in ("GITHUB_TOKEN", "APP_MODULO_OPENCODE_API_KEY", "GITHUB_REVIEWBOT_PAT") and extra_idx > idx:
                     _fail(
                         f"{path}: env_vars_extra (index {extra_idx}) is placed after "
                         f"'{key}' (index {idx}) in node {prefix} — "

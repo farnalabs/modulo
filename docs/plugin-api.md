@@ -179,6 +179,7 @@ Create a Python package that implements either `ConnectorBase` or `ModelBackendB
 # my_plugin/connector.py
 from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorResult, HealthResult
 
+
 class MyConnector(ConnectorBase):
     @property
     def connector_type(self) -> str:
@@ -204,6 +205,7 @@ The entry point must point to a **builder function** — not a class directly. T
 ```python
 # my_plugin/__init__.py
 from my_plugin.connector import MyConnector
+
 
 def build_my_connector(config: dict, creds: dict) -> MyConnector:
     return MyConnector(config=config)
@@ -345,6 +347,7 @@ Unit tests use mocked entry points via `unittest.mock.patch`:
 
 ```python
 from modulo.core.plugin_registry import PluginRegistry, PluginManifest
+
 
 def test_manual_registration():
     registry = PluginRegistry()

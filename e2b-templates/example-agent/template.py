@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 from e2b import Template
 

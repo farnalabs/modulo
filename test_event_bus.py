@@ -160,6 +160,7 @@ class TestEventBus:
         await configure_event_bus(redis_broker=mock_redis)
         bus = get_event_bus()
         import modulo.core.events.event_bus as eb
+
         eb._event_bus = None
         eb._event_bus = bus
         await bus.publish("org-123", "run", "r1", "created", version=0)

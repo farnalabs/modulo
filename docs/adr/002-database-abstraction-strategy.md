@@ -45,10 +45,12 @@ Replace `from sqlalchemy.dialects.postgresql import UUID` with SA's generic `Uui
 ```python
 # Before
 from sqlalchemy.dialects.postgresql import UUID
+
 id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
 
 # After
 from sqlalchemy import Uuid
+
 id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True)
 ```
 

@@ -1,4 +1,5 @@
 """Shared conftest for the connector conformance suite."""
+
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from tests.connectors._conformance import (
 @pytest.fixture
 def fs_connector(tmp_path: Path):
     from modulo.connectors.filesystem import FilesystemConnector
+
     return FilesystemConnector(base_path=str(tmp_path))
 
 

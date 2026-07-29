@@ -253,7 +253,7 @@ async def preview_cron_schedule(
                 )
 
             times: list[str] = []
-            next_fire = datetime.datetime.now(datetime.timezone.utc)
+            next_fire = datetime.datetime.now(datetime.UTC)
             for _ in range(count):
                 next_fire = compute_next_fire(
                     trigger.cron_expression,

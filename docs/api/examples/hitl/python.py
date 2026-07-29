@@ -34,9 +34,13 @@ def bail(msg: str):
 
 
 def login(client: httpx.Client) -> str:
-    resp = client.post("/api/v1/auth/login", json={
-        "email": EMAIL, "password": PASSWORD,
-    })
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": EMAIL,
+            "password": PASSWORD,
+        },
+    )
     if resp.status_code != 200:
         bail(f"login failed: {resp.status_code} {resp.text}")
     return resp.json()["access_token"]
@@ -68,7 +72,7 @@ def main():
         print(f"  - Gate {g['gate_id']} | Run {g['run_id']} | Node: {g.get('node_id', 'N/A')}")
         print(f"    Created: {g.get('created_at', 'N/A')}")
         claimed_by = g.get("claimed_by")
-        print(f"    Claimed: {claimed_by if claimed_by else 'No (available)'}")
+        print(f"    Claimed: {claimed_by or 'No (available)'}")
 
     # Step 2: Pick the first available (unclaimed) gate
     available = [g for g in gates if not g.get("claimed_by")]

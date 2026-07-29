@@ -46,18 +46,19 @@ def bail(msg: str):
 
 def login(client: httpx.Client) -> tuple[str, str, str]:
     """Authenticate and return (access_token, refresh_token, user_id)."""
-    resp = client.post("/api/v1/auth/login", json={
-        "email": EMAIL,
-        "password": PASSWORD,
-    })
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": EMAIL,
+            "password": PASSWORD,
+        },
+    )
     if resp.status_code != 200:
         bail(f"Login failed: {resp.status_code} {resp.text}")
     data = resp.json()
     print(f"✓ Logged in as {EMAIL}")
 
-    me = client.get("/api/v1/auth/me", headers={
-        "Authorization": f"Bearer {data['access_token']}"
-    }).json()
+    me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {data['access_token']}"}).json()
     return data["access_token"], data["refresh_token"], me["id"]
 
 
@@ -94,12 +95,16 @@ def main():
         # STEP 2: Create a Pipeline
         # ═══════════════════════════════════════════════════════════
         step("2. Create Pipeline")
-        resp = client.post("/api/v1/pipelines", json={
-            "name": f"Full Workflow Demo {uuid.uuid4().hex[:8]}",
-            "description": "Created by full-workflow.py example",
-            "visibility": "org",
-            "max_concurrent_runs": 3,
-        }, headers=headers)
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={
+                "name": f"Full Workflow Demo {uuid.uuid4().hex[:8]}",
+                "description": "Created by full-workflow.py example",
+                "visibility": "org",
+                "max_concurrent_runs": 3,
+            },
+            headers=headers,
+        )
         if resp.status_code != 201:
             bail(f"Create pipeline failed: {resp.status_code} {resp.text}")
         pipeline = resp.json()
@@ -110,27 +115,35 @@ def main():
         # STEP 3: Create a Schema (input/output contract for the agent)
         # ═══════════════════════════════════════════════════════════
         step("3. Create Schema")
-        resp = client.post("/api/v1/schemas", json={
-            "name": "PR Review Input",
-            "description": "Input schema for code review agent",
-        }, headers=headers)
+        resp = client.post(
+            "/api/v1/schemas",
+            json={
+                "name": "PR Review Input",
+                "description": "Input schema for code review agent",
+            },
+            headers=headers,
+        )
         if resp.status_code == 201:
             schema = resp.json()
             schema_id = schema["id"]
             # Create a version of the schema
-            client.post(f"/api/v1/schemas/{schema_id}/versions", json={
-                "version": "1.0.0",
-                "version_number": 1,
-                "definition_json": {
-                    "type": "object",
-                    "properties": {
-                        "pr_url": {"type": "string", "description": "URL of the PR"},
-                        "diff": {"type": "string", "description": "PR diff content"},
+            client.post(
+                f"/api/v1/schemas/{schema_id}/versions",
+                json={
+                    "version": "1.0.0",
+                    "version_number": 1,
+                    "definition_json": {
+                        "type": "object",
+                        "properties": {
+                            "pr_url": {"type": "string", "description": "URL of the PR"},
+                            "diff": {"type": "string", "description": "PR diff content"},
+                        },
+                        "required": ["pr_url"],
                     },
-                    "required": ["pr_url"],
+                    "published": True,
                 },
-                "published": True,
-            }, headers=headers)
+                headers=headers,
+            )
             print(f"  Schema: {schema['name']} ({schema_id})")
         else:
             print(f"  Schema creation skipped ({resp.status_code}): {resp.text}")
@@ -185,11 +198,15 @@ def main():
             print(f"  Using existing connector: {connector['name']} ({connector_id})")
         else:
             # Create a filesystem connector (no external credentials needed)
-            resp = client.post("/api/v1/connectors", json={
-                "name": "Demo Filesystem Connector",
-                "connector_type_id": "filesystem",
-                "config_json": {"base_path": "/tmp/modulo-demo"},
-            }, headers=headers)
+            resp = client.post(
+                "/api/v1/connectors",
+                json={
+                    "name": "Demo Filesystem Connector",
+                    "connector_type_id": "filesystem",
+                    "config_json": {"base_path": "/tmp/modulo-demo"},
+                },
+                headers=headers,
+            )
             if resp.status_code == 201:
                 connector = resp.json()
                 connector_id = connector["id"]
@@ -217,8 +234,7 @@ def main():
             ],
             "edges": [],
         }
-        resp = client.patch(f"/api/v1/pipelines/{pipeline_id}/graph",
-                            json=graph, headers=headers)
+        resp = client.patch(f"/api/v1/pipelines/{pipeline_id}/graph", json=graph, headers=headers)
         if resp.status_code == 200:
             print(f"  Graph saved with 1 node (agent: {agent_id})")
         else:
@@ -228,23 +244,27 @@ def main():
         # STEP 7: Trigger a Run
         # ═══════════════════════════════════════════════════════════
         step("7. Trigger Run")
-        resp = client.post("/api/v1/runs", json={
-            "pipeline_id": pipeline_id,
-            "input_payload": {
-                "pr_url": "https://github.com/example/org/pull/42",
-                "diff": (
-                    "diff --git a/src/main.py b/src/main.py\n"
-                    "index abc..def 100644\n"
-                    "--- a/src/main.py\n"
-                    "+++ b/src/main.py\n"
-                    "@@ -10,6 +10,8 @@\n"
-                    " def process(data):\n"
-                    "+    # TODO: validate input\n"
-                    "     result = execute(data)\n"
-                    "     return result\n"
-                ),
+        resp = client.post(
+            "/api/v1/runs",
+            json={
+                "pipeline_id": pipeline_id,
+                "input_payload": {
+                    "pr_url": "https://github.com/example/org/pull/42",
+                    "diff": (
+                        "diff --git a/src/main.py b/src/main.py\n"
+                        "index abc..def 100644\n"
+                        "--- a/src/main.py\n"
+                        "+++ b/src/main.py\n"
+                        "@@ -10,6 +10,8 @@\n"
+                        " def process(data):\n"
+                        "+    # TODO: validate input\n"
+                        "     result = execute(data)\n"
+                        "     return result\n"
+                    ),
+                },
             },
-        }, headers=headers)
+            headers=headers,
+        )
         if resp.status_code != 202:
             bail(f"Trigger run failed: {resp.status_code} {resp.text}")
         run = resp.json()
@@ -262,10 +282,7 @@ def main():
         resp = client.post("/api/v1/auth/ws-token", json={}, headers=headers)
         if resp.status_code == 200:
             ws_token = resp.json()["ws_token"]
-            ws_url = (
-                BASE_URL.replace("http://", "ws://")
-                .replace("https://", "wss://")
-            )
+            ws_url = BASE_URL.replace("http://", "ws://").replace("https://", "wss://")
             print(f"  WebSocket available: {ws_url}/api/v1/runs/{run_id}/ws?token={ws_token[:20]}...")
         else:
             print("  WebSocket token not available — falling back to polling")
