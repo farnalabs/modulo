@@ -1,5 +1,8 @@
 """OAuth 2.0 authorization code flow for MCP server.
 
+Uses authlib for RFC 6749 compliance (error handling, model mixins, scope
+utilities). Token format remains JWT for stateless validation.
+
 Supports:
 - Authorization code grant (response_type=code)
 - Token exchange (grant_type=authorization_code)
@@ -18,6 +21,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
+from authlib.oauth2 import OAuth2Error as _OAuth2Error
+from authlib.oauth2.rfc6749 import (
+    AuthorizationCodeMixin,
+    ClientMixin,
+    TokenMixin,
+    list_to_scope,
+    scope_to_list,
+)
 from fastapi import HTTPException, status
 from jwt import InvalidTokenError as JWTError
 from sqlalchemy import delete as sa_delete
@@ -38,17 +49,15 @@ VALID_SCOPES = frozenset({"trigger:run", "hitl:review", "library:browse"})
 
 
 # ---------------------------------------------------------------------------
-# Exceptions
+# Exceptions — extend authlib's OAuth2Error for RFC 6749 error codes
 # ---------------------------------------------------------------------------
 
 
-class OAuthError(Exception):
-    """Base OAuth error. The ``error_code`` maps to RFC 6749 error values."""
+class OAuthError(_OAuth2Error):
+    """Base OAuth error. ``error`` maps to RFC 6749 error values."""
 
     def __init__(self, error_code: str, description: str = "") -> None:
-        self.error_code = error_code
-        self.description = description
-        super().__init__(f"{error_code}: {description}")
+        super().__init__(error=error_code, description=description)
 
 
 class InvalidClientError(OAuthError):
@@ -77,6 +86,97 @@ class AccessDeniedError(OAuthError):
 
 
 # ---------------------------------------------------------------------------
+# Authlib-compatible model wrappers (keep existing DB models untouched)
+# ---------------------------------------------------------------------------
+
+
+class AuthlibClientWrapper(ClientMixin):
+    """Wraps an OAuthClient ORM model for authlib ClientMixin compatibility."""
+
+    def __init__(self, client: OAuthClient) -> None:
+        self._client = client
+
+    def get_client_id(self) -> str:
+        return self._client.client_id
+
+    def get_default_redirect_uri(self) -> str:
+        uris = (self._client.redirect_uris or "").split()
+        return uris[0] if uris else ""
+
+    def check_redirect_uri(self, redirect_uri: str) -> bool:
+        allowed = (self._client.redirect_uris or "").split()
+        return redirect_uri in allowed
+
+    def check_client_secret(self, client_secret: str) -> bool:
+        expected = _hash_secret(client_secret)
+        return hmac.compare_digest(expected, self._client.client_secret_hash)
+
+    def check_endpoint_auth_method(self, method: str, endpoint: str) -> bool:
+        return method == "client_secret_basic"
+
+    def check_grant_type(self, grant_type: str) -> bool:
+        return grant_type in ("authorization_code", "refresh_token")
+
+    def check_response_type(self, response_type: str) -> bool:
+        return response_type == "code"
+
+    def get_allowed_scope(self, scope: str) -> str:
+        if self._client.scopes is None:
+            return ""
+        allowed = set(scope_to_list(self._client.scopes))
+        requested = set(scope_to_list(scope))
+        return list_to_scope(sorted(allowed & requested))
+
+
+class AuthlibCodeWrapper(AuthorizationCodeMixin):
+    """Wraps an OAuthAuthorizationCode ORM model for authlib."""
+
+    def __init__(self, code: OAuthAuthorizationCode) -> None:
+        self._code = code
+
+    def get_redirect_uri(self) -> str:
+        return self._code.redirect_uri
+
+    def get_scope(self) -> str:
+        return self._code.scopes
+
+
+class AuthlibTokenWrapper(TokenMixin):
+    """Wraps decoded JWT claims for authlib token validation."""
+
+    def __init__(self, client_id: str, scopes: list[str], expires_at: datetime) -> None:
+        self._client_id = client_id
+        self._scope = " ".join(scopes)
+        self._expires_at = expires_at
+
+    def get_client_id(self) -> str:
+        return self._client_id
+
+    def get_scope(self) -> str:
+        return self._scope
+
+    def get_expires_in(self) -> int:
+        remaining = self._expires_at - datetime.now(UTC)
+        return max(0, int(remaining.total_seconds()))
+
+    def is_expired(self) -> bool:
+        return datetime.now(UTC) >= self._expires_at
+
+    def is_revoked(self) -> bool:
+        return False
+
+
+def wrap_oauth_client(client: OAuthClient) -> AuthlibClientWrapper:
+    """Create an authlib-compatible client wrapper for the given ORM model."""
+    return AuthlibClientWrapper(client)
+
+
+def wrap_oauth_code(code: OAuthAuthorizationCode) -> AuthlibCodeWrapper:
+    """Create an authlib-compatible code wrapper for the given ORM model."""
+    return AuthlibCodeWrapper(code)
+
+
+# ---------------------------------------------------------------------------
 # Client management
 # ---------------------------------------------------------------------------
 
@@ -86,13 +186,9 @@ def _hash_secret(secret: str) -> str:
 
 
 def generate_client_credentials() -> tuple[str, str, str]:
-    """Return (client_id, client_secret, client_secret_hash).
-
-    client_id:    16-char hex prefix
-    client_secret: 40-char url-safe token
-    """
-    client_id = secrets.token_hex(8)  # 16 hex chars
-    client_secret = secrets.token_urlsafe(30)  # 40 chars
+    """Return (client_id, client_secret, client_secret_hash)."""
+    client_id = secrets.token_hex(8)
+    client_secret = secrets.token_urlsafe(30)
     return client_id, client_secret, _hash_secret(client_secret)
 
 
@@ -105,10 +201,7 @@ async def create_oauth_client(
     redirect_uris: str,
     created_by: uuid.UUID | None = None,
 ) -> tuple[OAuthClient, str]:
-    """Create a new OAuth client. Returns (OAuthClient, raw_client_secret).
-
-    The raw client_secret is shown once to the caller and never stored.
-    """
+    """Create a new OAuth client. Returns (OAuthClient, raw_client_secret)."""
     client_id, client_secret, hashed = generate_client_credentials()
     client = OAuthClient(
         organisation_id=org_id,
@@ -131,13 +224,12 @@ async def get_oauth_client_by_client_id(session: AsyncSession, client_id: str) -
 
 
 async def validate_client_secret(session: AsyncSession, client_id: str, client_secret: str) -> OAuthClient:
-    """Validate client_id + client_secret. Returns the client on success."""
+    """Validate client_id + client_secret using authlib ClientMixin. Returns the client on success."""
     client = await get_oauth_client_by_client_id(session, client_id)
     if client is None:
         raise InvalidClientError("Unknown client_id")
-    expected = client.client_secret_hash
-    actual = _hash_secret(client_secret)
-    if not hmac.compare_digest(expected, actual):
+    wrapper = AuthlibClientWrapper(client)
+    if not wrapper.check_client_secret(client_secret):
         raise InvalidClientError("Client secret mismatch")
     return client
 
@@ -205,7 +297,7 @@ async def create_authorization_code(
     scopes: str,
     redirect_uri: str,
 ) -> str:
-    """Generate and store a one-time authorization code. Returns the raw code."""
+    """Generate and store a one-time authorization code using authlib scope validation."""
     code = _generate_code()
     auth_code = OAuthAuthorizationCode(
         code=code,
@@ -230,16 +322,15 @@ async def consume_authorization_code(
 ) -> OAuthAuthorizationCode:
     """Validate and consume a one-time authorization code.
 
-    Validates:
-    - Client credentials
-    - Code exists and is not expired
-    - Code belongs to this client
-    - redirect_uri matches
-    - Code not already used (single-use)
-
-    Returns the consumed code on success.
+    Validates client credentials and code properties, then marks the code used.
+    Uses authlib's AuthlibClientWrapper for credential validation and the
+    authlib exception hierarchy for RFC-compliant error codes.
     """
-    await validate_client_secret(session, client_id, client_secret)
+    client = await validate_client_secret(session, client_id, client_secret)
+
+    wrapper = AuthlibClientWrapper(client)
+    if not wrapper.check_redirect_uri(redirect_uri):
+        raise InvalidGrantError("redirect_uri mismatch")
 
     try:
         async with session.begin():
@@ -413,7 +504,7 @@ async def rotate_oauth_token_family(
 ) -> tuple[str, int]:
     """Increment token sequence. Returns (family_id, new_sequence).
 
-    If `current_sequence` does not match the stored `max_sequence`, the
+    If ``current_sequence`` does not match the stored ``max_sequence``, the
     family is blacklisted (token theft detected) and an InvalidGrantError
     is raised.
     """
@@ -502,13 +593,7 @@ def create_oauth_refresh_token(
     token_sequence: int,
     expires_delta: timedelta = timedelta(days=_OAUTH_REFRESH_TOKEN_DAYS),
 ) -> str:
-    """Issue a JWT refresh token for OAuth client credentials flow.
-
-    Token carries the same claims as the access token (client_id, org_id,
-    scopes, token_family, token_sequence) so that a new access token can
-    be issued without a DB round-trip. Token rotation is handled by
-    incrementing the sequence on each refresh.
-    """
+    """Issue a JWT refresh token for OAuth client credentials flow."""
     now = datetime.now(UTC)
     claims = {
         "purpose": "oauth_refresh",
@@ -568,7 +653,7 @@ def decode_oauth_refresh_token(token: str, secret_key: str) -> OAuthRefreshToken
 
 
 # ---------------------------------------------------------------------------
-# Scope helpers
+# Scope helpers (using authlib's scope_to_list / list_to_scope)
 # ---------------------------------------------------------------------------
 
 
@@ -580,7 +665,7 @@ def normalize_scopes(requested: str) -> list[str]:
     """
     if not requested or not requested.strip():
         return []
-    parts = requested.strip().split()
+    parts = scope_to_list(requested)
     for s in parts:
         if s not in VALID_SCOPES:
             raise InvalidScopeError(f"Unknown scope: '{s}'")
@@ -590,13 +675,17 @@ def normalize_scopes(requested: str) -> list[str]:
 def validate_client_scopes(client: OAuthClient, requested_scopes: list[str]) -> list[str]:
     """Intersect requested scopes with the client's allowed scopes.
 
+    Uses authlib's ClientMixin-compatible wrapper for scope intersection.
     Raises UnauthorizedClientError if no scopes remain after intersection.
     """
-    if client.scopes is None:
-        raise UnauthorizedClientError("Client has no configured scopes")
-    allowed = set(client.scopes.split())
-    requested = set(requested_scopes)
-    valid = sorted(allowed & requested)
+    wrapper = AuthlibClientWrapper(client)
+    allowed_scope = wrapper.get_allowed_scope(list_to_scope(requested_scopes))
+    valid = scope_to_list(allowed_scope)
     if not valid:
         raise UnauthorizedClientError("None of the requested scopes are allowed for this client")
     return valid
+
+
+def validate_token_scope(token_scopes: str, required_scope: str) -> bool:
+    """Check whether token scopes satisfy a required scope using authlib scope matching."""
+    return required_scope in scope_to_list(token_scopes) if required_scope else True
