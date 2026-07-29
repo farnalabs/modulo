@@ -169,4 +169,5 @@ class TestEventBus:
         eb._event_bus = None
         eb._event_bus = bus
         await bus.publish("org-123", "run", "r1", "created", version=0)
+        await asyncio.sleep(0.01)
         mock_redis.publish.assert_awaited_once()

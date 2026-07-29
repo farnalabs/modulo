@@ -219,119 +219,119 @@ async def fire_cron_trigger(
         if trigger is None or not trigger.active:
             return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
 
-            # Concurrency check
-            active_count = await _count_active_runs(session, trigger_id)
-            if active_count >= trigger.max_concurrent_runs:
+        # Concurrency check
+        active_count = await _count_active_runs(session, trigger_id)
+        if active_count >= trigger.max_concurrent_runs:
+            await _log_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="concurrency_limit_reached",
+                error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
+            )
+            return {
+                "status": "skipped",
+                "reason": "concurrency_limit",
+                "active_runs": active_count,
+            }
+
+        # Daily spend limit check
+        spend_limit = trigger.daily_spend_limit
+        if spend_limit is not None:
+            today_start = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            cost_result = await session.execute(
+                select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
+                    Run.trigger_id == trigger_id,
+                    Run.organisation_id == org_id,
+                    Run.created_at >= today_start,
+                )
+            )
+            today_cost = cost_result.scalar_one()
+            if today_cost >= spend_limit:
                 await _log_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
-                    result="concurrency_limit_reached",
-                    error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
+                    result="spend_limit_reached",
+                    error_detail=(f"Daily spend limit {trigger.daily_spend_limit} reached (today: {today_cost})"),
                 )
                 return {
                     "status": "skipped",
-                    "reason": "concurrency_limit",
-                    "active_runs": active_count,
+                    "reason": "spend_limit",
+                    "daily_spend_limit": str(spend_limit),
+                    "today_cost": str(today_cost),
                 }
 
-            # Daily spend limit check
-            spend_limit = trigger.daily_spend_limit
-            if spend_limit is not None:
-                today_start = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-                cost_result = await session.execute(
-                    select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
-                        Run.trigger_id == trigger_id,
-                        Run.organisation_id == org_id,
-                        Run.created_at >= today_start,
-                    )
-                )
-                today_cost = cost_result.scalar_one()
-                if today_cost >= spend_limit:
-                    await _log_event(
-                        session,
-                        trigger=trigger,
-                        org_id=org_id,
-                        result="spend_limit_reached",
-                        error_detail=(f"Daily spend limit {trigger.daily_spend_limit} reached (today: {today_cost})"),
-                    )
-                    return {
-                        "status": "skipped",
-                        "reason": "spend_limit",
-                        "daily_spend_limit": str(spend_limit),
-                        "today_cost": str(today_cost),
-                    }
+        # Resolve snapshot_id — auto-create from live graph if not provided
+        if snapshot_id is None:
+            from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
-            # Resolve snapshot_id — auto-create from live graph if not provided
-            if snapshot_id is None:
-                from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-
-                new_snapshot = await create_snapshot_from_live_graph(
-                    session,
-                    pipeline_id=pipeline_id,
-                    account_id=None,
-                )
-                if new_snapshot is None:
-                    await _log_event(
-                        session,
-                        trigger=trigger,
-                        org_id=org_id,
-                        result="no_pipeline",
-                        error_detail="Pipeline not found when trying to auto-create snapshot",
-                    )
-                    return {"status": "skipped", "reason": "pipeline_not_found"}
-                snapshot_id = new_snapshot.id
-                _log.info("Auto-created snapshot %s for cron trigger %s", snapshot_id, trigger_id)
-
-            # Build input payload from config
-            config = trigger.config_json or {}
-            input_payload = config.get("input_template", {})
-
-            # Create the run
-            run = await create_run(
+            new_snapshot = await create_snapshot_from_live_graph(
                 session,
-                org_id=org_id,
                 pipeline_id=pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="cron",
-                trigger_id=trigger_id,
-                input_payload=input_payload,
+                account_id=None,
             )
+            if new_snapshot is None:
+                await _log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    result="no_pipeline",
+                    error_detail="Pipeline not found when trying to auto-create snapshot",
+                )
+                return {"status": "skipped", "reason": "pipeline_not_found"}
+            snapshot_id = new_snapshot.id
+            _log.info("Auto-created snapshot %s for cron trigger %s", snapshot_id, trigger_id)
 
-            # Log TriggerEvent
-            event = await _log_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="accepted",
-                run_id=run.id,
-            )
+        # Build input payload from config
+        config = trigger.config_json or {}
+        input_payload = config.get("input_template", {})
 
-            # Update last_fired_at and next_fire_at
-            now = datetime.datetime.now(datetime.UTC)
-            next_fire = compute_next_fire(
-                cron_expression,
-                after=now,
-                timezone=trigger.cron_timezone or "UTC",
-            )
-            await session.execute(
-                update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now, next_fire_at=next_fire)
-            )
+        # Create the run
+        run = await create_run(
+            session,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            snapshot_id=snapshot_id,
+            trigger_type="cron",
+            trigger_id=trigger_id,
+            input_payload=input_payload,
+        )
 
-            _log.info(
-                "Cron trigger %s fired → run %s (next fire: %s)",
-                trigger_id,
-                run.id,
-                next_fire.isoformat(),
-            )
+        # Log TriggerEvent
+        event = await _log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            result="accepted",
+            run_id=run.id,
+        )
 
-            return {
-                "status": "fired",
-                "run_id": str(run.id),
-                "event_id": str(event.id),
-                "next_fire_at": next_fire.isoformat(),
-                "input_payload": input_payload,
-            }
+        # Update last_fired_at and next_fire_at
+        now = datetime.datetime.now(datetime.UTC)
+        next_fire = compute_next_fire(
+            cron_expression,
+            after=now,
+            timezone=trigger.cron_timezone or "UTC",
+        )
+        await session.execute(
+            update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now, next_fire_at=next_fire)
+        )
+
+        _log.info(
+            "Cron trigger %s fired → run %s (next fire: %s)",
+            trigger_id,
+            run.id,
+            next_fire.isoformat(),
+        )
+
+        return {
+            "status": "fired",
+            "run_id": str(run.id),
+            "event_id": str(event.id),
+            "next_fire_at": next_fire.isoformat(),
+            "input_payload": input_payload,
+        }
 
     return {"status": "error", "reason": "unexpected"}
 

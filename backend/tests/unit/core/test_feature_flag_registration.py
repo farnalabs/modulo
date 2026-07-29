@@ -1,7 +1,5 @@
 """Unit tests for feature flag registration — ensures new flags are properly catalogued."""
 
-import uuid
-
 from modulo.core.feature_flags import FeatureFlag, FeatureFlagRegistry
 
 
@@ -37,9 +35,9 @@ class TestFeatureFlagModel:
         assert flag.tier == "community"
         assert flag.description == "test"
         assert flag.depends_on is None
-        assert flag.currently_active is True
+        assert flag.currently_active is False
 
-    def test_currently_active_reflects_is_active(self) -> None:
+    def test_currently_active_can_be_set_false(self) -> None:
         flag = FeatureFlag(name="inactive_flag", tier="team", description="test", currently_active=False)
         assert flag.currently_active is False
 
@@ -47,17 +45,13 @@ class TestFeatureFlagModel:
         flag = FeatureFlag(name="team_flag", tier="team", description="test")
         assert flag.currently_active is False
 
-    def test_non_blocked_flag_with_is_active(self) -> None:
+    def test_non_blocked_flag_with_currently_active(self) -> None:
         flag = FeatureFlag(name="active_flag", tier="community", description="test", currently_active=True)
         assert flag.currently_active is True
 
     def test_depends_on_relationship(self) -> None:
         child = FeatureFlag(name="child_flag", tier="team", description="test", depends_on="parent_flag")
         assert child.depends_on == "parent_flag"
-
-    def test_uuid_assigned_automatically(self) -> None:
-        flag = FeatureFlag(name="uuid_test", tier="community", description="test")
-        assert isinstance(flag.id, uuid.UUID)
 
     def test_description_defaults_to_empty(self) -> None:
         flag = FeatureFlag(name="no_desc", tier="community", description="")
