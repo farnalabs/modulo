@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     modulo_celery_db_pool_async_overflow: int = Field(
         default=1, alias="MODULO_CELERY_DB_POOL_ASYNC_OVERFLOW", ge=0, le=3
     )
+    # Connection budget: the validator conservatively sums sync+async pool
+    # sizes because both engines are used simultaneously in a task (sync
+    # for heartbeat + claim, async for execution).
+    modulo_celery_db_pool_connect_timeout: int = Field(
+        default=10, alias="MODULO_CELERY_DB_POOL_CONNECT_TIMEOUT", ge=1, le=30
+    )
 
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)

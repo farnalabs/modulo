@@ -56,7 +56,7 @@ _log = logging.getLogger(__name__)
 
 _TASK_NAME = "modulo.pipeline.execute_run"
 
-_sync_lock = threading.Lock()
+_engine_lock = threading.Lock()
 _SYNC_ENGINE: Any = None
 _ASYNC_ENGINE: AsyncEngine | None = None
 
@@ -69,66 +69,52 @@ def _get_settings() -> Any:
     return get_settings()
 
 
-if _CELERY_SIGNALS_AVAILABLE:
-
-    @worker_process_shutdown.connect
-    def _dispose_worker_engines(**kwargs):
-        """Dispose engine singletons on worker shutdown.
-
-        Assumes Celery's graceful shutdown (default: wait for running tasks to
-        finish). If a task holds a connection when dispose() fires, the
-        connection becomes invalid mid-operation -- graceful shutdown avoids
-        this race.
-        """
-        global _SYNC_ENGINE, _ASYNC_ENGINE
-        if _SYNC_ENGINE is not None:
-            try:
-                _SYNC_ENGINE.dispose()
-            except Exception:
-                _log.exception("pipeline_executor._dispose_sync_engine")
-            _SYNC_ENGINE = None
-        if _ASYNC_ENGINE is not None:
-            try:
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                loop.run_until_complete(_ASYNC_ENGINE.dispose())
-            except Exception:
-                _log.exception("pipeline_executor._dispose_async_engine")
-            _ASYNC_ENGINE = None
-
-
 def _get_engines():
+    """Create sync + async engines for this prefork child.
+
+    NOTE: Only safe with --pool=prefork (default). gevent/eventlet/solo pools
+    may create race conditions on the module-level globals. The default Celery
+    pool type is prefork -- no other pool type is supported for these engines.
+    """
     global _SYNC_ENGINE, _ASYNC_ENGINE
     if _ASYNC_ENGINE is not None:
         return _SYNC_ENGINE, _ASYNC_ENGINE
-    s = _get_settings()
-    sync_url = (
-        str(s.database_url)
-        .replace("+asyncpg", "+psycopg")
-        .replace("+aiomysql", "+mysqldb")
-        .replace("+aiosqlite", "+pysqlite")
-    )
-    _SYNC_ENGINE = create_engine(
-        sync_url,
-        pool_size=s.modulo_celery_db_pool_sync_size,
-        max_overflow=s.modulo_celery_db_pool_sync_overflow,
-        pool_pre_ping=True,
-        pool_recycle=1800,
-        connect_args={"connect_timeout": 10},
-        pool_timeout=10,
-    )
-    _ASYNC_ENGINE = create_async_engine(
-        s.database_url,
-        pool_size=s.modulo_celery_db_pool_async_size,
-        max_overflow=s.modulo_celery_db_pool_async_overflow,
-        pool_pre_ping=True,
-        pool_recycle=1800,
-        connect_args={"connect_timeout": 10},
-        pool_timeout=10,
-    )
+    with _engine_lock:
+        if _ASYNC_ENGINE is not None:
+            return _SYNC_ENGINE, _ASYNC_ENGINE
+        s = _get_settings()
+        sync_url = (
+            str(s.database_url)
+            .replace("+asyncpg", "+psycopg")
+            .replace("+aiomysql", "+mysqldb")
+            .replace("+aiosqlite", "+pysqlite")
+        )
+        _SYNC_ENGINE = create_engine(
+            sync_url,
+            pool_size=s.modulo_celery_db_pool_sync_size,
+            max_overflow=s.modulo_celery_db_pool_sync_overflow,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            pool_timeout=5,
+            connect_args={"connect_timeout": s.modulo_celery_db_pool_connect_timeout},
+        )
+        _ASYNC_ENGINE = create_async_engine(
+            s.database_url,
+            pool_size=s.modulo_celery_db_pool_async_size,
+            max_overflow=s.modulo_celery_db_pool_async_overflow,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            pool_timeout=5,
+            connect_args={"connect_timeout": s.modulo_celery_db_pool_connect_timeout},
+        )
+        _log.info(
+            "Engines created: sync(pool=%d, overflow=%d, timeout=%ds) "
+            "async(pool=%d, overflow=%d, timeout=%ds)",
+            s.modulo_celery_db_pool_sync_size, s.modulo_celery_db_pool_sync_overflow,
+            s.modulo_celery_db_pool_connect_timeout,
+            s.modulo_celery_db_pool_async_size, s.modulo_celery_db_pool_async_overflow,
+            s.modulo_celery_db_pool_connect_timeout,
+        )
     return _SYNC_ENGINE, _ASYNC_ENGINE
 
 
