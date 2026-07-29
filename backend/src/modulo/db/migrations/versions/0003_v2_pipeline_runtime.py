@@ -1,4 +1,4 @@
-"""v2 — Pipeline & Runtime Engine.
+﻿"""v2 — Pipeline & Runtime Engine.
 
 Combines 0003 (pipeline execution) and 0004 (runtime engine) to resolve
 cross-dependency: agents in 0003 references model_backends in 0004.
@@ -81,9 +81,7 @@ _TENANT_REFS: tuple[tuple[str, str, str], ...] = (
     ("webhook_dedup_hashes", "trigger_id", "triggers"),
     ("agents", "account_id", "accounts"),
     ("agents", "input_schema_id", "schemas"),
-    ("agents", "input_schema_version", "schema_versions"),
     ("agents", "output_schema_id", "schemas"),
-    ("agents", "output_schema_version", "schema_versions"),
     ("agents", "model_backend_id", "model_backends"),
     ("agents", "library_id", "library_primitives"),
     ("runs", "account_id", "accounts"),
