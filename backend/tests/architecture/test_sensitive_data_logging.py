@@ -33,7 +33,7 @@ def test_no_sensitive_data_in_logs():
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (SyntaxError, UnicodeDecodeError, OSError):
             continue
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):

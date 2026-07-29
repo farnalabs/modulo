@@ -54,7 +54,7 @@ def _queue_get_with_timeout(q, timeout: float = 2.0) -> dict[str, Any]:
     while time.monotonic() < deadline:
         try:
             return q.get_nowait()
-        except Exception:
+        except asyncio.QueueEmpty:
             time.sleep(0.01)
     raise AssertionError(f"Timed out after {timeout}s waiting for event on queue")
 
@@ -66,7 +66,7 @@ def _queue_empty_with_timeout(q, timeout: float = 0.3) -> None:
         try:
             q.get_nowait()
             raise AssertionError("Expected queue to remain empty but an event was present")
-        except Exception:
+        except asyncio.QueueEmpty:
             time.sleep(0.01)
 
 

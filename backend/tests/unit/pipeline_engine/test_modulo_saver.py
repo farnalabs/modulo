@@ -307,7 +307,7 @@ class TestIsEncrypted:
             return True
         try:
             return blob[:6] == b"gAAAAA"
-        except Exception:
+        except (TypeError, IndexError):
             return False
 
     def test_encrypted_blob_detected(self):
