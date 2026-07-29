@@ -96,6 +96,7 @@ class TestAuthRateLimiterWithMockRedis:
         mock_redis.ttl = AsyncMock(return_value=-2)
         mock_redis.zadd = AsyncMock()
         mock_redis.expire = AsyncMock()
+        mock_redis.setex = AsyncMock()
         pipe = MagicMock()
         pipe.zremrangebyscore = MagicMock(return_value=pipe)
         pipe.zcard = MagicMock(return_value=pipe)

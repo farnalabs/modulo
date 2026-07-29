@@ -50,10 +50,9 @@ class AlertEngine:
     Cooldown state is persisted to Redis for multi-process deployments.
     """
 
-    def __init__(self, redis_client: Any) -> None:
-        if redis_client is None:
-            raise ValueError("AlertEngine requires a Redis client")
+    def __init__(self, redis_client: Any = None) -> None:
         self._redis = redis_client
+        self._in_memory_cooldown: dict[str, float] = {}
 
     async def evaluate(
         self,
@@ -148,19 +147,25 @@ class AlertEngine:
                 )
 
     async def _get_last_fired(self, key: _CooldownKey) -> float | None:
-        try:
-            raw = await self._redis.get(str(key))
-            if raw:
-                try:
-                    return float(json.loads(raw))
-                except (ValueError, TypeError):
-                    return None
-        except Exception:
-            _log.exception("alert.cooldown_redis_get_failed", extra={"key": str(key)})
+        val = self._in_memory_cooldown.get(str(key))
+        if val is not None:
+            return val
+        if self._redis is not None:
+            try:
+                raw = await self._redis.get(str(key))
+                if raw:
+                    try:
+                        return float(json.loads(raw))
+                    except (ValueError, TypeError):
+                        return None
+            except Exception:
+                _log.exception("alert.cooldown_redis_get_failed", extra={"key": str(key)})
         return None
 
     async def _set_last_fired(self, key: _CooldownKey, value: float) -> None:
-        try:
-            await self._redis.setex(str(key), _COOLDOWN_TTL, json.dumps(value))
-        except Exception:
-            _log.exception("alert.cooldown_redis_set_failed", extra={"key": str(key)})
+        self._in_memory_cooldown[str(key)] = value
+        if self._redis is not None:
+            try:
+                await self._redis.setex(str(key), _COOLDOWN_TTL, json.dumps(value))
+            except Exception:
+                _log.exception("alert.cooldown_redis_set_failed", extra={"key": str(key)})

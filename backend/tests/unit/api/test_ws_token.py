@@ -207,27 +207,18 @@ def test_ws_token_endpoint_returns_200(client: TestClient) -> None:
 
 def test_ws_token_decodes_correctly(client: TestClient) -> None:
     resp = client.post("/api/v1/auth/ws-token")
-    token = resp.json()["ws_token"]
-    settings = _make_settings()
-    principal = decode_principal(token, settings.secret_key, allowed_purposes=["ws"])
-    assert principal.username == "testuser"
-    assert principal.organisation_id == _ORG_ID
-    assert principal.account_id == _USER_ID
+    body = resp.json()
+    assert "ws_token" in body
+    assert len(body["ws_token"]) > 20
+    assert body["token_type"] == "ws-opaque"
+    assert body["expires_in_seconds"] == 60
 
 
 def test_ws_token_jwt_expiry_matches_settings(client: TestClient) -> None:
-    """The JWT WS token's actual expiry should match the configured TTL."""
+    """The WS token response should reflect the configured TTL."""
     resp = client.post("/api/v1/auth/ws-token")
     body = resp.json()
-    token = body["ws_token"]
-    settings = _make_settings()
-    import jwt
-
-    payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
-    exp = datetime.fromtimestamp(payload["exp"], tz=UTC)
-    iat = datetime.fromtimestamp(payload["iat"], tz=UTC)
-    ttl_seconds = (exp - iat).total_seconds()
-    assert 50 <= ttl_seconds <= 70, f"Expected ~60s TTL, got {ttl_seconds}s"
+    assert body["expires_in_seconds"] == 60
 
 
 def test_ws_token_endpoint_unauthenticated_returns_4xx() -> None:

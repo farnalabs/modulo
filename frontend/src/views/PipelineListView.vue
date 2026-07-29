@@ -49,6 +49,7 @@
         :pipeline-counts="folderPipelineCounts"
         @select-folder="onSelectFolder"
         @folders-changed="loadPipelines"
+        @move-pipeline="onMovePipeline"
       />
       <p v-if="folderError" class="px-4 py-2 text-xs text-destructive">
         Failed to load folders: {{ folderError }}
@@ -107,6 +108,8 @@
             class="card card-hover p-5 cursor-pointer"
             @click="openPipeline(p)"
             data-testid="pipeline-list-card"
+            draggable="true"
+            @dragstart="onPipelineDragStart(p, $event)"
           >
             <div class="flex items-start justify-between gap-2 mb-3">
               <h3 class="text-base font-medium text-foreground truncate">{{ p.name }}</h3>
@@ -180,6 +183,7 @@
                 <th class="px-4 py-3">Name</th>
                 <th class="px-4 py-3">Description</th>
                 <th class="px-4 py-3">Visibility</th>
+                <th class="px-4 py-3">Last Run</th>
                 <th class="px-4 py-3">{{ $t('views.PipelineListView.trigger') }}</th>
                 <th class="px-4 py-3">Created</th>
                 <th class="px-4 py-3 text-right">Actions</th>
@@ -188,7 +192,7 @@
             <tbody class="divide-y">
               <template v-for="(row, i) in treeRows" :key="i">
                 <tr v-if="row.type === 'folder'" class="bg-muted/20 hover:bg-muted/30 transition-colors" data-testid="pipeline-tree-folder-row">
-                  <td colspan="6" class="px-4 py-2">
+                  <td colspan="7" class="px-4 py-2">
                     <button
                       class="flex w-full items-center gap-2 text-sm font-medium text-foreground text-left"
                       @click="toggleFolder((row.data as FolderItem).id)"
@@ -218,7 +222,7 @@
                 </tr>
 
                 <tr v-else-if="row.type === 'uncategorised-header'" class="bg-muted/20">
-                  <td colspan="6" class="px-4 py-2">
+                  <td colspan="7" class="px-4 py-2">
                     <span class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                       {{ $t('views.PipelineListView.uncategorised') }}
@@ -231,6 +235,8 @@
                   class="cursor-pointer transition-colors hover:bg-muted/30"
                   @click="openPipeline(row.data as PipelineItem)"
                   :data-testid="`pipeline-tree-row-${(row.data as PipelineItem).id}`"
+                  draggable="true"
+                  @dragstart="onPipelineDragStart(row.data as PipelineItem, $event)"
                 >
                   <td class="px-4 py-3" :style="{ paddingLeft: `${12 + (row.depth || 0) * 16}px` }">
                     <span class="font-medium text-foreground">{{ (row.data as PipelineItem).name }}</span>
@@ -243,6 +249,9 @@
                     <span class="badge text-xs" :class="(row.data as PipelineItem).visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'">
                       {{ (row.data as PipelineItem).visibility === 'org' ? 'Org' : 'Team' }}
                     </span>
+                  </td>
+                  <td class="px-4 py-3">
+                    <span class="text-muted-foreground">{{ getLastRun((row.data as PipelineItem).id) || '\u2014' }}</span>
                   </td>
                   <td class="px-4 py-3">
                     <span class="text-xs text-muted-foreground">{{ getPipelineTrigger((row.data as PipelineItem).id) || '\u2014' }}</span>
@@ -598,6 +607,31 @@ const foldersList = ref<FolderItem[]>([])
 const folderError = ref<string | null>(null)
 
 const triggerTypes = ref<Record<string, string>>({})
+const lastRunDates = ref<Record<string, string>>({})
+
+async function loadLastRunDates() {
+  try {
+    const response = await api.GET('/api/v1/runs', { params: { query: { page_size: 500, sort_by: 'created_at', sort_order: 'desc' } } })
+    if (response.data) {
+      const items = (response.data as any).items as any[]
+      const map: Record<string, string> = {}
+      for (const run of items) {
+        if (run.pipeline_id && !map[run.pipeline_id]) {
+          map[run.pipeline_id] = run.created_at
+        }
+      }
+      lastRunDates.value = map
+    }
+  } catch {
+    // last run dates are optional
+  }
+}
+
+function getLastRun(pipelineId: string): string | undefined {
+  const dateStr = lastRunDates.value[pipelineId]
+  if (!dateStr) return undefined
+  return formatDate(dateStr)
+}
 
 async function loadTriggers() {
   try {
@@ -623,6 +657,7 @@ function getPipelineTrigger(pipelineId: string): string | undefined {
 
 watch(allPipelines, () => {
   loadTriggers()
+  loadLastRunDates()
 }, { immediate: false })
 
 const folderPipelineCounts = computed(() => {
@@ -655,6 +690,20 @@ const folderNameMap = computed(() => {
   }
   return map
 })
+
+function onPipelineDragStart(pipeline: PipelineItem, event: DragEvent) {
+  event.dataTransfer?.setData('text/plain', pipeline.id)
+  event.dataTransfer!.effectAllowed = 'move'
+}
+
+async function onMovePipeline(ev: { pipelineId: string; folderId: string }) {
+  const pipeline = allPipelines.value.find(p => p.id === ev.pipelineId)
+  if (!pipeline) return
+  moveTarget.value = pipeline
+  moveToFolderId.value = ev.folderId
+  moveError.value = null
+  await handleMoveToFolder()
+}
 
 function onSelectFolder(folderId: string | null) {
   selectedFolderId.value = folderId
