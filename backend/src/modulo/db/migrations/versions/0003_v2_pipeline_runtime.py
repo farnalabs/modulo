@@ -365,7 +365,7 @@ def _create_tables() -> None:
         sa.Column("schema_pins_json", sa.JSON(), nullable=False),
         sa.Column("prompt_pins_json", sa.JSON(), nullable=False),
         sa.Column("model_backend_pins_json", sa.JSON(), nullable=False),
-        sa.Column("composite_bindings_json", sa.JSON(), nullable=False),
+        sa.Column("composite_bindings_json", sa.JSON(), nullable=True),
         sa.Column("tag", sa.String(length=100), nullable=True),
         sa.Column("notes", sa.String(length=2000), nullable=True),
         sa.Column("default_autonomy_level", sa.String(length=30), nullable=True),
