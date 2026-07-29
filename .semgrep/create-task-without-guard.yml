@@ -1,0 +1,14 @@
+rules:
+  - id: create-task-without-guard
+    patterns:
+      - pattern: asyncio.create_task(...)
+      - pattern-not-inside: |
+          try:
+              asyncio.get_running_loop()
+          except RuntimeError:
+              ...
+    message: "asyncio.create_task() from sync code (SQLAlchemy listeners, signal handlers) must be guarded with `try: asyncio.get_running_loop(); except RuntimeError: ...` to prevent RuntimeError: no running event loop"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

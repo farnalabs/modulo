@@ -1,0 +1,11 @@
+rules:
+  - id: func-now-with-timezone
+    patterns:
+      - pattern: func.now()
+      - pattern-inside: |
+          DateTime(timezone=True)
+    message: "func.now() with DateTime(timezone=True) on SQLite returns naive datetime. Use func.current_timestamp() instead."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/modulo/**"]

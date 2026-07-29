@@ -1,0 +1,9 @@
+rules:
+  - id: playwright-no-waitforloadstate
+    patterns:
+      - pattern: waitForLoadState('networkidle')
+    message: "waitForLoadState('networkidle') never fires on staging (ongoing polling). Use expect().toContainText() with built-in retry instead."
+    languages: [typescript, javascript]
+    severity: ERROR
+    paths:
+      include: ["**/tests/e2e/**", "**/tests/bdd/**"]

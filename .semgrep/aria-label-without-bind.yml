@@ -1,0 +1,8 @@
+rules:
+  - id: aria-label-without-bind
+    pattern-regex: aria-label="[^"]*\b\$t\(
+    message: "aria-label with $t() content should use `:aria-label` (bind syntax) instead of `aria-label` to ensure reactive translation updates"
+    languages: [typescript, javascript, vue]
+    severity: ERROR
+    paths:
+      include: ["**/frontend/src/**"]
