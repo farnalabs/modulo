@@ -1,4 +1,4 @@
-"""Factory that builds a cancellable LangGraph node function from a node definition.
+﻿"""Factory that builds a cancellable LangGraph node function from a node definition.
 
 Node types:
   - standard (agent):  agent/connector node; runs the node body, then checks for
@@ -652,9 +652,7 @@ def make_sandbox_agent_fn(
     from e2b import AsyncSandbox  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
 
-    @cancellable_node(
-        timeout=(timeout or sandbox_timeout) + 30, role="sandbox_agent"
-    )  # +30s buffer over sandbox_timeout — inner timeout fires first; decorator is safety net
+    @cancellable_node(timeout=(timeout or sandbox_timeout) + 30, role="sandbox_agent")  # +30s buffer
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
 
         run_context: dict[str, Any] = state.get("run_context") or {}
