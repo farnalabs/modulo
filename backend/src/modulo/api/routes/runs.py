@@ -27,7 +27,7 @@ from modulo.api.dependencies import (
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
+from modulo.celery_app import get_celery_app as _get_celery_app
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -68,13 +68,6 @@ _RETRY_TRANSIENT = retry(
     reraise=True,
     before_sleep=before_sleep_log(_log, logging.WARNING),
 )
-
-_bg_worker: BackgroundPipelineWorker | None = None
-
-
-def set_background_worker(worker: BackgroundPipelineWorker) -> None:
-    global _bg_worker
-    _bg_worker = worker
 
 
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
@@ -398,10 +391,14 @@ async def trigger_run(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    if _bg_worker is not None:
-        _bg_worker.submit(run_id, org_id, req.input_payload)
-    else:
-        _log.warning("Background worker not initialized — run %s will not execute", run_id)
+    _celery = _get_celery_app()
+    _celery.send_task(
+        "modulo.pipeline.execute_run",
+        args=[str(run_id), str(org_id)],
+        queue="runs_manual",
+        retry=True,
+        retry_policy={"max_retries": 3, "interval_start": 1, "interval_step": 2, "interval_max": 10},
+    )
 
     return _build_run_response(run)
 

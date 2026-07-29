@@ -739,47 +739,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     get_runtime_config_store()
 
-    # Start the background pipeline worker (after migrations and checkpointer init).
-    try:
-        from modulo.api.mcp_server import set_background_worker as set_mcp_bg_worker
-        from modulo.api.routes.runs import set_background_worker as set_runs_bg_worker
-        from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
-
-        _bg_worker = BackgroundPipelineWorker(
-            database_url=str(settings.database_url),
-            checkpointer_conn_string=pg_connection_string(settings.database_url),
-        )
-        await _bg_worker.start()
-        try:
-            await _bg_worker.cleanup_stale_runs()
-        except Exception:
-            logger.exception("Startup stale-run cleanup failed")
-        set_runs_bg_worker(_bg_worker)
-        set_mcp_bg_worker(_bg_worker)
-        from modulo.api.routes.health import set_worker_ref as set_health_bg_worker
-
-        set_health_bg_worker(_bg_worker)
-        logger.info("startup.redis_configured - Celery beat available for distributed scheduling")
-        # Start in-process cron trigger scheduler
-        from modulo.core.scheduler import run_scheduler
-
-        _scheduler_stop = asyncio.Event()
-        _scheduler_task = asyncio.create_task(
-            run_scheduler(_scheduler_stop, bg_worker=_bg_worker),
-            name="cron-scheduler",
-        )
-
-        def _on_scheduler_done(task: asyncio.Task[None]) -> None:
-            if not task.cancelled() and task.exception() is not None:
-                logger.error(
-                    "Cron scheduler task exited with exception — no more cron triggers will fire until restart",
-                    exc_info=task.exception(),
-                )
-
-        _scheduler_task.add_done_callback(_on_scheduler_done)
-        logger.info("started in-process cron scheduler")
-    except Exception:
-        logger.warning("startup.background_worker_init_failed", exc_info=True)
+    # Background pipeline execution is handled by Celery workers.
+    # The in-process BackgroundPipelineWorker and in-process cron scheduler
+    # have been replaced by the Celery single-ingress ExecuteRunTask.
+    # Celery beat (CompositeScheduler) runs in its own process.
+    logger.info("startup.celery_workers_handle_pipeline_execution")
 
     # Initialise the graceful shutdown manager with the configured timeout.
     # Two session factories exist:
@@ -834,10 +798,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _claim_expiry_job.stop()
     with suppress(asyncio.CancelledError):
         await retention_task
-    with suppress(NameError):
-        _scheduler_stop.set()
-    with suppress(NameError):
-        await _bg_worker.stop()
     await _shutdown_manager.shutdown()
 
 

@@ -150,12 +150,7 @@ class CronFireTask(Task):  # type: ignore[misc]
         cron_expression: str,
         snapshot_id: str = "",
     ) -> dict[str, Any]:
-        """Fire a cron trigger — creates a run in the database.
-
-        Handles both sync Celery classic pool (``asyncio.run()``) and
-        async Celery pool (``asyncio.run_coroutine_threadsafe()``),
-        matching the pattern in ``PollingFireTask.run()``.
-        """
+        """Fire a cron trigger — creates a run and dispatches it to Celery."""
         import asyncio
 
         _snap = uuid.UUID(snapshot_id) if snapshot_id else None
@@ -163,7 +158,7 @@ class CronFireTask(Task):  # type: ignore[misc]
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(
+            result = asyncio.run(
                 fire_cron_trigger(
                     trigger_id=uuid.UUID(trigger_id),
                     org_id=uuid.UUID(org_id),
@@ -172,15 +167,23 @@ class CronFireTask(Task):  # type: ignore[misc]
                     cron_expression=cron_expression,
                 )
             )
-        coro = fire_cron_trigger(
-            trigger_id=uuid.UUID(trigger_id),
-            org_id=uuid.UUID(org_id),
-            pipeline_id=uuid.UUID(pipeline_id),
-            snapshot_id=_snap,
-            cron_expression=cron_expression,
-        )
-        future = asyncio.run_coroutine_threadsafe(coro, loop)
-        return future.result()
+        else:
+            coro = fire_cron_trigger(
+                trigger_id=uuid.UUID(trigger_id),
+                org_id=uuid.UUID(org_id),
+                pipeline_id=uuid.UUID(pipeline_id),
+                snapshot_id=_snap,
+                cron_expression=cron_expression,
+            )
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            result = future.result()
+
+        if result.get("status") == "fired" and result.get("run_id"):
+            from modulo.core.pipeline_executor_task import dispatch
+
+            dispatch(result["run_id"], org_id, "runs_automated")
+
+        return result
 
 
 async def fire_cron_trigger(
@@ -200,21 +203,21 @@ async def fire_cron_trigger(
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
 
-        # Re-read trigger with pg_try_advisory_lock to serialise concurrent fires
+        # Re-read trigger with pg_try_advisory_xact_lock to serialise concurrent fires
+        # (auto-released on transaction end — no manual unlock needed)
         key1, key2 = _uuid_to_lock_keys(trigger_id)
         lock_result = await session.execute(
-            text("SELECT pg_try_advisory_lock(:key1, :key2)"),
+            text("SELECT pg_try_advisory_xact_lock(:key1, :key2)"),
             {"key1": key1, "key2": key2},
         )
         if not lock_result.scalar_one():
             return {"status": "skipped", "reason": "trigger_busy"}
-        try:
-            result = await session.execute(
-                select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id)
-            )
-            trigger = result.scalar_one_or_none()
-            if trigger is None or not trigger.active:
-                return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+        result = await session.execute(
+            select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id)
+        )
+        trigger = result.scalar_one_or_none()
+        if trigger is None or not trigger.active:
+            return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
 
             # Concurrency check
             active_count = await _count_active_runs(session, trigger_id)
@@ -329,11 +332,8 @@ async def fire_cron_trigger(
                 "next_fire_at": next_fire.isoformat(),
                 "input_payload": input_payload,
             }
-        finally:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(:key1, :key2)"),
-                {"key1": key1, "key2": key2},
-            )
+
+    return {"status": "error", "reason": "unexpected"}
 
 
 # ---------------------------------------------------------------------------

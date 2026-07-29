@@ -19,6 +19,7 @@ from typing import Any
 try:
     from celery import Celery
     from celery.signals import task_failure
+    from kombu import Queue
 except ImportError:
     import typing
 
@@ -57,6 +58,7 @@ def get_celery_app() -> Any:
         broker=settings.redis_url,
         backend=settings.redis_url,
         include=[
+            "modulo.core.pipeline_executor_task",
             "modulo.core.cron_scheduler",
             "modulo.core.trigger_engine.polling",
             "modulo.core.reports.scheduler",
@@ -73,6 +75,12 @@ def get_celery_app() -> Any:
         timezone="UTC",
         enable_utc=True,
         beat_scheduler="modulo.core.composite_scheduler:CompositeScheduler",
+        broker_transport_options={"visibility_timeout": 1200},
+        task_default_queue="runs_automated",
+    )
+    app.conf.task_queues = (
+        Queue("runs_manual", routing_key="runs_manual"),
+        Queue("runs_automated", routing_key="runs_automated"),
     )
 
     if task_failure is not None:
