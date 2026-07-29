@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import typing
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -40,7 +41,7 @@ async def list_tiers_endpoint(
         cache_key = f"tiers:{current_user.organisation_id}"
         cached = await redis.get(cache_key)
         if cached:
-            return json.loads(cached)
+            return typing.cast(dict[str, Any], json.loads(cached))
     except Exception:
         logger.warning("tiers.cache_read_failed", exc_info=True)
     finally:
