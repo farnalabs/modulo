@@ -66,7 +66,7 @@ _worker_loop: asyncio.AbstractEventLoop | None = None
 def _get_settings() -> Any:
     from modulo.settings import get_settings
 
-    return get_settings(fresh=True)
+    return get_settings()
 
 
 if _CELERY_SIGNALS_AVAILABLE:
@@ -117,6 +117,8 @@ def _get_engines():
         max_overflow=s.modulo_celery_db_pool_sync_overflow,
         pool_pre_ping=True,
         pool_recycle=1800,
+        connect_args={"connect_timeout": 10},
+        pool_timeout=10,
     )
     _ASYNC_ENGINE = create_async_engine(
         s.database_url,
@@ -124,6 +126,8 @@ def _get_engines():
         max_overflow=s.modulo_celery_db_pool_async_overflow,
         pool_pre_ping=True,
         pool_recycle=1800,
+        connect_args={"connect_timeout": 10},
+        pool_timeout=10,
     )
     return _SYNC_ENGINE, _ASYNC_ENGINE
 
@@ -141,8 +145,10 @@ def reset_engines():
     global _SYNC_ENGINE, _ASYNC_ENGINE
     for e in (_SYNC_ENGINE, _ASYNC_ENGINE):
         if e is not None:
-            with contextlib.suppress(Exception):
+            try:
                 e.dispose()
+            except Exception:
+                _log.exception("pipeline_executor.reset_engines")
     _SYNC_ENGINE = None
     _ASYNC_ENGINE = None
 
