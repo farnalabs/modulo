@@ -10,8 +10,8 @@ Usage in Celery config::
     beat_scheduler = "modulo.core.composite_scheduler:CompositeScheduler"
 """
 
-import datetime
 import logging
+from datetime import datetime
 from typing import Any
 
 from celery import Celery
@@ -22,6 +22,8 @@ from modulo.core.reports.scheduler import DatabaseReportScheduler
 from modulo.core.trigger_engine.polling import DatabasePollingScheduler
 
 _log = logging.getLogger(__name__)
+
+_STALE_RECOVERY_INTERVAL = 300  # 5 minutes
 
 
 class StaleRecoveryEntry(ScheduleEntry):  # type: ignore[misc]
@@ -107,10 +109,7 @@ class CompositeScheduler(Scheduler):  # type: ignore[misc]
         merged.update(self._cron_scheduler._schedule)
         merged.update(self._polling_scheduler._schedule)
         merged.update(self._report_scheduler._schedule)
-        # Register the stale-running recovery sweep (every 5 min)
-        if self._stale_entry is None:
-            self._stale_entry = StaleRecoveryEntry()
-        merged[self._stale_entry.name] = self._stale_entry
+        merged["stale-run-recovery"] = StaleRecoveryEntry()
         self._schedule = merged
 
     @property
