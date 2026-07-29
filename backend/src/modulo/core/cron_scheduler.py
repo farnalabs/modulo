@@ -565,13 +565,13 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 
 
 async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
-    from sqlalchemy import func
+    from sqlalchemy import func, or_
 
     result = await session.execute(
         select(func.count()).where(
             Run.trigger_id == trigger_id,
             Run.status.in_(_ACTIVE_STATUSES),
-            Run.cancellation_requested == False,  # noqa: E712
+            or_(Run.cancellation_requested.is_(False), Run.cancellation_requested.is_(None)),
         )
     )
     return result.scalar_one()

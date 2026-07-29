@@ -764,10 +764,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         from modulo.core.scheduler import run_scheduler
 
         _scheduler_stop = asyncio.Event()
-        _scheduler_task = asyncio.create_task(  # noqa: RUF006
+        _scheduler_task = asyncio.create_task(
             run_scheduler(_scheduler_stop, bg_worker=_bg_worker),
             name="cron-scheduler",
         )
+
+        def _on_scheduler_done(task: asyncio.Task[None]) -> None:
+            if not task.cancelled() and task.exception() is not None:
+                logger.error(
+                    "Cron scheduler task exited with exception — no more cron triggers will fire until restart",
+                    exc_info=task.exception(),
+                )
+
+        _scheduler_task.add_done_callback(_on_scheduler_done)
         logger.info("started in-process cron scheduler")
     except Exception:
         logger.warning("startup.background_worker_init_failed", exc_info=True)
