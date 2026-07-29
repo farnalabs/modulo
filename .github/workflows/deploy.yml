@@ -14,46 +14,140 @@ jobs:
     name: Check CI result and context
     runs-on: ubicloud-standard-2
     outputs:
-      branch: ${{ steps.context.outputs.branch }}
-      is_main: ${{ steps.context.outputs.is_main }}
-      ci_passed: ${{ steps.context.outputs.ci_passed }}
-      head_sha: ${{ steps.context.outputs.head_sha }}
+      ci_passed: ${{ steps.check-ci.outputs.ci_passed }}
+      head_sha: ${{ steps.check-ci.outputs.head_sha }}
     steps:
-      - name: Determine context
-        id: context
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Check main CI status
+        id: check-ci
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MAIN_SHA=$(git rev-parse main)
+          CI_RUN=$(gh run list --workflow "CI: Fast Validation" --branch main --limit 1 --json conclusion,headSha 2>/dev/null || echo "[]")
+          CI_CONCLUSION=$(echo "$CI_RUN" | jq -r '.[0].conclusion // "unknown"')
+          CI_SHA=$(echo "$CI_RUN" | jq -r '.[0].headSha // "unknown"')
+          echo "Main HEAD: $MAIN_SHA"
+          echo "Latest CI run: conclusion=$CI_CONCLUSION sha=$CI_SHA"
+          if [ "$CI_CONCLUSION" = "success" ] && [ "$CI_SHA" = "$MAIN_SHA" ]; then
+            echo "ci_passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ci_passed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Main CI has not passed for current HEAD. CI=$CI_CONCLUSION, SHA match=$([ "$CI_SHA" = "$MAIN_SHA" ] && echo yes || echo no)"
+          fi
+          echo "head_sha=$MAIN_SHA" >> "$GITHUB_OUTPUT"
+
+  pre-deploy-tests:
+    name: Pre-deploy tests (fast + expensive)
+    needs: [check-context]
+    if: needs.check-context.outputs.ci_passed == 'true'
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-context.outputs.head_sha }}
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Fast tests (belt-and-braces re-run)
+      - name: Backend lint
+        working-directory: backend
+        run: |
+          uv sync --frozen
+          uv run --no-sync ruff check .
+          uv run --no-sync mypy src/modulo/
+          uv run --no-sync bandit -r src/modulo/ -ll
+          uv run --no-sync semgrep --config=../.semgrep/ --error .
+          uv run --no-sync pip-audit
+
+      - name: Backend unit tests
+        working-directory: backend
+        run: uv run --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+        env:
+          DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
+
+      - name: Frontend checks
+        working-directory: frontend
+        run: |
+          npm ci --force
+          npm run lint -- --quiet
+          npm run type-check
+          npm run test:unit
+          npm run build
+          npm audit --audit-level=critical
+
+      # Expensive tests
+      - name: Start Postgres
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            CONCLUSION="${{ github.event.workflow_run.conclusion }}"
-            BRANCH="${{ github.event.workflow_run.head_branch }}"
-            SHA="${{ github.event.workflow_run.head_sha }}"
-            if [ "$CONCLUSION" = "success" ]; then
-              echo "ci_passed=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "ci_passed=false" >> "$GITHUB_OUTPUT"
-            fi
-            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-            echo "head_sha=$SHA" >> "$GITHUB_OUTPUT"
-            if [ "$BRANCH" = "main" ]; then
-              echo "is_main=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "is_main=false" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            echo "ci_passed=true" >> "$GITHUB_OUTPUT"
-            echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-            echo "head_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
-            if [ "${{ github.ref_name }}" = "main" ]; then
-              echo "is_main=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "is_main=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
+          docker rm -f modulo-ci-pg 2>/dev/null || true
+          docker run -d --name modulo-ci-pg \
+            -e POSTGRES_USER=modulo_test \
+            -e POSTGRES_PASSWORD=modulo_test \
+            -e POSTGRES_DB=modulo_test \
+            -p 5433:5432 \
+            postgres:16-alpine
+          for i in $(seq 1 60); do
+            docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null && { echo "Postgres ready"; break; }
+            sleep 2
+          done
+
+      - name: Start Redis
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-redis 2>/dev/null || true
+          docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
+          for i in $(seq 1 30); do
+            docker exec modulo-ci-redis redis-cli ping 2>/dev/null && { echo "Redis ready"; break; }
+            sleep 2
+          done
+
+      - name: Integration tests
+        working-directory: backend
+        run: uv run --no-sync pytest tests/integration/ -m integration -n 2 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+
+      - name: Schemathesis API fuzz testing
+        shell: bash
+        run: uv run --no-sync pytest tests/integration/test_schemathesis.py -x --timeout=120
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+          REDIS_URL: "redis://localhost:6379/0"
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+
+      - name: Security audit
+        working-directory: backend
+        run: |
+          uv run pip-audit
+          uv run --no-sync semgrep --config=../.semgrep/ --error .
+        env:
+          SEMGREP_BASELINE_COMMIT: "HEAD^"
+
+      - name: Stop containers
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-pg 2>/dev/null || true
+          docker rm -f modulo-ci-redis 2>/dev/null || true
 
   deploy-staging:
     name: Deploy to staging
-    needs: [check-context]
-    if: needs.check-context.outputs.ci_passed == 'true'
+    needs: [pre-deploy-tests]
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
@@ -185,7 +279,7 @@ jobs:
   deploy-production:
     name: Deploy to app.modulo.run
     needs: [check-context, staging-e2e]
-    if: needs.check-context.outputs.is_main == 'true' && needs.check-context.outputs.ci_passed == 'true'
+    if: needs.check-context.outputs.ci_passed == 'true'
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
