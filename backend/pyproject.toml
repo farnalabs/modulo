@@ -88,6 +88,8 @@ dependencies = [
     "psycopg-binary>=3.3.4",
     # Runtime environments
     "e2b>=0.15.0",
+    # Retry library — replaces hand-rolled retry-with-backoff patterns
+    "tenacity>=9.0.0",
     # CLI
     "click>=8.1.0",
     "tqdm>=4.68.3",
