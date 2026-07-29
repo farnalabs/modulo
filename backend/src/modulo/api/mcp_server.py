@@ -660,30 +660,18 @@ async def update_pipeline_graph(
         except ValueError:
             return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
-        # Validate sandbox_agent nodes have non-empty agent_prompt
-        for node in nodes:
-            if node.get("node_type") == "sandbox_agent":
-                prompt = node.get("agent_prompt")
-                if not prompt or not str(prompt).strip():
-                    return {
-                        "error": "validation_failed",
-                        "field": "agent_prompt",
-                        "detail": f"sandbox_agent node '{node.get('id')}' requires a non-empty agent_prompt",
-                    }
-                command = node.get("agent_command")
-                if not command or not str(command).strip():
-                    return {
-                        "error": "validation_failed",
-                        "field": "agent_command",
-                        "detail": f"sandbox_agent node '{node.get('id')}' requires a non-empty agent_command",
-                    }
-                template_id = node.get("template_id")
-                if not template_id or not str(template_id).strip():
-                    return {
-                        "error": "validation_failed",
-                        "field": "template_id",
-                        "detail": f"sandbox_agent node '{node.get('id')}' requires a template_id (e.g. 'opencode')",
-                    }
+        # Validate graph structure using Pydantic models (same as REST endpoint)
+        from pydantic import ValidationError as _PydanticValidationError
+
+        from modulo.api.routes.pipelines import PipelineGraphUpdate
+
+        try:
+            PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
+        except _PydanticValidationError as exc:
+            return {
+                "error": "validation_failed",
+                "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
+            }
 
         async with _session(org_id) as s:
             result = await replace_pipeline_graph(
@@ -1852,6 +1840,147 @@ async def delete_connector(
     except Exception:
         _log.exception("delete_connector failed")
         return _tool_error("Failed to delete connector")
+
+
+@mcp.tool(
+    description="Create or update a secret in the organisation vault. "
+    "Secrets are encrypted at rest and scoped to the organisation. "
+    "Returns the created secret details."
+)
+@_RETRY_DB
+async def create_secret(
+    key: str,
+    value: str,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "create_secret")
+
+        if not key or not key.strip():
+            return {"error": "validation_failed", "field": "key", "detail": "Secret key is required"}
+        if len(key) > 255:
+            return {"error": "validation_failed", "field": "key", "detail": "Secret key exceeds 255 characters"}
+        if not value:
+            return {"error": "validation_failed", "field": "value", "detail": "Secret value is required"}
+
+        org_id = _ctx_org_id_val()
+        from modulo.settings import get_settings
+
+        settings = get_settings()
+        from modulo.core.secrets_backend import create_secrets_backend
+
+        async with _session(org_id) as s:
+            secrets_backend = create_secrets_backend(
+                fernet_key=settings.fernet_key,
+                session=s,
+            )
+            await secrets_backend.set_secret(key, value)
+
+        return {"status": "created", "key": key}
+
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("create_secret failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+    except Exception:
+        _log.exception("create_secret failed")
+        return _tool_error("Failed to create secret")
+
+
+@mcp.tool(
+    description="List all secret keys in the organisation vault. "
+    "Returns secret keys and metadata — never exposes secret values."
+)
+@_RETRY_DB
+async def list_secrets(
+    limit: int = 100,
+    search: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "list_secrets")
+
+        org_id = _ctx_org_id_val()
+
+        async with _session(org_id) as s:
+            from sqlalchemy import func, select
+
+            from modulo.db.models.secret import Secret
+
+            query = select(Secret).where(Secret.organisation_id == org_id)
+            if search:
+                query = query.where(Secret.key.ilike(f"%{search}%"))
+            query = query.order_by(Secret.key).limit(limit)
+
+            result = await s.execute(query)
+            secrets = result.scalars().all()
+
+            count_query = select(func.count()).select_from(Secret).where(Secret.organisation_id == org_id)
+            if search:
+                count_query = count_query.where(Secret.key.ilike(f"%{search}%"))
+            total = (await s.execute(count_query)).scalar() or 0
+
+        return {
+            "secrets": [
+                {
+                    "key": sec.key,
+                    "created_at": sec.created_at.isoformat() if sec.created_at else None,
+                    "updated_at": sec.updated_at.isoformat() if sec.updated_at else None,
+                }
+                for sec in secrets
+            ],
+            "total": total,
+        }
+
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_secrets failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+    except Exception:
+        _log.exception("list_secrets failed")
+        return _tool_error("Failed to list secrets")
+
+
+@mcp.tool(description="Delete a secret from the organisation vault by key.")
+@_RETRY_DB
+async def delete_secret(
+    key: str,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "delete_secret")
+
+        if not key or not key.strip():
+            return {"error": "validation_failed", "field": "key", "detail": "Secret key is required"}
+
+        org_id = _ctx_org_id_val()
+        from modulo.settings import get_settings
+
+        settings = get_settings()
+        from modulo.core.secrets_backend import create_secrets_backend
+
+        async with _session(org_id) as s:
+            secrets_backend = create_secrets_backend(
+                fernet_key=settings.fernet_key,
+                session=s,
+            )
+            await secrets_backend.delete_secret(key)
+
+        return {"status": "deleted", "key": key}
+
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("delete_secret failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+    except Exception:
+        _log.exception("delete_secret failed")
+        return _tool_error("Failed to delete secret")
 
 
 @mcp.tool(description="Create a new agent. Returns the created agent details.")
