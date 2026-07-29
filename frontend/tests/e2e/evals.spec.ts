@@ -1,6 +1,6 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Evals', () => {
+test.describe('Evals', { tag: "@regression" }, () => {
   test('eval editor page loads', async ({ page, env }) => {
     await page.route('**/api/v1/evals*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: 'e1', name: 'Accuracy Eval', eval_type: 'exact_match', status: 'active', created_at: '2025-06-01T10:00:00Z' }], total: 1 }) })

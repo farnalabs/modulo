@@ -1,6 +1,6 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Settings MCP', () => {
+test.describe('Settings MCP', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await page.route('**/api/v1/mcp/keys*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: 'mk1', name: 'Production Key', prefix: 'mod_abc', created_at: '2025-06-01T10:00:00Z', expires_at: '2026-06-01T10:00:00Z' }], total: 1 }) })

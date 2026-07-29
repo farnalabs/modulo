@@ -1,6 +1,6 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Settings HITL Review', () => {
+test.describe('Settings HITL Review', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/hitl-review')
@@ -9,7 +9,7 @@ test.describe('Settings HITL Review', () => {
   })
 })
 
-test.describe('Settings Browser Monitoring', () => {
+test.describe('Settings Browser Monitoring', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/monitoring')
@@ -18,7 +18,7 @@ test.describe('Settings Browser Monitoring', () => {
   })
 })
 
-test.describe('Settings Rate Limits', () => {
+test.describe('Settings Rate Limits', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/rate-limits')
@@ -27,7 +27,7 @@ test.describe('Settings Rate Limits', () => {
   })
 })
 
-test.describe('Settings Remy Skills', () => {
+test.describe('Settings Remy Skills', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/remy')
@@ -36,7 +36,7 @@ test.describe('Settings Remy Skills', () => {
   })
 })
 
-test.describe('Settings Runtime Config', () => {
+test.describe('Settings Runtime Config', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/runtime-config')

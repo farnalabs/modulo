@@ -9,7 +9,7 @@ function filterViolations(violations: { id: string }[]) {
   return violations.filter(v => !ACCEPTABLE_VIOLATIONS.includes(v.id))
 }
 
-test.describe('WCAG AA audit (CI â€” Vite dev server)', () => {
+test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression" }, () => {
   const pages = [
     { path: '/login', name: 'login page' },
     { path: '/', name: 'root page' },

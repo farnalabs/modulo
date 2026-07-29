@@ -27,7 +27,7 @@ const sampleViews = {
   ],
 }
 
-test.describe('View Modes Admin CRUD', () => {
+test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
   test('page loads and shows header + Create View button', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', (route) => {

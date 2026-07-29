@@ -1,6 +1,6 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Admin API Changelog', () => {
+test.describe('Admin API Changelog', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/api-changelog')
@@ -9,7 +9,7 @@ test.describe('Admin API Changelog', () => {
   })
 })
 
-test.describe('Admin Audit Log', () => {
+test.describe('Admin Audit Log', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/audit')
@@ -18,7 +18,7 @@ test.describe('Admin Audit Log', () => {
   })
 })
 
-test.describe('Admin My Profile', () => {
+test.describe('Admin My Profile', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/my-profile')
@@ -27,7 +27,7 @@ test.describe('Admin My Profile', () => {
   })
 })
 
-test.describe('Admin Notification Delivery', () => {
+test.describe('Admin Notification Delivery', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/notification-delivery')
@@ -36,7 +36,7 @@ test.describe('Admin Notification Delivery', () => {
   })
 })
 
-test.describe('Admin Org Settings', () => {
+test.describe('Admin Org Settings', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/admin/billing/overview*', (route) => {
@@ -51,7 +51,7 @@ test.describe('Admin Org Settings', () => {
   })
 })
 
-test.describe('Admin Pipelines', () => {
+test.describe('Admin Pipelines', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/pipelines')
@@ -60,7 +60,7 @@ test.describe('Admin Pipelines', () => {
   })
 })
 
-test.describe('Admin Plugins', () => {
+test.describe('Admin Plugins', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/admin/feature-flags*', (route) => {
@@ -75,7 +75,7 @@ test.describe('Admin Plugins', () => {
   })
 })
 
-test.describe('Admin Team Comparison', () => {
+test.describe('Admin Team Comparison', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/teams/comparison')
@@ -84,7 +84,7 @@ test.describe('Admin Team Comparison', () => {
   })
 })
 
-test.describe('Admin Triggers', () => {
+test.describe('Admin Triggers', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/triggers')

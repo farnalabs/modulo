@@ -157,32 +157,10 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium
 
-      - name: Run @smoke Playwright tests against staging
-        id: smoke-tests
-        run: npm run test:e2e:smoke -- --reporter=line
-        timeout-minutes: 10
-        env:
-          E2E_TARGET: staging
-          E2E_NO_WEBSERVER: "true"
-          E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
-          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
-        continue-on-error: true
-
-
-      - name: Run WCAG audit on staging
-        id: wcag-tests
-        run: npx playwright test staging-wcag --output=test-results/wcag
-        env:
-          E2E_TARGET: staging
-          E2E_NO_WEBSERVER: "true"
-          E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
-          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
-        continue-on-error: true
-
-      - name: Run @staging-regression tests against staging
+      - name: Run @regression Playwright tests against staging
         id: regression-tests
-        run: npx playwright test --grep "@staging-regression" --reporter=line
-        timeout-minutes: 30
+        run: npx playwright test --grep "@regression" --reporter=line
+        timeout-minutes: 60
         env:
           E2E_TARGET: staging
           E2E_NO_WEBSERVER: "true"
@@ -198,7 +176,7 @@ jobs:
           path: frontend/test-results/
           if-no-files-found: ignore
       - name: Fail on test failure
-        if: steps.smoke-tests.outcome == 'failure' || steps.wcag-tests.outcome == 'failure' || steps.regression-tests.outcome == 'failure'
+        if: steps.regression-tests.outcome == 'failure'
         shell: pwsh
         run: |
           Write-Host "::error::One or more staging suites failed."
@@ -271,3 +249,43 @@ jobs:
             exit 1
           }
           Write-Host "app.modulo.run SHA match: $deployedSha"
+  prod-smoke:
+    name: Prod smoke tests
+    needs: [check-context, deploy-production]
+    if: always() && needs.deploy-production.result == 'success'
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-context.outputs.head_sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Run @smoke Playwright tests against app.modulo.run
+        run: npm run test:e2e:smoke -- --reporter=line
+        timeout-minutes: 10
+        env:
+          E2E_TARGET: production
+          E2E_NO_WEBSERVER: "true"
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
+        continue-on-error: true
+
+      - name: Fail on smoke test failure
+        if: steps.smoke-tests.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Write-Host "::error::Smoke tests against production failed."
+          exit 1

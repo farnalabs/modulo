@@ -1,6 +1,6 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Settings Teams', () => {
+test.describe('Settings Teams', { tag: "@regression" }, () => {
   test('page loads with correct heading and create button', async ({ page, env }) => {
     await page.route('**/api/v1/teams', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: 't1', name: 'Engineering', description: 'Core engineering team', member_count: 5, created_at: '2025-01-15T10:00:00Z' }], total: 1 }) })
