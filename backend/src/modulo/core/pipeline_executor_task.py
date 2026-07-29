@@ -9,11 +9,13 @@ Connection budget (per prefork child):
   Async pool: pool_size + max_overflow = up to N+O connections (pipeline execution)
   Total per child: (sync_N+sync_O) + (async_N+async_O)
   Total per cluster: per_child_value x worker_count
-    automated workers (4): Nx4 sync, Nx4 async
-    manual workers (2):    Nx2 sync, Nx2 async
+    automated workers (4): 2x4 sync, 4x4 async = 24 connections
+    manual workers (2):    2x2 sync, 4x2 async = 12 connections
+    sweep recovery (1):    0 sync, 1+1 async  = 2 connections
     beat:                  1 connection
     web app:               ~10-20 connections (separate pool)
   Postgres max_connections default: 100
+  Budget at defaults: 24+12+2+1 = ~39 out of 100 (safe margin)
 """
 
 import asyncio
@@ -24,13 +26,27 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-import kombu.exceptions
-import redis.exceptions
-import sqlalchemy.exc
-from celery import Task
-from celery.signals import worker_process_init, worker_process_shutdown
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+
+try:
+    import kombu.exceptions  # noqa: F401
+    import redis.exceptions  # noqa: F401
+    import sqlalchemy.exc  # noqa: F401
+    from celery import Task
+    from celery.signals import worker_process_init, worker_process_shutdown
+    _CELERY_SIGNALS_AVAILABLE = True
+except ImportError:
+    import typing
+
+    if typing.TYPE_CHECKING:
+        import kombu.exceptions  # noqa: F401
+        import redis.exceptions  # noqa: F401
+        import sqlalchemy.exc  # noqa: F401
+        from celery import Task
+        from celery.signals import worker_process_init, worker_process_shutdown
+    Task = object
+    _CELERY_SIGNALS_AVAILABLE = False
 
 _log = logging.getLogger(__name__)
 
@@ -46,36 +62,61 @@ _worker_loop: asyncio.AbstractEventLoop | None = None
 def _get_settings() -> Any:
     from modulo.settings import get_settings
 
-    return get_settings()
+    return get_settings(fresh=True)
 
 
-def _get_sync_engine() -> Any:
-    global _SYNC_ENGINE
-    if _SYNC_ENGINE is None:
-        with _sync_lock:
-            if _SYNC_ENGINE is None:
-                settings = _get_settings()
-                url = str(settings.database_url).replace("+asyncpg", "+psycopg")
-                _SYNC_ENGINE = create_engine(
-                    url,
-                    pool_size=settings.celery_worker_pool_sync_size,
-                    max_overflow=settings.celery_worker_pool_overflow,
-                    pool_pre_ping=True,
-                )
-    return _SYNC_ENGINE
+if _CELERY_SIGNALS_AVAILABLE:
+
+    @worker_process_shutdown.connect
+    def _dispose_worker_engines(**kwargs):
+        global _SYNC_ENGINE, _ASYNC_ENGINE
+        if _SYNC_ENGINE is not None:
+            _SYNC_ENGINE.dispose()
+            _SYNC_ENGINE = None
+        if _ASYNC_ENGINE is not None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            loop.run_until_complete(_ASYNC_ENGINE.dispose())
+            _ASYNC_ENGINE = None
 
 
-def _get_async_engine() -> AsyncEngine:
-    global _ASYNC_ENGINE
-    if _ASYNC_ENGINE is None:
-        settings = _get_settings()
-        _ASYNC_ENGINE = create_async_engine(
-            settings.database_url,
-            pool_size=settings.celery_worker_pool_async_size,
-            max_overflow=settings.celery_worker_pool_overflow,
-            pool_pre_ping=True,
-        )
-    return _ASYNC_ENGINE
+def _get_engines():
+    global _SYNC_ENGINE, _ASYNC_ENGINE
+    if _ASYNC_ENGINE is not None:
+        return _SYNC_ENGINE, _ASYNC_ENGINE
+    s = _get_settings()
+    sync_url = (
+        str(s.database_url)
+        .replace("+asyncpg", "+psycopg")
+        .replace("+aiomysql", "+mysqldb")
+        .replace("+aiosqlite", "+pysqlite")
+    )
+    _SYNC_ENGINE = create_engine(
+        sync_url,
+        pool_size=s.modulo_celery_pool_sync_size,
+        max_overflow=s.modulo_celery_pool_overflow,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
+    _ASYNC_ENGINE = create_async_engine(
+        s.database_url,
+        pool_size=s.modulo_celery_pool_async_size,
+        max_overflow=s.modulo_celery_pool_overflow,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
+    return _SYNC_ENGINE, _ASYNC_ENGINE
+
+
+def _get_sync_engine():
+    return _get_engines()[0]
+
+
+def _get_async_engine():
+    return _get_engines()[1]
 
 
 @worker_process_init.connect
@@ -309,38 +350,79 @@ class StaleRunRecoveryTask(Task):
     name = "modulo.pipeline.stale_run_recovery"
     ignore_result = True
 
-    def run(self) -> None:
-        _log.info("Stale-run recovery sweep starting")
-        try:
-            from sqlalchemy import text as _text
+    def run(self) -> dict[str, Any]:
+        return asyncio.run(_stale_run_recovery_sweep())
 
-            engine = _get_sync_engine()
-            with engine.connect() as c:
-                c.execute(
-                    _text(
-                        "UPDATE runs SET status='failed', error_code='never_dispatched', completed_at=now() "
-                        "WHERE status='pending' AND created_at < now() - interval '5 minutes' "
-                        "AND dispatched_at IS NULL"
-                    )
-                )
-                nd_count = c.rowcount
 
-                c.execute(
-                    _text(
-                        "UPDATE runs SET status='failed', error_code='worker_lost', completed_at=now() "
-                        "WHERE status='running' AND heartbeat_at < now() - interval '10 minutes' "
-                        "AND claim_count >= 5"
-                    )
-                )
-                sl_count = c.rowcount
-                c.commit()
+async def _stale_run_recovery_sweep() -> dict[str, Any]:
+    """Sweep stale pending and running pipeline runs.
 
-            if nd_count or sl_count:
-                _log.info("Stale-run recovery: %d never-dispatched failed, %d stale-running failed", nd_count, sl_count)
-            else:
-                _log.debug("Stale-run recovery sweep complete — no stale runs found")
-        except Exception:
-            _log.exception("Stale-run recovery sweep failed")
+    Uses its own dedicated async engine (pool_size=1, max_overflow=1)
+    so the sweep does not compete with the execution pool for connections.
+
+    - Pending runs older than 5 minutes with no ``dispatched_at`` are marked
+      ``failed`` with ``never_dispatched``.
+    - Running runs with a heartbeat older than 10 minutes and 5+ claims are
+      marked ``failed`` with ``worker_lost``.
+    """
+    from modulo.settings import get_settings
+
+    s = get_settings(fresh=True)
+    sweep_engine = create_async_engine(
+        s.database_url,
+        pool_size=1,
+        max_overflow=1,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
+    try:
+        factory = async_sessionmaker(sweep_engine, expire_on_commit=False)
+        async with factory() as session, session.begin():
+            never_result = await session.execute(
+                text("""
+                    UPDATE runs
+                    SET status = 'failed',
+                        error_code = 'never_dispatched',
+                        completed_at = now()
+                    WHERE status = 'pending'
+                      AND created_at < now() - interval '5 minutes'
+                      AND dispatched_at IS NULL
+                """)
+            )
+            never_count = never_result.rowcount
+
+            lost_result = await session.execute(
+                text("""
+                    UPDATE runs
+                    SET status = 'failed',
+                        error_code = 'worker_lost',
+                        completed_at = now()
+                    WHERE status = 'running'
+                      AND heartbeat_at < now() - interval '10 minutes'
+                      AND claim_count >= 5
+                """)
+            )
+            lost_count = lost_result.rowcount
+
+        if never_count or lost_count:
+            _log.info(
+                "Stale run recovery: %d never-dispatched, %d worker-lost runs swept",
+                never_count,
+                lost_count,
+            )
+        return {
+            "never_dispatched_swept": never_count,
+            "worker_lost_swept": lost_count,
+        }
+    except Exception:
+        _log.exception("Stale run recovery sweep failed")
+        return {
+            "never_dispatched_swept": 0,
+            "worker_lost_swept": 0,
+            "error": "sweep_failed",
+        }
+    finally:
+        await sweep_engine.dispose()
 
 
 try:
@@ -351,4 +433,3 @@ try:
     _celery_app.register_task(StaleRunRecoveryTask())
 except Exception:
     _log.warning("Could not register Celery tasks — Celery may not be configured")
-

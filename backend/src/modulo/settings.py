@@ -62,9 +62,9 @@ class Settings(BaseSettings):
     modulo_max_local_concurrency: int = Field(2)
 
     # Celery worker connection pool sizes (per prefork child)
-    celery_worker_pool_sync_size: int = Field(default=4, alias="CELERY_WORKER_POOL_SYNC_SIZE", ge=1, le=20)
-    celery_worker_pool_async_size: int = Field(default=8, alias="CELERY_WORKER_POOL_ASYNC_SIZE", ge=1, le=30)
-    celery_worker_pool_overflow: int = Field(default=4, alias="CELERY_WORKER_POOL_OVERFLOW", ge=0, le=10)
+    modulo_celery_pool_sync_size: int = Field(default=2, alias="MODULO_CELERY_POOL_SYNC_SIZE", ge=1, le=20)
+    modulo_celery_pool_async_size: int = Field(default=4, alias="MODULO_CELERY_POOL_ASYNC_SIZE", ge=1, le=30)
+    modulo_celery_pool_overflow: int = Field(default=2, alias="MODULO_CELERY_POOL_OVERFLOW", ge=0, le=10)
 
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)
@@ -247,5 +247,5 @@ class Settings(BaseSettings):
 
 
 @lru_cache
-def get_settings() -> Settings:
+def get_settings(fresh: bool = False) -> Settings:
     return Settings()
