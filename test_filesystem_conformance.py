@@ -57,3 +57,42 @@ class TestFilesystemConnector:
 
     async def test_connector_type_is_filesystem(self, fs_connector: FilesystemConnector) -> None:
         assert fs_connector.connector_type == ConnectorType.FILESYSTEM
+
+    async def test_write_to_nested_path_creates_intermediate_dirs(self, fs_connector: FilesystemConnector) -> None:
+        result = await fs_connector.write(
+            ConnectorPayload(resource="file", data={"path": "a/b/c/nested.txt", "content": "nested"})
+        )
+        assert result.get("bytes_written") == 6
+        read_result = await fs_connector.query(_file_query("a/b/c/nested.txt"))
+        assert read_result.records[0]["content"] == "nested"
+
+    async def test_browse_directory_returns_children(self, fs_connector: FilesystemConnector) -> None:
+        await fs_connector.write(
+            ConnectorPayload(resource="file", data={"path": "f1.txt", "content": "one"})
+        )
+        await fs_connector.write(
+            ConnectorPayload(resource="file", data={"path": "f2.txt", "content": "two"})
+        )
+        result = await fs_connector.query(ConnectorQuery(resource="directory"))
+        paths = [r.get("name", r.get("path", "")) for r in result.records]
+        assert "f1.txt" in paths
+        assert "f2.txt" in paths
+
+    async def test_write_binary_content(self, fs_connector: FilesystemConnector) -> None:
+        binary_data = b"\x00\x01\x02\xff\xfe"
+        result = await fs_connector.write(
+            ConnectorPayload(resource="file", data={"path": "binary.bin", "content": binary_data})
+        )
+        assert result.get("bytes_written") == 5
+        read_result = await fs_connector.query(_file_query("binary.bin"))
+        assert read_result.records[0]["content"] == binary_data
+
+    async def test_overwrite_existing_file(self, fs_connector: FilesystemConnector) -> None:
+        await fs_connector.write(
+            ConnectorPayload(resource="file", data={"path": "overwrite.txt", "content": "original"})
+        )
+        await fs_connector.write(
+            ConnectorPayload(resource="file", data={"path": "overwrite.txt", "content": "updated"})
+        )
+        read_result = await fs_connector.query(_file_query("overwrite.txt"))
+        assert read_result.records[0]["content"] == "updated"

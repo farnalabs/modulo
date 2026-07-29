@@ -57,3 +57,45 @@ class TestSecurityHeadersMiddleware:
             middleware = SecurityHeadersMiddleware(app)
             assert "https://faro.mycompany.com" in middleware._csp
             assert "*.ingest.sentry.io" in middleware._csp
+
+    def test_multiple_custom_domains_in_csp(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        monkeypatch.setenv(
+            "MODULO_MONITOR_DOMAINS",
+            "https://faro.mycompany.com https://sentry.mycompany.com",
+        )
+        settings = Settings()
+        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+            app = FastAPI()
+            middleware = SecurityHeadersMiddleware(app)
+            assert "https://faro.mycompany.com" in middleware._csp
+            assert "https://sentry.mycompany.com" in middleware._csp
+
+    def test_empty_domains_omits_custom_sources(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        monkeypatch.setenv("MODULO_MONITOR_DOMAINS", "")
+        settings = Settings()
+        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+            app = FastAPI()
+            middleware = SecurityHeadersMiddleware(app)
+            assert "https://" not in middleware._csp or middleware._csp.count("https://") == 0
+
+    def test_csp_contains_default_sources(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        monkeypatch.setenv("DEBUG", "true")
+        settings = Settings()
+        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+            app = FastAPI()
+            middleware = SecurityHeadersMiddleware(app)
+            assert "connect-src" in middleware._csp
+            assert "default-src" in middleware._csp
+            assert "script-src" in middleware._csp
+            assert "style-src" in middleware._csp
+            assert "frame-src" in middleware._csp
+            assert "img-src" in middleware._csp
