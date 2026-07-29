@@ -1450,8 +1450,7 @@ class GraphValidator:
                     if t < 60 or t > 3600:
                         result.warning(
                             "SANDBOX_TIMEOUT_BOUNDS",
-                            f"Sandbox agent node '{nid}' timeout_seconds={t} is outside recommended "
-                            f"range 60-3600s",
+                            f"Sandbox agent node '{nid}' timeout_seconds={t} is outside recommended range 60-3600s",
                             node_id=nid,
                         )
                 except (ValueError, TypeError):
