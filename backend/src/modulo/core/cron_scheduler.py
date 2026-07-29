@@ -247,7 +247,7 @@ async def fire_cron_trigger(
                     )
                 )
                 today_cost = cost_result.scalar_one()
-                if today_cost >= spend_limit:  # type: ignore[operator]
+                if today_cost >= spend_limit:
                     await _log_event(
                         session,
                         trigger=trigger,

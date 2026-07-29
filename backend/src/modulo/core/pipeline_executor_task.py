@@ -32,13 +32,13 @@ _ASYNC_ENGINE: AsyncEngine | None = None
 _worker_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _get_settings():
+def _get_settings() -> Any:
     from modulo.settings import get_settings
 
     return get_settings()
 
 
-def _get_sync_engine():
+def _get_sync_engine() -> Any:
     global _SYNC_ENGINE
     if _SYNC_ENGINE is None:
         with _sync_lock:
@@ -49,7 +49,7 @@ def _get_sync_engine():
     return _SYNC_ENGINE
 
 
-def _get_async_engine():
+def _get_async_engine() -> AsyncEngine:
     global _ASYNC_ENGINE
     if _ASYNC_ENGINE is None:
         settings = _get_settings()
@@ -63,7 +63,7 @@ def _get_async_engine():
 
 
 @worker_process_init.connect
-def _init_worker(**kw):
+def _init_worker(**kw: Any) -> None:
     global _worker_loop
     _worker_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_worker_loop)
@@ -71,7 +71,7 @@ def _init_worker(**kw):
 
 
 @worker_process_shutdown.connect
-def _shutdown_worker(**kw):
+def _shutdown_worker(**kw: Any) -> None:
     global _SYNC_ENGINE, _ASYNC_ENGINE, _worker_loop
     if _SYNC_ENGINE is not None:
         _SYNC_ENGINE.dispose()
@@ -82,7 +82,7 @@ def _shutdown_worker(**kw):
     _log.info("pipeline_executor_task: worker process shut down")
 
 
-def dispatch(run_id, org_id, queue):
+def dispatch(run_id: str, org_id: str, queue: str) -> None:
     """Dispatch a run to Celery and record dispatched_at (best-effort)."""
     from modulo.celery_app import app as celery_app
 
@@ -293,7 +293,7 @@ class StaleRunRecoveryTask(Task):
     name = "modulo.pipeline.stale_run_recovery"
     ignore_result = True
 
-    def run(self):
+    def run(self) -> None:
         _log.info("Stale-run recovery sweep starting")
         try:
             from sqlalchemy import text as _text
