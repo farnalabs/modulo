@@ -1,10 +1,12 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Admin Spend Limits', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
-    await page.route('**/api/v1/costs/limits*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ limits: [] }) })
-    })
+    if (env.name === 'local') {
+      await page.route('**/api/v1/costs/limits*', (route) => {
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ limits: [] }) })
+      })
+    }
     await loginAsAdmin(page, env)
     await page.goto('/admin/costs/limits')
     await expect(page.locator('h1')).toContainText('Spend Limits')

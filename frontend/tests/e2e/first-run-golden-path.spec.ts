@@ -1,6 +1,7 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('First-Run Golden Path', { tag: "@regression" }, () => {
+  test.skip(({ env }) => env.name !== 'local', 'Requires local mock with specific pipeline data')
 
   test('golden path: login -> browse pipelines -> trigger run -> inspect output', async ({ page, env }) => {
     // â”€â”€ Step 1: Navigate to app and log in â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
