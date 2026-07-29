@@ -3,8 +3,8 @@
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0027_add_claimed_by_to_runs"
-down_revision = "0026_add_agent_commands"
+revision = "0028_add_claimed_by_to_runs"
+down_revision = "0027_add_run_heartbeat_dispatched_claim"
 
 
 def upgrade():

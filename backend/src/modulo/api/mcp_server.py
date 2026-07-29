@@ -13,7 +13,6 @@ Dual-layer enforcement:
 Org context validated per-event for streaming (SSE) connections.
 """
 
-import asyncio
 import contextvars
 import json
 import logging
@@ -26,7 +25,7 @@ from typing import Any
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware import Middleware
@@ -39,7 +38,6 @@ from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_afte
 from modulo.api.dependencies import (
     get_or_create_engine,
     get_or_create_session_factory,
-    pg_connection_string,
 )
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.auth.api_key import ApiKeyInvalidError, validate_api_key
@@ -47,18 +45,6 @@ from modulo.auth.oauth import (
     check_oauth_token_family_valid,
     decode_oauth_access_token,
 )
-
-# ContextVars populated by McpAuthMiddleware before each request.
-# Propagation: this server runs FastMCP in stateless HTTP mode, where each request
-# spawns a fresh per-request server task *from the already-authenticated request
-# coroutine* (StreamableHTTPSessionManager._handle_stateless_request calls
-# task_group.start(...) at request time). asyncio/anyio copy the caller's context
-# at task-creation time, so values set here in the middleware propagate to tool
-# handlers. If a handler ever runs without this context, tenant resolution FAILS
-# CLOSED (auth error) — there must never be a process-global fallback, because
-# under concurrent multi-tenant load a global would resolve to whichever org
-# authenticated last, leaking cross-tenant data.
-from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
 from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
 from modulo.core.documentation_indexer import DocumentationIndex
 from modulo.core.exceptions import SnapshotLockNotAvailableError
@@ -79,10 +65,21 @@ from modulo.core.library_service import (
     list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+
+# ContextVars populated by McpAuthMiddleware before each request.
+# Propagation: this server runs FastMCP in stateless HTTP mode, where each request
+# spawns a fresh per-request server task *from the already-authenticated request
+# coroutine* (StreamableHTTPSessionManager._handle_stateless_request calls
+# task_group.start(...) at request time). asyncio/anyio copy the caller's context
+# at task-creation time, so values set here in the middleware propagate to tool
+# handlers. If a handler ever runs without this context, tenant resolution FAILS
+# CLOSED (auth error) — there must never be a process-global fallback, because
+# under concurrent multi-tenant load a global would resolve to whichever org
+# authenticated last, leaking cross-tenant data.
+from modulo.core.pipeline_executor_task import dispatch
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
-from modulo.db.crud.run import get_run, update_run_status
+from modulo.db.crud.run import get_run
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
@@ -99,13 +96,6 @@ _RETRY_DB = retry(
     reraise=True,
     before_sleep=before_sleep_log(_log, logging.WARNING),
 )
-_bg_worker: BackgroundPipelineWorker | None = None
-
-
-def set_background_worker(worker: BackgroundPipelineWorker) -> None:
-    global _bg_worker
-    _bg_worker = worker
-
 
 _ctx_org_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_org_id")
 _ctx_role: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_role")
@@ -773,13 +763,6 @@ async def trigger_pipeline(
             return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
         payload = input_payload or {}
 
-        if _bg_worker is None or not _bg_worker.is_alive:
-            return {
-                "status": "error",
-                "error": "background_worker_unavailable",
-                "detail": "Pipeline execution worker is not running. Cannot create run.",
-            }
-
         async with _session(org_id) as s:
             pipeline = await get_pipeline(s, pid)
             if pipeline is None:
@@ -804,58 +787,7 @@ async def trigger_pipeline(
             run_id = run.id
             thread_id = run.langgraph_thread_id
 
-        _bg_worker.submit(run_id, org_id, payload)
-
-        # Verify the worker picked up the run; fall back to direct execution if not
-        await asyncio.sleep(0.5)
-        async with _session(org_id) as vs:
-            verify_run = await get_run(vs, run_id)
-        if verify_run and verify_run.status == "pending" and _bg_worker.is_alive:
-            _log.info(
-                "MCP: Run %s still pending after submit — spawning fallback execution",
-                run_id,
-            )
-            settings = get_settings()
-            fallback_engine = get_or_create_engine(settings)
-            fallback_executor = PipelineExecutor(
-                fallback_engine,
-                checkpointer_conn_string=pg_connection_string(str(fallback_engine.url)),
-            )
-
-            async def _fallback_execute(
-                _engine: AsyncEngine = fallback_engine,
-                _executor: PipelineExecutor = fallback_executor,
-                _run_id: uuid.UUID = run_id,
-                _org_id: uuid.UUID = org_id,
-                _payload: dict[str, Any] = payload,
-            ) -> None:
-                try:
-                    await _executor.execute(
-                        run_id=_run_id,
-                        org_id=_org_id,
-                        input_payload=_payload,
-                    )
-                except Exception:
-                    _log.exception("MCP fallback execution failed for run %s", _run_id)
-                    try:
-                        factory = async_sessionmaker(_engine, expire_on_commit=False)
-                        async with factory() as fe, fe.begin():
-                            await set_rls_org(fe, _org_id)
-                            await update_run_status(fe, _run_id, "failed", error_code="internal_error")
-                    except Exception:
-                        _log.exception("MCP fallback marking run %s as failed", _run_id)
-
-            _fallback_task = asyncio.create_task(  # noqa: RUF006
-                _fallback_execute(),
-                name=f"mcp-fallback-run-{run_id}",
-            )
-        elif verify_run and verify_run.status == "pending" and not _bg_worker.is_alive:
-            _log.warning(
-                "MCP: Run %s has no active worker — marking as failed",
-                run_id,
-            )
-            async with _session(org_id) as fs:
-                await update_run_status(fs, run_id, "failed", error_code="worker_unavailable")
+        dispatch(str(run_id), str(org_id), "runs_manual")
 
         return {
             "run_id": str(run_id),
@@ -1270,13 +1202,23 @@ async def review_hitl(
                     return {"status": "approved", "gate_id": gate_id}
                 if action == "deliver_manual":
                     await mgr.deliver_manual(
-                        s, run_id=rid, gate_id=gate_id, org_id=org_id,
-                        claim_token=claim_token or "", output=output or {}, actor_id=key_id,
+                        s,
+                        run_id=rid,
+                        gate_id=gate_id,
+                        org_id=org_id,
+                        claim_token=claim_token or "",
+                        output=output or {},
+                        actor_id=key_id,
                     )
                     return {"status": "delivered_manual", "gate_id": gate_id}
                 await mgr.reject(
-                    s, run_id=rid, gate_id=gate_id, org_id=org_id,
-                    claim_token=claim_token or "", actor_id=key_id, reason=reason,
+                    s,
+                    run_id=rid,
+                    gate_id=gate_id,
+                    org_id=org_id,
+                    claim_token=claim_token or "",
+                    actor_id=key_id,
+                    reason=reason,
                 )
                 return {"status": "rejected", "gate_id": gate_id}
             except GateNotFoundError:

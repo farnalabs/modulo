@@ -10,6 +10,7 @@ Auth: HMAC-SHA256 via X-Modulo-Webhook-Secret header (configured per trigger).
 All delivery attempts are logged as TriggerEvent rows regardless of outcome.
 """
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -17,13 +18,13 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import _get_engine, get_db_session, get_or_create_engine, pg_connection_string
+from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.auth.dependencies import get_current_tenant_user_optional
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from modulo.core.pipeline_executor_task import dispatch
 from modulo.core.trigger_engine import (
     ConcurrentRunLimitError,
     DuplicateWebhookError,
@@ -35,10 +36,8 @@ from modulo.core.trigger_engine import (
     TriggerInactiveError,
     TriggerNotFoundError,
 )
-from modulo.db.crud.run import update_run_status
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org
-from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -108,7 +107,7 @@ async def receive_webhook(
                     detail="Failed to create pipeline snapshot for webhook trigger",
                 )
 
-            run, _, input_payload = await _trigger_engine.handle_webhook(
+            run, _, _input_payload = await _trigger_engine.handle_webhook(
                 session,
                 trigger_id=trigger_id,
                 org_id=org_id,
@@ -167,11 +166,8 @@ async def receive_webhook(
         ) from None
 
     run_id = run.id
-    executor = PipelineExecutor(
-        engine,
-        checkpointer_conn_string=pg_connection_string(str(engine.url)),
-    )
-    background_tasks.add_task(_run_in_background, executor, run_id, org_id, input_payload)
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, dispatch, str(run_id), str(org_id), "runs_automated")
 
     return {"run_id": str(run_id), "status": "accepted"}
 
@@ -220,7 +216,7 @@ async def replay_webhook(
                     detail="Failed to create pipeline snapshot for webhook replay",
                 )
 
-            run, _, input_payload = await _trigger_engine.replay_event(
+            run, _, _input_payload = await _trigger_engine.replay_event(
                 session,
                 event_id=event_id,
                 org_id=org_id,
@@ -262,11 +258,8 @@ async def replay_webhook(
         ) from None
 
     run_id = run.id
-    executor = PipelineExecutor(
-        engine,
-        checkpointer_conn_string=pg_connection_string(str(engine.url)),
-    )
-    background_tasks.add_task(_run_in_background, executor, run_id, org_id, input_payload)
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, dispatch, str(run_id), str(org_id), "runs_automated")
 
     return {"run_id": str(run_id), "status": "accepted"}
 
@@ -315,24 +308,3 @@ async def cleanup_expired(
             detail="Cleanup job failed",
         ) from None
     return result
-
-
-async def _run_in_background(
-    executor: PipelineExecutor,
-    run_id: uuid.UUID,
-    org_id: uuid.UUID,
-    input_payload: dict[str, Any],
-) -> None:
-    try:
-        await executor.execute(run_id=run_id, org_id=org_id, input_payload=input_payload)
-    except Exception:
-        _log.exception("Unhandled error in webhook-triggered run %s", run_id)
-        try:
-            settings = get_settings()
-            engine = get_or_create_engine(settings)
-            factory = async_sessionmaker(engine, expire_on_commit=False)
-            async with factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await update_run_status(session, run_id, "failed", error_code="internal_error")
-        except Exception:
-            _log.exception("webhook.run.mark_failed_error", extra={"run_id": str(run_id)})
