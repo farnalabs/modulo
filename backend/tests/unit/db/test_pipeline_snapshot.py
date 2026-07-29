@@ -74,6 +74,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     agent.max_input_length = None
     agent.parameter_schema_id = None
     agent.agent_command = None
+    agent.agent_commands = None
 
     connector = MagicMock()
     connector.id = connector_id
