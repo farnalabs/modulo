@@ -284,6 +284,7 @@ function onFolderDrop(folderId: string, event: DragEvent) {
   const pipelineId = event.dataTransfer?.getData('text/plain')
   if (pipelineId) {
     emit('move-pipeline', { pipelineId, folderId })
+    emit('folders-changed')
   }
 }
 

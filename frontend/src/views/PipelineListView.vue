@@ -100,6 +100,17 @@
       </div>
 
       <div v-else>
+        <!-- Breadcrumb navigation -->
+        <div class="mb-4 flex items-center gap-2 text-sm">
+          <template v-if="selectedFolderId && selectedFolderName">
+            <button class="text-muted-foreground hover:text-foreground transition-colors" @click="onSelectFolder(null)">
+              {{ $t('views.PipelineListView.all_pipelines') }}
+            </button>
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><polyline points="9 18 15 12 9 6"/></svg>
+            <span class="font-medium text-foreground">{{ selectedFolderName }}</span>
+          </template>
+          <h2 v-else class="text-base font-semibold text-foreground">{{ $t('views.PipelineListView.all_pipelines') }}</h2>
+        </div>
         <!-- Card view -->
         <div v-if="viewMode === 'card'" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
@@ -191,7 +202,7 @@
             </thead>
             <tbody class="divide-y">
               <template v-for="(row, i) in treeRows" :key="i">
-                <tr v-if="row.type === 'folder'" class="bg-muted/20 hover:bg-muted/30 transition-colors" data-testid="pipeline-tree-folder-row">
+                <tr v-if="row.type === 'folder'" class="bg-muted/20 hover:bg-muted/30 transition-colors" data-testid="pipeline-tree-folder-row" @dragover.prevent @drop="onTableFolderDrop((row.data as FolderItem).id, $event)">
                   <td colspan="7" class="px-4 py-2">
                     <button
                       class="flex w-full items-center gap-2 text-sm font-medium text-foreground text-left"
@@ -216,7 +227,7 @@
                       </svg>
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
                       {{ (row.data as FolderItem).name }}
-                      <span class="text-muted-foreground text-xs ml-auto">{{ pipelineFolderCount.get((row.data as FolderItem).id) || 0 }} {{ $t('views.PipelineListView.pipelines') }}</span>
+                      <span class="text-muted-foreground text-xs ml-2">{{ pipelineFolderCount.get((row.data as FolderItem).id) || 0 }} {{ $t('views.PipelineListView.pipelines') }}</span>
                     </button>
                   </td>
                 </tr>
@@ -664,19 +675,28 @@ watch(selectedFolderId, () => {
   loadTriggers()
   loadLastRunDates()
 })
-
+const totalPipelineCount = ref(0)
 const folderPipelineCounts = computed(() => {
   const counts: Record<string, number> = {}
-  let total = 0
   for (const p of allPipelines.value) {
-    total++
     if (p.folder_id) {
       counts[p.folder_id] = (counts[p.folder_id] || 0) + 1
     }
   }
-  counts.__all__ = total
+  counts.__all__ = totalPipelineCount.value
   return counts
 })
+
+async function loadTotalCount() {
+  try {
+    const response = await api.GET('/api/v1/pipelines', { params: { query: { page_size: 1 } } })
+    if (response.data) {
+      totalPipelineCount.value = (response.data as any).total ?? 0
+    }
+  } catch {
+    // optional
+  }
+}
 
 async function loadFolders() {
   folderError.value = null
@@ -696,9 +716,21 @@ const folderNameMap = computed(() => {
   return map
 })
 
+const selectedFolderName = computed(() => {
+  if (!selectedFolderId.value) return ''
+  return folderNameMap.value.get(selectedFolderId.value) || ''
+})
+
 function onPipelineDragStart(pipeline: PipelineItem, event: DragEvent) {
   event.dataTransfer?.setData('text/plain', pipeline.id)
   event.dataTransfer!.effectAllowed = 'move'
+}
+
+function onTableFolderDrop(folderId: string, event: DragEvent) {
+  const pipelineId = event.dataTransfer?.getData('text/plain')
+  if (pipelineId) {
+    onMovePipeline({ pipelineId, folderId })
+  }
 }
 
 async function onMovePipeline(ev: { pipelineId: string; folderId: string }) {
@@ -715,6 +747,7 @@ function onSelectFolder(folderId: string | null) {
   page.value = 1
   loadPipelines()
   loadFolders()
+  loadTotalCount()
 }
 
 // Move to folder state
@@ -886,6 +919,7 @@ async function handleMoveToFolder() {
     moveTarget.value = null
     await loadPipelines()
     await loadFolders()
+    await loadTotalCount()
   } catch (e: unknown) {
     moveError.value = formatApiError(e)
   } finally {
@@ -994,5 +1028,6 @@ async function triggerRun() {
 
 onMounted(() => {
   loadFolders()
+  loadTotalCount()
 })
 </script>
