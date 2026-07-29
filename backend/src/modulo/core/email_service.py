@@ -26,6 +26,10 @@ def send_email(
         _log.warning("email.disabled_no_smtp_host")
         return False
 
+    if not to:
+        _log.warning("email.no_recipients")
+        return False
+
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = settings.email_from
