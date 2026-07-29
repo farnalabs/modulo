@@ -1,14 +1,12 @@
 """OIDC and SAML 2.0 SSO support with JIT account provisioning."""
 
 import base64
-import binascii
 import hmac
 import json
 import logging
 import urllib.parse
 import uuid
-import zlib
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import defusedxml.ElementTree as ElementTree
 import httpx
@@ -17,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_access_token, create_refresh_token
 from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
+from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 from modulo.db.crud.account import create_account, get_account_by_email, update_last_login
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.team_membership import add_team_member, get_membership_by_team_and_account, update_member_role
@@ -438,7 +437,12 @@ async def saml_get_auth_url(
     settings: Settings,
     acs_url: str,
 ) -> tuple[str, str]:
-    """Generate a SAML AuthnRequest and return (IdP redirect URL, request_id)."""
+    """Generate a SAML AuthnRequest using python3-saml and return (IdP redirect URL, _).
+
+    python3-saml handles proper XML construction, signing (if SP key configured),
+    and encoding. The second return value (request_id) is no longer used by the
+    caller but kept for API compatibility.
+    """
     if not settings.modulo_saml_enabled:
         raise ValueError("SAML is not enabled")
     if not settings.modulo_license_key:
@@ -449,36 +453,19 @@ async def saml_get_auth_url(
     except (httpx.HTTPError, ValueError) as exc:
         raise ValueError(f"Failed to fetch IdP metadata: {exc}") from None
 
-    try:
-        idp_sso_url, _ = _saml_parse_idp_metadata(idp_metadata)
-    except (ElementTree.ParseError, ValueError) as exc:
-        raise ValueError(f"Failed to parse IdP metadata: {exc}") from None
-
-    request_id = f"_{uuid.uuid4().hex}"
-    issue_instant = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    authn_request_xml = (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        "<samlp:AuthnRequest"
-        ' xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"'
-        ' xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"'
-        f' ID="{request_id}"'
-        ' Version="2.0"'
-        f' IssueInstant="{issue_instant}"'
-        f' Destination="{idp_sso_url}"'
-        f' AssertionConsumerServiceURL="{acs_url}"'
-        ' ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST">'
-        f" <saml:Issuer>{settings.modulo_saml_entity_id}</saml:Issuer>"
-        " <samlp:NameIDPolicy"
-        '  Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"'
-        '  AllowCreate="true"/>'
-        "</samlp:AuthnRequest>"
+    handler = ModuloSamlAuth(
+        entity_id=settings.modulo_saml_entity_id,
+        acs_url=acs_url,
+        idp_metadata_xml=idp_metadata,
+        sp_private_key=settings.modulo_saml_sp_private_key or None,
+        sp_x509_cert=settings.modulo_saml_sp_x509_cert or None,
     )
+    try:
+        auth_url = handler.get_auth_url()
+    except Exception as exc:
+        raise ValueError(f"Failed to generate SAML AuthnRequest: {exc}") from None
 
-    deflated = zlib.compress(authn_request_xml.encode())[2:-4]
-    encoded = base64.b64encode(deflated).decode()
-    params = urllib.parse.urlencode({"SAMLRequest": encoded})
-    return f"{idp_sso_url}?{params}", request_id
+    return auth_url, ""
 
 
 async def saml_process_response(
@@ -486,7 +473,13 @@ async def saml_process_response(
     settings: Settings,
     session: AsyncSession,
 ) -> dict[str, str]:
-    """Validate a SAML Response and issue tokens."""
+    """Validate a SAML Response using python3-saml and issue tokens.
+
+    python3-saml provides XML signature verification using the IdP's X.509
+    certificate from metadata (the critical security gap in the old
+    implementation), plus condition validation, audience restriction, and
+    clock-skew management.
+    """
     if not settings.modulo_saml_enabled:
         raise ValueError("SAML is not enabled")
     if not settings.modulo_license_key:
@@ -502,103 +495,59 @@ async def saml_process_response(
     except (ElementTree.ParseError, ValueError) as exc:
         raise ValueError(f"Failed to parse IdP metadata: {exc}") from None
 
+    acs_url = f"{settings.modulo_public_url.rstrip('/')}/api/v1/auth/saml/acs"
+    handler = ModuloSamlAuth(
+        entity_id=settings.modulo_saml_entity_id,
+        acs_url=acs_url,
+        idp_metadata_xml=idp_metadata,
+        sp_private_key=settings.modulo_saml_sp_private_key or None,
+        sp_x509_cert=settings.modulo_saml_sp_x509_cert or None,
+    )
     try:
-        decoded = base64.b64decode(saml_response).decode()
-        root = ElementTree.fromstring(decoded)
-    except (binascii.Error, ElementTree.ParseError, UnicodeDecodeError, ValueError) as exc:
-        _log.warning("sso.saml_decode_failed", extra={"error": str(exc)})
+        result = handler.process_response(saml_response)
+    except SamlAuthError as exc:
+        _log.warning("sso.saml_signature_validation_failed", extra={"error": str(exc)})
         raise ValueError(str(exc)) from None
 
+    name_id = result["name_id"]
+    raw_attrs = result["attributes"]
+    attrs: dict[str, str] = {}
+    for attr_name, values in raw_attrs.items():
+        attrs[attr_name] = ",".join(values)
+
+    email = attrs.get("email", "") or attrs.get("Email", "") or name_id or ""
+    if not email:
+        raise ValueError("SAML provider did not return an email attribute — cannot provision account")
+    display_name = (
+        attrs.get("displayName", "")
+        or attrs.get("cn", "")
+        or attrs.get("firstName", "")
+        or (email.split("@")[0] if "@" in email else email)
+    )
+    sso_subject = f"saml:{idp_entity_id}:{name_id}"
+
     try:
-        ns = {
-            "samlp": "urn:oasis:names:tc:SAML:2.0:protocol",
-            "saml": "urn:oasis:names:tc:SAML:2.0:assertion",
-        }
-
-        assertion = root.find(".//saml:Assertion", ns)
-        if assertion is None:
-            raise ValueError("No SAML Assertion found in response")
-
-        conditions = assertion.find("saml:Conditions", ns)
-        if conditions is not None:
-            now_utc = datetime.now(UTC)
-            not_before_str = conditions.get("NotBefore", "")
-            not_on_or_after_str = conditions.get("NotOnOrAfter", "")
-            issue_instant_str = assertion.get("IssueInstant", "")
-            if not_before_str:
-                try:
-                    not_before = _parse_saml_datetime(not_before_str)
-                    if now_utc < not_before:
-                        raise ValueError("SAML assertion used before NotBefore time")
-                except ValueError as exc:
-                    raise ValueError("Invalid SAML Conditions NotBefore format") from exc
-            if not_on_or_after_str:
-                try:
-                    not_on_or_after = _parse_saml_datetime(not_on_or_after_str)
-                    if now_utc >= not_on_or_after:
-                        raise ValueError("SAML assertion has expired (NotOnOrAfter)")
-                except ValueError as exc:
-                    raise ValueError("Invalid SAML Conditions NotOnOrAfter format") from exc
-            if issue_instant_str:
-                try:
-                    issue_instant = _parse_saml_datetime(issue_instant_str)
-                    if now_utc < issue_instant - timedelta(minutes=5):
-                        _log.warning(
-                            "sso.saml_clock_skew",
-                            extra={"issue_instant": issue_instant_str, "now": now_utc.isoformat()},
-                        )
-                except ValueError as exc:
-                    _log.warning(
-                        "sso.saml_unparseable_issue_instant",
-                        extra={"issue_instant": issue_instant_str, "error": str(exc)},
-                    )
-
-        subject = assertion.find(".//saml:Subject/saml:NameID", ns)
-        name_id = subject.text.strip() if subject is not None and subject.text else ""
-
-        attrs: dict[str, str] = {}
-        for attr in assertion.findall(".//saml:Attribute", ns):
-            attr_name = attr.get("Name", "")
-            values = [v.text.strip() for v in attr.findall("saml:AttributeValue", ns) if v.text and v.text.strip()]
-            if values:
-                attrs[attr_name] = ",".join(values)
-
-        email = attrs.get("email", "") or attrs.get("Email", "") or name_id or ""
-        if not email:
-            raise ValueError("SAML provider did not return an email attribute — cannot provision account")
-        display_name = (
-            attrs.get("displayName", "")
-            or attrs.get("cn", "")
-            or attrs.get("firstName", "")
-            or (email.split("@")[0] if "@" in email else email)
+        account, org_id, org_role = await jit_provision_user(
+            session, settings, email, display_name, "saml", sso_subject
         )
-        sso_subject = f"saml:{idp_entity_id}:{name_id}"
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from None
 
-        try:
-            account, org_id, org_role = await jit_provision_user(
-                session, settings, email, display_name, "saml", sso_subject
-            )
-        except RuntimeError as exc:
-            raise ValueError(str(exc)) from None
+    saml_groups: list[str] = []
+    for group_attr in ("groups", "memberOf", "Group"):
+        raw = attrs.get(group_attr, "")
+        if raw:
+            saml_groups = [g.strip() for g in raw.split(",") if g.strip()]
+            break
+    if saml_groups:
+        db_provider = await _lookup_provider_by_entity_id(session, idp_entity_id, org_id)
+        if db_provider is not None and db_provider.group_mappings:
+            await apply_group_mappings(session, account, org_id, saml_groups, db_provider.group_mappings)
 
-        saml_groups: list[str] = []
-        for group_attr in ("groups", "memberOf", "Group"):
-            raw = attrs.get(group_attr, "")
-            if raw:
-                saml_groups = [g.strip() for g in raw.split(",") if g.strip()]
-                break
-        if saml_groups:
-            db_provider = await _lookup_provider_by_entity_id(session, idp_entity_id, org_id)
-            if db_provider is not None and db_provider.group_mappings:
-                await apply_group_mappings(session, account, org_id, saml_groups, db_provider.group_mappings)
-
-        try:
-            return await issue_sso_tokens(account, org_id, org_role, session, settings)
-        except RuntimeError as exc:
-            raise ValueError(str(exc)) from None
-    except ValueError:
-        _log.warning("sso.saml_acs_failed", extra={"entity_id": idp_entity_id})
-        raise
+    try:
+        return await issue_sso_tokens(account, org_id, org_role, session, settings)
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from None
 
 
 def _parse_saml_datetime(value: str) -> datetime:
