@@ -49,7 +49,6 @@ if (env.name === 'local') {
     await page.route('**/api/v1/views**', async (route) => {
       await new Promise(r => setTimeout(r, 3000))
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
-        }
     })
     }
 
@@ -64,7 +63,6 @@ if (env.name === 'local') {
 if (env.name === 'local') {
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'Server error' }) })
-        }
     })
     }
 
@@ -79,7 +77,6 @@ if (env.name === 'local') {
 if (env.name === 'local') {
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
-        }
     })
     }
 
@@ -102,7 +99,6 @@ if (env.name === 'local') {
         await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({}) })
       } else {
         await route.fulfill({ status: 405, body: '' })
-      }
     })
     }
 
@@ -135,7 +131,6 @@ if (env.name === 'local') {
 if (env.name === 'local') {
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
-        }
     })
     }
 
@@ -154,7 +149,6 @@ if (env.name === 'local') {
 if (env.name === 'local') {
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
-        }
     })
     }
 
@@ -204,7 +198,6 @@ if (env.name === 'local') {
         await route.fulfill({ status: 204, body: '' })
       } else {
         await route.fulfill({ status: 405, body: '' })
-      }
     })
     }
 
