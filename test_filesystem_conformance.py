@@ -8,6 +8,8 @@ from modulo.connectors.base import (
 )
 from modulo.connectors.filesystem import FilesystemConnector, PathTraversalError
 
+pytestmark = pytest.mark.asyncio(loop_scope="module")
+
 
 def _file_query(path: str) -> ConnectorQuery:
     return ConnectorQuery(resource="file", filters={"path": path})

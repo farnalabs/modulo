@@ -53,7 +53,7 @@ class TestComplexityReviewerDefinition:
 
 class TestContextSetterRole:
     @pytest.mark.asyncio
-    async def test_context_setter_can_write_to_run_context(self):
+    async def test_context_setter_can_write_to_run_context(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -74,7 +74,7 @@ class TestContextSetterRole:
         assert "Moderate" in result["run_context"]["complexity_reason"]
 
     @pytest.mark.asyncio
-    async def test_non_context_setter_cannot_write_to_run_context(self):
+    async def test_non_context_setter_cannot_write_to_run_context(self) -> None:
         @cancellable_node(role="standard")
         async def standard_node(state: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -92,7 +92,7 @@ class TestContextSetterRole:
         assert "context_setter" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_context_setter_without_run_context_ok(self):
+    async def test_context_setter_without_run_context_ok(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"artifacts": [{"status": "ok"}]}
@@ -105,7 +105,7 @@ class TestContextSetterRole:
         assert len(result["artifacts"]) == 1
 
     @pytest.mark.asyncio
-    async def test_context_setter_with_missing_run_context_defaults(self):
+    async def test_context_setter_with_missing_run_context_defaults(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             state.get("run_context", {})
@@ -115,7 +115,7 @@ class TestContextSetterRole:
         assert result["run_context"]["model_tier"] == "tier-1"
 
     @pytest.mark.asyncio
-    async def test_context_setter_with_empty_input_does_not_crash(self):
+    async def test_context_setter_with_empty_input_does_not_crash(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"model_tier": "tier-1", "estimated_tokens": 0, "complexity_reason": "ok"}}
@@ -124,7 +124,7 @@ class TestContextSetterRole:
         assert result["run_context"]["estimated_tokens"] == 0
 
     @pytest.mark.asyncio
-    async def test_complexity_reviewer_style_node(self):
+    async def test_complexity_reviewer_style_node(self) -> None:
         @cancellable_node(role="context_setter")
         async def complexity_reviewer(state: dict[str, Any]) -> dict[str, Any]:
             artifact = state.get("run_context", {}).get("input", {}).get("code", "")
@@ -154,7 +154,7 @@ class TestContextSetterRole:
         assert result["run_context"]["model_tier"] == "tier-1"
 
     @pytest.mark.asyncio
-    async def test_context_setter_cancellation_still_works(self):
+    async def test_context_setter_cancellation_still_works(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"model_tier": "tier-1"}}

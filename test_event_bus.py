@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from modulo.core.events.event_bus import EventBus, configure_event_bus, get_event_bus
 
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 @pytest.fixture(autouse=True)
 def _reset_singleton():
@@ -124,14 +125,14 @@ class TestEventBus:
         bus = EventBus()
         await bus.publish("org-empty", "run", "r1", "created", version=0)
 
-    async def test_late_subscriber_does_not_receive_past_events(self):
+    async def test_late_subscriber_does_not_receive_past_events(self) -> None:
         bus = EventBus()
         await bus.publish("org-123", "run", "run-1", "created", version=0)
         q = await bus.subscribe("org-123")
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(q.get(), timeout=0.2)
 
-    async def test_publish_with_all_event_fields(self):
+    async def test_publish_with_all_event_fields(self) -> None:
         bus = EventBus()
         org_id = "org-123"
         q = await bus.subscribe(org_id)
@@ -143,7 +144,7 @@ class TestEventBus:
         assert event["version"] == 2
         assert event["metadata"] == {"key": "val"}
 
-    async def test_multiple_events_in_order(self):
+    async def test_multiple_events_in_order(self) -> None:
         bus = EventBus()
         org_id = "org-123"
         q = await bus.subscribe(org_id)
@@ -154,7 +155,7 @@ class TestEventBus:
             event = await asyncio.wait_for(q.get(), timeout=1.0)
             assert event["id"] == expected_id
 
-    async def test_redis_broker_publish_path(self):
+    async def test_redis_broker_publish_path(self) -> None:
         mock_redis = MagicMock(spec=["publish"])
         mock_redis.publish = AsyncMock()
         await configure_event_bus(redis_broker=mock_redis)
