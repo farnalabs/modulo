@@ -24,7 +24,7 @@
             :label="item.label"
             :label-key="item.labelKey"
             :exact="item.exact"
-            :preview="item.visibility === 'public_preview'"
+            :visibility="item.visibility"
             @click="$emit('navigate')"
           /></SidebarGroup>
       </template>
@@ -62,7 +62,7 @@ defineEmits<{
 }>();
 
 const route = useRoute();
-const { viewMode, toggleGroup, isGroupCollapsed } = useSidebar();
+const { toggleGroup, isGroupCollapsed } = useSidebar();
 const planStore = usePlanStore();
 
 const activeGroupIds = computed(() => {
@@ -85,7 +85,6 @@ const visibleSidebarGroups = computed(() =>
   getNavGroups()
     .filter(
       (g) =>
-        (g.simpleMode || viewMode.value === "advanced") &&
         (!g.systemAdminOnly || props.isSystemAdmin),
     )
     .map((group) => ({
