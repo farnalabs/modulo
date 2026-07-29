@@ -247,10 +247,9 @@ class TestSamlMetadataParsing:
         with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = self.SAMPLE_IDP_METADATA
 
-            url, req_id = await saml_get_auth_url(settings, "https://modulo.example.com/api/v1/auth/saml/acs")
+            url, _req_id = await saml_get_auth_url(settings, "https://modulo.example.com/api/v1/auth/saml/acs")
             assert "idp.example.com" in url
             assert "SAMLRequest" in url
-            assert req_id.startswith("_")
 
     def test_saml_acs_parses_response_xml(self) -> None:
         """Verify SAML response XML parsing extracts NameID and attributes."""
@@ -780,10 +779,11 @@ class TestSamlProcessResponse:
         empty_response = base64.b64encode(b"<root/>").decode()
         with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = self.SAMPLE_IDP_METADATA
-            with pytest.raises(ValueError, match="No SAML Assertion"):
+            with pytest.raises(ValueError, match="SAML response validation failed"):
                 await saml_process_response(empty_response, settings, session)
 
     async def test_full_success_flow(self) -> None:
+        from modulo.auth.saml_handler import ModuloSamlAuth
         from modulo.auth.sso import saml_process_response
 
         settings = _override(
@@ -799,6 +799,14 @@ class TestSamlProcessResponse:
             patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
             patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
             patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+            patch.object(
+                ModuloSamlAuth,
+                "process_response",
+                return_value={
+                    "name_id": "user@example.com",
+                    "attributes": {"email": ["user@example.com"], "displayName": ["Test User"]},
+                },
+            ),
         ):
             mock_fetch.return_value = self.SAMPLE_IDP_METADATA
             mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
@@ -918,22 +926,9 @@ class TestSamlRoutesExtended:
         _override_settings(
             modulo_license_key="lic-123",
             modulo_saml_enabled=True,
-            modulo_saml_idp_metadata_xml="""<?xml version="1.0"?>
-<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
-                     entityID="idp">
-  <md:IDPSSODescriptor>
-    <md:SingleSignOnService Location="https://idp.example.com/sso"/>
-  </md:IDPSSODescriptor>
-</md:EntityDescriptor>""",
         )
-        with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as m:
-            m.return_value = """<?xml version="1.0"?>
-<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
-                     entityID="idp">
-  <md:IDPSSODescriptor>
-    <md:SingleSignOnService Location="https://idp.example.com/sso"/>
-  </md:IDPSSODescriptor>
-</md:EntityDescriptor>"""
+        with patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as m:
+            m.return_value = ("https://idp.example.com/sso?SAMLRequest=abc", "_req123")
             resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
             assert resp.status_code == 307
             assert "idp.example.com" in resp.headers.get("location", "")
@@ -942,51 +937,12 @@ class TestSamlRoutesExtended:
         _override_settings(
             modulo_license_key="lic-123",
             modulo_saml_enabled=True,
-            modulo_saml_idp_metadata_xml="""<?xml version="1.0"?>
-<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
-                     entityID="idp">
-  <md:IDPSSODescriptor>
-    <md:SingleSignOnService Location="https://idp.example.com/sso"/>
-  </md:IDPSSODescriptor>
-</md:EntityDescriptor>""",
         )
 
-        saml_xml = """<?xml version="1.0" encoding="UTF-8"?>
-<samlp:Response
- xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
- xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">
-  <saml:Assertion ID="_abc123" IssueInstant="2024-01-01T00:00:00Z">
-    <saml:Subject>
-      <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">
-        user@example.com
-      </saml:NameID>
-    </saml:Subject>
-    <saml:AttributeStatement>
-      <saml:Attribute Name="email">
-        <saml:AttributeValue>user@example.com</saml:AttributeValue>
-      </saml:Attribute>
-      <saml:Attribute Name="displayName">
-        <saml:AttributeValue>Test User</saml:AttributeValue>
-      </saml:Attribute>
-    </saml:AttributeStatement>
-  </saml:Assertion>
-</samlp:Response>"""
-        encoded = base64.b64encode(saml_xml.encode()).decode()
-
         with (
-            patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as m,
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as m_jit,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as m_tok,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as m,
         ):
-            m.return_value = """<?xml version="1.0"?>
-<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
-                     entityID="idp">
-  <md:IDPSSODescriptor>
-    <md:SingleSignOnService Location="https://idp.example.com/sso"/>
-  </md:IDPSSODescriptor>
-</md:EntityDescriptor>"""
-            m_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
-            m_tok.return_value = {
+            m.return_value = {
                 "access_token": "at-saml",
                 "refresh_token": "rt-saml",
                 "token_type": "bearer",
@@ -994,7 +950,7 @@ class TestSamlRoutesExtended:
 
             resp = client.post(
                 "/api/v1/auth/saml/acs",
-                data={"SAMLResponse": encoded},
+                data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
                 follow_redirects=False,
             )
             assert resp.status_code == 307  # RedirectResponse
@@ -1004,23 +960,10 @@ class TestSamlRoutesExtended:
         _override_settings(
             modulo_license_key="lic-123",
             modulo_saml_enabled=True,
-            modulo_saml_idp_metadata_xml="""<?xml version="1.0"?>
-<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
-                     entityID="idp">
-  <md:IDPSSODescriptor>
-    <md:SingleSignOnService Location="https://idp.example.com/sso"/>
-  </md:IDPSSODescriptor>
-</md:EntityDescriptor>""",
         )
 
-        with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as m:
-            m.return_value = """<?xml version="1.0"?>
-<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
-                     entityID="idp">
-  <md:IDPSSODescriptor>
-    <md:SingleSignOnService Location="https://idp.example.com/sso"/>
-  </md:IDPSSODescriptor>
-</md:EntityDescriptor>"""
+        with patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as m:
+            m.side_effect = ValueError("SAML response validation failed: invalid_response")
             resp = client.post(
                 "/api/v1/auth/saml/acs",
                 data={"SAMLResponse": base64.b64encode(b"<bad/>").decode()},

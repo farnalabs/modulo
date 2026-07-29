@@ -9,5 +9,5 @@ from modulo.model_backends.qwen import QwenBackend
 
 @pytest.fixture()
 def backend():
-    with patch("modulo.model_backends.qwen.ChatOpenAI"):
+    with patch("modulo.model_backends.module.ChatOpenAI"):
         return QwenBackend(api_key="sk-test", model_id="qwen-max")

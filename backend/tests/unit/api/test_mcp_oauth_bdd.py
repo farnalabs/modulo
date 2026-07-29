@@ -577,7 +577,7 @@ class TestConsumeAuthorizationCode:
         execute_result.scalar_one_or_none = MagicMock(return_value=expired_code)
         mock_session.execute = AsyncMock(return_value=execute_result)
 
-        with patch("modulo.auth.oauth.validate_client_secret"):
+        with patch("modulo.auth.oauth.validate_client_secret", return_value=_make_mock_client()):
             with pytest.raises(InvalidGrantError) as exc:
                 await consume_authorization_code(
                     mock_session,
@@ -602,7 +602,7 @@ class TestConsumeAuthorizationCode:
         execute_result.scalar_one_or_none = MagicMock(return_value=used_code)
         mock_session.execute = AsyncMock(return_value=execute_result)
 
-        with patch("modulo.auth.oauth.validate_client_secret"):
+        with patch("modulo.auth.oauth.validate_client_secret", return_value=_make_mock_client()):
             with pytest.raises(InvalidGrantError) as exc:
                 await consume_authorization_code(
                     mock_session,
@@ -627,7 +627,7 @@ class TestConsumeAuthorizationCode:
         execute_result.scalar_one_or_none = MagicMock(return_value=wrong_client_code)
         mock_session.execute = AsyncMock(return_value=execute_result)
 
-        with patch("modulo.auth.oauth.validate_client_secret"):
+        with patch("modulo.auth.oauth.validate_client_secret", return_value=_make_mock_client()):
             with pytest.raises(InvalidGrantError) as exc:
                 await consume_authorization_code(
                     mock_session,
@@ -653,7 +653,7 @@ class TestConsumeAuthorizationCode:
         execute_result.scalar_one_or_none = MagicMock(return_value=code)
         mock_session.execute = AsyncMock(return_value=execute_result)
 
-        with patch("modulo.auth.oauth.validate_client_secret"):
+        with patch("modulo.auth.oauth.validate_client_secret", return_value=_make_mock_client()):
             with pytest.raises(InvalidGrantError) as exc:
                 await consume_authorization_code(
                     mock_session,
