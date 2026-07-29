@@ -13,8 +13,7 @@ const sampleCostData = {
 
 test.describe('Admin Cost Breakdown', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
-if (env.name === "local") {
-    if (env.name === 'local') {
+if (env.name === 'local') {
     await page.route('**/api/v1/costs*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleCostData) })
     })
@@ -27,8 +26,7 @@ if (env.name === "local") {
   })
 
   test('shows cost summary cards', async ({ page, env }) => {
-if (env.name === "local") {
-    if (env.name === 'local') {
+if (env.name === 'local') {
     await page.route('**/api/v1/costs*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleCostData) })
     })
