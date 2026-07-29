@@ -1,67 +1,20 @@
-"""VllmBackend — wraps ChatOpenAI pointed at vLLM's OpenAI-compatible endpoint."""
-
-from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import BaseMessage
-from langchain_openai import ChatOpenAI
-
-from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
-
-DEFAULT_VLLM_BASE_URL = "http://localhost:8000/v1"
+from modulo.model_backends.module import OpenAICompatibleBackend
 
 
-class VllmBackend(ModelBackendBase):
-    """Thin adapter over ChatOpenAI targeting vLLM's OpenAI-compatible API.
-
-    vLLM does not require an API key by default, but the LangChain ChatOpenAI
-    client enforces a non-None api_key. If None or empty is passed, we use "vllm"
-    as a placeholder.
-    """
-
-    supports_tools: bool = True
-
+class VllmBackend(OpenAICompatibleBackend):
     def __init__(
         self,
-        api_key: str | None,
-        model_id: str,
-        base_url: str = DEFAULT_VLLM_BASE_URL,
+        api_key: str | None = None,
+        model_id: str = "",
+        base_url: str = "http://localhost:8000/v1",
         **default_params: Any,
-    ) -> None:
-        self._model = ChatOpenAI(
-            model=model_id,
-            api_key=api_key or "vllm",
+    ):
+        super().__init__(
+            api_key=api_key or "",
+            model_id=model_id,
             base_url=base_url.rstrip("/"),
+            provider="vllm",
             **default_params,
         )
-        self._backend_id = f"vllm/{model_id}"
-        self._base_url = base_url.rstrip("/")
-        self._api_key = api_key or ""
-
-    @property
-    def base_url(self) -> str:
-        return self._base_url
-
-    @property
-    def backend_id(self) -> str:
-        return self._backend_id
-
-    def __repr__(self) -> str:
-        return f"VllmBackend(model_id={self._backend_id!r}, base_url={self._base_url!r})"
-
-    async def health_check(self) -> HealthResult:
-        return await openai_compatible_health_check(
-            base_url=self._base_url,
-            api_key=self._api_key,
-        )
-
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
-        return await self._model.ainvoke(messages, **kwargs)
-
-    def stream(
-        self,
-        messages: list[BaseMessage],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, tools=tools, **kwargs)

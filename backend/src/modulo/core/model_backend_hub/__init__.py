@@ -325,32 +325,32 @@ class ModelBackendHub:
         return frozenset(self._backends)
 
 
-_SIMPLE_API_KEY_BACKENDS: dict[str, str] = {
-    "ai21": "Ai21Backend",
+_NON_OPENAI_COMPATIBLE: dict[str, str] = {
     "anthropic": "AnthropicBackend",
     "cohere": "CohereBackend",
-    "deepseek": "DeepSeekBackend",
-    "fireworks": "FireworksBackend",
     "gemini": "GeminiBackend",
-    "grok": "GrokBackend",
-    "groq": "GroqBackend",
     "mistral": "MistralBackend",
-    "openai": "OpenAIBackend",
-    "opencode": "OpenCodeBackend",
-    "openrouter": "OpenRouterBackend",
-    "perplexity": "PerplexityBackend",
-    "qwen": "QwenBackend",
-    "togetherai": "TogetherAIBackend",
 }
 
-_LOCAL_BACKENDS: dict[str, tuple[str, str]] = {
-    "jan": ("JanBackend", "http://localhost:1337/v1"),
-    "llamacpp": ("LLamaCppBackend", _LOCALHOST_V1_URL),
-    "lm_studio": ("LmStudioBackend", "http://localhost:1234/v1"),
-    "localai": ("LocalAIBackend", _LOCALHOST_V1_URL),
-    "ollama": ("OllamaBackend", "http://localhost:11434/v1"),
-    "tgi": ("TgiBackend", _LOCALHOST_V1_URL),
-    "vllm": ("VllmBackend", "http://localhost:8000/v1"),
+_OPENAI_COMPATIBLE_BACKENDS: dict[str, str | None] = {
+    "ai21": "https://api.ai21.com/studio/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+    "fireworks": "https://api.fireworks.ai/inference/v1",
+    "grok": "https://api.x.ai/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "jan": "http://localhost:1337/v1",
+    "llamacpp": _LOCALHOST_V1_URL,
+    "lm_studio": "http://localhost:1234/v1",
+    "localai": _LOCALHOST_V1_URL,
+    "ollama": "http://localhost:11434/v1",
+    "openai": None,
+    "opencode": "https://opencode.ai/zen/go/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "perplexity": "https://api.perplexity.ai",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "tgi": _LOCALHOST_V1_URL,
+    "togetherai": "https://api.together.xyz/v1",
+    "vllm": "http://localhost:8000/v1",
 }
 
 
@@ -362,22 +362,11 @@ def _backend_class(provider: str, class_name: str) -> Callable[..., ModelBackend
 
 _API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset(
     {
-        "ai21",
         "anthropic",
-        "cohere",
         "azure_openai",
-        "openai",
-        "opencode",
-        "openrouter",
-        "mistral",
-        "togetherai",
-        "deepseek",
+        "cohere",
         "gemini",
-        "grok",
-        "fireworks",
-        "groq",
-        "perplexity",
-        "qwen",
+        "mistral",
         "watsonx",
     }
 )
@@ -413,18 +402,20 @@ def _build_backend(
     if provider in _API_KEY_REQUIRED_PROVIDERS and "api_key" not in creds:
         raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
 
-    class_name = _SIMPLE_API_KEY_BACKENDS.get(provider)
+    class_name = _NON_OPENAI_COMPATIBLE.get(provider)
     if class_name is not None:
         return _backend_class(provider, class_name)(api_key=creds["api_key"], model_id=model_id, **default_params)
 
-    local_config = _LOCAL_BACKENDS.get(provider)
-    if local_config is not None:
-        class_name, default_url = local_config
-        base_url = creds.get("base_url", default_url)
-        return _backend_class(provider, class_name)(
-            api_key=creds.get("api_key", ""),
+    default_base_url = _OPENAI_COMPATIBLE_BACKENDS.get(provider)
+    if default_base_url is not None or provider == "openai":
+        base_url = creds.get("base_url", default_base_url) if default_base_url is not None else None
+        from modulo.model_backends.module import OpenAICompatibleBackend
+
+        return OpenAICompatibleBackend(
+            api_key=creds.get("api_key"),
             model_id=model_id,
             base_url=base_url,
+            provider=provider,
             **default_params,
         )
 
