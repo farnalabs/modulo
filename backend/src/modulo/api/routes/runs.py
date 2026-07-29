@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from tenacity import before_sleep_log, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
@@ -58,6 +59,16 @@ from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
 
+_RETRY_TRANSIENT = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception(
+        lambda e: isinstance(e, (TimeoutError, ConnectionResetError, OSError, SA_TimeoutError, OperationalError))
+    ),
+    reraise=True,
+    before_sleep=before_sleep_log(_log, logging.WARNING),
+)
+
 _bg_worker: BackgroundPipelineWorker | None = None
 
 
@@ -75,26 +86,12 @@ class RunNotFoundError(KeyError):
     """Raised when a run is not found."""
 
 
+@_RETRY_TRANSIENT
 async def _run_with_retry[R](
     fn: Callable[[], Awaitable[R]],
-    max_retries: int = 2,
-    base_delay: float = 0.5,
 ) -> R:
     """Execute fn with retry on transient connection errors."""
-    last_exc: BaseException | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            return await fn()
-        except (TimeoutError, ConnectionResetError, OSError, SA_TimeoutError, OperationalError) as exc:
-            last_exc = exc
-            if attempt < max_retries:
-                _log.warning("route.db_retry", extra={"attempt": attempt + 1, "error": str(exc)})
-                await asyncio.sleep(base_delay * (2**attempt))
-            else:
-                _log.warning("route.db_retry_exhausted", extra={"error": str(exc)})
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("Retry exhausted without exception")
+    return await fn()
 
 
 async def _do_get_run(
