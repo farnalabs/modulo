@@ -1,7 +1,7 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('MonitorBackendRegistry typeof gating', { tag: '@staging-regression' }, () => {
-  test('no TypeError from missing captureError/captureMessage on backends', { tag: '@e2e-regression' }, async ({ page, env }) => {
+test.describe('MonitorBackendRegistry typeof gating', { tag: '@regression' }, () => {
+  test('no TypeError from missing captureError/captureMessage on backends', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
     const consoleErrors: string[] = []

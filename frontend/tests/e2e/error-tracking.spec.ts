@@ -1,6 +1,6 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Error Tracking', () => {
+test.describe('Error Tracking', { tag: "@regression" }, () => {
   test('error dashboard page loads', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/errors')

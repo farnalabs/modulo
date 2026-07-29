@@ -28,7 +28,7 @@ test.describe('Library Page', () => {
     expect(options.length).toBeGreaterThan(1)
   })
 
-  test('loads without ReferenceError crash', { tag: '@e2e-regression' }, async ({ page }) => {
+  test('loads without ReferenceError crash', { tag: '@regression' }, async ({ page }) => {
     const logs: any[] = []
     page.on('console', (msg) => {
       logs.push(msg)

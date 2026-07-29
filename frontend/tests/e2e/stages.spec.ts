@@ -1,7 +1,7 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Stages Board', () => {
-  test('stages board page loads', { tag: '@staging-regression' }, async ({ page, env }) => {
+  test('stages board page loads', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/stages')
 

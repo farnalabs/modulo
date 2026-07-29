@@ -1,6 +1,6 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('AB Test Models', () => {
+test.describe('AB Test Models', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/variants/ab-test')

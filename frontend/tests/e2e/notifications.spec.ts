@@ -1,6 +1,6 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Notifications', () => {
+test.describe('Notifications', { tag: "@regression" }, () => {
   test('notifications page loads', async ({ page, env }) => {
     await page.route('**/api/v1/notifications/in-app*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0, page: 1, page_size: 20 }) })

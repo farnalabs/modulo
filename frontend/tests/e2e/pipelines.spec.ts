@@ -1,7 +1,7 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 import { getTestEnv } from './setup/env'
 
-test.describe('Pipelines Page', () => {
+test.describe('Pipelines Page', { tag: "@regression" }, () => {
   test('displays page title and search input', async ({ page }) => {
     await loginAsAdmin(page, getTestEnv())
     await page.goto('/pipelines')
