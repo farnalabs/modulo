@@ -1,6 +1,6 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Schemas Page', { tag: '@staging-regression' }, () => {
+test.describe('Schemas Page', { tag: '@regression' }, () => {
   test('Browse tab is active by default', async ({ page, env }) => {
     await loginAsAdmin(page, env)
 

@@ -1,6 +1,6 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Settings Email', () => {
+test.describe('Settings Email', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await page.route('**/api/v1/email/config*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ smtp_host: 'smtp.example.com', smtp_port: 587, from_address: 'noreply@example.com', encryption: 'tls', enabled: true }) })
@@ -12,7 +12,7 @@ test.describe('Settings Email', () => {
   })
 })
 
-test.describe('Settings Error Forwarders', () => {
+test.describe('Settings Error Forwarders', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/error-forwarders')
@@ -21,7 +21,7 @@ test.describe('Settings Error Forwarders', () => {
   })
 })
 
-test.describe('Settings Observability', () => {
+test.describe('Settings Observability', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/observability')

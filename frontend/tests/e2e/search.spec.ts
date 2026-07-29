@@ -9,7 +9,7 @@ const samplePipelines = {
   total: 3,
 }
 
-test.describe('Search', () => {
+test.describe('Search', { tag: "@regression" }, () => {
   test('pipelines page has search input', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/pipelines*', (route) => {

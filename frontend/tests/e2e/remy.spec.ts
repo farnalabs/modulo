@@ -1,6 +1,6 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Remy Admin Configuration', () => {
+test.describe('Remy Admin Configuration', { tag: "@regression" }, () => {
   test('page loads with remy configuration sections', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/admin/remy/config', (route) => {
