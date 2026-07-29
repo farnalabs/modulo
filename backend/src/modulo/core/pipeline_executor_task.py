@@ -3,6 +3,17 @@
 All pipeline execution flows through a single Celery task registered
 as ``modulo.pipeline.execute_run``.  Uses a persistent asyncio event
 loop per prefork child and lazy, thread-safe engine singletons.
+
+Connection budget (per prefork child):
+  Sync pool: pool_size + max_overflow = up to N+O connections (claims + heartbeats)
+  Async pool: pool_size + max_overflow = up to N+O connections (pipeline execution)
+  Total per child: (sync_N+sync_O) + (async_N+async_O)
+  Total per cluster: per_child_value x worker_count
+    automated workers (4): Nx4 sync, Nx4 async
+    manual workers (2):    Nx2 sync, Nx2 async
+    beat:                  1 connection
+    web app:               ~10-20 connections (separate pool)
+  Postgres max_connections default: 100
 """
 
 import asyncio
@@ -45,7 +56,12 @@ def _get_sync_engine() -> Any:
             if _SYNC_ENGINE is None:
                 settings = _get_settings()
                 url = str(settings.database_url).replace("+asyncpg", "+psycopg")
-                _SYNC_ENGINE = create_engine(url, pool_size=4, max_overflow=4, pool_pre_ping=True)
+                _SYNC_ENGINE = create_engine(
+                    url,
+                    pool_size=settings.celery_worker_pool_sync_size,
+                    max_overflow=settings.celery_worker_pool_overflow,
+                    pool_pre_ping=True,
+                )
     return _SYNC_ENGINE
 
 
@@ -55,8 +71,8 @@ def _get_async_engine() -> AsyncEngine:
         settings = _get_settings()
         _ASYNC_ENGINE = create_async_engine(
             settings.database_url,
-            pool_size=8,
-            max_overflow=4,
+            pool_size=settings.celery_worker_pool_async_size,
+            max_overflow=settings.celery_worker_pool_overflow,
             pool_pre_ping=True,
         )
     return _ASYNC_ENGINE
@@ -300,7 +316,6 @@ class StaleRunRecoveryTask(Task):
 
             engine = _get_sync_engine()
             with engine.connect() as c:
-                # Never-dispatched pending runs
                 c.execute(
                     _text(
                         "UPDATE runs SET status='failed', error_code='never_dispatched', completed_at=now() "
@@ -310,7 +325,6 @@ class StaleRunRecoveryTask(Task):
                 )
                 nd_count = c.rowcount
 
-                # Stale running runs (worker crash not caught by reject_on_worker_lost)
                 c.execute(
                     _text(
                         "UPDATE runs SET status='failed', error_code='worker_lost', completed_at=now() "
@@ -329,7 +343,6 @@ class StaleRunRecoveryTask(Task):
             _log.exception("Stale-run recovery sweep failed")
 
 
-# Register tasks with the Celery app on import.
 try:
     from modulo.celery_app import get_celery_app as _get_celery_app
 
