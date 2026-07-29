@@ -136,7 +136,7 @@ class TestSendEmail:
             msg = mock_server.send_message.call_args[0][0]
             assert msg["Subject"] == ""
 
-    def test_send_email_special_characters_in_subject(self):
+    def test_send_email_special_characters_in_subject(self) -> None:
         settings = MockSettings()
         with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
@@ -154,7 +154,7 @@ class TestSendEmail:
             msg = mock_server.send_message.call_args[0][0]
             assert msg["Subject"] == "Test: üñíçödé & <special> chars!"
 
-    def test_send_email_mime_structure(self):
+    def test_send_email_mime_structure(self) -> None:
         settings = MockSettings()
         with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
@@ -175,7 +175,7 @@ class TestSendEmail:
             assert "text/plain" in parts
             assert "text/html" in parts
 
-    def test_send_email_mime_structure_html_only(self):
+    def test_send_email_mime_structure_html_only(self) -> None:
         settings = MockSettings()
         with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()

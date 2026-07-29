@@ -9,6 +9,8 @@ import uuid
 
 import anyio
 import pytest
+
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
