@@ -62,7 +62,6 @@ def get_celery_app() -> Any:
             "modulo.core.cron_scheduler",
             "modulo.core.trigger_engine.polling",
             "modulo.core.reports.scheduler",
-            "modulo.core.cleanup_jobs.webhook_dedup_cleanup",
             "modulo.core.notifier.celery_tasks",
             "modulo.core.pipeline_executor_task",
         ],

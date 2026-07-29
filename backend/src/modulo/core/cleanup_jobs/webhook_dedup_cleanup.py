@@ -5,19 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.pool import NullPool
 
 from modulo.db.models.trigger_event import TriggerEvent
-from modulo.settings import get_settings
-
-try:
-    from celery import Task as _CeleryTask
-except ImportError:
-    _CeleryTask = object
 
 _log = logging.getLogger(__name__)
 
@@ -59,53 +51,6 @@ async def cleanup_old_webhook_events(
 
     _log.info("Cleaned up %d old webhook trigger events", len(ids))
     return len(ids)
-
-
-# ---------------------------------------------------------------------------
-# Celery task — wraps cleanup_old_webhook_events for Celery beat
-# ---------------------------------------------------------------------------
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncEngine
-
-_ENGINE_GLOBAL: AsyncEngine | None = None
-
-
-def _get_engine() -> AsyncEngine:
-    global _ENGINE_GLOBAL
-    if _ENGINE_GLOBAL is None:
-        from sqlalchemy.ext.asyncio import create_async_engine
-
-        _ENGINE_GLOBAL = create_async_engine(get_settings().database_url, poolclass=NullPool)
-    return _ENGINE_GLOBAL
-
-
-class WebhookDedupCleanupTask(_CeleryTask):  # type: ignore[misc]
-    """Celery task that runs the webhook dedup cleanup once per hour."""
-
-    name = "modulo.cleanup.webhook_dedup"
-    autoretry_for = (Exception,)
-    max_retries = 3
-    default_retry_delay = 300
-
-    def run(self) -> dict[str, Any]:
-        """Run one iteration of cleanup, batching until fewer than BATCH_SIZE rows remain."""
-        return asyncio.run(_run_cleanup())
-
-
-async def _run_cleanup() -> dict[str, Any]:
-    """Execute cleanup in batches until the table is under the retention threshold."""
-    engine = _get_engine()
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    total = 0
-    async with factory() as session:
-        while True:
-            deleted = await cleanup_old_webhook_events(session)
-            total += deleted
-            if deleted < BATCH_SIZE:
-                break
-    _log.info("Webhook dedup cleanup complete — %d rows deleted", total)
-    return {"deleted": total}
 
 
 # ---------------------------------------------------------------------------
