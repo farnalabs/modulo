@@ -934,14 +934,14 @@ const selectedNodeData = ref<any | null>(null)
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
 const nodeTypes = { agent: 'agent', manual: 'manual' }
-const { fitView, setViewport, viewportRef } = useVueFlow()
+const { fitView, setViewport, viewport } = useVueFlow()
 let savedViewport: { x: number; y: number; zoom: number } | null = null
 
 function onVisibilityChange() {
   if (document.hidden) {
-    savedViewport = viewportRef.value ? { ...viewportRef.value } : null
+    savedViewport = viewport.value ? { ...viewport.value } : null
   } else if (savedViewport) {
-    const current = viewportRef.value
+    const current = viewport.value
     if (current && Math.abs(current.x) < 10 && Math.abs(current.y) < 10) {
       setViewport(savedViewport)
     }
