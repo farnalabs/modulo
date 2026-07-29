@@ -1,4 +1,4 @@
-"""Factory that builds a cancellable LangGraph node function from a node definition.
+﻿"""Factory that builds a cancellable LangGraph node function from a node definition.
 
 Node types:
   - standard (agent):  agent/connector node; runs the node body, then checks for
@@ -660,6 +660,7 @@ def make_sandbox_agent_fn(
         timeout=(timeout or sandbox_timeout) + _OUTPUT_READ_TIMEOUT + _DECORATOR_GRACE,
         role="sandbox_agent",
     )
+
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
 
         run_context: dict[str, Any] = state.get("run_context") or {}
