@@ -8,11 +8,11 @@ inputs:
   max-retries:
     description: Maximum health check retries (2s apart)
     required: false
-    default: '60'
+    default: '180'
   smoke-retries:
     description: Maximum smoke test retries
     required: false
-    default: '2'
+    default: '3'
 
 runs:
   using: composite
