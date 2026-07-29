@@ -1,4 +1,6 @@
-"""Application-level background worker for pipeline execution.
+"""DEPRECATED — replaced by Celery ExecuteRunTask (2026-07).
+
+Application-level background worker for pipeline execution.
 
 Started during the FastAPI lifespan and lives outside any request's ASGI
 scope, so background pipeline execution is never cancelled by scope teardown.

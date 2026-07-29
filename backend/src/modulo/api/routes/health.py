@@ -17,17 +17,9 @@ from sqlalchemy import text
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
-from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
-
-_bg_worker_ref: BackgroundPipelineWorker | None = None
-
-
-def set_worker_ref(worker: BackgroundPipelineWorker | None) -> None:
-    global _bg_worker_ref
-    _bg_worker_ref = worker
 
 
 router = APIRouter(tags=["health"])
@@ -148,27 +140,14 @@ async def liveness() -> dict[str, str]:
     return {"status": "ok"}
 
 
-async def _check_background_worker() -> CheckResult:
-    if _bg_worker_ref is None:
-        return CheckResult(status="degraded", detail="background worker not initialized")
-    info = _bg_worker_ref.info()
-    if info["started"]:
-        return CheckResult(
-            status="ok",
-            detail=f"queue_depth={info['queue_depth']}, in_flight={info['in_flight']}",
-        )
-    return CheckResult(status="degraded", detail="background worker not started")
-
-
 @handle_db_errors("health.readiness")
 @router.get("/healthz/ready")
 async def readiness(response: Response) -> ReadinessResponse:
-    db_check, redis_check, cp_check, mig_check, bg_check = await asyncio.gather(
+    db_check, redis_check, cp_check, mig_check = await asyncio.gather(
         _check_database(),
         _check_redis(),
         _check_checkpointer(),
         _check_migrations(),
-        _check_background_worker(),
     )
 
     checks: dict[str, CheckResult] = {
@@ -176,7 +155,6 @@ async def readiness(response: Response) -> ReadinessResponse:
         "redis": redis_check,
         "checkpointer": cp_check,
         "migrations": mig_check,
-        "background_worker": bg_check,
     }
 
     statuses = [c.status for c in checks.values()]
