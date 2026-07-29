@@ -1,5 +1,7 @@
 """Unit tests for feature flag registration — ensures new flags are properly catalogued."""
 
+import uuid
+
 from modulo.core.feature_flags import FeatureFlag, FeatureFlagRegistry
 
 

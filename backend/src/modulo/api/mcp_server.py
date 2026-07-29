@@ -2527,7 +2527,8 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
     description="Delete housekeeping cleanup candidates. "
     "Accepts a list of items with id and entity_type. "
     "Valid entity types: secret, connector, model_backend, pipeline, "
-    "pipeline_snapshot, trigger, webhook_dedup. "
+    "pipeline_snapshot, trigger, webhook_dedup, environment_profile, "
+    "org_api_key, sso_provider, team, parameter_schema, schema, lifecycle_map. "
     "Deletions are grouped by entity type with per-group savepoints.",
 )
 async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
