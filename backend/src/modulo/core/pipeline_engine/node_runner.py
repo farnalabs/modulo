@@ -722,7 +722,6 @@ def make_sandbox_agent_fn(
                 cmd_result = await asyncio.wait_for(
                     sandbox.commands.run(
                         agent_command,
-                        timeout=sandbox_timeout,
                         envs={
                             # System env vars first -- provide defaults from the host.
                             # DO NOT move env_vars_extra before these. Pipelines need
@@ -743,7 +742,6 @@ def make_sandbox_agent_fn(
                             **env_vars_extra,
                         },
                     ),
-                    timeout=sandbox_timeout,
                 )
             except asyncio.CancelledError:
                 raise
