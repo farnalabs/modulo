@@ -11,7 +11,7 @@ Usage in Celery config::
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from celery import Celery
@@ -30,7 +30,7 @@ class StaleRecoveryEntry(ScheduleEntry):  # type: ignore[misc]
     """Celery beat entry for the stale-running recovery sweep (every 5 min)."""
 
     def __init__(self) -> None:
-        self._last_run: datetime.datetime | None = None
+        self._last_run: datetime | None = None
 
     @property
     def name(self) -> str:
@@ -56,17 +56,17 @@ class StaleRecoveryEntry(ScheduleEntry):  # type: ignore[misc]
     def options(self) -> dict[str, Any]:
         return {}
 
-    def is_due(self) -> tuple[bool, datetime.timedelta]:
-        now = datetime.datetime.now(datetime.UTC)
+    def is_due(self) -> tuple[bool, timedelta]:
+        now = datetime.now(UTC)
         if self._last_run is None:
             self._last_run = now
-            return (True, datetime.timedelta(seconds=0))
+            return (True, timedelta(seconds=0))
         delta = now - self._last_run
         if delta.total_seconds() >= 300:
             self._last_run = now
-            return (True, datetime.timedelta(seconds=0))
+            return (True, timedelta(seconds=0))
         remaining = 300 - delta.total_seconds()
-        return (False, datetime.timedelta(seconds=max(remaining, 0)))
+        return (False, timedelta(seconds=max(remaining, 0)))
 
     def __repr__(self) -> str:
         return "<StaleRecoveryEntry: every 5 min>"
