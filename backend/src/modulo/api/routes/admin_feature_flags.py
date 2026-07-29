@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
@@ -111,9 +113,25 @@ async def list_feature_flags(
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> Response | dict[str, Any]:
+    # Attempt Redis cache read
+    redis: Redis | None = None
+    try:
+        redis = Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+        )
+        cache_key = f"feature-flags:{current_user.organisation_id}"
+        cached = await redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        logger.warning("feature-flags.cache_read_failed", exc_info=True)
+    finally:
+        if redis is not None:
+            await redis.aclose()
+
     try:
         registry = await _build_registry(settings, session, current_user)
-        return {
+        response_data = {
             "license": {
                 "tier": registry.current_tier,
                 "has_license_key": registry.has_license_key,
@@ -140,6 +158,21 @@ async def list_feature_flags(
                 for f in registry.tier_gap_flags()
             ],
         }
+
+        # Write to Redis cache (best-effort, 60s TTL)
+        try:
+            redis = Redis.from_url(
+                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+            )
+            cache_key = f"feature-flags:{current_user.organisation_id}"
+            await redis.setex(cache_key, 60, json.dumps(response_data, default=str))
+        except Exception:
+            logger.warning("feature-flags.cache_write_failed", exc_info=True)
+        finally:
+            if redis is not None:
+                await redis.aclose()
+
+        return response_data
     except HTTPException:
         raise
     except ProgrammingError:
