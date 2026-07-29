@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
+import socket
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -72,6 +74,7 @@ from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 from modulo.otel_bridge import LangGraphOtelBridge
 
+_WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
 _RETRY_SEMAPHORE: asyncio.Semaphore | None = None
 
 _log = logging.getLogger(__name__)
@@ -233,7 +236,7 @@ class PipelineExecutor:
                     if cancelled_run is None:
                         raise RunNotFoundError(run_id)
                     return cancelled_run
-                await update_run_status(session, run_id, "running")
+                await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
                 running_run = await get_run(session, run_id)
                 if running_run is None:
                     raise RunNotFoundError(run_id)
@@ -253,7 +256,7 @@ class PipelineExecutor:
 
             active_count = await count_active_runs_for_pipeline(session, pipeline_id, exclude_run_id=run_id)
             if active_count < max_concurrent:
-                await update_run_status(session, run_id, "running")
+                await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
                 running_run = await get_run(session, run_id)
                 if running_run is None:
                     raise RunNotFoundError(run_id)
@@ -520,7 +523,7 @@ class PipelineExecutor:
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
-            await update_run_status(session, run_id, "running")
+            await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
 
             snapshot_result = await session.execute(
                 select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
