@@ -1,0 +1,17 @@
+﻿rules:
+  - id: module-level-mutable-default
+    patterns:
+      - pattern-either:
+          - pattern: |
+              class $CLASS:
+                  ...
+                  $ATTR = []
+          - pattern: |
+              class $CLASS:
+                  ...
+                  $ATTR = {}
+    message: "Class-level mutable list/dict default is shared across all instances — use `None` + init or `field(default_factory=list)` instead"
+    languages: [python]
+    severity: WARNING
+    paths:
+      include: ["**/backend/src/modulo/**"]

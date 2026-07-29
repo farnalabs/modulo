@@ -1,14 +1,6 @@
 ﻿rules:
   - id: bare-raise-in-except
-    patterns:
-      - pattern-inside: |
-          except $EXC:
-            ...
-      - pattern: raise
-      - pattern-not: raise $X from $Y
-      - metavariable-regex:
-          metavariable: $EXC
-          regex: '.*Exception|.*Error'
+    pattern-regex: (?ms)^\s*except\s+(?:Exception|BaseException|HTTPException)\s*(?:as\s+\w+)?:\s*\n(?:(?!^\s*(?:except|def|class|async\s+def|@)).)*\braise\b(?!\s+\w+\s+from)
     message: "Bare `raise` inside `except Exception:` is ambiguous — use `raise ... from None` to produce a clean error trace, or provide the specific exception context."
     languages: [python]
     severity: ERROR
