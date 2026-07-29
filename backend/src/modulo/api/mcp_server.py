@@ -580,6 +580,63 @@ async def list_runs(
 
 
 @mcp.tool(
+    name="get_pipeline_graph",
+    description="Get the full graph (nodes + edges) of a pipeline by ID. "
+    "Returns nodes with their configuration (agent_prompt, agent_command, template_id, timeout_seconds, etc.) "
+    "and edges with their source/target/type. "
+    "For pipelines that use sandbox_agent nodes, this is how you read the current agent_command before modifying it.",
+)
+@_RETRY_DB
+async def get_pipeline_graph_tool(
+    pipeline_id: str,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        from modulo.db.crud.pipeline import get_pipeline_graph
+
+        org_id = _ctx_org_id_val()
+        try:
+            pid = uuid.UUID(pipeline_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
+
+        async with _session(org_id) as s:
+            result = await get_pipeline_graph(s, pid)
+
+        if result is None:
+            return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+
+        nodes, edges = result
+        edge_dicts = [
+            {
+                "id": str(e.id),
+                "source_node_id": str(e.source_node_id),
+                "target_node_id": str(e.target_node_id),
+                "edge_type": e.edge_type,
+            }
+            for e in edges
+        ]
+
+        return {
+            "pipeline_id": pipeline_id,
+            "nodes": nodes,
+            "edges": edge_dicts,
+            "node_count": len(nodes),
+            "edge_count": len(edge_dicts),
+        }
+    except ProgrammingError:
+        _log.exception("get_pipeline_graph_tool failed")
+        return {
+            "error": "migration_required",
+            "detail": "Database migration may be required. Run alembic upgrade heads.",
+        }
+    except Exception:
+        _log.exception("get_pipeline_graph_tool failed")
+        return _tool_error("Failed to get pipeline graph")
+
+
+@mcp.tool(
     description="Set or replace the graph (nodes + edges) of an existing pipeline. "
     "Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), "
     "and edges as a list of dicts with id, source_node_id, target_node_id, edge_type. "
