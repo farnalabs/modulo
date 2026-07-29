@@ -1,4 +1,4 @@
-"""Create snapshot_schema_pins table
+﻿"""Create snapshot_schema_pins table
 
 Revision ID: 0022_create_snapshot_schema_pins_table
 Revises: 0021_add_system_bool_to_schemas
@@ -38,8 +38,8 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
-            ["schema_id", "schema_version"],
-            ["schema_versions.schema_id", "schema_versions.version"],
+            ["schema_id", "schema_version", "organisation_id"],
+            ["schema_versions.schema_id", "schema_versions.version", "schema_versions.organisation_id"],
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
