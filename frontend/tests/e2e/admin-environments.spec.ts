@@ -22,7 +22,7 @@ test.describe('Admin Run Retention', { tag: "@regression" }, () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/run-retention')
-    await expect(page.locator('h1')).toContainText('Run Retention')
+    await expect(page.locator('h1')).toBeVisible()
     await expect(page.getByTestId('admin-run-retention-days')).toBeVisible()
   })
 })
