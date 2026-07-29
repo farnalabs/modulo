@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from modulo.db.crud.variant_group import (
     check_pipeline_run_quota,
     create_variant_group,
-    delete_variant_group,
+    soft_delete_variant_group,
     get_coverage_gaps,
     get_variant_group,
     list_variant_groups,
@@ -174,7 +174,7 @@ async def test_update_variant_group_unknown_returns_none(
     assert await update_variant_group(rls_session, uuid.uuid4(), name="x") is None
 
 
-async def test_delete_variant_group(
+async def test_soft_delete_variant_group(
     rls_session: AsyncSession,
     test_org: uuid.UUID,
     test_user: uuid.UUID,
@@ -188,14 +188,14 @@ async def test_delete_variant_group(
         name="Delete Me",
         variants=[],
     )
-    assert await delete_variant_group(rls_session, group.id) is True
+    assert await soft_delete_variant_group(rls_session, group.id) is True
     assert await get_variant_group(rls_session, group.id) is None
 
 
-async def test_delete_variant_group_unknown_returns_false(
+async def test_soft_delete_variant_group_unknown_returns_false(
     rls_session: AsyncSession,
 ) -> None:
-    assert await delete_variant_group(rls_session, uuid.uuid4()) is False
+    assert await soft_delete_variant_group(rls_session, uuid.uuid4()) is False
 
 
 async def test_check_pipeline_run_quota_allows_within_limit(
