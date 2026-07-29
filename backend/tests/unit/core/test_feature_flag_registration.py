@@ -2,8 +2,6 @@
 
 import uuid
 
-import pytest
-
 from modulo.core.feature_flags import FeatureFlag, FeatureFlagRegistry
 
 

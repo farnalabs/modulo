@@ -1,4 +1,4 @@
-﻿"""Factory that builds a cancellable LangGraph node function from a node definition.
+"""Factory that builds a cancellable LangGraph node function from a node definition.
 
 Node types:
   - standard (agent):  agent/connector node; runs the node body, then checks for
@@ -686,7 +686,9 @@ def make_sandbox_agent_fn(
                 cmd_result = await asyncio.wait_for(
                     sandbox.commands.run(
                         agent_command,
-                        timeout=max(1, sandbox_timeout - 10),  # inner timeout first — prevents race with outer cancellable_node (identical value causes ~50% node_timeout)
+                        timeout=max(
+                            1, sandbox_timeout - 10
+                        ),  # inner timeout first — prevents race with outer cancellable_node (identical value causes ~50% node_timeout)
                         envs={
                             **env_vars_extra,
                             "MODULO_RUN_ID": run_id,
@@ -699,7 +701,9 @@ def make_sandbox_agent_fn(
                             or os.environ.get("GITHUB_TOKEN", ""),
                         },
                     ),
-                    timeout=max(1, sandbox_timeout - 10),  # inner timeout first — prevents race with outer cancellable_node (identical value causes ~50% node_timeout)
+                    timeout=max(
+                        1, sandbox_timeout - 10
+                    ),  # inner timeout first — prevents race with outer cancellable_node (identical value causes ~50% node_timeout)
                 )
             except asyncio.CancelledError:
                 raise
@@ -913,4 +917,3 @@ def _validate_against_schema(data: dict[str, Any], schema: dict[str, Any]) -> No
     for field in required:
         if field not in data:
             raise ValueError(f"Manual output missing required field {field!r} (required: {required})")
-
