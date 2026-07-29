@@ -146,7 +146,6 @@ def migrated_db_url(db_url: str) -> str:
                 "pipeline_snapshots",
                 "triggers",
                 "runs",
-                "webhook_dedup_hashes",
                 "hitl_claims",
                 "notification_delivery_log",
                 "trigger_events",

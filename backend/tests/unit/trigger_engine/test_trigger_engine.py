@@ -590,40 +590,4 @@ def test_webhook_route(
 # ---------------------------------------------------------------------------
 
 
-async def test_cleanup_expired_dedup_hashes() -> None:
-    session = _make_session(trigger=_make_trigger())
 
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = True
-
-    expired_result = MagicMock()
-    expired_result.scalars.return_value.all.return_value = [uuid.uuid4(), uuid.uuid4()]
-
-    call_count = 0
-
-    async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return lock_result
-        return expired_result
-
-    session.execute = _execute
-
-    count = await TriggerEngine.cleanup_expired_dedup_hashes(session)
-    assert count == 2
-
-
-async def test_cleanup_expired_dedup_hashes_lock_contention() -> None:
-    session = _make_session(trigger=_make_trigger())
-
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = False
-
-    async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
-        return lock_result
-
-    session.execute = _execute
-
-    count = await TriggerEngine.cleanup_expired_dedup_hashes(session)
-    assert count == 0

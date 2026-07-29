@@ -4,11 +4,11 @@ Webhook processing pipeline:
   1. Load trigger config from DB (with FOR UPDATE lock)
   2. X-Modulo-Timestamp replay window check (±300s)
   3. HMAC-SHA256 validation over timestamp.body (if hmac_secret configured)
-  4. Deduplication (WebhookDedupHash — payload hash, 5-min TTL)
+  4. Deduplication (Redis SET NX EX — payload hash, 5-min TTL)
   5. Flood protection (concurrent run count vs. trigger.max_concurrent_runs)
   6. Payload mapping (dot-notation path → input_payload key)
   7. Create Run + TriggerEvent in one transaction
-  8. Dedup hash committed with run (single atomic unit)
+  8. Dedup stored in Redis (TTL auto-evicts after 5 min)
 
 All outcomes (pass and fail) are recorded as a TriggerEvent row.
 The caller is responsible for background execution of the created run.
@@ -25,7 +25,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, select, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.connectors.base import ConnectorQuery
@@ -36,7 +35,8 @@ from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
-from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
+from modulo.db.models.webhook import WebhookPayload
+from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -113,6 +113,19 @@ _DEDUP_TTL_SECONDS = 300  # 5 minutes
 _REPLAY_WINDOW_SECONDS = 300  # ±300s for X-Modulo-Timestamp
 _ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
 
+_IN_MEMORY_DEDUPS: dict[str, float] = {}  # key -> expiry timestamp
+
+_DEDUP_REDIS: Any = None
+
+
+def _get_dedup_redis() -> Any:
+    global _DEDUP_REDIS
+    if _DEDUP_REDIS is None:
+        from redis.asyncio import Redis
+
+        _DEDUP_REDIS = Redis.from_url(get_settings().redis_url, decode_responses=True)
+    return _DEDUP_REDIS
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -123,35 +136,6 @@ def _sha256_hex(data: bytes | None) -> str:
     if not isinstance(data, bytes):
         return ""
     return hashlib.sha256(data).hexdigest()
-
-
-def _is_unique_violation(exc: IntegrityError) -> bool:
-    """Return True if *exc* is a unique-constraint violation (not FK, NOT NULL, etc.).
-
-    Handles PostgreSQL (pgcode 23505), SQLite (UNIQUE constraint failed), and
-    MariaDB/MySQL (IntegrityError: 1062 Duplicate entry).
-    """
-    orig = getattr(exc, "orig", None)
-    if orig is None:
-        return False
-
-    # PostgreSQL — asyncpg raises with pgcode attribute
-    pgcode = getattr(orig, "pgcode", None)
-    if pgcode is not None:
-        return str(pgcode) == "23505"
-
-    # SQLite — aiosqlite wraps the message as a string
-    msg = str(orig)
-    if "UNIQUE constraint failed" in msg:
-        return True
-
-    # MariaDB / MySQL DBAPI errors expose the numeric code in args[0].
-    if isinstance(orig, Exception):
-        err_args = getattr(orig, "args", None)
-        if err_args and len(err_args) > 0 and err_args[0] == 1062:
-            return True
-
-    return False
 
 
 def _verify_timestamp(modulo_timestamp: str | None) -> int:
@@ -296,7 +280,7 @@ class TriggerEngine:
                     )
 
             # Deduplication
-            is_new = await self._try_insert_dedup(session, trigger_id, org_id, payload_hash)
+            is_new = await self._try_insert_dedup(trigger_id, payload_hash)
             if not is_new:
                 _log.warning("Webhook deduplicated for trigger %s (hash=%s)", trigger_id, payload_hash[:16])
                 await self._log_event(
@@ -691,33 +675,6 @@ class TriggerEngine:
             "total": query_result.total,
         }
 
-    # ------------------------------------------------------------------
-    # Dedup cleanup
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    async def cleanup_expired_dedup_hashes(session: AsyncSession) -> int:
-        """Delete expired webhook_dedup_hashes rows.
-
-        Acquires a Postgres advisory lock (key=20250601) on PostgreSQL to prevent
-        concurrent cleanup across workers. On other backends the lock is skipped.
-        Returns the number of deleted rows.
-        """
-        dialect = session.get_bind().dialect.name
-        if dialect == "postgresql":
-            lock_acquired = await session.execute(text("SELECT pg_try_advisory_xact_lock(20250601)"))
-            if not lock_acquired.scalar_one():
-                return 0
-
-        now = datetime.now(UTC)
-        result = await session.execute(select(WebhookDedupHash.id).where(WebhookDedupHash.expires_at <= now))
-        expired_ids = result.scalars().all()
-        if not expired_ids:
-            return 0
-
-        await session.execute(delete(WebhookDedupHash).where(WebhookDedupHash.id.in_(expired_ids)))
-        return len(expired_ids)
-
     @staticmethod
     async def cleanup_expired_payloads(session: AsyncSession) -> int:
         """Delete expired webhook_payloads rows. Returns the number of deleted rows."""
@@ -820,53 +777,24 @@ class TriggerEngine:
         await session.flush()
         return stored
 
-    async def _try_insert_dedup(
-        self,
-        session: AsyncSession,
-        trigger_id: uuid.UUID,
-        org_id: uuid.UUID,
-        payload_hash: str,
-    ) -> bool:
-        """Try to insert a dedup hash row. Return True if new, False if duplicate.
+    async def _try_insert_dedup(self, trigger_id: uuid.UUID, payload_hash: str) -> bool:
+        """Check dedup with Redis SET NX EX. Returns True if new, False if duplicate.
 
-        Uses a savepoint so IntegrityError from a concurrent insert does not
-        roll back the outer transaction.
+        Uses Redis with automatic 5-minute TTL — no cleanup needed.
+        In-memory fallback for debug mode without Redis.
         """
-        now = datetime.now(UTC)
-
-        existing = await session.execute(
-            select(WebhookDedupHash).where(
-                WebhookDedupHash.trigger_id == trigger_id,
-                WebhookDedupHash.payload_hash == payload_hash,
-                WebhookDedupHash.expires_at > now,
-            )
-        )
-        if existing.scalar_one_or_none() is not None:
-            return False
-
-        await session.execute(
-            delete(WebhookDedupHash).where(
-                WebhookDedupHash.trigger_id == trigger_id,
-                WebhookDedupHash.payload_hash == payload_hash,
-                WebhookDedupHash.expires_at <= now,
-            )
-        )
-
-        dedup = WebhookDedupHash(
-            organisation_id=org_id,
-            trigger_id=trigger_id,
-            payload_hash=payload_hash,
-            expires_at=now + timedelta(seconds=_DEDUP_TTL_SECONDS),
-        )
+        key = f"webhook:dedup:{trigger_id}:{payload_hash}"
         try:
-            async with session.begin_nested():
-                session.add(dedup)
-                await session.flush()
-        except IntegrityError as exc:
-            if _is_unique_violation(exc):
+            redis = _get_dedup_redis()
+            result = await redis.set(key, "1", nx=True, ex=_DEDUP_TTL_SECONDS)
+            return result is not None
+        except Exception:
+            _log.warning("Redis unavailable for dedup, using in-memory fallback", exc_info=True)
+            now = time.time()
+            if key in _IN_MEMORY_DEDUPS and _IN_MEMORY_DEDUPS[key] > now:
                 return False
-            raise
-        return True
+            _IN_MEMORY_DEDUPS[key] = now + _DEDUP_TTL_SECONDS
+            return True
 
     async def _log_event(
         self,

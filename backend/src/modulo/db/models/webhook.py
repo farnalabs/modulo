@@ -2,24 +2,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, String, UniqueConstraint, Uuid
+from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
-
-
-class WebhookDedupHash(OrgScoped):
-    __tablename__ = "webhook_dedup_hashes"
-    __table_args__ = (UniqueConstraint("trigger_id", "payload_hash", name="uq_webhook_dedup_trigger_hash"),)
-
-    trigger_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(),
-        ForeignKey("triggers.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
 class WebhookPayload(OrgScoped):

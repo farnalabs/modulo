@@ -270,10 +270,11 @@ async def cleanup_expired(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
 ) -> dict[str, int]:
-    """Delete expired dedup hashes and webhook payloads.
+    """Delete expired webhook payloads for replay storage.
 
-    Acquires a Postgres advisory lock to prevent concurrent cleanup across workers.
-    Safe to call from cron every 5 minutes.
+    Dedup hash cleanup is automatic (Redis TTL). This endpoint only
+    handles the payload storage table, which keeps raw bodies for
+    replay after the dedup window closes.
     """
     org_id = principal.organisation_id if principal else None
     if org_id is None:
@@ -282,12 +283,8 @@ async def cleanup_expired(
             detail="Authentication required",
         )
 
-    result: dict[str, int] = {"dedup_hashes_deleted": 0, "payloads_deleted": 0}
+    result: dict[str, int] = {"payloads_deleted": 0}
     try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            result["dedup_hashes_deleted"] = await _trigger_engine.cleanup_expired_dedup_hashes(session)
-        # Separate transaction for payloads
         async with session.begin():
             await set_rls_org(session, org_id)
             result["payloads_deleted"] = await _trigger_engine.cleanup_expired_payloads(session)

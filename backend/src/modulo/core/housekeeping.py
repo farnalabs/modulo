@@ -17,7 +17,6 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.secret import Secret
 from modulo.db.models.trigger import Trigger
-from modulo.db.models.webhook import WebhookDedupHash
 
 _log = logging.getLogger(__name__)
 
@@ -28,7 +27,6 @@ ENTITY_MODEL_MAP: dict[str, type] = {
     "pipeline": Pipeline,
     "pipeline_snapshot": PipelineSnapshot,
     "trigger": Trigger,
-    "webhook_dedup": WebhookDedupHash,
 }
 
 _CATEGORY_LABELS: dict[str, str] = {
@@ -39,7 +37,6 @@ _CATEGORY_LABELS: dict[str, str] = {
     "unused_model_backends": "Unused Model Backends",
     "inactive_triggers": "Inactive Triggers",
     "orphan_snapshots": "Orphan Snapshots",
-    "expired_webhook_dedups": "Expired Webhook Dedups",
 }
 
 _CATEGORY_DESCRIPTIONS: dict[str, str] = {
@@ -50,7 +47,6 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     "unused_model_backends": "Model backends not assigned to any agent",
     "inactive_triggers": "Triggers that are inactive and have never fired",
     "orphan_snapshots": "Snapshots whose pipeline no longer exists",
-    "expired_webhook_dedups": "Expired webhook deduplication hash entries",
 }
 
 
@@ -305,31 +301,6 @@ async def _scan_orphan_snapshots(session: AsyncSession, org_id: uuid.UUID) -> li
     ]
 
 
-async def _scan_expired_webhook_dedups(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
-    now = datetime.now(UTC)
-    rows = (
-        (
-            await session.execute(
-                select(WebhookDedupHash).where(
-                    WebhookDedupHash.organisation_id == org_id,
-                    WebhookDedupHash.expires_at < now,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return [
-        Candidate(
-            id=str(r.id),
-            name=f"Webhook dedup {r.payload_hash[:16]}...",
-            detail="Expired webhook deduplication hash",
-            created_at=r.expires_at.isoformat() if r.expires_at else None,
-        )
-        for r in rows
-    ]
-
-
 _SCANNERS: list[tuple[str, Any]] = [
     ("orphan_secrets", _scan_orphan_secrets),
     ("unbound_connectors", _scan_unbound_connectors),
@@ -338,7 +309,6 @@ _SCANNERS: list[tuple[str, Any]] = [
     ("unused_model_backends", _scan_unused_model_backends),
     ("inactive_triggers", _scan_inactive_triggers),
     ("orphan_snapshots", _scan_orphan_snapshots),
-    ("expired_webhook_dedups", _scan_expired_webhook_dedups),
 ]
 
 
