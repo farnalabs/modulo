@@ -96,8 +96,8 @@ class TestGetAuthRateLimiter:
         assert limiter is not None
         assert isinstance(limiter, AuthRateLimiterCls)
 
-    def test_raises_when_no_redis(self):
-        """get_auth_rate_limiter raises if REDIS_URL is empty."""
+    def test_returns_none_when_no_redis(self):
+        """get_auth_rate_limiter returns None when REDIS_URL is empty (graceful fallback)."""
         settings = Settings(
             database_url="postgresql+asyncpg://localhost/test",
             secret_key="a" * 32,
@@ -106,8 +106,8 @@ class TestGetAuthRateLimiter:
             modulo_auth_rate_limit_enabled=True,
             redis_url="",
         )
-        with pytest.raises(RuntimeError, match="REDIS_URL is required"):
-            get_auth_rate_limiter(settings)
+        limiter = get_auth_rate_limiter(settings)
+        assert limiter is None
 
     def test_singleton_returns_same_instance(self):
         settings = _make_settings(enabled=True)

@@ -17,8 +17,8 @@ def clear_celery_module_cache():
 
 
 class TestGetCeleryApp:
-    def test_returns_none_when_no_redis_url(self, clear_celery_module_cache):
-        """get_celery_app() should return None when redis_url is not configured."""
+    def test_raises_when_no_redis_url(self, clear_celery_module_cache):
+        """get_celery_app() should raise RuntimeError when redis_url is not configured."""
         with patch("modulo.settings.get_settings") as mock_settings:
             settings = MagicMock()
             settings.redis_url = ""
@@ -27,8 +27,8 @@ class TestGetCeleryApp:
             import modulo.celery_app
 
             importlib.reload(modulo.celery_app)
-            result = modulo.celery_app.get_celery_app()
-            assert result is None
+            with pytest.raises(RuntimeError, match="REDIS_URL is required"):
+                modulo.celery_app.get_celery_app()
 
     def test_returns_instance_with_redis(self, clear_celery_module_cache):
         """get_celery_app() should return a Celery instance when redis_url is set."""
