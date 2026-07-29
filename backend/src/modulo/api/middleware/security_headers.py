@@ -31,6 +31,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             f"default-src 'self'; connect-src {csp_connect}; "
             "script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "frame-src 'self'; "
             "frame-ancestors 'none'"
         )
         self._hsts = "max-age=31536000; includeSubDomains"
