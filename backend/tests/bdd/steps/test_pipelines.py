@@ -1855,5 +1855,5 @@ def _store_response(request: pytest.FixtureRequest, resp) -> None:
     request.node._resp = resp
     try:
         request.node._resp_body = resp.json()
-    except Exception:
+    except (ValueError, TypeError):
         request.node._resp_body = resp.text
