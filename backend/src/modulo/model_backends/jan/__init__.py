@@ -4,13 +4,15 @@ from langchain_openai import ChatOpenAI  # noqa: F401
 
 from modulo.model_backends.module import OpenAICompatibleBackend
 
+DEFAULT_JAN_BASE_URL = "http://localhost:1337/v1"
+
 
 class JanBackend(OpenAICompatibleBackend):
     def __init__(
         self,
         api_key: str | None = None,
         model_id: str = "",
-        base_url: str = "http://localhost:1337/v1",
+        base_url: str = DEFAULT_JAN_BASE_URL,
         **default_params: Any,
     ):
         super().__init__(
