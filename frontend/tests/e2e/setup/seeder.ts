@@ -74,7 +74,7 @@ async function findExistingPipeline(
 async function createPipeline(
   apiBase: string,
   token: string,
-): Promise<ApiPipeline> {
+): Promise<ApiPipeline | undefined> {
   const res = await fetch(apiBase + '/api/v1/pipelines', {
     method: 'POST',
     headers: authHeaders(token),
@@ -85,6 +85,18 @@ async function createPipeline(
     }),
     signal: AbortSignal.timeout(15000),
   })
+  if (res.status === 501) {
+    console.log('[seeder] POST /api/v1/pipelines returned 501, trying starter-pipeline fallback...')
+    const fallbackRes = await fetch(apiBase + '/api/v1/onboarding/starter-pipeline', {
+      method: 'POST',
+      headers: authHeaders(token),
+      signal: AbortSignal.timeout(15000),
+    })
+    if (fallbackRes.ok) {
+      return (await fallbackRes.json()) as ApiPipeline
+    }
+    throw new Error('Pipeline creation failed (primary=501, fallback=' + fallbackRes.status + ')')
+  }
   if (!res.ok) {
     throw new Error('Pipeline creation failed: ' + res.status)
   }
@@ -115,7 +127,7 @@ async function seedRetention(
   token: string,
 ): Promise<void> {
   try {
-    const res = await fetch(apiBase + '/api/v1/runs/retention', {
+    const res = await fetch(apiBase + '/api/v1/admin/runs/retention', {
       method: 'PUT',
       headers: authHeaders(token),
       body: JSON.stringify({ retention_days: 90 }),
@@ -136,7 +148,7 @@ async function seedEmailSettings(
   orgId: string,
 ): Promise<void> {
   try {
-    const res = await fetch(apiBase + '/api/v1/' + orgId + '/email-settings', {
+    const res = await fetch(apiBase + '/api/v1/admin/org/' + orgId + '/email-settings', {
       method: 'PUT',
       headers: authHeaders(token),
       body: JSON.stringify({
@@ -162,13 +174,13 @@ async function seedCostControls(
   token: string,
 ): Promise<void> {
   try {
-    const res = await fetch(apiBase + '/api/v1/costs/controls', {
+    const res = await fetch(apiBase + '/api/v1/admin/costs/controls', {
       method: 'PUT',
       headers: authHeaders(token),
       body: JSON.stringify({
-        monthly_budget: 1000,
-        alert_threshold: 80,
-        enabled: true,
+        budget: 1000,
+        alert_thresholds: [80],
+        circuit_breaker_enabled: true,
       }),
       signal: AbortSignal.timeout(15000),
     })
