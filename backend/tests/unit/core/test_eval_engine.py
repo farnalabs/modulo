@@ -54,9 +54,11 @@ def _make_llm_callable(result: dict | None = None):
 
 def _make_capturing_callable(captured: list):
     """Return an LLM judge callable that captures (output, eval_def) into *captured*."""
+
     def fn(output: dict, eval_def: EvalDefinition) -> dict:
         captured.append((output, eval_def))
         return {"passed": True, "score": 0.95, "detail": "captured"}
+
     return fn
 
 
@@ -689,9 +691,7 @@ class TestNormalContent:
         eval_def = _make_eval_def("llm_judge", {"field": "output"})
         content = "def foo(): pass"
 
-        result = engine.evaluate(
-            {"output": content}, eval_def, llm_judge_callable=_make_capturing_callable(captured)
-        )
+        result = engine.evaluate({"output": content}, eval_def, llm_judge_callable=_make_capturing_callable(captured))
 
         assert result.passed is True
         assert result.score == 0.95
@@ -715,9 +715,7 @@ class TestNormalContent:
         engine = EvalEngine()
         eval_def = _make_eval_def("llm_judge", {"field": "nonexistent"})
 
-        result = engine.evaluate(
-            {"output": "hello"}, eval_def, llm_judge_callable=_make_capturing_callable(captured)
-        )
+        result = engine.evaluate({"output": "hello"}, eval_def, llm_judge_callable=_make_capturing_callable(captured))
 
         assert result.passed is True
 

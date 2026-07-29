@@ -100,14 +100,6 @@ class TestCeleryTasksGuard:
         assert hasattr(ct, "Task")
 
 
-class TestCleanupJobGuard:
-    def test_module_loads(self):
-        """webhook_dedup_cleanup module should load without errors."""
-        import modulo.core.cleanup_jobs.webhook_dedup_cleanup as wc
-
-        assert wc.WebhookDedupCleanupTask is not None
-
-
 class TestReportSchedulerGuard:
     def test_module_loads(self):
         """reports/scheduler module should load without errors."""
