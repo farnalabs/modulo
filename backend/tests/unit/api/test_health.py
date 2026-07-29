@@ -1,4 +1,4 @@
-"""Tests for readiness endpoint — aggregation logic, degraded/unavailable status, and check structure."""
+﻿"""Tests for readiness endpoint — aggregation logic, degraded/unavailable status, and check structure."""
 
 from collections.abc import Generator
 from unittest.mock import AsyncMock, patch
@@ -69,7 +69,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch(
-                "modulo.api.routes.health._check_background_worker",
+                "modulo.api.routes.health._check_redis",
                 AsyncMock(return_value=_ok_check("background_worker")),
             ),
         ):
@@ -88,7 +88,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch(
-                "modulo.api.routes.health._check_background_worker",
+                "modulo.api.routes.health._check_redis",
                 AsyncMock(return_value=_ok_check("background_worker")),
             ),
         ):
@@ -105,7 +105,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch(
-                "modulo.api.routes.health._check_background_worker",
+                "modulo.api.routes.health._check_redis",
                 AsyncMock(return_value=_ok_check("background_worker")),
             ),
         ):
@@ -123,7 +123,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch(
-                "modulo.api.routes.health._check_background_worker",
+                "modulo.api.routes.health._check_redis",
                 AsyncMock(return_value=_ok_check("background_worker")),
             ),
         ):
@@ -147,7 +147,7 @@ class TestHttpTimeout:
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch(
-                "modulo.api.routes.health._check_background_worker",
+                "modulo.api.routes.health._check_redis",
                 AsyncMock(return_value=_ok_check("background_worker")),
             ),
         ):
