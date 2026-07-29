@@ -1,4 +1,3 @@
-import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -7,55 +6,48 @@ from langchain_openai import ChatOpenAI
 
 from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
-logger = logging.getLogger(__name__)
 
-
-class AzureOpenAIBackend(ModelBackendBase):
-    """Thin adapter over ChatOpenAI configured for Azure OpenAI."""
+class OpenAICompatibleBackend(ModelBackendBase):
+    """Single backend for all OpenAI-compatible providers.
+    Parameterized by base_url, api_key, and provider name."""
 
     supports_tools: bool = True
 
     def __init__(
         self,
-        api_key: str,
-        model_id: str,
-        azure_endpoint: str,
-        api_version: str = "2024-10-01-preview",
+        api_key: str | None = None,
+        model_id: str = "",
+        base_url: str | None = None,
+        provider: str = "openai",
         **default_params: Any,
     ) -> None:
+        resolved_api_key = api_key or provider
+        self._base_url = base_url.rstrip("/") if base_url else None
+
         self._model = ChatOpenAI(
             model=model_id,
-            api_key=api_key,
-            azure_deployment=model_id,
-            azure_endpoint=azure_endpoint.rstrip("/"),
-            api_version=api_version,
+            api_key=resolved_api_key,
+            base_url=self._base_url,
             **default_params,
         )
-        self._backend_id = f"azure_openai/{model_id}"
-        self._azure_endpoint = azure_endpoint.rstrip("/")
-        self._api_version = api_version
-        self._api_key = api_key
+        self._backend_id = f"{provider}/{model_id}"
+        self._api_key = resolved_api_key
 
     @property
-    def azure_endpoint(self) -> str:
-        return self._azure_endpoint
-
-    @property
-    def api_version(self) -> str:
-        return self._api_version
+    def base_url(self) -> str | None:
+        return self._base_url
 
     @property
     def backend_id(self) -> str:
         return self._backend_id
 
     def __repr__(self) -> str:
-        return f"AzureOpenAIBackend(model_id={self._backend_id!r}, endpoint={self._azure_endpoint!r})"
+        return f"OpenAICompatibleBackend(provider={self._backend_id!r})"
 
     async def health_check(self) -> HealthResult:
         return await openai_compatible_health_check(
-            base_url=self._azure_endpoint,
-            api_key=None,
-            extra_headers={"api-key": self._api_key},
+            base_url=self._base_url or "https://api.openai.com/v1",
+            api_key=self._api_key,
         )
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:

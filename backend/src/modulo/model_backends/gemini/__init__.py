@@ -1,19 +1,11 @@
-"""GeminiBackend — wraps ChatGoogleGenerativeAI for Google Gemini models."""
-
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-import httpx
 from langchain_core.messages import BaseMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from modulo.model_backends.base import (
-    HEALTH_CHECK_TIMEOUT,
-    HEALTH_DETAIL_MAX_LENGTH,
-    HealthResult,
-    ModelBackendBase,
-)
+from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
 logger = logging.getLogger(__name__)
 
@@ -42,21 +34,11 @@ class GeminiBackend(ModelBackendBase):
         return f"GeminiBackend(model_id={self._backend_id!r})"
 
     async def health_check(self) -> HealthResult:
-        try:
-            async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
-                response = await client.get(
-                    f"{GEMINI_BASE_URL}/models",
-                    headers={"x-goog-api-key": self._api_key},
-                )
-                if response.is_success:
-                    return HealthResult(ok=True)
-                return HealthResult(ok=False, detail=response.text[:HEALTH_DETAIL_MAX_LENGTH])
-        except httpx.TimeoutException:
-            logger.warning("Health check timed out for GeminiBackend")
-            return HealthResult(ok=False, detail="Health check timed out")
-        except httpx.HTTPError as exc:
-            logger.warning("Health check failed for GeminiBackend: %s", exc)
-            return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
+        return await openai_compatible_health_check(
+            base_url=GEMINI_BASE_URL,
+            api_key=None,
+            extra_headers={"x-goog-api-key": self._api_key},
+        )
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
