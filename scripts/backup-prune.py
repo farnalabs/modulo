@@ -20,9 +20,7 @@ from typing import NamedTuple
 
 # ruff: noqa: N999
 
-BACKUP_RE = re.compile(
-    r"modulo-backup-(?P<org>[a-f0-9]+)-(?P<ts>\d{8})T.*\.tar\.gz\.enc$"
-)
+BACKUP_RE = re.compile(r"modulo-backup-(?P<org>[a-f0-9]+)-(?P<ts>\d{8})T.*\.tar\.gz\.enc$")
 
 
 class BackupFile(NamedTuple):

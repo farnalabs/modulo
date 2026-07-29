@@ -256,7 +256,7 @@ LangGraph's `PostgresSaver` creates its own tables (`checkpoints`, `checkpoint_b
 ```python
 class PlanContext(Protocol):
     def feature_enabled(self, feature_name: str) -> bool: ...
-    def max_concurrent_runs(self) -> int | None: ...     # None = unbounded
+    def max_concurrent_runs(self) -> int | None: ...  # None = unbounded
     def rate_limit(self, endpoint: str) -> int | None:  # None = no plan limit
         ...
 ```
@@ -3472,7 +3472,7 @@ The existing `PipelineGraphNode` Pydantic model (§2.5 of RFC) gains:
 ```python
 class PipelineGraphNode(BaseModel):
     # ...existing fields...
-    composite_ref: uuid.UUID | None = None          # references a CompositeTemplate
+    composite_ref: uuid.UUID | None = None  # references a CompositeTemplate
     composite_parameter_values: dict[str, Any] | None = None  # port name → value
     composite_input_mapping: FieldMapping | None = None
     composite_output_mapping: FieldMapping | None = None

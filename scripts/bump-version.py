@@ -24,12 +24,11 @@ def bump(version: str, part: str) -> str:
     major, minor, patch = map(int, version.split("."))
     if part == "major":
         return f"{major + 1}.0.0"
-    elif part == "minor":
+    if part == "minor":
         return f"{major}.{minor + 1}.0"
-    elif part == "patch":
+    if part == "patch":
         return f"{major}.{minor}.{patch + 1}"
-    else:
-        raise ValueError(f"Unknown part: {part}")
+    raise ValueError(f"Unknown part: {part}")
 
 
 def write_version(path: Path, old_version: str, new_version: str):

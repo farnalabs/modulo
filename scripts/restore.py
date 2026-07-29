@@ -18,15 +18,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Modulo restore tool")
     parser.add_argument("--input", "-i", required=True, help="Encrypted backup archive path")
     parser.add_argument(
-        "--passphrase", "-p", default=None,
+        "--passphrase",
+        "-p",
+        default=None,
         help="Decryption passphrase (prompts if omitted and MODULO_BACKUP_PASSPHRASE not set)",
     )
     parser.add_argument(
-        "--db-url", default=None,
+        "--db-url",
+        default=None,
         help="Postgres connection URL (default: DATABASE_URL env var)",
     )
     parser.add_argument(
-        "--pg-restore", default="pg_restore",
+        "--pg-restore",
+        default="pg_restore",
         help="pg_restore executable path (default: pg_restore)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Verify archive without restoring")
@@ -51,9 +55,24 @@ def decrypt_archive(enc_path: str, passphrase: str, output_path: str) -> None:
         print("ERROR: openssl not found. Install OpenSSL to decrypt backups.")
         sys.exit(1)
     result = subprocess.run(
-        ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "600000",
-         "-in", enc_path, "-out", output_path, "-pass", f"pass:{passphrase}"],
-        capture_output=True, text=True, check=False,
+        [
+            "openssl",
+            "enc",
+            "-d",
+            "-aes-256-cbc",
+            "-pbkdf2",
+            "-iter",
+            "600000",
+            "-in",
+            enc_path,
+            "-out",
+            output_path,
+            "-pass",
+            f"pass:{passphrase}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         print(f"Decryption failed: {result.stderr}")
@@ -133,6 +152,7 @@ def get_db_url(args_db_url: str | None) -> str:
 
 def pg_database_name(db_url: str) -> str:
     import urllib.parse
+
     parsed = urllib.parse.urlparse(db_url)
     return parsed.path.lstrip("/").split("?")[0]
 
@@ -151,15 +171,24 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
 
     print("  Terminating existing connections...")
     subprocess.run(
-        ["psql", "-d", admin_url, "-c",
-         f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"],
-        capture_output=True, text=True, check=False,
+        [
+            "psql",
+            "-d",
+            admin_url,
+            "-c",
+            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db_name}' AND pid <> pg_backend_pid()",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
     print("  Dropping existing database...")
     result = subprocess.run(
         ["dropdb", "--if-exists", "-f", db_name, f"--maintenance-db={admin_url}"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         print(f"  dropdb warning: {result.stderr}")
@@ -167,7 +196,9 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     print("  Recreating database...")
     result = subprocess.run(
         ["createdb", db_name, f"--maintenance-db={admin_url}"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         print(f"  createdb failed: {result.stderr}")
@@ -176,7 +207,9 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     print("  Importing data (this may take a while)...")
     result = subprocess.run(
         [pg_restore, "--no-owner", "--no-acl", "--dbname", db_url, dump_path],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         print(f"  pg_restore warning/output: {result.stderr}")
@@ -200,6 +233,7 @@ def restore_config(extract_dir: str) -> None:
     manifest_path = os.path.join(extract_dir, "manifest.json")
     if os.path.exists(manifest_path):
         import json
+
         with open(manifest_path) as f:
             manifest = json.load(f)
         print(f"  Backup created at: {manifest.get('created_at', 'unknown')}")
@@ -266,4 +300,5 @@ async def main() -> None:
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())

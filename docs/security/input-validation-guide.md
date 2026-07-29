@@ -69,12 +69,13 @@ define a Pydantic body model and accept it as a function parameter:
 async def handler(request: Request):
     data = await request.json()
 
+
 # GOOD
 class MyRequest(BaseModel):
     name: str = Field(min_length=1)
 
-async def handler(body: MyRequest):
-    ...
+
+async def handler(body: MyRequest): ...
 ```
 
 The only exceptions are:

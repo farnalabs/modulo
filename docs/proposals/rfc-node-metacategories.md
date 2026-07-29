@@ -161,6 +161,7 @@ class DurationConfig(BaseModel):
     type: Literal["duration", "datetime", "cron"]
     value: str
 
+
 class PipelineGraphNode(BaseModel):
     id: uuid.UUID
     node_type: str  # category determines which node_types are valid
@@ -168,12 +169,12 @@ class PipelineGraphNode(BaseModel):
     label: str | None = None
 
     # Shared
-    role: str | None = None             # "context_setter" — orthogonal to category
+    role: str | None = None  # "context_setter" — orthogonal to category
     autonomy_recommendation: str | None = None
     output_schema_id: uuid.UUID | None = None
 
     # Executable fields
-    agent_id: uuid.UUID | None = None   # executable.agent only
+    agent_id: uuid.UUID | None = None  # executable.agent only
 
     # Observed / Human fields
     connector_binding: ConnectorBinding | None = None
@@ -189,6 +190,7 @@ class PipelineGraphNode(BaseModel):
     def category(self) -> str:
         """Inferred from node_type, not stored."""
         return _CATEGORY_MAP[self.node_type]
+
 
 _CATEGORY_MAP = {
     # Executable
@@ -241,11 +243,16 @@ The `build_graph_from_json` function routes on `node_type` via the category:
 match _CATEGORY_MAP[node_def["node_type"]]:
     case "executable":
         match node_def["node_type"]:
-            case "agent":       make_agent_fn(...)
-            case "human_input": make_human_input_fn(...)
-            case "sandbox":     make_sandbox_fn(...)
-            case "hitl_gate":   make_hitl_gate_fn(...)
-            case "transform":   make_transform_fn(...)
+            case "agent":
+                make_agent_fn(...)
+            case "human_input":
+                make_human_input_fn(...)
+            case "sandbox":
+                make_sandbox_fn(...)
+            case "hitl_gate":
+                make_hitl_gate_fn(...)
+            case "transform":
+                make_transform_fn(...)
     case "observed" | "human":
         # Same runtime: suspend until completion_condition is met
         make_external_wait_fn(node_def, timeout=...)

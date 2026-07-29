@@ -244,9 +244,7 @@ async def test_multiple_connectors_scanned_independently():
     await hub.initialise([ci1, ci2])
 
     respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
-    respx.get(f"{_GITHUB_API}/user/repos").mock(
-        httpx.Response(200, json=[{"full_name": "owner/repo1"}])
-    )
+    respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[{"full_name": "owner/repo1"}]))
     respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(httpx.Response(200, json=[]))
 
     samples = await run_scan(hub)

@@ -33,9 +33,13 @@ def bail(msg: str):
 
 
 def login(client: httpx.Client) -> str:
-    resp = client.post("/api/v1/auth/login", json={
-        "email": EMAIL, "password": PASSWORD,
-    })
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": EMAIL,
+            "password": PASSWORD,
+        },
+    )
     if resp.status_code != 200:
         bail(f"login failed: {resp.status_code} {resp.text}")
     return resp.json()["access_token"]
@@ -61,10 +65,14 @@ def main():
 
     # Step 1: Trigger a run
     print("\nTriggering run ...")
-    resp = client.post("/api/v1/runs", json={
-        "pipeline_id": pipeline_id,
-        "input_payload": {"pr_url": "https://github.com/example/org/pull/42"},
-    }, headers=headers)
+    resp = client.post(
+        "/api/v1/runs",
+        json={
+            "pipeline_id": pipeline_id,
+            "input_payload": {"pr_url": "https://github.com/example/org/pull/42"},
+        },
+        headers=headers,
+    )
     if resp.status_code != 202:
         bail(f"trigger run failed: {resp.status_code} {resp.text}")
     run = resp.json()
