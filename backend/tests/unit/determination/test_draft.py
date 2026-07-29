@@ -30,19 +30,19 @@ def _finding(
     return Finding(category=category, finding=finding, evidence="test", confidence=confidence)
 
 
-def test_empty_data_returns_empty_draft():
+def test_empty_data_returns_empty_draft() -> None:
     draft = generate_draft([], [])
     assert len(draft.nodes) == 0
     assert len(draft.edges) == 0
 
 
-def test_only_findings_no_samples_returns_empty():
+def test_only_findings_no_samples_returns_empty() -> None:
     findings = [_finding("overview", "No SDLC stages detected")]
     draft = generate_draft([], findings)
     assert len(draft.nodes) == 0
 
 
-def test_repos_create_start_end_nodes():
+def test_repos_create_start_end_nodes() -> None:
     samples = [_sample("repos", [{"name": "repo-a"}, {"name": "repo-b"}])]
     findings = infer(samples)
     draft = generate_draft(samples, findings)
@@ -52,7 +52,7 @@ def test_repos_create_start_end_nodes():
     assert "development" in node_ids
 
 
-def test_planning_and_development_creates_hitl_gate():
+def test_planning_and_development_creates_hitl_gate() -> None:
     samples = [
         _sample(
             "issues",
@@ -69,7 +69,7 @@ def test_planning_and_development_creates_hitl_gate():
     assert edge.target == "development"
 
 
-def test_full_sdlc_creates_all_stages():
+def test_full_sdlc_creates_all_stages() -> None:
     samples = [
         _sample(
             "issues",
@@ -88,7 +88,7 @@ def test_full_sdlc_creates_all_stages():
     assert "ci_cd" in node_ids
 
 
-def test_automation_suggestions_included():
+def test_automation_suggestions_included() -> None:
     samples = [
         _sample(
             "issues",
@@ -106,7 +106,7 @@ def test_automation_suggestions_included():
         assert "suggestion" in s
 
 
-def test_development_node_has_required_capabilities():
+def test_development_node_has_required_capabilities() -> None:
     samples = [_sample("repos", [{"name": "repo-a"}])]
     findings = infer(samples)
     draft = generate_draft(samples, findings)
@@ -116,7 +116,7 @@ def test_development_node_has_required_capabilities():
     assert len(dev.required_capabilities) > 0
 
 
-def test_draft_preserves_findings():
+def test_draft_preserves_findings() -> None:
     samples = [_sample("repos", [{"name": "repo-a"}])]
     findings = infer(samples)
     draft = generate_draft(samples, findings)
@@ -124,7 +124,7 @@ def test_draft_preserves_findings():
     assert any(f.category == "overview" for f in draft.findings)
 
 
-def test_placeholder_nodes_have_correct_types():
+def test_placeholder_nodes_have_correct_types() -> None:
     samples = [_sample("repos", [{"name": "repo"}]), _sample("pulls", [{"number": 1}])]
     findings = infer(samples)
     draft = generate_draft(samples, findings)
