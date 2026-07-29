@@ -1,4 +1,4 @@
-"""Unit tests for feature flag registration — ensures new flags are properly catalogued."""
+﻿"""Unit tests for feature flag registration — ensures new flags are properly catalogued."""
 
 from modulo.core.feature_flags import FeatureFlag, FeatureFlagRegistry
 
@@ -52,6 +52,10 @@ class TestFeatureFlagModel:
     def test_depends_on_relationship(self) -> None:
         child = FeatureFlag(name="child_flag", tier="team", description="test", depends_on="parent_flag")
         assert child.depends_on == "parent_flag"
+
+    def test_uuid_assigned_automatically(self) -> None:
+        flag = FeatureFlag(name="uuid_test", tier="community", description="test")
+        assert isinstance(flag.id, uuid.UUID)
 
     def test_description_defaults_to_empty(self) -> None:
         flag = FeatureFlag(name="no_desc", tier="community", description="")
