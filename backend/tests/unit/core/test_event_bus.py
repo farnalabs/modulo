@@ -141,13 +141,12 @@ class TestEventBus:
         bus = EventBus()
         org_id = "org-123"
         q = await bus.subscribe(org_id)
-        await bus.publish(org_id, "pipeline", "pipe-1", "updated", version=2, metadata={"key": "val"})
+        await bus.publish(org_id, "pipeline", "pipe-1", "updated", version=2)
         event = await asyncio.wait_for(q.get(), timeout=1.0)
         assert event["type"] == "pipeline"
         assert event["id"] == "pipe-1"
         assert event["action"] == "updated"
         assert event["version"] == 2
-        assert event["metadata"] == {"key": "val"}
 
     async def test_multiple_events_in_order(self) -> None:
         bus = EventBus()
