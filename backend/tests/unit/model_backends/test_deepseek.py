@@ -9,5 +9,5 @@ from modulo.model_backends.deepseek import DeepSeekBackend
 
 @pytest.fixture()
 def backend():
-    with patch("modulo.model_backends.deepseek.ChatOpenAI"):
+    with patch("modulo.model_backends.module.ChatOpenAI"):
         return DeepSeekBackend(api_key="sk-test", model_id="deepseek-chat")

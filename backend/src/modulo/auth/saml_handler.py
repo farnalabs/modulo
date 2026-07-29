@@ -112,7 +112,7 @@ class ModuloSamlAuth:
             self._get_request_data(),
             self._settings_dict,
         )
-        return auth.login(stay=True)  # type: ignore[no-any-return]
+        return auth.login()  # type: ignore[no-any-return]
 
     def process_response(self, saml_response: str) -> dict[str, Any]:
         """Validate a SAML Response including XML signature verification.

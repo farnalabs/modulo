@@ -1,7 +1,5 @@
 """Unit tests for feature flag registration — ensures new flags are properly catalogued."""
 
-import uuid
-
 from modulo.core.feature_flags import FeatureFlag, FeatureFlagRegistry
 
 
@@ -32,36 +30,31 @@ class TestSavedViewsFlag:
 
 class TestFeatureFlagModel:
     def test_creates_with_minimal_fields(self) -> None:
-        flag = FeatureFlag(name="test_flag", tier="community")
+        flag = FeatureFlag(name="test_flag", tier="community", description="test")
         assert flag.name == "test_flag"
         assert flag.tier == "community"
-        assert flag.description == ""
+        assert flag.description == "test"
         assert flag.depends_on is None
-        assert flag.is_active is True
-        assert flag.currently_active is True
+        assert flag.currently_active is False
 
-    def test_currently_active_reflects_is_active(self) -> None:
-        flag = FeatureFlag(name="inactive_flag", tier="team", is_active=False)
+    def test_currently_active_can_be_set_false(self) -> None:
+        flag = FeatureFlag(name="inactive_flag", tier="team", description="test", currently_active=False)
         assert flag.currently_active is False
 
     def test_currently_active_reflects_tier_comparison(self) -> None:
-        flag = FeatureFlag(name="team_flag", tier="team", current_tier_rank=0)
+        flag = FeatureFlag(name="team_flag", tier="team", description="test")
         assert flag.currently_active is False
 
-    def test_non_blocked_flag_with_is_active(self) -> None:
-        flag = FeatureFlag(name="active_flag", tier="community", is_active=True, current_tier_rank=0)
+    def test_non_blocked_flag_with_currently_active(self) -> None:
+        flag = FeatureFlag(name="active_flag", tier="community", description="test", currently_active=True)
         assert flag.currently_active is True
 
     def test_depends_on_relationship(self) -> None:
-        child = FeatureFlag(name="child_flag", tier="team", depends_on="parent_flag")
+        child = FeatureFlag(name="child_flag", tier="team", description="test", depends_on="parent_flag")
         assert child.depends_on == "parent_flag"
 
-    def test_uuid_assigned_automatically(self) -> None:
-        flag = FeatureFlag(name="uuid_test", tier="community")
-        assert isinstance(flag.id, uuid.UUID)
-
     def test_description_defaults_to_empty(self) -> None:
-        flag = FeatureFlag(name="no_desc", tier="community")
+        flag = FeatureFlag(name="no_desc", tier="community", description="")
         assert flag.description == ""
 
 

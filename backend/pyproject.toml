@@ -198,6 +198,10 @@ ignore = [
 "src/modulo/core/reports/scheduler.py" = ["UP017"]
 "src/modulo/core/trigger_engine/polling.py" = ["UP017"]
 
+"tests/unit/test_mcp_security.py" = ["E402"]
+"tests/unit/test_multi_backend_sqlite.py" = ["E402"]
+"tests/unit/test_pipeline_node_conversion.py" = ["E402"]
+
 [tool.mypy]
 strict = true
 python_version = "3.12"
@@ -235,6 +239,7 @@ filterwarnings = [
     "default::pytest.PytestUnraisableExceptionWarning",
     "error::ResourceWarning",
     "error::DeprecationWarning",
+    "ignore::DeprecationWarning:onelogin",
 ]
 testpaths = ["tests"]
 addopts = "-q -m 'not awaiting-implementation'"

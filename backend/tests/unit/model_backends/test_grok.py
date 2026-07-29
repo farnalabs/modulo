@@ -9,5 +9,5 @@ from modulo.model_backends.grok import GrokBackend
 
 @pytest.fixture()
 def backend():
-    with patch("modulo.model_backends.grok.ChatOpenAI"):
+    with patch("modulo.model_backends.module.ChatOpenAI"):
         return GrokBackend(api_key="sk-test", model_id="grok-2")

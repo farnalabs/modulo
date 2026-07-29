@@ -9,7 +9,7 @@ from modulo.model_backends.groq import GROQ_BASE_URL, GroqBackend
 
 @pytest.fixture()
 def backend():
-    with patch("modulo.model_backends.groq.ChatOpenAI"):
+    with patch("modulo.model_backends.module.ChatOpenAI"):
         return GroqBackend(
             api_key="test-key",
             model_id="llama3-70b-8192",
@@ -21,7 +21,7 @@ def test_groq_base_url_constant():
 
 
 def test_chat_openai_uses_groq_base_url():
-    with patch("modulo.model_backends.groq.ChatOpenAI") as mock_chat_openai:
+    with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_openai:
         GroqBackend(api_key="test-key", model_id="llama3-70b-8192")
         mock_chat_openai.assert_called_once_with(
             model="llama3-70b-8192",

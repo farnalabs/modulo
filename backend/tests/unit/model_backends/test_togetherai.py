@@ -9,7 +9,7 @@ from modulo.model_backends.togetherai import TOGETHERAI_BASE_URL, TogetherAIBack
 
 @pytest.fixture()
 def backend():
-    with patch("modulo.model_backends.togetherai.ChatOpenAI"):
+    with patch("modulo.model_backends.module.ChatOpenAI"):
         return TogetherAIBackend(
             api_key="test-key",
             model_id="mistralai/Mixtral-8x7B-Instruct-v0.1",
@@ -21,7 +21,7 @@ def test_togetherai_base_url_constant():
 
 
 def test_chat_openai_uses_togetherai_base_url():
-    with patch("modulo.model_backends.togetherai.ChatOpenAI") as mock_chat_openai:
+    with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_openai:
         TogetherAIBackend(api_key="test-key", model_id="mistralai/Mixtral-8x7B-Instruct-v0.1")
         mock_chat_openai.assert_called_once_with(
             model="mistralai/Mixtral-8x7B-Instruct-v0.1",

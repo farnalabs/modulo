@@ -9,7 +9,7 @@ from modulo.model_backends.fireworks import FIREWORKS_BASE_URL, FireworksBackend
 
 @pytest.fixture()
 def backend():
-    with patch("modulo.model_backends.fireworks.ChatOpenAI"):
+    with patch("modulo.model_backends.module.ChatOpenAI"):
         return FireworksBackend(
             api_key="test-key",
             model_id="accounts/fireworks/models/llama-v3p1-8b",
@@ -21,7 +21,7 @@ def test_fireworks_base_url_constant():
 
 
 def test_chat_openai_uses_fireworks_base_url():
-    with patch("modulo.model_backends.fireworks.ChatOpenAI") as mock_chat_openai:
+    with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_openai:
         FireworksBackend(api_key="test-key", model_id="accounts/fireworks/models/llama-v3p1-8b")
         mock_chat_openai.assert_called_once_with(
             model="accounts/fireworks/models/llama-v3p1-8b",

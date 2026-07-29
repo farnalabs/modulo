@@ -529,7 +529,7 @@ async def rotate_oauth_token_family(
             },
         )
         raise InvalidGrantError(
-            "Token family rotated out of order — possible token theft. This family has been blacklisted."
+            "Token family rotated out of order - possible token theft. This family has been blacklisted."
         )
 
     new_sequence = family.max_sequence + 1

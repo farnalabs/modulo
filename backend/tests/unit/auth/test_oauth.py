@@ -265,7 +265,7 @@ class TestAuthorizationCode:
             client_id="cid",
             org_id=_ORG_ID,
             scopes="trigger:run",
-            redirect_uri="http://localhost/cb",
+            redirect_uri="http://localhost/callback",
         )
         assert isinstance(code, str)
         assert len(code) > 0
@@ -278,7 +278,7 @@ class TestAuthorizationCode:
         code_record = MagicMock()
         code_record.code = "authcode123"
         code_record.client_id = client.client_id
-        code_record.redirect_uri = "http://localhost/cb"
+        code_record.redirect_uri = "http://localhost/callback"
         code_record.used = False
         code_record.expires_at = datetime.now(UTC) + timedelta(minutes=10)
 
@@ -302,7 +302,7 @@ class TestAuthorizationCode:
             session,
             code="authcode123",
             client_id=client.client_id,
-            redirect_uri="http://localhost/cb",
+            redirect_uri="http://localhost/callback",
             client_secret=secret,
         )
         assert result is code_record
@@ -315,7 +315,7 @@ class TestAuthorizationCode:
 
         code_record = MagicMock()
         code_record.client_id = client.client_id
-        code_record.redirect_uri = "http://localhost/cb"
+        code_record.redirect_uri = "http://localhost/callback"
         code_record.used = False
         code_record.expires_at = datetime.now(UTC) - timedelta(minutes=1)
 
@@ -339,7 +339,7 @@ class TestAuthorizationCode:
                 session,
                 code="oldcode",
                 client_id=client.client_id,
-                redirect_uri="http://localhost/cb",
+                redirect_uri="http://localhost/callback",
                 client_secret=secret,
             )
 
@@ -350,7 +350,7 @@ class TestAuthorizationCode:
 
         code_record = MagicMock()
         code_record.client_id = client.client_id
-        code_record.redirect_uri = "http://localhost/cb"
+        code_record.redirect_uri = "http://localhost/callback"
         code_record.used = True
         code_record.expires_at = datetime.now(UTC) + timedelta(minutes=10)
 
@@ -374,7 +374,7 @@ class TestAuthorizationCode:
                 session,
                 code="usedcode",
                 client_id=client.client_id,
-                redirect_uri="http://localhost/cb",
+                redirect_uri="http://localhost/callback",
                 client_secret=secret,
             )
 
@@ -385,7 +385,7 @@ class TestAuthorizationCode:
 
         code_record = MagicMock()
         code_record.client_id = "other-client-id"
-        code_record.redirect_uri = "http://localhost/cb"
+        code_record.redirect_uri = "http://localhost/callback"
         code_record.used = False
         code_record.expires_at = datetime.now(UTC) + timedelta(minutes=10)
 
@@ -409,7 +409,7 @@ class TestAuthorizationCode:
                 session,
                 code="other-code",
                 client_id=client.client_id,
-                redirect_uri="http://localhost/cb",
+                redirect_uri="http://localhost/callback",
                 client_secret=secret,
             )
 

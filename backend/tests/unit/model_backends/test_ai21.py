@@ -9,7 +9,7 @@ from modulo.model_backends.ai21 import AI21_BASE_URL, Ai21Backend
 
 @pytest.fixture()
 def backend():
-    with patch("modulo.model_backends.ai21.ChatOpenAI"):
+    with patch("modulo.model_backends.module.ChatOpenAI"):
         return Ai21Backend(api_key="test-key", model_id="jamba-1.5-mini")
 
 
@@ -18,7 +18,7 @@ def test_ai21_base_url_constant():
 
 
 def test_chat_openai_uses_ai21_base_url():
-    with patch("modulo.model_backends.ai21.ChatOpenAI") as mock_chat_openai:
+    with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_openai:
         Ai21Backend(api_key="test-key", model_id="jamba-1.5-mini")
         mock_chat_openai.assert_called_once_with(
             model="jamba-1.5-mini",
