@@ -11,7 +11,7 @@ import logging
 import threading
 import uuid
 from datetime import UTC, datetime
-from typing import Any,  Any
+from typing import Any
 
 import kombu.exceptions
 import redis.exceptions
@@ -338,3 +338,4 @@ try:
     _celery_app.register_task(StaleRunRecoveryTask())
 except Exception:
     _log.warning("Could not register Celery tasks — Celery may not be configured")
+
