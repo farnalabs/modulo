@@ -30,9 +30,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 try:
-    import kombu.exceptions  # noqa: F401
-    import redis.exceptions  # noqa: F401
-    import sqlalchemy.exc  # noqa: F401
+    import kombu.exceptions
+    import redis.exceptions
+    import sqlalchemy.exc
     from celery import Task
     from celery.signals import worker_process_init, worker_process_shutdown
     _CELERY_SIGNALS_AVAILABLE = True
@@ -40,9 +40,9 @@ except ImportError:
     import typing
 
     if typing.TYPE_CHECKING:
-        import kombu.exceptions  # noqa: F401
-        import redis.exceptions  # noqa: F401
-        import sqlalchemy.exc  # noqa: F401
+        import kombu.exceptions
+        import redis.exceptions
+        import sqlalchemy.exc
         from celery import Task
         from celery.signals import worker_process_init, worker_process_shutdown
     Task = object
@@ -119,24 +119,25 @@ def _get_async_engine():
     return _get_engines()[1]
 
 
-@worker_process_init.connect
-def _init_worker(**kw: Any) -> None:
-    global _worker_loop
-    _worker_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(_worker_loop)
-    _log.info("pipeline_executor_task: worker process initialised")
+if _CELERY_SIGNALS_AVAILABLE:
 
+    @worker_process_init.connect
+    def _init_worker(**kw: Any) -> None:
+        global _worker_loop
+        _worker_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_worker_loop)
+        _log.info("pipeline_executor_task: worker process initialised")
 
-@worker_process_shutdown.connect
-def _shutdown_worker(**kw: Any) -> None:
-    global _SYNC_ENGINE, _ASYNC_ENGINE, _worker_loop
-    if _SYNC_ENGINE is not None:
-        _SYNC_ENGINE.dispose()
-    if _ASYNC_ENGINE is not None and _worker_loop is not None:
-        _worker_loop.run_until_complete(_ASYNC_ENGINE.dispose())
-    if _worker_loop is not None:
-        _worker_loop.close()
-    _log.info("pipeline_executor_task: worker process shut down")
+    @worker_process_shutdown.connect
+    def _shutdown_worker(**kw: Any) -> None:
+        global _SYNC_ENGINE, _ASYNC_ENGINE, _worker_loop
+        if _SYNC_ENGINE is not None:
+            _SYNC_ENGINE.dispose()
+        if _ASYNC_ENGINE is not None and _worker_loop is not None:
+            _worker_loop.run_until_complete(_ASYNC_ENGINE.dispose())
+        if _worker_loop is not None:
+            _worker_loop.close()
+        _log.info("pipeline_executor_task: worker process shut down")
 
 
 def dispatch(run_id: str, org_id: str, queue: str) -> None:
