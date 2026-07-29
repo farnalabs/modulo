@@ -207,11 +207,12 @@
         </div>
 
         <VueFlow
+          :key="pipelineId"
           v-model:nodes="flowNodes"
           v-model:edges="flowEdges"
           :node-types="nodeTypes"
           :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: '#888' } }"
-          fit-view-on-init
+          :fit-view-on-init="false"
           @node-click="onNodeClick"
           @edge-click="onEdgeClick"
           @pane-click="onPaneClick"
@@ -219,16 +220,34 @@
           <Background :gap="20" :size="1" />
           <Controls :showInteractive="false" />
           <template #node-manual="nodeProps">
-            <div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm">
-              <div class="text-xs font-medium text-warning">MANUAL</div>
-              <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
-            </div>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm">
+                    <div class="text-xs font-medium text-warning">MANUAL</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" v-if="nodeProps.data.description">
+                  <div class="max-w-xs text-xs">{{ nodeProps.data.description }}</div>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </template>
           <template #node-agent="nodeProps">
-            <div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm">
-              <div class="text-xs font-medium text-primary">AGENT</div>
-              <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
-            </div>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm">
+                    <div class="text-xs font-medium text-primary">AGENT</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" v-if="nodeProps.data.description">
+                  <div class="max-w-xs text-xs">{{ nodeProps.data.description }}</div>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_gate_config" class="absolute -translate-y-4 translate-x-2">
@@ -269,8 +288,25 @@
             </dd>
           </div>
           <div>
-            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.label_field') }}</dt>
-            <dd>{{ selectedNodeData.label || '-' }}</dd>
+            <label class="text-muted-foreground text-xs uppercase tracking-wider">Label</label>
+            <input
+              v-model="selectedNodeData.label"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium mt-1"
+              placeholder="Enter node label"
+              @input="syncNodeToFlow"
+              data-testid="pipeline-editor-node-label"
+            />
+          </div>
+          <div>
+            <label class="text-muted-foreground text-xs uppercase tracking-wider">Description</label>
+            <textarea
+              v-model="selectedNodeData.description"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm mt-1"
+              placeholder="Optional description"
+              rows="2"
+              @input="syncNodeToFlow"
+              data-testid="pipeline-editor-node-description"
+            />
           </div>
 
           <!-- Manual node: Output Schema -->
@@ -896,6 +932,7 @@ import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { Button } from '@/components/ui/button'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000): Promise<T> {
   const ctrl = new AbortController()
@@ -1053,6 +1090,14 @@ function connectorName(binding: any): string {
   return binding.instance_id ? `${binding.type} / ${shortId(binding.instance_id)}` : binding.type
 }
 
+function syncNodeToFlow() {
+  if (!selectedNodeData.value) return
+  const fn = flowNodes.value.find((n: any) => n.id === selectedNodeData.value.id)
+  if (fn) {
+    fn.data = { ...fn.data, label: selectedNodeData.value.label, description: selectedNodeData.value.description || '' }
+  }
+}
+
 // Parameter schema + set support
 const paramSchemas = ref<any[]>([])
 const paramSets = ref<any[]>([])
@@ -1144,6 +1189,7 @@ function convertBackendNode(n: any): any {
     position: n.position || { x: 0, y: 0 },
     data: {
       label: n.label || 'Node ' + shortId(n.id),
+      description: n.description || '',
       parameter_set_id: n.parameter_set_id,
       parameter_overrides: n.parameter_overrides,
     },
@@ -1350,6 +1396,7 @@ async function saveEdgeConfig() {
           id: n.id,
           node_type: n.node_type || 'agent',
           label: n.label || null,
+          description: n.description || null,
           agent_id: n.agent_id || null,
           connector_binding: n.connector_binding || null,
           output_schema_id: n.output_schema_id || null,
@@ -1391,13 +1438,14 @@ function addNode() {
     id,
     type: 'agent',
     position: { x: 250, y: 100 },
-    data: { label: 'New Node' },
+    data: { label: 'New Node', description: '' },
   }
   flowNodes.value = [...flowNodes.value, newNode]
   rawNodes.value = [...rawNodes.value, {
     id,
     node_type: 'agent',
     label: 'New Node',
+    description: '',
     position: { x: 250, y: 100 },
   }]
 }
@@ -1612,6 +1660,7 @@ async function saveGraph() {
           id: n.id,
           node_type: n.node_type || 'agent',
           label: n.label || null,
+          description: n.description || null,
           agent_id: n.agent_id || null,
           connector_binding: n.connector_binding || null,
           output_schema_id: n.output_schema_id || null,
@@ -1635,6 +1684,8 @@ async function saveGraph() {
       },
       signal,
     }))
+    // Reload graph to sync flowNodes with saved state
+    await loadGraph()
   } catch (e: unknown) {
     saveGraphError.value = formatApiError(e)
   } finally {
