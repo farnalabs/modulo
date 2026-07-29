@@ -10,6 +10,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from modulo.model_backends.base import ModelBackendBase
+from modulo.model_backends.module import OpenAICompatibleBackend
 
 
 def _build(module_path, class_name, patch_target, kwargs):
@@ -25,7 +26,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.ollama",
         "OllamaBackend",
-        "modulo.model_backends.ollama.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "llama3"},
         "ollama/llama3",
         id="ollama",
@@ -33,7 +34,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.vllm",
         "VllmBackend",
-        "modulo.model_backends.vllm.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "vllm-model"},
         "vllm/vllm-model",
         id="vllm",
@@ -41,7 +42,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.llamacpp",
         "LLamaCppBackend",
-        "modulo.model_backends.llamacpp.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "llama-model"},
         "llamacpp/llama-model",
         id="llamacpp",
@@ -49,7 +50,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.jan",
         "JanBackend",
-        "modulo.model_backends.jan.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "jan-model"},
         "jan/jan-model",
         id="jan",
@@ -57,7 +58,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.lm_studio",
         "LmStudioBackend",
-        "modulo.model_backends.lm_studio.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "lm-studio-model"},
         "lm_studio/lm-studio-model",
         id="lm_studio",
@@ -65,7 +66,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.localai",
         "LocalAIBackend",
-        "modulo.model_backends.localai.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "localai-model"},
         "localai/localai-model",
         id="localai",
@@ -73,7 +74,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.tgi",
         "TgiBackend",
-        "modulo.model_backends.tgi.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "tgi-model"},
         "tgi/tgi-model",
         id="tgi",
@@ -81,7 +82,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.openai",
         "OpenAIBackend",
-        "modulo.model_backends.openai.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "gpt-4o"},
         "openai/gpt-4o",
         id="openai",
@@ -121,7 +122,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.deepseek",
         "DeepSeekBackend",
-        "modulo.model_backends.deepseek.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "deepseek-chat"},
         "deepseek/deepseek-chat",
         id="deepseek",
@@ -129,7 +130,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.grok",
         "GrokBackend",
-        "modulo.model_backends.grok.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "grok-2"},
         "grok/grok-2",
         id="grok",
@@ -137,7 +138,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.groq",
         "GroqBackend",
-        "modulo.model_backends.groq.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "llama-3.1-70b"},
         "groq/llama-3.1-70b",
         id="groq",
@@ -145,7 +146,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.qwen",
         "QwenBackend",
-        "modulo.model_backends.qwen.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "qwen-max"},
         "qwen/qwen-max",
         id="qwen",
@@ -153,7 +154,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.togetherai",
         "TogetherAIBackend",
-        "modulo.model_backends.togetherai.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "mistral-7b"},
         "togetherai/mistral-7b",
         id="togetherai",
@@ -161,7 +162,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.openrouter",
         "OpenRouterBackend",
-        "modulo.model_backends.openrouter.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "gpt-4o"},
         "openrouter/gpt-4o",
         id="openrouter",
@@ -169,7 +170,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.perplexity",
         "PerplexityBackend",
-        "modulo.model_backends.perplexity.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "llama-3-sonar"},
         "perplexity/llama-3-sonar",
         id="perplexity",
@@ -177,7 +178,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.fireworks",
         "FireworksBackend",
-        "modulo.model_backends.fireworks.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "llama-v3"},
         "fireworks/llama-v3",
         id="fireworks",
@@ -185,7 +186,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.ai21",
         "Ai21Backend",
-        "modulo.model_backends.ai21.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "jamba-1.5"},
         "ai21/jamba-1.5",
         id="ai21",
@@ -193,7 +194,7 @@ BACKENDS = [
     pytest.param(
         "modulo.model_backends.opencode",
         "OpenCodeBackend",
-        "modulo.model_backends.opencode.ChatOpenAI",
+        "modulo.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "deepseek-chat"},
         "opencode/deepseek-chat",
         id="opencode",
@@ -323,7 +324,10 @@ class TestSharedBackendContracts:
     def test_repr_content(self, module_path, class_name, patch_target, kwargs, expected_id):
         backend = _build(module_path, class_name, patch_target, kwargs)
         r = repr(backend)
-        assert class_name in r
+        if isinstance(backend, OpenAICompatibleBackend):
+            assert "OpenAICompatibleBackend" in r
+        else:
+            assert class_name in r
         assert expected_id in r
 
     @pytest.mark.parametrize(
