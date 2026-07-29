@@ -27,6 +27,7 @@ def _finding(
     finding: str,
     confidence: str = "high",
 ) -> Finding:
+    """Create a Finding with test evidence."""
     return Finding(category=category, finding=finding, evidence="test", confidence=confidence)
 
 

@@ -13,6 +13,7 @@ def _sample(
     connector_type: ConnectorType = ConnectorType.GITHUB,
     error: str | None = None,
 ) -> ScanSample:
+
     return ScanSample(
         connector_id=uuid.uuid4(),
         connector_type=connector_type,

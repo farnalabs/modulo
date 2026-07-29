@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.asyncio(loop_scope="module")
+
 from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
     check_tool_scope,
@@ -109,8 +111,6 @@ class TestHumanOnlyGateBypass:
     The ``review_hitl`` MCP tool must refuse to approve gates where
     the pipeline edge config has ``human_only=true``.
     """
-
-    pytestmark = pytest.mark.asyncio
 
     @pytest.fixture(autouse=True)
     def _patch_auth(self) -> Generator[None, None, None]:

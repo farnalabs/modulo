@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, status
+
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +30,7 @@ MODEL_BACKEND_ID = uuid.UUID("55555555-5555-5555-5555-555555555555")
 SNAPSHOT_ID = uuid.UUID("66666666-6666-6666-6666-666666666666")
 
 
-def make_principal():
+def make_principal() -> AuthenticatedPrincipal:
     return AuthenticatedPrincipal(
         username="testuser",
         organisation_id=ORG_ID,
@@ -37,7 +39,7 @@ def make_principal():
     )
 
 
-def make_session():
+def make_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
@@ -63,7 +65,7 @@ def make_session():
     return session
 
 
-def make_pipeline_row(nodes=None, edges=None):
+def make_pipeline_row(nodes=None, edges=None) -> MagicMock:
     pipeline = MagicMock()
     pipeline.id = PIPELINE_ID
     pipeline.graph_nodes_json = nodes or []
@@ -71,14 +73,14 @@ def make_pipeline_row(nodes=None, edges=None):
     return pipeline
 
 
-def make_agent_mock():
+def make_agent_mock() -> MagicMock:
     agent = MagicMock()
     agent.id = AGENT_ID
     agent.organisation_id = ORG_ID
     return agent
 
 
-def make_connector_mock(connector_type="github"):
+def make_connector_mock(connector_type: str = "github") -> MagicMock:
     connector = MagicMock()
     connector.id = CONNECTOR_ID
     connector.organisation_id = ORG_ID
@@ -86,7 +88,7 @@ def make_connector_mock(connector_type="github"):
     return connector
 
 
-def make_model_backend_mock():
+def make_model_backend_mock() -> MagicMock:
     mb = MagicMock()
     mb.id = MODEL_BACKEND_ID
     mb.organisation_id = ORG_ID
@@ -163,7 +165,7 @@ def setup_execute_side_effect(session, results):
 class TestConvertToAgent:
     """Tests for convert_node_to_agent_endpoint."""
 
-    async def test_happy_path(self):
+    async def test_happy_path(self) -> None:
         session = make_session()
         setup_execute_side_effect(
             session,
@@ -194,7 +196,7 @@ class TestConvertToAgent:
         assert resp is not None
         assert hasattr(resp, "nodes")
 
-    async def test_pipeline_not_found(self):
+    async def test_pipeline_not_found(self) -> None:
         session = make_session()
         principal = make_principal()
         body = make_convert_body()
@@ -210,7 +212,7 @@ class TestConvertToAgent:
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
 
-    async def test_node_not_found(self):
+    async def test_node_not_found(self) -> None:
         session = make_session()
         other_id = uuid.uuid4()
         nodes = [{"id": str(other_id), "node_type": "manual", "position": {"x": 0, "y": 0}}]
@@ -229,7 +231,7 @@ class TestConvertToAgent:
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
 
-    async def test_node_not_manual(self):
+    async def test_node_not_manual(self) -> None:
         session = make_session()
         nodes = [{"id": str(NODE_ID), "node_type": "agent", "position": {"x": 0, "y": 0}}]
         setup_execute_side_effect(session, [make_pipeline_row(nodes=nodes)])
@@ -247,7 +249,7 @@ class TestConvertToAgent:
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
-    async def test_agent_not_found(self):
+    async def test_agent_not_found(self) -> None:
         session = make_session()
         setup_execute_side_effect(
             session,
@@ -272,7 +274,7 @@ class TestConvertToAgent:
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
         assert "Agent not found" in excinfo.value.detail
 
-    async def test_connector_not_found(self):
+    async def test_connector_not_found(self) -> None:
         session = make_session()
         setup_execute_side_effect(
             session,
@@ -298,7 +300,7 @@ class TestConvertToAgent:
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
         assert "Connector not found" in excinfo.value.detail
 
-    async def test_connector_type_mismatch(self):
+    async def test_connector_type_mismatch(self) -> None:
         session = make_session()
         setup_execute_side_effect(
             session,
@@ -323,7 +325,7 @@ class TestConvertToAgent:
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
-    async def test_model_backend_not_found(self):
+    async def test_model_backend_not_found(self) -> None:
         session = make_session()
         setup_execute_side_effect(
             session,
@@ -350,7 +352,7 @@ class TestConvertToAgent:
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
         assert "Model backend not found" in excinfo.value.detail
 
-    async def test_programming_error_caught(self):
+    async def test_programming_error_caught(self) -> None:
         session = make_session()
         setup_execute_side_effect(
             session,
@@ -391,7 +393,7 @@ class TestConvertToAgent:
 class TestRevertToManual:
     """Tests for revert_node_to_manual_endpoint."""
 
-    async def test_happy_path(self):
+    async def test_happy_path(self) -> None:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
@@ -418,7 +420,7 @@ class TestRevertToManual:
         assert resp is not None
         assert hasattr(resp, "nodes")
 
-    async def test_pipeline_not_found(self):
+    async def test_pipeline_not_found(self) -> None:
         session = make_session()
         principal = make_principal()
 
@@ -433,7 +435,7 @@ class TestRevertToManual:
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
 
-    async def test_node_not_found(self):
+    async def test_node_not_found(self) -> None:
         session = make_session()
         other_id = uuid.uuid4()
         nodes = [{"id": str(other_id), "node_type": "agent", "position": {"x": 0, "y": 0}}]
@@ -451,7 +453,7 @@ class TestRevertToManual:
 
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
 
-    async def test_node_not_agent(self):
+    async def test_node_not_agent(self) -> None:
         session = make_session()
         nodes = [{"id": str(NODE_ID), "node_type": "manual", "position": {"x": 0, "y": 0}}]
         setup_execute_side_effect(session, [make_pipeline_row(nodes=nodes)])
@@ -468,7 +470,7 @@ class TestRevertToManual:
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
-    async def test_snapshot_not_found(self):
+    async def test_snapshot_not_found(self) -> None:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
@@ -487,7 +489,7 @@ class TestRevertToManual:
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
         assert "Snapshot not found" in excinfo.value.detail
 
-    async def test_snapshot_no_node(self):
+    async def test_snapshot_no_node(self) -> None:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
@@ -511,7 +513,7 @@ class TestRevertToManual:
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
-    async def test_snapshot_node_not_manual(self):
+    async def test_snapshot_node_not_manual(self) -> None:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
@@ -535,7 +537,7 @@ class TestRevertToManual:
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
-    async def test_snapshot_no_output_schema(self):
+    async def test_snapshot_no_output_schema(self) -> None:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
@@ -559,7 +561,7 @@ class TestRevertToManual:
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
-    async def test_integrity_error_returns_409(self):
+    async def test_integrity_error_returns_409(self) -> None:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
@@ -581,7 +583,7 @@ class TestRevertToManual:
 
         assert excinfo.value.status_code == status.HTTP_409_CONFLICT
 
-    async def test_programming_error_returns_501(self):
+    async def test_programming_error_returns_501(self) -> None:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
@@ -603,7 +605,7 @@ class TestRevertToManual:
 
         assert excinfo.value.status_code == status.HTTP_501_NOT_IMPLEMENTED
 
-    async def test_sqlalchemy_error_returns_503(self):
+    async def test_sqlalchemy_error_returns_503(self) -> None:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
@@ -625,7 +627,7 @@ class TestRevertToManual:
 
         assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
 
-    async def test_unexpected_exception_returns_500(self):
+    async def test_unexpected_exception_returns_500(self) -> None:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()

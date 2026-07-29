@@ -13,7 +13,7 @@ from modulo.core.connector_hub import ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.determination.scanner import run_scan
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 _KEY = Fernet.generate_key().decode()
 
@@ -222,7 +222,7 @@ async def test_connector_query_error_returns_error_in_sample() -> None:
 
 
 @respx.mock
-async def test_connector_initialisation_error_returns_no_samples():
+async def test_connector_initialisation_error_returns_no_samples() -> None:
     ci = _fake_ci("github", creds={"token": "ghp_test"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -237,7 +237,7 @@ async def test_connector_initialisation_error_returns_no_samples():
 
 
 @respx.mock
-async def test_multiple_connectors_scanned_independently():
+async def test_multiple_connectors_scanned_independently() -> None:
     ci1 = _fake_ci("github", creds={"token": "ghp_one"})
     ci2 = _fake_ci("github", creds={"token": "ghp_two"})
     hub = _hub(ci1)
@@ -253,7 +253,7 @@ async def test_multiple_connectors_scanned_independently():
 
 
 @respx.mock
-async def test_all_health_checks_fail_returns_no_samples():
+async def test_all_health_checks_fail_returns_no_samples() -> None:
     ci = _fake_ci("github", creds={"token": "bad_token"})
     hub = _hub(ci)
     await hub.initialise([ci])
