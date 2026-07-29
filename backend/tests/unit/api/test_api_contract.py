@@ -251,7 +251,7 @@ class TestAuthEndpointSchemas:
         validate_shape(resp.json(), MeResponse)
 
     def test_ws_token_schema(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.auth.Redis.from_url") as mock_redis_factory:
+        with patch("redis.asyncio.Redis.from_url") as mock_redis_factory:
             mock_redis = AsyncMock()
             mock_redis.setex = AsyncMock()
             mock_redis.aclose = AsyncMock()

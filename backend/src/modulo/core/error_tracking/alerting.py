@@ -147,6 +147,9 @@ class AlertEngine:
                 )
 
     async def _get_last_fired(self, key: _CooldownKey) -> float | None:
+        val = self._in_memory_cooldown.get(str(key))
+        if val is not None:
+            return val
         if self._redis is not None:
             try:
                 raw = await self._redis.get(str(key))
@@ -157,15 +160,12 @@ class AlertEngine:
                         return None
             except Exception:
                 _log.exception("alert.cooldown_redis_get_failed", extra={"key": str(key)})
-            return None
-        val = self._in_memory_cooldown.get(str(key))
-        return val if val is not None else None
+        return None
 
     async def _set_last_fired(self, key: _CooldownKey, value: float) -> None:
+        self._in_memory_cooldown[str(key)] = value
         if self._redis is not None:
             try:
                 await self._redis.setex(str(key), _COOLDOWN_TTL, json.dumps(value))
             except Exception:
                 _log.exception("alert.cooldown_redis_set_failed", extra={"key": str(key)})
-        else:
-            self._in_memory_cooldown[str(key)] = value
