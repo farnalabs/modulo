@@ -104,6 +104,7 @@ from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
+from modulo.core.cleanup_jobs import cleanup_scheduler_loop
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
@@ -783,6 +784,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     _claim_expiry_job = ClaimExpiryJob(db_engine)
     await _claim_expiry_job.start()
 
+    # Start webhook trigger event cleanup loop (30-day retention).
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    _trigger_event_cleanup_task = asyncio.create_task(
+        cleanup_scheduler_loop(async_sessionmaker(db_engine, expire_on_commit=False))
+    )
+
     # Start MCP task group so FastMCP's _handle_stateless_request can use tg.start().
     from modulo.api.mcp_server import mcp
 
@@ -795,9 +803,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await _mcp_tg.__aexit__(None, None, None)
     retention_task.cancel()
+    _trigger_event_cleanup_task.cancel()
     await _claim_expiry_job.stop()
     with suppress(asyncio.CancelledError):
         await retention_task
+    with suppress(asyncio.CancelledError):
+        await _trigger_event_cleanup_task
     await _shutdown_manager.shutdown()
 
 
