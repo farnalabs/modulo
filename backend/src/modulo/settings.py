@@ -61,6 +61,20 @@ class Settings(BaseSettings):
 
     modulo_max_local_concurrency: int = Field(2)
 
+    # Celery worker connection pool sizes (per prefork child)
+    modulo_celery_db_pool_sync_size: int = Field(default=2, alias="MODULO_CELERY_DB_POOL_SYNC_SIZE", ge=1, le=5)
+    modulo_celery_db_pool_async_size: int = Field(default=4, alias="MODULO_CELERY_DB_POOL_ASYNC_SIZE", ge=1, le=10)
+    modulo_celery_db_pool_sync_overflow: int = Field(default=1, alias="MODULO_CELERY_DB_POOL_SYNC_OVERFLOW", ge=0, le=3)
+    modulo_celery_db_pool_async_overflow: int = Field(
+        default=1, alias="MODULO_CELERY_DB_POOL_ASYNC_OVERFLOW", ge=0, le=3
+    )
+    # Connection budget: the validator conservatively sums sync+async pool
+    # sizes because both engines are used simultaneously in a task (sync
+    # for heartbeat + claim, async for execution).
+    modulo_celery_db_pool_connect_timeout: int = Field(
+        default=10, alias="MODULO_CELERY_DB_POOL_CONNECT_TIMEOUT", ge=1, le=30
+    )
+
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)
     modulo_auth_max_attempts: int = Field(10)
@@ -240,7 +254,25 @@ class Settings(BaseSettings):
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
         return self
 
+    @model_validator(mode="after")
+    def _check_connection_budget(self) -> "Settings":
+        per_child = (
+            self.modulo_celery_db_pool_sync_size
+            + self.modulo_celery_db_pool_sync_overflow
+            + self.modulo_celery_db_pool_async_size
+            + self.modulo_celery_db_pool_async_overflow
+        )
+        max_safe = 14
+        if per_child > max_safe:
+            raise ValueError(
+                f"Total connections per Celery worker child ({per_child}) exceeds {max_safe}. "
+                f"Reduce MODULO_CELERY_DB_POOL_SYNC_SIZE, _ASYNC_SIZE, or _*_OVERFLOW. "
+                f"Current: sync={self.modulo_celery_db_pool_sync_size}+{self.modulo_celery_db_pool_sync_overflow}, "
+                f"async={self.modulo_celery_db_pool_async_size}+{self.modulo_celery_db_pool_async_overflow}"
+            )
+        return self
+
 
 @lru_cache
-def get_settings() -> Settings:
+def get_settings(fresh: bool = False) -> Settings:
     return Settings()
