@@ -2,6 +2,7 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Navigation Flow', { tag: "@regression" }, () => {
   test('navigates from Dashboard to Pipelines', async ({ page, env }) => {
+    test.skip(env.name !== 'local', 'Requires a pipeline in the database')
     await loginAsAdmin(page, env)
 
     await page.goto('/')
