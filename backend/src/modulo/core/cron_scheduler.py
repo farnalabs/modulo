@@ -1,4 +1,4 @@
-"""Celery beat scheduler that reads cron trigger rows from the database.
+﻿"""Celery beat scheduler that reads cron trigger rows from the database.
 
 Architecture
 ------------
@@ -247,7 +247,7 @@ async def fire_cron_trigger(
                 )
             )
             today_cost = cost_result.scalar_one()
-            if today_cost >= spend_limit:
+            if today_cost is not None and spend_limit is not None and today_cost >= spend_limit:
                 await _log_event(
                     session,
                     trigger=trigger,
