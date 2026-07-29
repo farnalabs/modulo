@@ -188,10 +188,10 @@ import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
 import CommandPalette from "./CommandPalette.vue";
 import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
-import Sun from "@lucide/vue/icons/sun";
-import Moon from "@lucide/vue/icons/moon";
-import Menu from "@lucide/vue/icons/menu";
-import X from "@lucide/vue/icons/x";
+import { Sun } from "lucide-vue-next";
+import { Moon } from "lucide-vue-next";
+import { Menu } from "lucide-vue-next";
+import { X } from "lucide-vue-next";
 
 const planStore = usePlanStore();
 const remyStore = useRemyStore();
