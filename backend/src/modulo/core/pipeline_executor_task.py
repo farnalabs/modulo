@@ -29,11 +29,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 try:
     import kombu.exceptions
+    import kombu
     import redis.exceptions
     import sqlalchemy.exc
     from celery import Task
@@ -44,7 +46,7 @@ except ImportError:
     import typing
 
     if typing.TYPE_CHECKING:
-        import kombu.exceptions
+        import kombu.exceptions  # type: ignore[import-untyped]
         import redis.exceptions
         import sqlalchemy.exc
         from celery import Task
@@ -69,7 +71,7 @@ def _get_settings() -> Any:
     return get_settings()
 
 
-def _get_engines():
+def _get_engines() -> tuple[Engine, AsyncEngine]:
     """Create sync + async engines for this prefork child.
 
     NOTE: Only safe with --pool=prefork (default). gevent/eventlet/solo pools
@@ -118,15 +120,15 @@ def _get_engines():
     return _SYNC_ENGINE, _ASYNC_ENGINE
 
 
-def _get_sync_engine():
+def _get_sync_engine() -> Engine:
     return _get_engines()[0]
 
 
-def _get_async_engine():
+def _get_async_engine() -> AsyncEngine:
     return _get_engines()[1]
 
 
-def reset_engines():
+def reset_engines() -> None:
     """Reset engine singletons. Call in test setup to isolate test cases."""
     global _SYNC_ENGINE, _ASYNC_ENGINE
     for e in (_SYNC_ENGINE, _ASYNC_ENGINE):
@@ -141,7 +143,7 @@ def reset_engines():
 
 if _CELERY_SIGNALS_AVAILABLE:
 
-    @worker_process_init.connect
+    @worker_process_init.connect  # type: ignore[untyped-decorator]
     def _init_worker(**kw: Any) -> None:
         global _worker_loop
         reset_engines()
@@ -149,7 +151,7 @@ if _CELERY_SIGNALS_AVAILABLE:
         asyncio.set_event_loop(_worker_loop)
         _log.info("pipeline_executor_task: worker process initialised")
 
-    @worker_process_shutdown.connect
+    @worker_process_shutdown.connect  # type: ignore[untyped-decorator]
     def _shutdown_worker(**kw: Any) -> None:
         global _SYNC_ENGINE, _ASYNC_ENGINE, _worker_loop
         if _SYNC_ENGINE is not None:
@@ -412,7 +414,7 @@ async def _stale_run_recovery_sweep() -> dict[str, Any]:
                       AND dispatched_at IS NULL
                 """)
             )
-            never_count = never_result.rowcount
+            never_count = never_result.rowcount  # type: ignore[attr-defined]
 
             lost_result = await session.execute(
                 text("""
@@ -425,7 +427,7 @@ async def _stale_run_recovery_sweep() -> dict[str, Any]:
                       AND claim_count >= 5
                 """)
             )
-            lost_count = lost_result.rowcount
+            lost_count = lost_result.rowcount  # type: ignore[attr-defined]
 
         if never_count or lost_count:
             _log.info(
