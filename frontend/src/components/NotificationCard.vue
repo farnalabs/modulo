@@ -58,6 +58,7 @@ import { ref, computed } from "vue";
 import type { NotificationResponse } from "../lib/api/notifications";
 import { dismissNotification } from "../lib/api/notifications";
 import DismissDialog from "./DismissDialog.vue";
+import { formatDistanceToNow } from "date-fns";
 
 const props = defineProps<{
   notification: NotificationResponse;
@@ -91,19 +92,11 @@ const levelAbbreviation = computed(() => {
 const scopeLabel = computed(() => props.notification.scope_label);
 
 const relativeTime = computed(() => {
-  const now = Date.now();
   const raw = props.notification.created_at;
   if (!raw) return "";
-  const created = new Date(raw).getTime();
-  if (isNaN(created)) return "";
-  const diff = now - created;
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  const created = new Date(raw);
+  if (isNaN(created.getTime())) return "";
+  return formatDistanceToNow(created, { addSuffix: true });
 });
 
 async function onDismiss(scope: "self" | "scope") {

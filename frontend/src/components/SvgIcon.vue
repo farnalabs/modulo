@@ -1,825 +1,112 @@
 <template>
-  <CirclePlay
-    v-if="name === 'CirclePlay'"
-    aria-hidden="true"
-    :size="16"
-  />
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'LayoutDashboard'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <rect x="3" y="3" width="7" height="9" />
-    <rect x="14" y="3" width="7" height="5" />
-    <rect x="14" y="12" width="7" height="9" />
-    <rect x="3" y="16" width="7" height="5" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'BookOpen'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-    <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Users'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-    <circle cx="9" cy="7" r="4" />
-    <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Shield'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Gauge'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M12 15.5v-3" />
-    <path d="M9 12l3-3 3 3" />
-    <circle cx="12" cy="12" r="10" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Settings'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <circle cx="12" cy="12" r="3" />
-    <path
-      d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
-    />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Eye'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-    <circle cx="12" cy="12" r="3" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'FileText'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-    <polyline points="14 2 14 8 20 8" />
-    <line x1="16" y1="13" x2="8" y2="13" />
-    <line x1="16" y1="17" x2="8" y2="17" />
-    <polyline points="10 9 9 9 8 9" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Search'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <circle cx="11" cy="11" r="8" />
-    <line x1="21" y1="21" x2="16.65" y2="16.65" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Flag'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
-    <line x1="4" y1="22" x2="4" y2="15" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'BarChart'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <line x1="12" y1="20" x2="12" y2="10" />
-    <line x1="18" y1="20" x2="18" y2="4" />
-    <line x1="6" y1="20" x2="6" y2="16" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'History'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <circle cx="12" cy="12" r="10" />
-    <polyline points="12 6 12 12 16 14" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'UserCircle'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <circle cx="12" cy="8" r="5" />
-    <path d="M3 21v-2a7 7 0 0 1 7-7h4a7 7 0 0 1 7 7v2" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'CheckSquare'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <polyline points="9 11 12 14 22 4" />
-    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'GitFork'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <circle cx="12" cy="18" r="3" />
-    <circle cx="6" cy="6" r="3" />
-    <circle cx="18" cy="6" r="3" />
-    <path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9" />
-    <path d="M12 12v3" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Database'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <ellipse cx="12" cy="5" rx="9" ry="3" />
-    <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'MessageSquare'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Clipboard'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path
-      d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
-    />
-    <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'DollarSign'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <line x1="12" y1="1" x2="12" y2="23" />
-    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Cable'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M4 9a2 2 0 0 1-2-2V5h6v2a2 2 0 0 1-2 2Z" />
-    <path d="M20 9a2 2 0 0 1-2-2V5h6v2a2 2 0 0 1-2 2Z" />
-    <line x1="7" x2="17" y1="9" y2="9" />
-    <path d="M12 9v10" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Plug'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M12 22v-5" />
-    <path d="M9 8V2" />
-    <path d="M15 8V2" />
-    <path d="M18 8v5a6 6 0 0 1-6 6v0a6 6 0 0 1-6-6V8Z" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'CreditCard'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
-    <line x1="1" y1="10" x2="23" y2="10" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Copy'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Columns'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-    <line x1="12" y1="3" x2="12" y2="21" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'KeyRound'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path
-      d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"
-    />
-    <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Tag'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path
-      d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2z"
-    />
-    <path d="M7 7h.01" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Puzzle'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path
-      d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.611a2.404 2.404 0 0 1-1.705.706 2.404 2.404 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.404 2.404 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.315 8.685a.98.98 0 0 1 .837-.276c.47.07.802.48.968.925a2.501 2.501 0 1 0 3.214-3.214c-.446-.166-.855-.497-.925-.968a.979.979 0 0 1 .276-.837l1.611-1.611a2.404 2.404 0 0 1 1.704-.706c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.969a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"
-    />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Clock'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <circle cx="12" cy="12" r="10" />
-    <polyline points="12 6 12 12 16 14" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Cpu'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <rect x="4" y="4" width="16" height="16" rx="2" />
-    <rect x="9" y="9" width="6" height="6" />
-    <path d="M15 2v2" />
-    <path d="M15 20v2" />
-    <path d="M2 15h2" />
-    <path d="M20 15h2" />
-    <path d="M9 2v2" />
-    <path d="M9 20v2" />
-    <path d="M2 9h2" />
-    <path d="M20 9h2" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Zap'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Building'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <rect x="4" y="2" width="16" height="20" rx="2" ry="2" />
-    <path d="M9 22v-4h6v4" />
-    <path d="M8 6h.01" />
-    <path d="M16 6h.01" />
-    <path d="M12 6h.01" />
-    <path d="M12 10h.01" />
-    <path d="M12 14h.01" />
-    <path d="M16 10h.01" />
-    <path d="M16 14h.01" />
-    <path d="M8 10h.01" />
-    <path d="M8 14h.01" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'ShieldQuestion'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-    <path d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3" />
-    <line x1="12" y1="17" x2="12.01" y2="17" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Bell'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Container'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path
-      d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"
-    />
-    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-    <line x1="12" y1="22.08" x2="12" y2="12" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'LayoutTemplate'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <rect x="3" y="3" width="18" height="18" rx="2" />
-    <line x1="3" y1="9" x2="21" y2="9" />
-    <line x1="9" y1="21" x2="9" y2="9" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'SlidersHorizontal'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <line x1="21" y1="4" x2="14" y2="4" />
-    <line x1="10" y1="4" x2="3" y2="4" />
-    <line x1="21" y1="12" x2="12" y2="12" />
-    <line x1="8" y1="12" x2="3" y2="12" />
-    <line x1="21" y1="20" x2="16" y2="20" />
-    <line x1="12" y1="20" x2="3" y2="20" />
-    <line x1="14" y1="2" x2="14" y2="6" />
-    <line x1="8" y1="10" x2="8" y2="14" />
-    <line x1="16" y1="18" x2="16" y2="22" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Building2'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z" />
-    <path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" />
-    <path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2" />
-    <path d="M10 6h4" />
-    <path d="M10 10h4" />
-    <path d="M10 14h4" />
-    <path d="M10 18h4" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Bot'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <rect x="3" y="11" width="18" height="10" rx="2" />
-    <circle cx="12" cy="5" r="2" />
-    <path d="M12 7v4" />
-    <line x1="8" y1="16" x2="8" y2="16" />
-    <line x1="16" y1="16" x2="16" y2="16" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'AlertTriangle'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path
-      d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
-    />
-    <line x1="12" y1="9" x2="12" y2="13" />
-    <line x1="12" y1="17" x2="12.01" y2="17" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'GitCommit'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <circle cx="12" cy="12" r="3" />
-    <line x1="3" y1="12" x2="9" y2="12" />
-    <line x1="15" y1="12" x2="21" y2="12" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'FlaskConical'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M14 2v6l4.7 7.52a1 1 0 0 1-.85 1.48H6.15a1 1 0 0 1-.85-1.48L10 8V2" />
-    <path d="M10 2h4" />
-    <path d="M7.5 13.5A5.5 5.5 0 0 1 12 11" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Map'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z" />
-    <path d="M15 5.5v13" />
-    <path d="M9 10.5v13" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'Mail'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <rect width="20" height="16" x="2" y="4" rx="2" />
-    <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else-if="name === 'File'"
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-    <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-  </svg>
-  <svg
-    aria-hidden="true"
-    v-else
-    xmlns="http://www.w3.org/2000/svg"
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <circle cx="12" cy="12" r="10" />
-    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-    <line x1="12" y1="17" x2="12.01" y2="17" />
-  </svg>
-  </template>
+  <component :is="iconComponent" aria-hidden="true" :size="16" />
+</template>
 
 <script setup lang="ts">
-import { CirclePlay } from "@lucide/vue";
-import { watch } from "vue";
+import { computed } from "vue";
+import CirclePlay from "@lucide/vue/icons/circle-play";
+import LayoutDashboard from "@lucide/vue/icons/layout-dashboard";
+import BookOpen from "@lucide/vue/icons/book-open";
+import Users from "@lucide/vue/icons/users";
+import Shield from "@lucide/vue/icons/shield";
+import Gauge from "@lucide/vue/icons/gauge";
+import Settings from "@lucide/vue/icons/settings";
+import Eye from "@lucide/vue/icons/eye";
+import FileText from "@lucide/vue/icons/file-text";
+import Search from "@lucide/vue/icons/search";
+import Flag from "@lucide/vue/icons/flag";
+import ChartBarIncreasing from "@lucide/vue/icons/chart-bar-increasing";
+import History from "@lucide/vue/icons/history";
+import UserCircle from "@lucide/vue/icons/circle-user";
+import CheckSquare from "@lucide/vue/icons/square-check-big";
+import GitFork from "@lucide/vue/icons/git-fork";
+import Database from "@lucide/vue/icons/database";
+import MessageSquare from "@lucide/vue/icons/message-square";
+import Clipboard from "@lucide/vue/icons/clipboard";
+import DollarSign from "@lucide/vue/icons/dollar-sign";
+import Cable from "@lucide/vue/icons/cable";
+import Plug from "@lucide/vue/icons/plug";
+import CreditCard from "@lucide/vue/icons/credit-card";
+import Copy from "@lucide/vue/icons/copy";
+import Columns from "@lucide/vue/icons/columns-2";
+import KeyRound from "@lucide/vue/icons/key-round";
+import Tag from "@lucide/vue/icons/tag";
+import Puzzle from "@lucide/vue/icons/puzzle";
+import Clock from "@lucide/vue/icons/clock";
+import Cpu from "@lucide/vue/icons/cpu";
+import Zap from "@lucide/vue/icons/zap";
+import Building from "@lucide/vue/icons/building";
+import ShieldQuestionMark from "@lucide/vue/icons/shield-question-mark";
+import Bell from "@lucide/vue/icons/bell";
+import Container from "@lucide/vue/icons/container";
+import LayoutTemplate from "@lucide/vue/icons/layout-template";
+import SlidersHorizontal from "@lucide/vue/icons/sliders-horizontal";
+import Building2 from "@lucide/vue/icons/building-2";
+import Bot from "@lucide/vue/icons/bot";
+import AlertTriangle from "@lucide/vue/icons/triangle-alert";
+import GitCommit from "@lucide/vue/icons/git-commit-horizontal";
+import FlaskConical from "@lucide/vue/icons/flask-conical";
+import Map from "@lucide/vue/icons/map";
+import Mail from "@lucide/vue/icons/mail";
+import File from "@lucide/vue/icons/file";
+
+const iconMap: Record<string, unknown> = {
+  CirclePlay,
+  LayoutDashboard,
+  BookOpen,
+  Users,
+  Shield,
+  Gauge,
+  Settings,
+  Eye,
+  FileText,
+  Search,
+  Flag,
+  BarChart: ChartBarIncreasing,
+  History,
+  UserCircle,
+  CheckSquare,
+  GitFork,
+  Database,
+  MessageSquare,
+  Clipboard,
+  DollarSign,
+  Cable,
+  Plug,
+  CreditCard,
+  Copy,
+  Columns,
+  KeyRound,
+  Tag,
+  Puzzle,
+  Clock,
+  Cpu,
+  Zap,
+  Building,
+  ShieldQuestion: ShieldQuestionMark,
+  Bell,
+  Container,
+  LayoutTemplate,
+  SlidersHorizontal,
+  Building2,
+  Bot,
+  AlertTriangle,
+  GitCommit,
+  FlaskConical,
+  Map,
+  Mail,
+  File,
+};
 
 const props = defineProps<{
   name: string;
 }>();
 
-const knownIcons = [
-  "LayoutDashboard", "BookOpen", "Users", "Shield",
-  "Gauge", "Settings", "Eye", "FileText", "Flag", "BarChart",
-  "History", "UserCircle", "CheckSquare", "GitFork", "Database",
-  "MessageSquare", "Clipboard", "DollarSign", "Cable", "Plug",
-  "CreditCard", "Copy", "Columns", "KeyRound", "Tag", "Puzzle",
-  "Clock", "Cpu", "Zap", "Building", "ShieldQuestion", "Bell",
-  "Container", "LayoutTemplate", "Map", "SlidersHorizontal", "Building2",
-  "Bot", "AlertTriangle", "GitCommit", "FlaskConical", "Search", "Mail", "File",
-  "CirclePlay",
-];
-
-watch(
-  () => props.name,
-  (name) => {
-    if (!knownIcons.includes(name)) {
-      console.warn(`SvgIcon: unknown icon "${name}"`);
-    }
-  },
-  { immediate: true },
-);
+const iconComponent = computed(() => {
+  const icon = iconMap[props.name];
+  if (!icon) {
+    console.warn(`SvgIcon: unknown icon "${props.name}"`);
+  }
+  return icon;
+});
 </script>
