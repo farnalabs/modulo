@@ -29,7 +29,7 @@ def _get_hub_connector_types() -> set[str]:
     return hub_types
 
 
-def test_all_connector_types_have_polling_parity() -> None:
+def test_all_connector_types_have_polling_parity():
     """Every non-excluded connector type in connector_hub must be handled by
     _build_polling_connector or explicitly excluded."""
     polling_types = {"filesystem", "github", "gitlab", "linear", "jira", "slack"}
@@ -83,7 +83,7 @@ def test_all_connector_types_have_polling_parity() -> None:
     )
 
 
-def test_polling_types_are_valid_connectors() -> None:
+def test_polling_types_are_valid_connectors():
     """Verify each polling-supported type actually instantiates with minimal config."""
     test_cases: list[tuple[str, dict, dict]] = [
         ("filesystem", {"base_path": "/tmp"}, {}),
@@ -98,7 +98,7 @@ def test_polling_types_are_valid_connectors() -> None:
         assert isinstance(connector, ConnectorBase), f"{type_id} should return a ConnectorBase instance"
 
 
-def test_hub_has_minimum_types() -> None:
+def test_hub_has_minimum_types():
     """Sanity check — the hub should have more types than polling supports."""
     hub_types = _get_hub_connector_types()
     assert len(hub_types) >= 20, (

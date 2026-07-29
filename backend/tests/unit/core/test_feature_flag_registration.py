@@ -20,3 +20,9 @@ class TestSavedViewsFlag:
         flag = registry.get_flag("saved_views")
         assert flag is not None
         assert len(flag.description) > 0
+
+    def test_flag_default_state(self) -> None:
+        registry = FeatureFlagRegistry()
+        flag = registry.get_flag("saved_views")
+        assert flag is not None
+        assert flag.currently_active is True
