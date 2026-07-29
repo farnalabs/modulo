@@ -10,17 +10,64 @@ Usage in Celery config::
     beat_scheduler = "modulo.core.composite_scheduler:CompositeScheduler"
 """
 
+import datetime
 import logging
 from typing import Any
 
 from celery import Celery
-from celery.beat import Scheduler
+from celery.beat import ScheduleEntry, Scheduler
 
 from modulo.core.cron_scheduler import DatabaseCronScheduler
 from modulo.core.reports.scheduler import DatabaseReportScheduler
 from modulo.core.trigger_engine.polling import DatabasePollingScheduler
 
 _log = logging.getLogger(__name__)
+
+
+class StaleRecoveryEntry(ScheduleEntry):  # type: ignore[misc]
+    """Celery beat entry for the stale-running recovery sweep (every 5 min)."""
+
+    def __init__(self) -> None:
+        self._last_run: datetime.datetime | None = None
+
+    @property
+    def name(self) -> str:
+        return "stale_run_recovery"
+
+    @property
+    def task(self) -> str:
+        return "modulo.pipeline.stale_run_recovery"
+
+    @property
+    def schedule(self) -> Any:
+        return self
+
+    @property
+    def args(self) -> list[Any]:
+        return []
+
+    @property
+    def kwargs(self) -> dict[str, Any]:
+        return {}
+
+    @property
+    def options(self) -> dict[str, Any]:
+        return {}
+
+    def is_due(self) -> tuple[bool, datetime.timedelta]:
+        now = datetime.datetime.now(datetime.UTC)
+        if self._last_run is None:
+            self._last_run = now
+            return (True, datetime.timedelta(seconds=0))
+        delta = now - self._last_run
+        if delta.total_seconds() >= 300:
+            self._last_run = now
+            return (True, datetime.timedelta(seconds=0))
+        remaining = 300 - delta.total_seconds()
+        return (False, datetime.timedelta(seconds=max(remaining, 0)))
+
+    def __repr__(self) -> str:
+        return "<StaleRecoveryEntry: every 5 min>"
 
 
 class CompositeScheduler(Scheduler):  # type: ignore[misc]
@@ -37,6 +84,7 @@ class CompositeScheduler(Scheduler):  # type: ignore[misc]
         self._cron_scheduler = DatabaseCronScheduler(app, **kwargs)
         self._polling_scheduler = DatabasePollingScheduler(app, **kwargs)
         self._report_scheduler = DatabaseReportScheduler(app, **kwargs)
+        self._stale_entry: StaleRecoveryEntry | None = None
 
     def setup_schedule(self) -> None:
         """Populate the schedule from all trigger and report sources."""
@@ -59,6 +107,10 @@ class CompositeScheduler(Scheduler):  # type: ignore[misc]
         merged.update(self._cron_scheduler._schedule)
         merged.update(self._polling_scheduler._schedule)
         merged.update(self._report_scheduler._schedule)
+        # Register the stale-running recovery sweep (every 5 min)
+        if self._stale_entry is None:
+            self._stale_entry = StaleRecoveryEntry()
+        merged[self._stale_entry.name] = self._stale_entry
         self._schedule = merged
 
     @property
