@@ -83,16 +83,7 @@
               aria-label="Edit"
               @click="startEdit(ep)"
             >
-              <svg
-                class="h-4 w-4"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-              </svg>
+              <Pencil class="h-4 w-4" />
             </button>
             <button
               class="rounded p-1 text-muted-foreground hover:text-destructive"
@@ -101,16 +92,7 @@
               aria-label="Test"
               @click="test(ep)"
             >
-              <svg
-                class="h-4 w-4"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M12 2a10 10 0 1 0 10 10h-10Z" />
-              </svg>
+              <Play class="h-4 w-4" />
             </button>
             <button
               class="rounded p-1 text-destructive hover:bg-destructive/10"
@@ -119,18 +101,7 @@
               aria-label="Delete"
               @click="confirmDelete(ep)"
             >
-              <svg
-                class="h-4 w-4"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M3 6h18" />
-                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-              </svg>
+              <Trash2 class="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -342,17 +313,7 @@
         data-testid="team-notif-add-button"
         @click="showAddForm = true"
       >
-        <svg
-          class="h-4 w-4"
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <path d="M5 12h14" />
-          <path d="M12 5v14" />
-        </svg>
+        <Plus class="h-4 w-4" />
         Add webhook
       </button>
     </template>
@@ -370,6 +331,10 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "../components/ui/tooltip";
+import Pencil from "@lucide/vue/icons/pencil";
+import Play from "@lucide/vue/icons/play";
+import Trash2 from "@lucide/vue/icons/trash-2";
+import Plus from "@lucide/vue/icons/plus";
 
 type NotificationEndpointResponse =
   components["schemas"]["NotificationEndpointResponse"];

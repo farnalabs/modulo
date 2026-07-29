@@ -43,38 +43,8 @@
               <span class="thumb" />
             </span>
             <span class="flex items-center gap-1">
-              <svg
-                v-if="isLight"
-                xmlns="http://www.w3.org/2000/svg"
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <circle cx="12" cy="12" r="5" />
-                <line x1="12" y1="1" x2="12" y2="3" />
-                <line x1="12" y1="21" x2="12" y2="23" />
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                <line x1="1" y1="12" x2="3" y2="12" />
-                <line x1="21" y1="12" x2="23" y2="12" />
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-              </svg>
-              <svg
-                v-else
-                xmlns="http://www.w3.org/2000/svg"
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
+              <Sun v-if="isLight" class="h-3 w-3" aria-hidden="true" />
+              <Moon v-else class="h-3 w-3" aria-hidden="true" />
               <span>{{ isLight ? $t('common.light') : $t('common.dark') }}</span>
             </span>
             <input id="applayout-field-2"
@@ -92,7 +62,6 @@
       <SidebarFooter @logout="logout" />
     </aside>
 
-    <!-- Mobile header -->
     <header
       class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center justify-between border-b bg-background px-4 h-14"
     >
@@ -104,33 +73,8 @@
         :aria-expanded="mobileOpen"
         aria-controls="mobile-sidebar"
       >
-        <svg
-          v-if="!mobileOpen"
-          xmlns="http://www.w3.org/2000/svg"
-          width="22"
-          height="22"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <line x1="3" y1="6" x2="21" y2="6" />
-          <line x1="3" y1="12" x2="21" y2="12" />
-          <line x1="3" y1="18" x2="21" y2="18" />
-        </svg>
-        <svg
-          v-else
-          xmlns="http://www.w3.org/2000/svg"
-          width="22"
-          height="22"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
+        <Menu v-if="!mobileOpen" class="h-[22px] w-[22px]" aria-hidden="true" />
+        <X v-else class="h-[22px] w-[22px]" aria-hidden="true" />
       </button>
       <NotificationBell class="ml-auto" />
       <label for="applayout-field-1" class="toggle-switch ml-2" :class="isLight ? 'light' : 'dark'">
@@ -157,7 +101,6 @@
       </router-link>
     </header>
 
-    <!-- Mobile overlay -->
     <div
       v-if="mobileOpen"
       class="md:hidden fixed inset-0 z-30 bg-black/50"
@@ -165,9 +108,6 @@
       aria-hidden="true"
     />
 
-    <!-- Mobile sidebar -->
-    <!-- The sidebar owns Escape handling while focus is within its descendants. -->
-    <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -->
     <aside
       id="mobile-sidebar"
       ref="mobileSidebarRef"
@@ -193,8 +133,6 @@
         </router-link>
       </div>
 
-
-
       <SidebarNav class="flex-1"
         :is-system-admin="isSystemAdmin"
         :user-role="userRole"
@@ -219,7 +157,6 @@
       </router-view>
     </main>
 
-    <!-- Remy execution overlay -->
     <div v-if="planStore.devMode && remyStore.isExecutingUi" class="remy-execution-overlay">
       <div class="remy-execution-banner">
         <span>Remy is performing actions on this page</span>
@@ -251,8 +188,10 @@ import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
 import CommandPalette from "./CommandPalette.vue";
 import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
-
-
+import Sun from "@lucide/vue/icons/sun";
+import Moon from "@lucide/vue/icons/moon";
+import Menu from "@lucide/vue/icons/menu";
+import X from "@lucide/vue/icons/x";
 
 const planStore = usePlanStore();
 const remyStore = useRemyStore();
