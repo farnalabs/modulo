@@ -1,4 +1,4 @@
-﻿"""Factory that builds a cancellable LangGraph node function from a node definition.
+"""Factory that builds a cancellable LangGraph node function from a node definition.
 
 Node types:
   - standard (agent):  agent/connector node; runs the node body, then checks for
@@ -45,6 +45,7 @@ import base64
 import json
 import logging
 import os
+import re as _re
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -128,6 +129,7 @@ def make_node_fn(
     When *token_budget* is set, per-node token budget is enforced at the
     executor level via ``node_token_budgets`` during ``_stream_graph()``.
     """
+
     node_id: str = str(node_def["id"])
 
     @cancellable_node(timeout=timeout, role=role)
@@ -450,6 +452,7 @@ def make_manual_node_fn(
     The node immediately interrupts and waits for human output. On resume the
     output is validated against output_schema_id (if defined) before continuing.
     """
+
     node_id: str = str(node_def["id"])
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
     manual_prompt: str = node_def.get("manual_prompt", "")
@@ -524,6 +527,7 @@ def make_connector_fn(
       - operation: 'query' or 'write' (optional, default 'query')
       - input: dict of input parameters (optional)
     """
+
     node_id: str = str(node_def["id"])
     binding = node_def.get("connector_binding") or {}
     op: str = binding.get("operation", "query")
@@ -603,10 +607,35 @@ def make_sandbox_agent_fn(
     and tears down the sandbox. Wall-clock time and exit code are captured
     natively ÃƒÂ¢Ã¢,Â¬Ã¢â‚¬Â even on failure.
     """
+
+    _secret_ref_re = _re.compile(r"^\{\{\s*secrets\.(\w+)\s*\}\}$")
+
+    def _resolve_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
+        """Resolve {{ secrets.KEY }} references in env var values."""
+        resolved: dict[str, str] = {}
+        for key, value in env_vars.items():
+            m = _secret_ref_re.match(str(value))
+            if m:
+                secret_key = m.group(1)
+                import os as _os
+
+                resolved_value = _os.environ.get(secret_key)
+                if resolved_value is None:
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning(
+                        "env_var.secret_ref_not_found", extra={"key": key, "secret_key": secret_key}
+                    )
+                    resolved[key] = ""
+                else:
+                    resolved[key] = resolved_value
+            else:
+                resolved[key] = value
+        return resolved
+
     node_id: str = str(node_def["id"])
     agent_prompt_template: str = node_def.get("agent_prompt") or ""
     template_id: str = node_def.get("template_id", "base")
-    env_vars_extra: dict[str, str] = node_def.get("env_vars") or {}
+    env_vars_extra: dict[str, str] = _resolve_env_vars(node_def.get("env_vars") or {})
     commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
     agent_commands_raw: list[str] | None = node_def.get("agent_commands")
     agent_command_raw: str | None = node_def.get("agent_command")
@@ -623,7 +652,9 @@ def make_sandbox_agent_fn(
     from e2b import AsyncSandbox  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
 
-    @cancellable_node(timeout=(timeout or sandbox_timeout) + 30, role="sandbox_agent")  # +30s buffer over sandbox_timeout — inner timeout fires first; decorator is safety net
+    @cancellable_node(
+        timeout=(timeout or sandbox_timeout) + 30, role="sandbox_agent"
+    )  # +30s buffer over sandbox_timeout — inner timeout fires first; decorator is safety net
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
 
         run_context: dict[str, Any] = state.get("run_context") or {}
@@ -688,7 +719,12 @@ def make_sandbox_agent_fn(
                         agent_command,
                         timeout=sandbox_timeout,
                         envs={
-                            **env_vars_extra,
+                            # System env vars first -- provide defaults from the host.
+                            # DO NOT move env_vars_extra before these. Pipelines need
+                            # to override GITHUB_TOKEN for identity separation (e.g.
+                            # PR Reviewer uses modulo-reviewbot PAT, not the system
+                            # default farnalabs bot). The reserved prefix validator
+                            # already prevents overriding MODULO_* vars.
                             "MODULO_RUN_ID": run_id,
                             "MODULO_PIPELINE_ID": pipeline_id,
                             "MODULO_ORG_ID": org_id,
@@ -697,6 +733,9 @@ def make_sandbox_agent_fn(
                             "GITHUB_TOKEN": os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
                             or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
                             or os.environ.get("GITHUB_TOKEN", ""),
+                            # Pipeline env vars last -- override system defaults.
+                            # See comment above for why ordering is critical.
+                            **env_vars_extra,
                         },
                     ),
                     timeout=sandbox_timeout,
@@ -913,4 +952,3 @@ def _validate_against_schema(data: dict[str, Any], schema: dict[str, Any]) -> No
     for field in required:
         if field not in data:
             raise ValueError(f"Manual output missing required field {field!r} (required: {required})")
-
