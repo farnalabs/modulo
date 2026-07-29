@@ -9,13 +9,24 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
+from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.org_membership import OrgMembership
+from modulo.db.models.parameter_schema import ParameterSchema
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.schema import Schema
 from modulo.db.models.secret import Secret
+from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
+from modulo.db.models.sso_provider import SsoProvider
+from modulo.db.models.team import Team
+from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.webhook import WebhookDedupHash
 
@@ -24,9 +35,16 @@ _log = logging.getLogger(__name__)
 ENTITY_MODEL_MAP: dict[str, type] = {
     "secret": Secret,
     "connector": ConnectorInstance,
+    "environment_profile": EnvironmentProfile,
+    "lifecycle_map": LifecycleMap,
     "model_backend": ModelBackend,
+    "org_api_key": OrgApiKey,
+    "parameter_schema": ParameterSchema,
     "pipeline": Pipeline,
     "pipeline_snapshot": PipelineSnapshot,
+    "schema": Schema,
+    "sso_provider": SsoProvider,
+    "team": Team,
     "trigger": Trigger,
     "webhook_dedup": WebhookDedupHash,
 }
@@ -40,17 +58,33 @@ _CATEGORY_LABELS: dict[str, str] = {
     "inactive_triggers": "Inactive Triggers",
     "orphan_snapshots": "Orphan Snapshots",
     "expired_webhook_dedups": "Expired Webhook Dedups",
+    "duplicate_triggers": "Duplicate Triggers",
+    "unused_environment_profiles": "Unused Environment Profiles",
+    "stale_api_keys": "Stale API Keys",
+    "unused_sso_providers": "Unused SSO Providers",
+    "empty_teams": "Empty Teams",
+    "unused_parameter_schemas": "Unused Parameter Schemas",
+    "unused_schemas": "Unused Schemas",
+    "empty_lifecycle_maps": "Empty Lifecycle Maps",
 }
 
 _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     "orphan_secrets": "Secrets whose key is not referenced by any connector config or agent connector_type_refs",
     "unbound_connectors": "Connector instances not bound to any pipeline snapshot",
     "untriggered_pipelines": "Pipelines with no trigger and no runs",
-    "stale_pipelines": "Pipelines with no runs in the last 90 days",
+    "stale_pipelines": "Pipelines with no runs in the last 4 weeks",
     "unused_model_backends": "Model backends not assigned to any agent",
     "inactive_triggers": "Triggers that are inactive and have never fired",
     "orphan_snapshots": "Snapshots whose pipeline no longer exists",
     "expired_webhook_dedups": "Expired webhook deduplication hash entries",
+    "duplicate_triggers": "Pipelines with multiple triggers of the same type (e.g. two cron triggers on the same pipeline)",
+    "unused_environment_profiles": "Environment profiles not referenced by any pipeline snapshot",
+    "stale_api_keys": "API keys not used in the last 4 weeks",
+    "unused_sso_providers": "SSO providers with no accounts using them for authentication",
+    "empty_teams": "Teams with no active user members",
+    "unused_parameter_schemas": "Parameter schemas not assigned to any agent",
+    "unused_schemas": "Schemas not referenced by any agent or pipeline snapshot",
+    "empty_lifecycle_maps": "Lifecycle maps with empty content (no stages configured)",
 }
 
 
@@ -193,7 +227,7 @@ async def _scan_untriggered_pipelines(session: AsyncSession, org_id: uuid.UUID) 
 
 
 async def _scan_stale_pipelines(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
-    ninety_days_ago = datetime.now(UTC) - timedelta(days=90)
+    four_weeks_ago = datetime.now(UTC) - timedelta(weeks=4)
     max_run = (
         select(
             Run.pipeline_id,
@@ -213,7 +247,7 @@ async def _scan_stale_pipelines(session: AsyncSession, org_id: uuid.UUID) -> lis
                 )
                 .where(
                     Pipeline.organisation_id == org_id,
-                    max_run.c.last_run_at < ninety_days_ago,
+                    max_run.c.last_run_at < four_weeks_ago,
                 )
             )
         )
@@ -224,7 +258,7 @@ async def _scan_stale_pipelines(session: AsyncSession, org_id: uuid.UUID) -> lis
         Candidate(
             id=str(p.id),
             name=p.name,
-            detail="Pipeline last run over 90 days ago",
+            detail="Pipeline last run over 4 weeks ago",
             created_at=p.created_at.isoformat() if p.created_at else None,
         )
         for p in pipelines
@@ -330,6 +364,310 @@ async def _scan_expired_webhook_dedups(session: AsyncSession, org_id: uuid.UUID)
     ]
 
 
+async def _scan_duplicate_triggers(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """Find pipelines with multiple triggers of the same type (e.g. two cron triggers)."""
+    from sqlalchemy import func as sa_func
+
+    dup_subq = (
+        select(
+            Trigger.pipeline_id,
+            Trigger.trigger_type,
+            sa_func.count(Trigger.id).label("cnt"),
+        )
+        .where(
+            Trigger.organisation_id == org_id,
+            Trigger.deleted_at.is_(None),
+        )
+        .group_by(Trigger.pipeline_id, Trigger.trigger_type)
+        .having(sa_func.count(Trigger.id) > 1)
+        .subquery()
+    )
+
+    duplicate_triggers = (
+        (
+            await session.execute(
+                select(Trigger)
+                .join(
+                    dup_subq,
+                    (Trigger.pipeline_id == dup_subq.c.pipeline_id)
+                    & (Trigger.trigger_type == dup_subq.c.trigger_type),
+                )
+                .where(
+                    Trigger.organisation_id == org_id,
+                    Trigger.deleted_at.is_(None),
+                )
+                .order_by(Trigger.pipeline_id, Trigger.trigger_type, Trigger.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # Group by pipeline+type so the detail message is informative
+    groups: dict[tuple[uuid.UUID, str], list[Trigger]] = {}
+    for t in duplicate_triggers:
+        groups.setdefault((t.pipeline_id, t.trigger_type), []).append(t)
+
+    candidates: list[Candidate] = []
+    for (pid, ttype), triggers in groups.items():
+        # Keep the first one (oldest), suggest removing the rest
+        for t in triggers[1:]:
+            candidates.append(
+                Candidate(
+                    id=str(t.id),
+                    name=f"Trigger {ttype} for pipeline {pid}",
+                    detail=f"Duplicate {ttype} trigger — {len(triggers)} total on this pipeline. "
+                           f"Created: {t.created_at.isoformat() if t.created_at else 'N/A'}",
+                    created_at=t.created_at.isoformat() if t.created_at else None,
+                )
+            )
+    return candidates
+
+
+async def _scan_unused_environment_profiles(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """Environment profiles not referenced by any pipeline snapshot."""
+    used_ids = (
+        select(PipelineSnapshot.environment_profile_id)
+        .where(
+            PipelineSnapshot.organisation_id == org_id,
+            PipelineSnapshot.environment_profile_id.is_not(None),
+        )
+        .distinct()
+        .subquery()
+    )
+    profiles = (
+        (
+            await session.execute(
+                select(EnvironmentProfile).where(
+                    EnvironmentProfile.organisation_id == org_id,
+                    EnvironmentProfile.deleted_at.is_(None),
+                    EnvironmentProfile.id.notin_(select(used_ids.c.environment_profile_id)),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        Candidate(
+            id=str(p.id),
+            name=p.name,
+            detail=f"Environment profile ({p.provider_type}) — not used by any pipeline snapshot",
+            created_at=p.created_at.isoformat() if p.created_at else None,
+        )
+        for p in profiles
+    ]
+
+
+async def _scan_stale_api_keys(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """API keys not used in the last 4 weeks, excluding already-revoked or expired keys."""
+    four_weeks_ago = datetime.now(UTC) - timedelta(weeks=4)
+    keys = (
+        (
+            await session.execute(
+                select(OrgApiKey).where(
+                    OrgApiKey.organisation_id == org_id,
+                    OrgApiKey.revoked_at.is_(None),
+                    (
+                        (OrgApiKey.last_used_at.is_(None))
+                        | (OrgApiKey.last_used_at < four_weeks_ago)
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        Candidate(
+            id=str(k.id),
+            name=k.name,
+            detail=f"API key (role: {k.role}) — {'never used' if k.last_used_at is None else f'last used {k.last_used_at.isoformat()}'}",
+            created_at=k.created_at.isoformat() if k.created_at else None,
+        )
+        for k in keys
+    ]
+
+
+async def _scan_unused_sso_providers(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """SSO providers with no accounts using SSO authentication in this org."""
+    providers = (
+        (await session.execute(select(SsoProvider).where(SsoProvider.organisation_id == org_id)))
+        .scalars()
+        .all()
+    )
+    if not providers:
+        return []
+
+    # Check if any org members use SSO auth (non-local auth_provider)
+    sso_accounts_subq = (
+        select(OrgMembership.account_id)
+        .join(Account, OrgMembership.account_id == Account.id)
+        .where(
+            OrgMembership.organisation_id == org_id,
+            OrgMembership.deactivated_at.is_(None),
+            Account.auth_provider.in_(["oidc", "saml", "scim"]),
+        )
+        .distinct()
+        .subquery()
+    )
+    result = await session.execute(select(func.count()).select_from(sso_accounts_subq))
+    sso_user_count = result.scalar() or 0
+
+    if sso_user_count > 0:
+        return []  # SSO is in use, no candidates
+
+    return [
+        Candidate(
+            id=str(p.id),
+            name=p.name,
+            detail=f"SSO provider ({p.provider_type}) — no accounts use SSO authentication in this org",
+            created_at=p.created_at.isoformat() if p.created_at else None,
+        )
+        for p in providers
+    ]
+
+
+async def _scan_empty_teams(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """Teams with no active user members."""
+    teams_with_members = select(TeamMembership.team_id).where(
+        TeamMembership.organisation_id == org_id
+    ).distinct().subquery()
+
+    teams = (
+        (
+            await session.execute(
+                select(Team).where(
+                    Team.organisation_id == org_id,
+                    Team.id.notin_(select(teams_with_members.c.team_id)),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        Candidate(
+            id=str(t.id),
+            name=t.name,
+            detail="Team has no member assignments",
+            created_at=t.created_at.isoformat() if t.created_at else None,
+        )
+        for t in teams
+    ]
+
+
+async def _scan_unused_parameter_schemas(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """Parameter schemas not assigned to any agent."""
+    used_ids = (
+        select(Agent.parameter_schema_id)
+        .where(
+            Agent.organisation_id == org_id,
+            Agent.parameter_schema_id.is_not(None),
+        )
+        .distinct()
+        .subquery()
+    )
+    schemas = (
+        (
+            await session.execute(
+                select(ParameterSchema).where(
+                    ParameterSchema.organisation_id == org_id,
+                    ParameterSchema.deleted_at.is_(None),
+                    ParameterSchema.id.notin_(select(used_ids.c.parameter_schema_id)),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        Candidate(
+            id=str(s.id),
+            name=s.name,
+            detail=f"Parameter schema v{s.version} — not assigned to any agent",
+            created_at=s.created_at.isoformat() if s.created_at else None,
+        )
+        for s in schemas
+    ]
+
+
+async def _scan_unused_schemas(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """Schemas not referenced by any agent (input/output) or snapshot schema pin. Excludes system schemas."""
+    # IDs used by agents (input or output schema)
+    agent_input_ids = (
+        select(Agent.input_schema_id)
+        .where(Agent.organisation_id == org_id)
+        .distinct()
+        .subquery()
+    )
+    agent_output_ids = (
+        select(Agent.output_schema_id)
+        .where(Agent.organisation_id == org_id)
+        .distinct()
+        .subquery()
+    )
+
+    # IDs used by snapshot schema pins
+    pin_schema_ids = (
+        select(SnapshotSchemaPin.schema_id)
+        .where(SnapshotSchemaPin.organisation_id == org_id)
+        .distinct()
+        .subquery()
+    )
+
+    schemas = (
+        (
+            await session.execute(
+                select(Schema).where(
+                    Schema.organisation_id == org_id,
+                    Schema.system.is_(False),
+                    Schema.id.notin_(select(agent_input_ids.c.input_schema_id)),
+                    Schema.id.notin_(select(agent_output_ids.c.output_schema_id)),
+                    Schema.id.notin_(select(pin_schema_ids.c.schema_id)),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        Candidate(
+            id=str(s.id),
+            name=s.name,
+            detail="Schema not used by any agent or pipeline snapshot",
+            created_at=s.created_at.isoformat() if s.created_at else None,
+        )
+        for s in schemas
+    ]
+
+
+async def _scan_empty_lifecycle_maps(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """Lifecycle maps with empty content (no stages configured)."""
+    maps = (
+        (
+            await session.execute(
+                select(LifecycleMap).where(
+                    LifecycleMap.organisation_id == org_id,
+                    LifecycleMap.deleted_at.is_(None),
+                    LifecycleMap.content_json == {},  # empty dict = no content
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        Candidate(
+            id=str(m.id),
+            name=m.name,
+            detail="Lifecycle map has no stages configured (empty content)",
+            created_at=m.created_at.isoformat() if m.created_at else None,
+        )
+        for m in maps
+    ]
+
+
 _SCANNERS: list[tuple[str, Any]] = [
     ("orphan_secrets", _scan_orphan_secrets),
     ("unbound_connectors", _scan_unbound_connectors),
@@ -339,6 +677,14 @@ _SCANNERS: list[tuple[str, Any]] = [
     ("inactive_triggers", _scan_inactive_triggers),
     ("orphan_snapshots", _scan_orphan_snapshots),
     ("expired_webhook_dedups", _scan_expired_webhook_dedups),
+    ("duplicate_triggers", _scan_duplicate_triggers),
+    ("unused_environment_profiles", _scan_unused_environment_profiles),
+    ("stale_api_keys", _scan_stale_api_keys),
+    ("unused_sso_providers", _scan_unused_sso_providers),
+    ("empty_teams", _scan_empty_teams),
+    ("unused_parameter_schemas", _scan_unused_parameter_schemas),
+    ("unused_schemas", _scan_unused_schemas),
+    ("empty_lifecycle_maps", _scan_empty_lifecycle_maps),
 ]
 
 

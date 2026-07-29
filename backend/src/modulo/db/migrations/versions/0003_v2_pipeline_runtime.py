@@ -369,7 +369,7 @@ def _create_tables() -> None:
         sa.Column("tag", sa.String(length=100), nullable=True),
         sa.Column("notes", sa.String(length=2000), nullable=True),
         sa.Column("default_autonomy_level", sa.String(length=30), nullable=True),
-        sa.Column("config_json", sa.JSON(), server_default='{}'::json, nullable=False),
+        sa.Column("config_json", sa.JSON(), server_default=sa.text("'{}'::json"), nullable=False),
         sa.Column("run_context_defaults", sa.JSON(), nullable=False),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
