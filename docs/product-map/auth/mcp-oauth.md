@@ -10,6 +10,9 @@ code:
   - backend/src/modulo/auth/oauth.py
   - backend/src/modulo/db/models/oauth_client.py
   - backend/src/modulo/db/models/oauth_token.py
+unit-tests:
+  - backend/tests/unit/api/test_mcp_oauth.py
+  - backend/tests/unit/api/test_mcp_oauth_bdd.py
 depends-on: [feat-core-oidc-integration, feat-auth-jwt-auth]
 status: partial
 ---

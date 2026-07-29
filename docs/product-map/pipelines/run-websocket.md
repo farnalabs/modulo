@@ -1,6 +1,7 @@
 ---
 id: feat-pipelines-run-websocket
 prd: 6.3
+delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/operations/websocket_reconnection.feature
 unit-tests:

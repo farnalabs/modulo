@@ -1,6 +1,7 @@
 ---
 id: feat-core-determination
 prd: 8.16
+delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/determination.py
   - backend/src/modulo/determination/draft.py

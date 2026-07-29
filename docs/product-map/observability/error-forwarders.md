@@ -1,6 +1,7 @@
 ---
 id: feat-observability-error-forwarders
 prd: 8.25
+delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/error_forwarder_config.py
 bdd:

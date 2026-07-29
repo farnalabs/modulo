@@ -1,6 +1,7 @@
 ---
 id: feat-core-email-config
 prd: 8.11
+delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/admin_email.py
   - backend/src/modulo/core/email_service.py

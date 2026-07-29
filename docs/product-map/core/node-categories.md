@@ -1,6 +1,7 @@
 ---
 id: feat-core-node-categories
 prd: 8
+delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/node_categories.py
   - backend/src/modulo/db/crud/node_category.py
