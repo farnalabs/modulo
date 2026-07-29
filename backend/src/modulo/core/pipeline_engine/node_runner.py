@@ -737,6 +737,7 @@ def make_sandbox_agent_fn(
                             **env_vars_extra,
                         },
                     ),
+                    timeout=sandbox_timeout,
                 )
             except asyncio.CancelledError:
                 raise
