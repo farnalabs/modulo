@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 
 from sqlalchemy import CheckConstraint, ForeignKey, ForeignKeyConstraint, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -27,3 +27,4 @@ class SnapshotSchemaPin(OrgScoped):
     )
 
     snapshot = relationship("PipelineSnapshot", back_populates="schema_pins")
+
