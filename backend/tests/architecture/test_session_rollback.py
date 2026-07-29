@@ -20,7 +20,7 @@ def test_no_bare_session_rollback():
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (SyntaxError, UnicodeDecodeError, OSError):
             continue
         for node in ast.walk(tree):
             if not isinstance(node, ast.Expr):

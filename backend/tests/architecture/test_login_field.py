@@ -25,7 +25,7 @@ def test_login_payload_uses_email_not_username():
             continue
         try:
             content = path.read_text(encoding="utf-8")
-        except Exception:
+        except (UnicodeDecodeError, OSError):
             continue
         for i, line in enumerate(content.splitlines(), 1):
             if not LOGIN_PAYLOAD.search(line):

@@ -35,7 +35,7 @@ def test_no_raw_sql_fstrings():
     for path in _iter_py_files(SRC):
         try:
             content = path.read_text(encoding="utf-8")
-        except Exception:
+        except (UnicodeDecodeError, OSError):
             continue
         for i, line in enumerate(content.splitlines(), 1):
             if RAWSQL_CALLS.search(line):

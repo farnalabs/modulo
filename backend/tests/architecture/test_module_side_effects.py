@@ -19,7 +19,7 @@ def test_no_module_level_side_effects():
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (SyntaxError, UnicodeDecodeError, OSError):
             continue
         for node in tree.body:
             # Skip imports, defs, classes, assignments, type aliases, decorators
