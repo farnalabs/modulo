@@ -11,14 +11,14 @@ Connection budget (per prefork child):
   Sync pool: pool_size + max_overflow (claims + heartbeats)
   Async pool: pool_size + max_overflow (pipeline execution)
   Total per child: (sync_N+sync_O) + (async_N+async_O)
-  Enforced by Settings._check_connection_budget (per-child max = 20)
+  Enforced by Settings._check_connection_budget (per-child max = 16)
   Total per cluster: per_child_value x worker_count
     automated workers (4): default 10/child x 4 = 40 connections
     manual workers (2):    default 10/child x 2 = 20 connections
     beat:                  1 connection
     web app:               ~10-20 connections (separate pool)
   Postgres max_connections default: 100
-  Budget at defaults: 40+20+1 = ~61 out of 100 (safe margin)
+  Budget at defaults: 40+20+1 = ~61 out of 100 (96 max at cap)
 """
 
 import asyncio
@@ -116,14 +116,14 @@ def _get_engines():
         pool_size=s.modulo_celery_db_pool_sync_size,
         max_overflow=s.modulo_celery_db_pool_sync_overflow,
         pool_pre_ping=True,
-        pool_recycle=3600,
+        pool_recycle=1800,
     )
     _ASYNC_ENGINE = create_async_engine(
         s.database_url,
         pool_size=s.modulo_celery_db_pool_async_size,
         max_overflow=s.modulo_celery_db_pool_async_overflow,
         pool_pre_ping=True,
-        pool_recycle=3600,
+        pool_recycle=1800,
     )
     return _SYNC_ENGINE, _ASYNC_ENGINE
 
@@ -152,6 +152,7 @@ if _CELERY_SIGNALS_AVAILABLE:
     @worker_process_init.connect
     def _init_worker(**kw: Any) -> None:
         global _worker_loop
+        reset_engines()
         _worker_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(_worker_loop)
         _log.info("pipeline_executor_task: worker process initialised")
