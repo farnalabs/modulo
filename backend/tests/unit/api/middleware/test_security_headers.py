@@ -8,6 +8,8 @@ EXPECTED_CSP = (
     "connect-src 'self' *.ingest.sentry.io *.datadoghq.com *.dd.dg *.rum.browserevents.com; "
     "script-src 'self' 'unsafe-inline'; "
     "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "frame-src 'self'; "
     "frame-ancestors 'none'"
 )
 EXPECTED_HSTS = "max-age=31536000; includeSubDomains"
