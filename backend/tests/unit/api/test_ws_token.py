@@ -1,6 +1,5 @@
 """Unit tests for ws-token endpoint and create_ws_token utility."""
 
-import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime, timedelta
@@ -26,22 +25,13 @@ _VALID_32 = "a" * 32
 
 
 @pytest.fixture(autouse=True)
-def _set_env() -> Generator[None, None, None]:
+def _set_env(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Set required env vars for middleware that calls get_settings() directly."""
-    old = {k: os.environ.pop(k, None) for k in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY")}
-    os.environ["DATABASE_URL"] = "postgresql+asyncpg://localhost/test"
-    os.environ["SECRET_KEY"] = _VALID_32
-    os.environ["FERNET_KEY"] = _VALID_32
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+    monkeypatch.setenv("SECRET_KEY", _VALID_32)
+    monkeypatch.setenv("FERNET_KEY", _VALID_32)
     get_settings.cache_clear()
-    try:
-        yield
-    finally:
-        for k, v in old.items():
-            if v is not None:
-                os.environ[k] = v
-            else:
-                os.environ.pop(k, None)
-        get_settings.cache_clear()
+    yield
 
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

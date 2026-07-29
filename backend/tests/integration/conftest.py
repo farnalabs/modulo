@@ -6,6 +6,7 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -80,8 +81,8 @@ def migrated_db_url(db_url: str) -> str:
     asyncio.run(_ensure_alembic_table())
     # Override DATABASE_URL so alembic env.py uses the testcontainer, not any
     # CI env var pointing at the service postgres.
-    os.environ["DATABASE_URL"] = db_url
-    command.upgrade(config, "heads")
+    with patch.dict(os.environ, {"DATABASE_URL": db_url}):
+        command.upgrade(config, "heads")
 
     async def _existing_cols(conn: Any, table: str) -> set[str]:
         result = await conn.execute(
