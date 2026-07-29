@@ -18,7 +18,7 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { fetchUnreadCount } from "../lib/api/notifications";
 import { registerHandler } from "../stores/syncRegistry";
-import Bell from "@lucide/vue/icons/bell";
+import { Bell } from "@lucide/vue";
 
 const unreadCount = ref(0);
 
@@ -43,3 +43,4 @@ onUnmounted(() => {
   if (unsubHandler) unsubHandler();
 });
 </script>
+

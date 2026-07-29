@@ -188,10 +188,10 @@ import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
 import CommandPalette from "./CommandPalette.vue";
 import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
-import { Sun } from "lucide-vue-next";
-import { Moon } from "lucide-vue-next";
-import { Menu } from "lucide-vue-next";
-import { X } from "lucide-vue-next";
+import { Sun } from "@lucide/vue";
+import { Moon } from "@lucide/vue";
+import { Menu } from "@lucide/vue";
+import { X } from "@lucide/vue";
 
 const planStore = usePlanStore();
 const remyStore = useRemyStore();
@@ -297,3 +297,5 @@ onMounted(() => {
   cursor: pointer;
 }
 </style>
+
+
