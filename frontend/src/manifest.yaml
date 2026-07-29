@@ -775,71 +775,59 @@ sidebar_groups:
         label: Lifecycle
         order: 0
         default_expanded: true
-        simple_mode: true
         labelKey: components.SidebarNav.group_lifecycle
     core:
         label: Core
         order: 1
         default_expanded: true
-        simple_mode: true
         labelKey: components.SidebarNav.group_core
     analysis:
         label: Analysis
         order: 2
         default_expanded: true
-        simple_mode: false
         labelKey: components.SidebarNav.group_analysis
     evals:
         label: Evals
         order: 3
         default_expanded: true
-        simple_mode: false
         labelKey: components.SidebarNav.group_evals
     schemas:
         label: Schemas
         order: 4
         default_expanded: true
-        simple_mode: false
         labelKey: components.SidebarNav.group_schemas
     remy:
         label: Remy
         order: 5
         default_expanded: true
-        simple_mode: true
         labelKey: components.SidebarNav.group_remy
     settings:
         label: Settings
         order: 6
         default_expanded: true
-        simple_mode: true
         labelKey: components.SidebarNav.group_settings
     access-control:
         label: Access Control
         order: 7
         default_expanded: true
-        simple_mode: false
         labelKey: components.SidebarNav.group_access_control
     cost-management:
         label: Cost Management
         order: 8
         default_expanded: true
-        simple_mode: false
         labelKey: components.SidebarNav.group_cost_management
     system:
         label: System
         order: 9
         default_expanded: true
-        simple_mode: false
         labelKey: components.SidebarNav.group_system
     monitoring:
         label: Monitoring
         order: 10
         default_expanded: true
-        simple_mode: false
         labelKey: components.SidebarNav.group_monitoring
     extensions:
         label: Extensions
         order: 11
         default_expanded: true
-        simple_mode: false
         labelKey: components.SidebarNav.group_extensions

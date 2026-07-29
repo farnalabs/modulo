@@ -36,6 +36,7 @@ class Agent(OrgScoped):
     prompt_always_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     template_id: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
     agent_command: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
+    agent_commands: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     input_schema_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
