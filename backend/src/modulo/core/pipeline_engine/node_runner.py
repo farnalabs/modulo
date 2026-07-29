@@ -716,7 +716,7 @@ def make_sandbox_agent_fn(
                     sandbox.commands.run(
                         agent_command,
                         timeout=sandbox_timeout,
-                        timeout=sandbox_timeout,
+
                         envs={
                             # System env vars first -- provide defaults from the host.
                             # DO NOT move env_vars_extra before these. Pipelines need
