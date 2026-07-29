@@ -81,9 +81,9 @@
 import { ref, computed, onMounted } from "vue";
 import { PopoverRoot, PopoverTrigger, PopoverContent } from "radix-vue";
 import { useI18n } from "vue-i18n";
-import ChevronDown from "@lucide/vue/icons/chevron-down";
-import Globe from "@lucide/vue/icons/globe";
-import Users from "@lucide/vue/icons/users";
+import { ChevronDown } from "@lucide/vue";
+import { Globe } from "@lucide/vue";
+import { Users } from "@lucide/vue";
 import { api } from "../lib/api/client";
 import type { components } from "../lib/api/client";
 
@@ -148,3 +148,4 @@ async function loadTeams() {
 
 onMounted(loadTeams);
 </script>
+

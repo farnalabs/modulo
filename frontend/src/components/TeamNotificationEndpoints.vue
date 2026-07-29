@@ -331,10 +331,10 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "../components/ui/tooltip";
-import Pencil from "@lucide/vue/icons/pencil";
-import Play from "@lucide/vue/icons/play";
-import Trash2 from "@lucide/vue/icons/trash-2";
-import Plus from "@lucide/vue/icons/plus";
+import { Pencil } from "@lucide/vue";
+import { Play } from "@lucide/vue";
+import { Trash2 } from "@lucide/vue";
+import { Plus } from "@lucide/vue";
 
 type NotificationEndpointResponse =
   components["schemas"]["NotificationEndpointResponse"];
@@ -552,3 +552,4 @@ async function test(ep: NotificationEndpointResponse) {
 
 onMounted(() => loadEndpoints());
 </script>
+
