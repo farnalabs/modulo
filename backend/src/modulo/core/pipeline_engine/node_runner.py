@@ -623,7 +623,7 @@ def make_sandbox_agent_fn(
     from e2b import AsyncSandbox  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
 
-    @cancellable_node(timeout=timeout or sandbox_timeout, role="sandbox_agent")
+    @cancellable_node(timeout=(timeout or sandbox_timeout) + 30, role="sandbox_agent")  # +30s buffer over sandbox_timeout — inner timeout fires first; decorator is safety net
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
 
         run_context: dict[str, Any] = state.get("run_context") or {}
@@ -686,7 +686,7 @@ def make_sandbox_agent_fn(
                 cmd_result = await asyncio.wait_for(
                     sandbox.commands.run(
                         agent_command,
-                        timeout=max(1, sandbox_timeout - 10),  # inner timeout first — prevents race with outer cancellable_node (identical value causes ~50% node_timeout)
+                        timeout=sandbox_timeout,
                         envs={
                             **env_vars_extra,
                             "MODULO_RUN_ID": run_id,
@@ -699,7 +699,7 @@ def make_sandbox_agent_fn(
                             or os.environ.get("GITHUB_TOKEN", ""),
                         },
                     ),
-                    timeout=max(1, sandbox_timeout - 10),  # inner timeout first — prevents race with outer cancellable_node (identical value causes ~50% node_timeout)
+                    timeout=sandbox_timeout,
                 )
             except asyncio.CancelledError:
                 raise
