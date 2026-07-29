@@ -1,4 +1,5 @@
 import logging
+import re
 import smtplib
 import time
 from email.message import EmailMessage
@@ -37,6 +38,8 @@ def send_email(
 
     if body_text:
         msg.set_content(body_text)
+    else:
+        msg.set_content(re.sub("<[^<]+?>", "", body_html).strip())
 
     msg.add_alternative(body_html, subtype="html")
 

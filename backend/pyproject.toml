@@ -239,6 +239,7 @@ filterwarnings = [
     "default::pytest.PytestUnraisableExceptionWarning",
     "error::ResourceWarning",
     "error::DeprecationWarning",
+    "ignore::DeprecationWarning:onelogin",
 ]
 testpaths = ["tests"]
 addopts = "-q -m 'not awaiting-implementation'"
