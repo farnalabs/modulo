@@ -1,6 +1,8 @@
-name: "CI: PR Validation"
+name: "CI: Validation"
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -637,3 +639,4 @@ jobs:
             if [ "${STATUS}" = "failed" ]; then echo "::error::Failed: ${ERROR}"; exit 1; fi
           done
           echo "::error::Timed out"; exit 1
+
