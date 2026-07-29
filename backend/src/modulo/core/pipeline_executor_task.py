@@ -4,18 +4,21 @@ All pipeline execution flows through a single Celery task registered
 as ``modulo.pipeline.execute_run``.  Uses a persistent asyncio event
 loop per prefork child and lazy, thread-safe engine singletons.
 
+The stale-run recovery sweep shares the async engine -- it runs every
+5 minutes as a beat task and does not compete with execution for pool slots.
+
 Connection budget (per prefork child):
-  Sync pool: pool_size + max_overflow = up to N+O connections (claims + heartbeats)
-  Async pool: pool_size + max_overflow = up to N+O connections (pipeline execution)
+  Sync pool: pool_size + max_overflow (claims + heartbeats)
+  Async pool: pool_size + max_overflow (pipeline execution)
   Total per child: (sync_N+sync_O) + (async_N+async_O)
+  Enforced by Settings._check_connection_budget (per-child max = 20)
   Total per cluster: per_child_value x worker_count
-    automated workers (4): 2x4 sync, 4x4 async = 24 connections
-    manual workers (2):    2x2 sync, 4x2 async = 12 connections
-    sweep recovery (1):    0 sync, 1+1 async  = 2 connections
+    automated workers (4): default 10/child x 4 = 40 connections
+    manual workers (2):    default 10/child x 2 = 20 connections
     beat:                  1 connection
     web app:               ~10-20 connections (separate pool)
   Postgres max_connections default: 100
-  Budget at defaults: 24+12+2+1 = ~39 out of 100 (safe margin)
+  Budget at defaults: 40+20+1 = ~61 out of 100 (safe margin)
 """
 
 import asyncio
@@ -35,6 +38,7 @@ try:
     import sqlalchemy.exc
     from celery import Task
     from celery.signals import worker_process_init, worker_process_shutdown
+
     _CELERY_SIGNALS_AVAILABLE = True
 except ImportError:
     import typing
@@ -69,17 +73,30 @@ if _CELERY_SIGNALS_AVAILABLE:
 
     @worker_process_shutdown.connect
     def _dispose_worker_engines(**kwargs):
+        """Dispose engine singletons on worker shutdown.
+
+        Assumes Celery's graceful shutdown (default: wait for running tasks to
+        finish). If a task holds a connection when dispose() fires, the
+        connection becomes invalid mid-operation -- graceful shutdown avoids
+        this race.
+        """
         global _SYNC_ENGINE, _ASYNC_ENGINE
         if _SYNC_ENGINE is not None:
-            _SYNC_ENGINE.dispose()
+            try:
+                _SYNC_ENGINE.dispose()
+            except Exception:
+                _log.exception("pipeline_executor._dispose_sync_engine")
             _SYNC_ENGINE = None
         if _ASYNC_ENGINE is not None:
             try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            loop.run_until_complete(_ASYNC_ENGINE.dispose())
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                loop.run_until_complete(_ASYNC_ENGINE.dispose())
+            except Exception:
+                _log.exception("pipeline_executor._dispose_async_engine")
             _ASYNC_ENGINE = None
 
 
@@ -96,15 +113,15 @@ def _get_engines():
     )
     _SYNC_ENGINE = create_engine(
         sync_url,
-        pool_size=s.modulo_celery_pool_sync_size,
-        max_overflow=s.modulo_celery_pool_overflow,
+        pool_size=s.modulo_celery_db_pool_sync_size,
+        max_overflow=s.modulo_celery_db_pool_sync_overflow,
         pool_pre_ping=True,
         pool_recycle=3600,
     )
     _ASYNC_ENGINE = create_async_engine(
         s.database_url,
-        pool_size=s.modulo_celery_pool_async_size,
-        max_overflow=s.modulo_celery_pool_overflow,
+        pool_size=s.modulo_celery_db_pool_async_size,
+        max_overflow=s.modulo_celery_db_pool_async_overflow,
         pool_pre_ping=True,
         pool_recycle=3600,
     )
@@ -117,6 +134,17 @@ def _get_sync_engine():
 
 def _get_async_engine():
     return _get_engines()[1]
+
+
+def reset_engines():
+    """Reset engine singletons. Call in test setup to isolate test cases."""
+    global _SYNC_ENGINE, _ASYNC_ENGINE
+    for e in (_SYNC_ENGINE, _ASYNC_ENGINE):
+        if e is not None:
+            with contextlib.suppress(Exception):
+                e.dispose()
+    _SYNC_ENGINE = None
+    _ASYNC_ENGINE = None
 
 
 if _CELERY_SIGNALS_AVAILABLE:
@@ -132,11 +160,20 @@ if _CELERY_SIGNALS_AVAILABLE:
     def _shutdown_worker(**kw: Any) -> None:
         global _SYNC_ENGINE, _ASYNC_ENGINE, _worker_loop
         if _SYNC_ENGINE is not None:
-            _SYNC_ENGINE.dispose()
+            try:
+                _SYNC_ENGINE.dispose()
+            except Exception:
+                _log.exception("pipeline_executor._shutdown_sync_engine")
         if _ASYNC_ENGINE is not None and _worker_loop is not None:
-            _worker_loop.run_until_complete(_ASYNC_ENGINE.dispose())
+            try:
+                _worker_loop.run_until_complete(_ASYNC_ENGINE.dispose())
+            except Exception:
+                _log.exception("pipeline_executor._shutdown_async_engine")
         if _worker_loop is not None:
-            _worker_loop.close()
+            try:
+                _worker_loop.close()
+            except Exception:
+                _log.exception("pipeline_executor._close_worker_loop")
         _log.info("pipeline_executor_task: worker process shut down")
 
 
@@ -358,26 +395,18 @@ class StaleRunRecoveryTask(Task):
 async def _stale_run_recovery_sweep() -> dict[str, Any]:
     """Sweep stale pending and running pipeline runs.
 
-    Uses its own dedicated async engine (pool_size=1, max_overflow=1)
-    so the sweep does not compete with the execution pool for connections.
+    Uses the shared async engine (not a dedicated engine) -- the sweep is a
+    periodic beat task that runs every 5 minutes and does not compete with
+    execution for pool slots.
 
     - Pending runs older than 5 minutes with no ``dispatched_at`` are marked
       ``failed`` with ``never_dispatched``.
     - Running runs with a heartbeat older than 10 minutes and 5+ claims are
       marked ``failed`` with ``worker_lost``.
     """
-    from modulo.settings import get_settings
-
-    s = get_settings(fresh=True)
-    sweep_engine = create_async_engine(
-        s.database_url,
-        pool_size=1,
-        max_overflow=1,
-        pool_pre_ping=True,
-        pool_recycle=3600,
-    )
+    _, async_engine = _get_engines()
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
     try:
-        factory = async_sessionmaker(sweep_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             never_result = await session.execute(
                 text("""
@@ -422,8 +451,6 @@ async def _stale_run_recovery_sweep() -> dict[str, Any]:
             "worker_lost_swept": 0,
             "error": "sweep_failed",
         }
-    finally:
-        await sweep_engine.dispose()
 
 
 try:

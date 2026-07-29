@@ -62,9 +62,12 @@ class Settings(BaseSettings):
     modulo_max_local_concurrency: int = Field(2)
 
     # Celery worker connection pool sizes (per prefork child)
-    modulo_celery_pool_sync_size: int = Field(default=2, alias="MODULO_CELERY_POOL_SYNC_SIZE", ge=1, le=20)
-    modulo_celery_pool_async_size: int = Field(default=4, alias="MODULO_CELERY_POOL_ASYNC_SIZE", ge=1, le=30)
-    modulo_celery_pool_overflow: int = Field(default=2, alias="MODULO_CELERY_POOL_OVERFLOW", ge=0, le=10)
+    modulo_celery_db_pool_sync_size: int = Field(default=2, alias="MODULO_CELERY_DB_POOL_SYNC_SIZE", ge=1, le=20)
+    modulo_celery_db_pool_async_size: int = Field(default=4, alias="MODULO_CELERY_DB_POOL_ASYNC_SIZE", ge=1, le=30)
+    modulo_celery_db_pool_sync_overflow: int = Field(default=2, alias="MODULO_CELERY_DB_POOL_SYNC_OVERFLOW", ge=0, le=5)
+    modulo_celery_db_pool_async_overflow: int = Field(
+        default=2, alias="MODULO_CELERY_DB_POOL_ASYNC_OVERFLOW", ge=0, le=5
+    )
 
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)
@@ -243,6 +246,24 @@ class Settings(BaseSettings):
             if self.database_url.startswith("postgresql+asyncpg://"):
                 self.database_url = "mysql+aiomysql://modulo:modulo@localhost:5435/modulo"
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
+        return self
+
+    @model_validator(mode="after")
+    def _check_connection_budget(self) -> "Settings":
+        per_child = (
+            self.modulo_celery_db_pool_sync_size
+            + self.modulo_celery_db_pool_sync_overflow
+            + self.modulo_celery_db_pool_async_size
+            + self.modulo_celery_db_pool_async_overflow
+        )
+        max_safe = 20
+        if per_child > max_safe:
+            raise ValueError(
+                f"Total connections per Celery worker child ({per_child}) exceeds {max_safe}. "
+                f"Reduce MODULO_CELERY_DB_POOL_SYNC_SIZE, _ASYNC_SIZE, or _*_OVERFLOW. "
+                f"Current: sync={self.modulo_celery_db_pool_sync_size}+{self.modulo_celery_db_pool_sync_overflow}, "
+                f"async={self.modulo_celery_db_pool_async_size}+{self.modulo_celery_db_pool_async_overflow}"
+            )
         return self
 
 
