@@ -21,8 +21,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
-from authlib.oauth2 import OAuth2Error as _OAuth2Error
-from authlib.oauth2.rfc6749 import (
+from authlib.oauth2 import OAuth2Error as _OAuth2Error  # type: ignore[import-untyped]
+from authlib.oauth2.rfc6749 import (  # type: ignore[import-untyped]
     AuthorizationCodeMixin,
     ClientMixin,
     TokenMixin,
@@ -53,7 +53,7 @@ VALID_SCOPES = frozenset({"trigger:run", "hitl:review", "library:browse"})
 # ---------------------------------------------------------------------------
 
 
-class OAuthError(_OAuth2Error):
+class OAuthError(_OAuth2Error):  # type: ignore[misc]
     """Base OAuth error. ``error`` maps to RFC 6749 error values."""
 
     def __init__(self, error_code: str, description: str = "") -> None:
@@ -90,7 +90,7 @@ class AccessDeniedError(OAuthError):
 # ---------------------------------------------------------------------------
 
 
-class AuthlibClientWrapper(ClientMixin):
+class AuthlibClientWrapper(ClientMixin):  # type: ignore[misc]
     """Wraps an OAuthClient ORM model for authlib ClientMixin compatibility."""
 
     def __init__(self, client: OAuthClient) -> None:
@@ -125,10 +125,10 @@ class AuthlibClientWrapper(ClientMixin):
             return ""
         allowed = set(scope_to_list(self._client.scopes))
         requested = set(scope_to_list(scope))
-        return list_to_scope(sorted(allowed & requested))
+        return list_to_scope(sorted(allowed & requested))  # type: ignore[no-any-return]
 
 
-class AuthlibCodeWrapper(AuthorizationCodeMixin):
+class AuthlibCodeWrapper(AuthorizationCodeMixin):  # type: ignore[misc]
     """Wraps an OAuthAuthorizationCode ORM model for authlib."""
 
     def __init__(self, code: OAuthAuthorizationCode) -> None:
@@ -141,7 +141,7 @@ class AuthlibCodeWrapper(AuthorizationCodeMixin):
         return self._code.scopes
 
 
-class AuthlibTokenWrapper(TokenMixin):
+class AuthlibTokenWrapper(TokenMixin):  # type: ignore[misc]
     """Wraps decoded JWT claims for authlib token validation."""
 
     def __init__(self, client_id: str, scopes: list[str], expires_at: datetime) -> None:
@@ -683,7 +683,7 @@ def validate_client_scopes(client: OAuthClient, requested_scopes: list[str]) -> 
     valid = scope_to_list(allowed_scope)
     if not valid:
         raise UnauthorizedClientError("None of the requested scopes are allowed for this client")
-    return valid
+    return valid  # type: ignore[no-any-return]
 
 
 def validate_token_scope(token_scopes: str, required_scope: str) -> bool:

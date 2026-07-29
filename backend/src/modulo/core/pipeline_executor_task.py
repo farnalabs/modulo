@@ -172,7 +172,7 @@ if _CELERY_SIGNALS_AVAILABLE:
 
 def dispatch(run_id: str, org_id: str, queue: str) -> None:
     """Dispatch a run to Celery and record dispatched_at (best-effort)."""
-    from modulo.celery_app import app as celery_app
+    from modulo.celery_app import app as celery_app  # type: ignore[attr-defined]
 
     celery_app.send_task(
         _TASK_NAME,
@@ -191,7 +191,7 @@ def dispatch(run_id: str, org_id: str, queue: str) -> None:
         _log.warning("Failed to record dispatched_at for %s", run_id)
 
 
-class ExecuteRunTask(Task):
+class ExecuteRunTask(Task):  # type: ignore[misc]
     """Celery task that executes a single pipeline run end-to-end.
 
     Claim semantics (via SQL) ensure at-most-once execution; heartbeat
@@ -214,14 +214,14 @@ class ExecuteRunTask(Task):
     acks_late = True
     reject_on_worker_lost = True
 
-    def run(self, run_id: str, org_id: str):
+    def run(self, run_id: str, org_id: str) -> None:
         global _worker_loop
         if _worker_loop is None:
             _worker_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(_worker_loop)
         _worker_loop.run_until_complete(_do_execute(run_id, org_id, self))
 
-    def on_failure(self, exc, task_id, args, kwargs, einfo):
+    def on_failure(self, exc, task_id, args, kwargs, einfo) -> None:  # type: ignore[no-untyped-def]
         run_id = args[0] if args else None
         org_id = args[1] if len(args) > 1 else None
         if not run_id or not org_id:
@@ -246,7 +246,7 @@ class ExecuteRunTask(Task):
             _log.exception("on_failure handler failed for run %s", run_id)
 
 
-async def _do_execute(run_id: str, org_id: str, task_instance: Task):
+async def _do_execute(run_id: str, org_id: str, task_instance: Task) -> None:
     """Execute a single pipeline run from claim through completion."""
     aeng = _get_async_engine()
     rid = uuid.UUID(run_id)
@@ -261,7 +261,7 @@ async def _do_execute(run_id: str, org_id: str, task_instance: Task):
     if cur is None:
         return
 
-    heartbeat_task: asyncio.Task | None = None
+    heartbeat_task: asyncio.Task[Any] | None = None
     try:
         heartbeat_task = asyncio.create_task(
             _heartbeat_loop(str(rid), str(oid)),
@@ -305,7 +305,7 @@ def _claim_run(run_id: str, org_id: str) -> bool:
         return False
 
 
-async def _load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID):
+async def _load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID) -> tuple[Any, Any]:
     """Load the Run and create PipelineExecutor with checkpointer."""
     from modulo.core.pipeline_engine.executor import PipelineExecutor
     from modulo.db.crud.run import get_run
@@ -324,7 +324,7 @@ async def _load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID):
     return cur, executor
 
 
-async def _heartbeat_loop(run_id: str, org_id: str):
+async def _heartbeat_loop(run_id: str, org_id: str) -> None:
     """Periodic heartbeat every 30s to keep the run alive."""
     aeng = _get_async_engine()
     while True:
@@ -346,7 +346,7 @@ async def _heartbeat_loop(run_id: str, org_id: str):
             _log.warning("Heartbeat failed for run %s", run_id)
 
 
-async def _mark_complete(aeng: AsyncEngine, run_id: str, org_id: str):
+async def _mark_complete(aeng: AsyncEngine, run_id: str, org_id: str) -> None:
     """Mark the run as completed if it's still running (don't overwrite failure/cancellation)."""
     factory = async_sessionmaker(aeng, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -359,7 +359,7 @@ async def _mark_complete(aeng: AsyncEngine, run_id: str, org_id: str):
             cur.completed_at = datetime.now(UTC)
 
 
-async def _set_rls_org(session, org_id: uuid.UUID):
+async def _set_rls_org(session: Any, org_id: uuid.UUID) -> None:
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
         await session.execute(
@@ -370,7 +370,7 @@ async def _set_rls_org(session, org_id: uuid.UUID):
         session.info["organisation_id"] = org_id
 
 
-class StaleRunRecoveryTask(Task):
+class StaleRunRecoveryTask(Task):  # type: ignore[misc]
     """Beat periodic task that recovers stale runs every 5 minutes.
 
     Handles two scenarios:
