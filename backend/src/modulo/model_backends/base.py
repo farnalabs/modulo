@@ -23,12 +23,20 @@ class HealthResult:
 async def openai_compatible_health_check(
     base_url: str,
     api_key: str | None,
+    extra_headers: dict[str, str] | None = None,
 ) -> HealthResult:
-    """Try GET {base_url}/models to verify reachability + credentials."""
+    """Try GET {base_url}/models to verify reachability + credentials.
+
+    For Bearer-auth endpoints, pass *api_key*. For providers that use
+    custom auth headers (x-api-key, x-goog-api-key, api-key), pass the
+    key via *extra_headers* and set *api_key* to None.
+    """
     url = f"{base_url.rstrip('/')}/models"
     headers: dict[str, str] = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    if extra_headers:
+        headers.update(extra_headers)
     try:
         async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
             response = await client.get(url, headers=headers)
