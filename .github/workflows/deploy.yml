@@ -277,7 +277,7 @@ jobs:
         run: npm run test:e2e:smoke -- --reporter=line
         timeout-minutes: 10
         env:
-          E2E_TARGET: production
+          E2E_TARGET: app
           E2E_NO_WEBSERVER: "true"
           E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
           E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
@@ -289,3 +289,4 @@ jobs:
         run: |
           Write-Host "::error::Smoke tests against production failed."
           exit 1
+
