@@ -50,6 +50,7 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
+        redis_url="redis://localhost:6379/0",
     )
 
 
@@ -212,6 +213,7 @@ def test_trigger_run_returns_202(client: TestClient) -> None:
         patch("modulo.api.routes.runs.create_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org") as set_org,
         patch("modulo.api.routes.runs.PipelineExecutor") as mock_executor_cls,
+        patch("modulo.api.routes.runs._get_celery_app"),
     ):
         mock_executor = AsyncMock()
         mock_executor.execute = AsyncMock(return_value=_make_run(status="complete"))
@@ -244,6 +246,7 @@ def test_trigger_run_body_includes_thread_id(client: TestClient) -> None:
         patch("modulo.api.routes.runs.create_run", return_value=run) as create_run_mock,
         patch("modulo.api.routes.runs.set_rls_org"),
         patch("modulo.api.routes.runs.PipelineExecutor") as mock_executor_cls,
+        patch("modulo.api.routes.runs._get_celery_app"),
     ):
         mock_executor_cls.return_value.execute = AsyncMock(return_value=run)
         resp = client.post(
@@ -546,6 +549,7 @@ def test_run_response_all_new_fields_present_in_trigger_endpoint(client: TestCli
         patch("modulo.api.routes.runs.create_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
         patch("modulo.api.routes.runs.PipelineExecutor") as mock_executor_cls,
+        patch("modulo.api.routes.runs._get_celery_app"),
     ):
         mock_executor_cls.return_value.execute = AsyncMock(return_value=run)
         resp = client.post(
