@@ -135,3 +135,62 @@ class TestSendEmail:
             assert result is True
             msg = mock_server.send_message.call_args[0][0]
             assert msg["Subject"] == ""
+
+    def test_send_email_special_characters_in_subject(self):
+        settings = MockSettings()
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+
+            result = send_email(
+                settings,
+                to=["admin@example.com"],
+                subject="Test: üñíçödé & <special> chars!",
+                body_html="<html><body><h1>Test</h1></body></html>",
+                body_text="Test",
+            )
+
+            assert result is True
+            msg = mock_server.send_message.call_args[0][0]
+            assert msg["Subject"] == "Test: üñíçödé & <special> chars!"
+
+    def test_send_email_mime_structure(self):
+        settings = MockSettings()
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+
+            result = send_email(
+                settings,
+                to=["admin@example.com"],
+                subject="MIME Test",
+                body_html="<html><body><h1>HTML</h1></body></html>",
+                body_text="Plain text version",
+            )
+
+            assert result is True
+            msg = mock_server.send_message.call_args[0][0]
+            assert msg.is_multipart()
+            parts = [p.get_content_type() for p in msg.walk() if p.get_content_maintype() != "multipart"]
+            assert "text/plain" in parts
+            assert "text/html" in parts
+
+    def test_send_email_mime_structure_html_only(self):
+        settings = MockSettings()
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+
+            result = send_email(
+                settings,
+                to=["admin@example.com"],
+                subject="HTML Only",
+                body_html="<html><body><h1>HTML</h1></body></html>",
+            )
+
+            assert result is True
+            msg = mock_server.send_message.call_args[0][0]
+            assert msg.is_multipart()
+            parts = [p.get_content_type() for p in msg.walk() if p.get_content_maintype() != "multipart"]
+            assert "text/html" in parts
+            assert "text/plain" in parts
