@@ -186,6 +186,7 @@ async def update_run_status(
     total_cost_usd: Decimal | None = None,
     node_token_usage: dict[str, Any] | None = None,
     outputs_json: dict[str, Any] | None = None,
+    claimed_by: str | None = None,
 ) -> Run | None:
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
     run = result.scalar_one_or_none()
@@ -194,6 +195,8 @@ async def update_run_status(
     run.status = status
     if status == "running" and run.started_at is None:
         run.started_at = datetime.now(UTC)
+    if claimed_by is not None:
+        run.claimed_by = claimed_by
     if status in ("complete", "failed", "cancelled", "eval_failed"):
         run.completed_at = datetime.now(UTC)
     if error_code is not None:
