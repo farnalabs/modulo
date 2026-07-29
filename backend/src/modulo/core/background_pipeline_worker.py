@@ -165,6 +165,7 @@ class BackgroundPipelineWorker:
                                   AND r.updated_at < NOW()
                                     - COALESCE(p.stale_run_timeout_minutes, 30) * INTERVAL '1 minute'
                                   AND (r.outputs_json IS NULL OR r.outputs_json::jsonb = '{}'::jsonb)
+                                  AND r.claimed_by IS NOT NULL
                             """)
                         )
                         for row in rows:
