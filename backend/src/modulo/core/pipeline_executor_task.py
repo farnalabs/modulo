@@ -30,12 +30,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Engine, create_engine, text
-from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 try:
-    import kombu.exceptions
     import kombu
+    import kombu.exceptions
     import redis.exceptions
     import sqlalchemy.exc
     from celery import Task
@@ -110,11 +109,12 @@ def _get_engines() -> tuple[Engine, AsyncEngine]:
             connect_args={"connect_timeout": s.modulo_celery_db_pool_connect_timeout},
         )
         _log.info(
-            "Engines created: sync(pool=%d, overflow=%d, timeout=%ds) "
-            "async(pool=%d, overflow=%d, timeout=%ds)",
-            s.modulo_celery_db_pool_sync_size, s.modulo_celery_db_pool_sync_overflow,
+            "Engines created: sync(pool=%d, overflow=%d, timeout=%ds) async(pool=%d, overflow=%d, timeout=%ds)",
+            s.modulo_celery_db_pool_sync_size,
+            s.modulo_celery_db_pool_sync_overflow,
             s.modulo_celery_db_pool_connect_timeout,
-            s.modulo_celery_db_pool_async_size, s.modulo_celery_db_pool_async_overflow,
+            s.modulo_celery_db_pool_async_size,
+            s.modulo_celery_db_pool_async_overflow,
             s.modulo_celery_db_pool_connect_timeout,
         )
     return _SYNC_ENGINE, _ASYNC_ENGINE
