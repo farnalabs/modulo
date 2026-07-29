@@ -37,10 +37,13 @@ def main():
 
     # Step 1: Login — get access + refresh tokens
     print(f"Logging in as {EMAIL} ...")
-    resp = client.post("/api/v1/auth/login", json={
-        "email": EMAIL,
-        "password": PASSWORD,
-    })
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": EMAIL,
+            "password": PASSWORD,
+        },
+    )
     if resp.status_code != 200:
         bail(f"login failed: {resp.status_code} {resp.text}")
 
@@ -65,9 +68,12 @@ def main():
 
     # Step 3: Refresh the access token
     print("\nRefreshing token ...")
-    resp = client.post("/api/v1/auth/refresh", json={
-        "refresh_token": refresh_token,
-    })
+    resp = client.post(
+        "/api/v1/auth/refresh",
+        json={
+            "refresh_token": refresh_token,
+        },
+    )
     if resp.status_code != 200:
         bail(f"refresh failed: {resp.status_code} {resp.text}")
 
@@ -79,9 +85,13 @@ def main():
 
     # Step 4: Logout (revoke the refresh token family)
     print("\nLogging out (revoking refresh token family) ...")
-    resp = client.post("/api/v1/auth/logout", json={
-        "refresh_token": new_refresh,
-    }, headers={"Authorization": f"Bearer {new_access}"})
+    resp = client.post(
+        "/api/v1/auth/logout",
+        json={
+            "refresh_token": new_refresh,
+        },
+        headers={"Authorization": f"Bearer {new_access}"},
+    )
     if resp.status_code != 200:
         bail(f"logout failed: {resp.status_code} {resp.text}")
     print(f"  {resp.json()['detail']}")

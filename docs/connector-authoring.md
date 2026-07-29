@@ -80,11 +80,13 @@ the real connector against test fixtures (e.g., local Git repositories for
 ```python
 async def test_your_connector():
     connector = YourConnector(config={"base_url": "https://example.com"})
-    result = await connector.execute(ConnectorQuery(
-        operation="read",
-        params={"path": "/test"},
-        context=MockContext(),
-    ))
+    result = await connector.execute(
+        ConnectorQuery(
+            operation="read",
+            params={"path": "/test"},
+            context=MockContext(),
+        )
+    )
     assert result.status == "ok"
 ```
 
@@ -101,6 +103,7 @@ Or register manually in the plugin system:
 
 ```python
 from modulo.core.plugin_registry import get_plugin_registry
+
 registry = get_plugin_registry()
 registry.register_connector_type("custom", YourConnector)
 ```

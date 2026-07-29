@@ -141,7 +141,7 @@ def compute_next_send(cron_expression: str, after: datetime.datetime | None = No
 
     If *after* is None, uses the current UTC time.
     """
-    base = after or datetime.datetime.now(datetime.timezone.utc)
+    base = after or datetime.datetime.now(datetime.UTC)
     cron = croniter(cron_expression, base)
     next_dt = cron.get_next(datetime.datetime)
     if not isinstance(next_dt, datetime.datetime):
@@ -204,7 +204,7 @@ async def _fire_scheduled_report(
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         result = await session.execute(
             select(ScheduledReport)
             .where(
@@ -465,7 +465,7 @@ class DatabaseReportEntry(ScheduleEntry):  # type: ignore[misc]  # Celery does n
         return {"task_id": f"report-{self._report_id}-{self._next_send_at.timestamp():.0f}"}
 
     def is_due(self) -> tuple[bool, datetime.timedelta]:
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         if self._next_send_at <= now:
             return (True, datetime.timedelta(seconds=0))
         delay = (self._next_send_at - now).total_seconds()
@@ -533,7 +533,7 @@ class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does n
 
             async with factory() as session:
                 async with session.begin():
-                    now = datetime.datetime.now(datetime.timezone.utc)
+                    now = datetime.datetime.now(datetime.UTC)
                     result = await session.execute(
                         select(
                             ScheduledReport.id,

@@ -101,9 +101,9 @@ def compute_next_fire(
     handling: nonexistent local times advance to the first valid instant and
     ambiguous local times use the first occurrence.
     """
-    base = after or datetime.datetime.now(datetime.timezone.utc)
+    base = after or datetime.datetime.now(datetime.UTC)
     if base.tzinfo is None:
-        base = base.replace(tzinfo=datetime.timezone.utc)
+        base = base.replace(tzinfo=datetime.UTC)
     local_base = base.astimezone(ZoneInfo(timezone))
     cron = croniter(cron_expression, local_base)
     next_dt = cron.get_next(datetime.datetime)
@@ -112,7 +112,7 @@ def compute_next_fire(
         raise TypeError(msg)
     if next_dt.tzinfo is None:
         next_dt = next_dt.replace(tzinfo=local_base.tzinfo)
-    return next_dt.astimezone(datetime.timezone.utc)
+    return next_dt.astimezone(datetime.UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -235,9 +235,7 @@ async def fire_cron_trigger(
             # Daily spend limit check
             spend_limit = trigger.daily_spend_limit
             if spend_limit is not None:
-                today_start = datetime.datetime.now(datetime.timezone.utc).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
+                today_start = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
                 cost_result = await session.execute(
                     select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
                         Run.trigger_id == trigger_id,
@@ -307,7 +305,7 @@ async def fire_cron_trigger(
             )
 
             # Update last_fired_at and next_fire_at
-            now = datetime.datetime.now(datetime.timezone.utc)
+            now = datetime.datetime.now(datetime.UTC)
             next_fire = compute_next_fire(
                 cron_expression,
                 after=now,
@@ -393,7 +391,7 @@ class DatabaseCronEntry(ScheduleEntry):  # type: ignore[misc]
         return {"task_id": f"cron-{self._trigger_id}-{self._next_fire_at.timestamp():.0f}"}
 
     def is_due(self) -> tuple[bool, datetime.timedelta]:
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         if self._next_fire_at <= now:
             return (True, datetime.timedelta(seconds=0))
         delay = (self._next_fire_at - now).total_seconds()
@@ -465,7 +463,7 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
             factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
 
             async with factory() as session:
-                now = datetime.datetime.now(datetime.timezone.utc)
+                now = datetime.datetime.now(datetime.UTC)
                 result = await session.execute(
                     select(
                         Trigger.id,

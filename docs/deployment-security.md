@@ -444,15 +444,15 @@ of the previous entry, forming a tamper-evident chain:
 ```python
 # Audit log entry structure
 {
-  "id": "uuid",
-  "timestamp": "2026-06-28T12:00:00Z",
-  "actor_id": "uuid",
-  "action": "user.deleted",
-  "resource_type": "user",
-  "resource_id": "uuid",
-  "organisation_id": "uuid",
-  "previous_hash": "sha256-of-previous-entry",
-  "hash": "sha256-of-this-entry",
+    "id": "uuid",
+    "timestamp": "2026-06-28T12:00:00Z",
+    "actor_id": "uuid",
+    "action": "user.deleted",
+    "resource_type": "user",
+    "resource_id": "uuid",
+    "organisation_id": "uuid",
+    "previous_hash": "sha256-of-previous-entry",
+    "hash": "sha256-of-this-entry",
 }
 ```
 

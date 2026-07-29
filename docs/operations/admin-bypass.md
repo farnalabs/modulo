@@ -185,6 +185,7 @@ Usage:
 
 Requires: pip install cryptography psycopg[binary]
 """
+
 import json
 import sys
 import os
@@ -439,6 +440,7 @@ after a partial migration), re-encrypt in bulk:
 Usage:
     FERNET_KEY_OLD=<key> FERNET_KEY_NEW=<key> DATABASE_URL=<url> uv run reencrypt_blobs.py
 """
+
 import os
 import psycopg
 from cryptography.fernet import Fernet, InvalidToken

@@ -47,8 +47,8 @@ Add two optional fields to the Agent ORM model:
 ```python
 class Agent(Base):
     # Existing fields...
-    template_id: Mapped[str | None]      # E2B template ID or Docker image ref
-    agent_command: Mapped[str | None]    # Default: "opencode --output-json /home/user/prompt.md"
+    template_id: Mapped[str | None]  # E2B template ID or Docker image ref
+    agent_command: Mapped[str | None]  # Default: "opencode --output-json /home/user/prompt.md"
 ```
 
 Both fields are nullable (`None` = agent is a non-sandbox, single-shot LLM agent). When both are set, the Agent can be used with a `sandbox_agent` pipeline node.

@@ -1,6 +1,7 @@
 """Bootstrap the Fly.io Postgres database — create alembic_version with
 VARCHAR(255) and run migrations. Run via: fly ssh console -C ".venv/bin/python3 /app/deploy/fly/bootstrap.py"
 """
+
 import asyncio
 import os
 
@@ -14,5 +15,6 @@ async def main():
     await conn.execute("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
     print("Created alembic_version table")
     await conn.close()
+
 
 asyncio.run(main())

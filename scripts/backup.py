@@ -14,7 +14,7 @@ import sys
 import tarfile
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import NamedTuple
 
 
@@ -63,7 +63,7 @@ def resolve_passphrase(args_passphrase: str | None) -> str:
 
 def check_disk_space(path: str, min_gb: int) -> None:
     usage = shutil.disk_usage(path)
-    free_gb = usage.free / (1024 ** 3)
+    free_gb = usage.free / (1024**3)
     print(f"Disk space: {free_gb:.1f} GB free at {path}")
     if free_gb < min_gb:
         print(f"ERROR: Insufficient disk space ({free_gb:.1f} GB < {min_gb} GB required)")
@@ -87,7 +87,8 @@ async def run_pg_dump(db_url: str, pg_dump: str, output_path: str) -> None:
         "--no-owner",
         "--no-acl",
         "--format=custom",
-        "--file", output_path,
+        "--file",
+        output_path,
         db_url,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
@@ -114,10 +115,11 @@ def collect_secrets(manifest_dir: str) -> list[str]:
     manifest = {
         "tool": "modulo-backup",
         "version": "1",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     manifest_path = os.path.join(manifest_dir, "manifest.json")
     import json
+
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
     files.append(manifest_path)
@@ -164,9 +166,24 @@ def encrypt_archive(tar_path: str, passphrase: str) -> None:
         print("ERROR: openssl not found. Install OpenSSL to encrypt backups.")
         sys.exit(1)
     result = subprocess.run(
-        ["openssl", "enc", "-aes-256-cbc", "-salt", "-pbkdf2", "-iter", "600000",
-         "-in", tar_path, "-out", enc_path, "-pass", f"pass:{passphrase}"],
-        capture_output=True, text=True, check=False,
+        [
+            "openssl",
+            "enc",
+            "-aes-256-cbc",
+            "-salt",
+            "-pbkdf2",
+            "-iter",
+            "600000",
+            "-in",
+            tar_path,
+            "-out",
+            enc_path,
+            "-pass",
+            f"pass:{passphrase}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         print(f"Encryption failed: {result.stderr}")
@@ -178,15 +195,19 @@ def encrypt_archive(tar_path: str, passphrase: str) -> None:
 def get_org_id(db_url: str) -> str:
     try:
         import urllib.parse
+
         parsed = urllib.parse.urlparse(db_url)
         parsed.path.lstrip("/")
         result = subprocess.run(
             ["psql", "-d", db_url, "-t", "-A", "-c", "SELECT id FROM organisations ORDER BY created_at LIMIT 1"],
-            capture_output=True, text=True, timeout=10, check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
-    except Exception:  # noqa: BLE001, S110
+    except Exception:  # noqa: S110
         pass
     return uuid.uuid4().hex[:8]
 
@@ -203,7 +224,7 @@ async def main() -> None:
     check_disk_space(os.path.dirname(args.output or "."), args.min_disk_gb)
 
     org_id = get_org_id(db_url)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output = args.output or f"modulo-backup-{org_id}-{timestamp}.tar.gz.enc"
 
     print(f"Starting backup (org={org_id}, timestamp={timestamp})")

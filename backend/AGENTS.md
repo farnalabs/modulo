@@ -212,12 +212,23 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 - When a FastAPI route uses `dependencies=[require_feature("error_forwarders")]` (or any feature name), the `require_feature` dependency runs before the route handler. If the test mocks a DB query to produce e.g. `ProgrammingError`, the mock returns `None` for feature checks, causing a 402 `FEATURE_REQUIRED` instead of the expected 501/503. Fix: override `get_plan_context` in the test app's `dependency_overrides` to return a `PlanContext` that enables all features:
   ```python
   class _AllFeatures:
-      def feature_enabled(self, name: str) -> bool: return True
-      def list_enabled_features(self) -> list: return []
-      def tier(self) -> str: return "enterprise"
-      def has_license_key(self) -> bool: return True
+      def feature_enabled(self, name: str) -> bool:
+          return True
+
+      def list_enabled_features(self) -> list:
+          return []
+
+      def tier(self) -> str:
+          return "enterprise"
+
+      def has_license_key(self) -> bool:
+          return True
+
+
   async def _override_plan_context() -> _AllFeatures:
       return _AllFeatures()
+
+
   app.dependency_overrides[get_plan_context] = _override_plan_context
   ```
 

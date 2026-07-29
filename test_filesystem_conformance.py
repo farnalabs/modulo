@@ -1,4 +1,5 @@
 """FilesystemConnector-specific tests beyond the shared conformance suite."""
+
 import pytest
 from modulo.connectors.base import (
     ConnectorPayload,
@@ -19,7 +20,7 @@ class TestFilesystemConnector:
         assert result.ok is True
 
     async def test_health_check_fails_on_missing_base(self) -> None:
-        c = FilesystemConnector(base_path="/tmp/__nonexistent_modulo_test_dir__")
+        c = FilesystemConnector(base_path="/tmp/__nonexistent_modulo_test_dir__")  # noqa: S108
         result = await c.health_check()
         assert result.ok is False
         assert "does not exist" in result.detail
@@ -67,12 +68,8 @@ class TestFilesystemConnector:
         assert read_result.records[0]["content"] == "nested"
 
     async def test_browse_directory_returns_children(self, fs_connector: FilesystemConnector) -> None:
-        await fs_connector.write(
-            ConnectorPayload(resource="file", data={"path": "f1.txt", "content": "one"})
-        )
-        await fs_connector.write(
-            ConnectorPayload(resource="file", data={"path": "f2.txt", "content": "two"})
-        )
+        await fs_connector.write(ConnectorPayload(resource="file", data={"path": "f1.txt", "content": "one"}))
+        await fs_connector.write(ConnectorPayload(resource="file", data={"path": "f2.txt", "content": "two"}))
         result = await fs_connector.query(ConnectorQuery(resource="directory"))
         paths = [r.get("name", r.get("path", "")) for r in result.records]
         assert "f1.txt" in paths

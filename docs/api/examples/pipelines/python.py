@@ -31,10 +31,13 @@ def bail(msg: str):
 
 
 def login(client: httpx.Client) -> str:
-    resp = client.post("/api/v1/auth/login", json={
-        "email": EMAIL,
-        "password": PASSWORD,
-    })
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": EMAIL,
+            "password": PASSWORD,
+        },
+    )
     if resp.status_code != 200:
         bail(f"login failed: {resp.status_code} {resp.text}")
     return resp.json()["access_token"]
@@ -60,12 +63,16 @@ def main():
 
     # Step 2: Create a new pipeline
     print("\nCreating pipeline 'PR Review Pipeline' ...")
-    resp = client.post("/api/v1/pipelines", json={
-        "name": "PR Review Pipeline",
-        "description": "Automated PR review pipeline for code quality",
-        "visibility": "org",
-        "max_concurrent_runs": 3,
-    }, headers=headers)
+    resp = client.post(
+        "/api/v1/pipelines",
+        json={
+            "name": "PR Review Pipeline",
+            "description": "Automated PR review pipeline for code quality",
+            "visibility": "org",
+            "max_concurrent_runs": 3,
+        },
+        headers=headers,
+    )
     if resp.status_code != 201:
         bail(f"create failed: {resp.status_code} {resp.text}")
     pipeline = resp.json()
@@ -85,10 +92,14 @@ def main():
 
     # Step 4: Update pipeline description
     print("\nUpdating pipeline description ...")
-    resp = client.patch(f"/api/v1/pipelines/{pipeline_id}", json={
-        "description": "Updated: Now handles code review + security scanning",
-        "max_concurrent_runs": 5,
-    }, headers=headers)
+    resp = client.patch(
+        f"/api/v1/pipelines/{pipeline_id}",
+        json={
+            "description": "Updated: Now handles code review + security scanning",
+            "max_concurrent_runs": 5,
+        },
+        headers=headers,
+    )
     if resp.status_code != 200:
         bail(f"update failed: {resp.status_code} {resp.text}")
     updated = resp.json()

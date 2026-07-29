@@ -1,4 +1,3 @@
-
 import pytest
 from modulo.core.eval_engine import (
     _CONTENT_BEGIN,
@@ -381,12 +380,8 @@ class TestEvaluateSuite:
         expected_passed: bool,
         expected_score: float,
     ) -> None:
-        results = [
-            make_result(passed=True)
-            for _ in range(pass_count)
-        ] + [
-            make_result(passed=False)
-            for _ in range(fail_count)
+        results = [make_result(passed=True) for _ in range(pass_count)] + [
+            make_result(passed=False) for _ in range(fail_count)
         ]
         result = evaluate_suite(results, "suite-1", pass_threshold=threshold)
         assert result.passed is expected_passed
@@ -579,7 +574,9 @@ class TestNormalContent:
         eval_def = make_eval_def("llm_judge", {"field": "output"})
         content = "def foo(): pass"
 
-        result = eval_engine.evaluate({"output": content}, eval_def, llm_judge_callable=make_capturing_callable(captured))
+        result = eval_engine.evaluate(
+            {"output": content}, eval_def, llm_judge_callable=make_capturing_callable(captured)
+        )
 
         assert result.passed is True
         assert result.score == 0.95
@@ -601,7 +598,9 @@ class TestNormalContent:
         captured: list = []
         eval_def = make_eval_def("llm_judge", {"field": "nonexistent"})
 
-        result = eval_engine.evaluate({"output": "hello"}, eval_def, llm_judge_callable=make_capturing_callable(captured))
+        result = eval_engine.evaluate(
+            {"output": "hello"}, eval_def, llm_judge_callable=make_capturing_callable(captured)
+        )
 
         assert result.passed is True
 
@@ -609,9 +608,7 @@ class TestNormalContent:
         captured: list = []
         eval_def = make_eval_def("llm_judge", {"field": "output"})
 
-        result = eval_engine.evaluate(
-            {"output": None}, eval_def, llm_judge_callable=make_capturing_callable(captured)
-        )
+        result = eval_engine.evaluate({"output": None}, eval_def, llm_judge_callable=make_capturing_callable(captured))
 
         assert result.passed is True
 

@@ -32,9 +32,13 @@ def bail(msg: str):
 
 
 def login(client: httpx.Client) -> str:
-    resp = client.post("/api/v1/auth/login", json={
-        "email": EMAIL, "password": PASSWORD,
-    })
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": EMAIL,
+            "password": PASSWORD,
+        },
+    )
     if resp.status_code != 200:
         bail(f"login failed: {resp.status_code} {resp.text}")
     return resp.json()["access_token"]
@@ -50,9 +54,14 @@ def main():
 
     # Step 1: Browse library (list all primitives)
     print("Browsing library ...")
-    resp = client.get("/api/v1/libraries", params={
-        "page": 1, "page_size": 20,
-    }, headers=headers)
+    resp = client.get(
+        "/api/v1/libraries",
+        params={
+            "page": 1,
+            "page_size": 20,
+        },
+        headers=headers,
+    )
     if resp.status_code != 200:
         bail(f"browse failed: {resp.status_code} {resp.text}")
     data = resp.json()
@@ -62,11 +71,16 @@ def main():
 
     # Step 2: Search for a specific type
     print("\nSearching for 'agent' type primitives ...")
-    resp = client.get("/api/v1/libraries", params={
-        "primitive_type": "agent",
-        "search": "review",
-        "page": 1, "page_size": 10,
-    }, headers=headers)
+    resp = client.get(
+        "/api/v1/libraries",
+        params={
+            "primitive_type": "agent",
+            "search": "review",
+            "page": 1,
+            "page_size": 10,
+        },
+        headers=headers,
+    )
     if resp.status_code == 200:
         results = resp.json()
         print(f"  Found {results['total']} matching primitive(s)")
@@ -93,9 +107,13 @@ def main():
 
         # Step 4: Copy-to-adapt (clone a primitive)
         print(f"\nCopying primitive '{prim['name']}' to adapt ...")
-        resp = client.post(f"/api/v1/libraries/{prim_id}/adapt", json={
-            # Optionally specify a target team; omit for personal copy
-        }, headers=headers)
+        resp = client.post(
+            f"/api/v1/libraries/{prim_id}/adapt",
+            json={
+                # Optionally specify a target team; omit for personal copy
+            },
+            headers=headers,
+        )
         if resp.status_code == 201 or resp.status_code == 200:
             cloned = resp.json()
             print(f"  Cloned! New primitive: {cloned['name']} ({cloned['id']})")
@@ -104,10 +122,14 @@ def main():
 
         # Step 5: Submit a rating
         print(f"\nSubmitting rating for '{prim['name']}' ...")
-        resp = client.post(f"/api/v1/libraries/{prim_id}/ratings", json={
-            "thumbs_up": True,
-            "comment": "Great primitive, very useful!",
-        }, headers=headers)
+        resp = client.post(
+            f"/api/v1/libraries/{prim_id}/ratings",
+            json={
+                "thumbs_up": True,
+                "comment": "Great primitive, very useful!",
+            },
+            headers=headers,
+        )
         if resp.status_code == 201:
             rating = resp.json()
             print(f"  Rated! ID: {rating.get('id', 'N/A')}")
@@ -116,17 +138,21 @@ def main():
     else:
         # Step 3b: Create a primitive if none exist
         print("\nNo primitives found. Creating one ...")
-        resp = client.post("/api/v1/libraries", json={
-            "name": "Code Review Agent",
-            "primitive_type": "agent",
-            "slug": f"code-review-agent-{uuid.uuid4().hex[:8]}",
-            "description": "An agent that reviews pull request code changes",
-            "content_json": {
-                "prompt_template": "Review the following PR diff: {{diff}}",
-                "input_schema": {"type": "object", "properties": {"diff": {"type": "string"}}},
-                "output_schema": {"type": "object", "properties": {"comment": {"type": "string"}}},
+        resp = client.post(
+            "/api/v1/libraries",
+            json={
+                "name": "Code Review Agent",
+                "primitive_type": "agent",
+                "slug": f"code-review-agent-{uuid.uuid4().hex[:8]}",
+                "description": "An agent that reviews pull request code changes",
+                "content_json": {
+                    "prompt_template": "Review the following PR diff: {{diff}}",
+                    "input_schema": {"type": "object", "properties": {"diff": {"type": "string"}}},
+                    "output_schema": {"type": "object", "properties": {"comment": {"type": "string"}}},
+                },
             },
-        }, headers=headers)
+            headers=headers,
+        )
         if resp.status_code == 201:
             created = resp.json()
             print(f"  Created: {created['name']} ({created['id']})")

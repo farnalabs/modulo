@@ -71,6 +71,7 @@ engine = create_async_engine("mysql+aiomysql://user:pass@host/db")
 - **SQLAlchemy `Uuid` type** (2.0.23+): The `Uuid` type handles this, defaulting to `CHAR(32)` on MySQL/SQLite and native `UUID` on PostgreSQL. You can force a variant:
   ```python
   from sqlalchemy import Uuid
+
   id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True))
   ```
   This **does** work cross-backend with the right driver support. MySQL/MariaDB will store as `CHAR(32)`.
@@ -119,6 +120,7 @@ engine = create_async_engine("mysql+aiomysql://user:pass@host/db")
 ```python
 from sqlalchemy_utils import UUIDType
 import uuid
+
 
 class MyModel(Base):
     __tablename__ = "my_model"
@@ -264,6 +266,7 @@ from sqlalchemy import Uuid, String
 from sqlalchemy.orm import Mapped, mapped_column
 import uuid
 
+
 class Item(Base):
     __tablename__ = "items"
 
@@ -279,6 +282,7 @@ class Item(Base):
 ```python
 from sqlalchemy_utils import UUIDType
 
+
 class Item(Base):
     id = Column(UUIDType(binary=False), primary_key=True)
 ```
@@ -289,6 +293,7 @@ But `sqlalchemy-utils` is in maintenance mode. Stick with SQLAlchemy's built-in 
 
 ```python
 from sqlalchemy import JSON
+
 
 class Item(Base):
     __tablename__ = "items"
