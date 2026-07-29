@@ -1,6 +1,10 @@
 from typing import Any
 
+from langchain_openai import ChatOpenAI  # noqa: F401
+
 from modulo.model_backends.module import OpenAICompatibleBackend
+
+DEFAULT_TGI_BASE_URL = "http://localhost:8080/v1"
 
 
 class TgiBackend(OpenAICompatibleBackend):
@@ -8,7 +12,7 @@ class TgiBackend(OpenAICompatibleBackend):
         self,
         api_key: str | None = None,
         model_id: str = "",
-        base_url: str = "http://localhost:8080/v1",
+        base_url: str = DEFAULT_TGI_BASE_URL,
         **default_params: Any,
     ):
         super().__init__(

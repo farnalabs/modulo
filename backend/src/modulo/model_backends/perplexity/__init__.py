@@ -1,6 +1,10 @@
 from typing import Any
 
+from langchain_openai import ChatOpenAI  # noqa: F401
+
 from modulo.model_backends.module import OpenAICompatibleBackend
+
+PERPLEXITY_BASE_URL = "https://api.perplexity.ai"
 
 
 class PerplexityBackend(OpenAICompatibleBackend):
@@ -8,7 +12,7 @@ class PerplexityBackend(OpenAICompatibleBackend):
         super().__init__(
             api_key=api_key,
             model_id=model_id,
-            base_url="https://api.perplexity.ai",
+            base_url=PERPLEXITY_BASE_URL,
             provider="perplexity",
             **default_params,
         )

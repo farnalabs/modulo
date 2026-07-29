@@ -1,6 +1,10 @@
 from typing import Any
 
+from langchain_openai import ChatOpenAI  # noqa: F401
+
 from modulo.model_backends.module import OpenAICompatibleBackend
+
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 
 class GroqBackend(OpenAICompatibleBackend):
@@ -8,7 +12,7 @@ class GroqBackend(OpenAICompatibleBackend):
         super().__init__(
             api_key=api_key,
             model_id=model_id,
-            base_url="https://api.groq.com/openai/v1",
+            base_url=GROQ_BASE_URL,
             provider="groq",
             **default_params,
         )
