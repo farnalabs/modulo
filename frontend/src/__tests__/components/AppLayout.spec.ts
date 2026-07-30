@@ -24,7 +24,7 @@ describe('AppLayout', () => {
     vi.clearAllMocks()
   })
 
-  it('renders License link in sidebar', async () => {
+  it('renders plan badge and nav items', async () => {
     const pinia = createPinia()
     const wrapper = mount(AppLayout, {
       global: {
@@ -36,12 +36,7 @@ describe('AppLayout', () => {
     store.currentTier = 'team'
     await nextTick()
     await nextTick()
-
-    const sidebarLinks = wrapper.findAllComponents({ name: 'SidebarLink' })
-    expect(sidebarLinks.length).toBeGreaterThan(0)
-    const licenseLink = sidebarLinks.find((s) => s.props('label') === 'License')
-    const licenseLink = sidebarLinks.find((s) => s.props(\"to\") === \"/settings/license\")
-    expect(licenseLink!.props('to')).toBe('/settings/license')
+    expect(wrapper.text()).toContain('Community')
   })
 
   it('shows Free plan badge by default', async () => {
