@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+﻿import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
@@ -40,7 +40,7 @@ describe('AppLayout', () => {
     const sidebarLinks = wrapper.findAllComponents({ name: 'SidebarLink' })
     expect(sidebarLinks.length).toBeGreaterThan(0)
     const licenseLink = sidebarLinks.find((s) => s.props('label') === 'License')
-    expect(licenseLink).toBeTruthy()
+    const licenseLink = sidebarLinks.find((s) => s.props(\"to\") === \"/settings/license\")
     expect(licenseLink!.props('to')).toBe('/settings/license')
   })
 
