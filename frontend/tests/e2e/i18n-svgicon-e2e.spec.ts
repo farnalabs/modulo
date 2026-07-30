@@ -3,11 +3,11 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 test.describe('i18n Keys & SvgIcon Regression', () => {
   test('sidebar shows "Environment Profiles" not raw key', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await page.goto('/admin/environments')
+    await page.goto('/environment-profiles')
 
-    // System group button - click to expand if collapsed
-    const systemGroup = page.locator('button.sidebar-group-header', { hasText: 'System' }).first()
-    await systemGroup.click()
+    // CONFIGURE group button - click to expand if collapsed
+    const configureGroup = page.locator('button.sidebar-group-header', { hasText: 'CONFIGURE' }).first()
+    await configureGroup.click()
 
     // Check that the sidebar link is "Environment Profiles" not "nav.environment-profiles"
     const envProfileLink = page.locator('a.sidebar-link', { hasText: 'Environment Profiles' }).first()
@@ -26,7 +26,6 @@ test.describe('i18n Keys & SvgIcon Regression', () => {
     })
 
     await loginAsAdmin(page, env)
-    // Visit settings-email (uses Mail icon) and dashboard (uses File as fallback)
     await page.goto('/settings/email')
 
     await page.goto('/dashboard')

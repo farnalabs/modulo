@@ -110,7 +110,7 @@ routes:
         breadcrumb: Output Diff
         parent: /
         product_map:
-        sidebar_group: analysis
+        sidebar_group: monitor
         sidebar_order: 1
         type: page
         <<: *community
@@ -163,7 +163,7 @@ routes:
         breadcrumb: Evals
         parent: /
         product_map:
-        sidebar_group: evals
+        sidebar_group: monitor
         sidebar_order: 1
         type: form_page
         <<: *community
@@ -174,7 +174,7 @@ routes:
         breadcrumb: Eval Proposals
         parent: /
         product_map:
-        sidebar_group: evals
+        sidebar_group: monitor
         sidebar_order: 2
         type: list_page
         <<: *community
@@ -186,7 +186,7 @@ routes:
         breadcrumb: Variants
         parent: /
         product_map:
-        sidebar_group: evals
+        sidebar_group: monitor
         sidebar_order: 3
         type: page
         <<: *community
@@ -198,7 +198,7 @@ routes:
         breadcrumb: AB Test Models
         parent: /
         product_map:
-        sidebar_group: evals
+        sidebar_group: monitor
         sidebar_order: 4
         type: page
         <<: *community
@@ -210,7 +210,7 @@ routes:
         breadcrumb: Schemas
         parent: /
         product_map:
-        sidebar_group: schemas
+        sidebar_group: configure
         sidebar_order: 1
         type: list_page
         <<: *community
@@ -222,7 +222,7 @@ routes:
         breadcrumb: Schema Editor
         parent: /schemas
         product_map:
-        sidebar_group: schemas
+        sidebar_group: configure
         sidebar_order: 2
         type: form_page
         pattern: /schemas/editor/:id
@@ -236,7 +236,7 @@ routes:
         breadcrumb: Schema Inference
         parent: /schemas
         product_map:
-        sidebar_group: schemas
+        sidebar_group: configure
         sidebar_order: 3
         type: form_page
         <<: *community
@@ -248,7 +248,7 @@ routes:
         breadcrumb: Remy Config
         parent: /
         product_map:
-        sidebar_group: remy
+        sidebar_group: admin
         sidebar_order: 1
         type: form_page
         <<: *team
@@ -260,7 +260,7 @@ routes:
         breadcrumb: Remy Skills
         parent: /
         product_map:
-        sidebar_group: remy
+        sidebar_group: admin
         sidebar_order: 2
         type: form_page
         <<: *community
@@ -272,7 +272,7 @@ routes:
         breadcrumb: Teams
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: admin
         sidebar_order: 1
         type: list_page
         <<: *team
@@ -283,7 +283,7 @@ routes:
         breadcrumb: SSO
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: admin
         sidebar_order: 2
         type: form_page
         <<: *team
@@ -294,7 +294,7 @@ routes:
         breadcrumb: License
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: admin
         sidebar_order: 3
         type: form_page
         <<: *team
@@ -305,7 +305,7 @@ routes:
         breadcrumb: MCP
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: configure
         sidebar_order: 4
         type: form_page
         <<: *community
@@ -316,7 +316,7 @@ routes:
         breadcrumb: Triggers
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: configure
         sidebar_order: 5
         type: form_page
         <<: *community
@@ -327,7 +327,7 @@ routes:
         breadcrumb: Runtime Config
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: configure
         sidebar_order: 7
         type: form_page
         <<: *team
@@ -338,7 +338,7 @@ routes:
         breadcrumb: Rate Limits
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: configure
         sidebar_order: 8
         type: form_page
         <<: *team
@@ -349,7 +349,7 @@ routes:
         breadcrumb: HITL Review
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: admin
         sidebar_order: 9
         type: page
         <<: *community
@@ -360,7 +360,7 @@ routes:
         breadcrumb: Observability
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: admin
         sidebar_order: 10
         type: form_page
         <<: *team
@@ -372,7 +372,7 @@ routes:
         breadcrumb: Error Forwarders
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: admin
         sidebar_order: 11
         type: form_page
         <<: *team
@@ -383,7 +383,7 @@ routes:
         breadcrumb: Email
         parent: /
         product_map:
-        sidebar_group: settings
+        sidebar_group: admin
         sidebar_order: 12
         type: form_page
         <<: *team
@@ -394,7 +394,7 @@ routes:
         breadcrumb: Browser Monitoring
         parent: /
         product_map:
-        sidebar_group: monitoring
+        sidebar_group: monitor
         sidebar_order: 6
         type: form_page
         <<: *community
@@ -404,7 +404,7 @@ routes:
         breadcrumb: Users
         parent: /
         product_map:
-        sidebar_group: access-control
+        sidebar_group: admin
         sidebar_order: 1
         type: list_page
         <<: *team
@@ -415,7 +415,7 @@ routes:
         breadcrumb: Org Settings
         parent: /
         product_map:
-        sidebar_group: access-control
+        sidebar_group: admin
         sidebar_order: 2
         type: form_page
         <<: *team
@@ -426,7 +426,7 @@ routes:
         breadcrumb: Audit Log
         parent: /
         product_map:
-        sidebar_group: access-control
+        sidebar_group: admin
         sidebar_order: 3
         type: list_page
         <<: *team
@@ -437,7 +437,7 @@ routes:
         breadcrumb: Cost Overview
         parent: /
         product_map:
-        sidebar_group: cost-management
+        sidebar_group: admin
         sidebar_order: 1
         type: page
         <<: *team
@@ -449,7 +449,7 @@ routes:
         breadcrumb: Spend Limits
         parent: /admin/costs
         product_map:
-        sidebar_group: cost-management
+        sidebar_group: admin
         sidebar_order: 2
         type: form_page
         <<: *team
@@ -460,7 +460,7 @@ routes:
         breadcrumb: Cost Controls
         parent: /admin/costs
         product_map:
-        sidebar_group: cost-management
+        sidebar_group: admin
         sidebar_order: 3
         type: form_page
         <<: *team
@@ -471,7 +471,7 @@ routes:
         breadcrumb: Connectors
         parent: /
         product_map:
-        sidebar_group: core
+        sidebar_group: configure
         sidebar_order: 6
         type: list_page
         <<: *team
@@ -482,7 +482,7 @@ routes:
         breadcrumb: Model Backends
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: configure
         sidebar_order: 2
         type: list_page
         <<: *team
@@ -493,7 +493,7 @@ routes:
         breadcrumb: Node Categories
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: admin
         sidebar_order: 3
         type: list_page
         <<: *team
@@ -504,7 +504,7 @@ routes:
         breadcrumb: Feature Flags
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: admin
         sidebar_order: 4
         type: list_page
         <<: *team
@@ -515,7 +515,7 @@ routes:
         breadcrumb: Housekeeping
         parent: /
         product_map:
-        sidebar_group: monitoring
+        sidebar_group: admin
         sidebar_order: 3
         type: page
         <<: *community
@@ -526,7 +526,7 @@ routes:
         breadcrumb: Environments
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: admin
         sidebar_order: 5
         type: list_page
         <<: *team
@@ -537,7 +537,7 @@ routes:
         breadcrumb: Parameter Schemas
         parent: /
         product_map:
-        sidebar_group: schemas
+        sidebar_group: configure
         sidebar_order: 4
         type: list_page
         <<: *team
@@ -548,7 +548,7 @@ routes:
         breadcrumb: Run Retention
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: admin
         sidebar_order: 6
         type: form_page
         <<: *team
@@ -559,7 +559,7 @@ routes:
         breadcrumb: Saved Views
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: admin
         sidebar_order: 7
         type: list_page
         <<: *team
@@ -570,7 +570,7 @@ routes:
         breadcrumb: Error Dashboard
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: monitor
         sidebar_order: 1
         type: list_page
         <<: *team
@@ -581,7 +581,7 @@ routes:
         breadcrumb: Error Detail
         parent: /admin/errors
         product_map:
-        sidebar_group:
+        sidebar_group: admin
         sidebar_order: 2
         type: detail_page
         pattern: /admin/errors/:id
@@ -595,7 +595,7 @@ routes:
         breadcrumb: Notification Log
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: monitor
         sidebar_order: 3
         type: list_page
         <<: *team
@@ -606,7 +606,7 @@ routes:
         breadcrumb: API Changelog
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: monitor
         sidebar_order: 4
         type: list_page
         <<: *team
@@ -617,7 +617,7 @@ routes:
         breadcrumb: Team Comparison
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: monitor
         sidebar_order: 5
         type: page
         <<: *team
@@ -628,7 +628,7 @@ routes:
         breadcrumb: Plugins
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: admin
         sidebar_order: 1
         type: list_page
         <<: *team
@@ -639,7 +639,7 @@ routes:
         breadcrumb: Lifecycle Maps
         parent: /
         product_map:
-        sidebar_group: core
+        sidebar_group:
         sidebar_order: 9
         type: list_page
         <<: *community
@@ -665,7 +665,7 @@ routes:
         breadcrumb: Feedback Inbox
         parent: /
         product_map:
-        sidebar_group: extensions
+        sidebar_group: admin
         sidebar_order: 2
         type: list_page
         <<: *community
@@ -702,7 +702,7 @@ routes:
         breadcrumb: Environment Profiles
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: configure
         sidebar_order: 8
         type: list_page
         <<: *team
@@ -771,63 +771,23 @@ elements:
         dynamic_testid: false
 
 sidebar_groups:
-    lifecycle:
-        label: Lifecycle
-        order: 0
-        default_expanded: true
-        labelKey: components.SidebarNav.group_lifecycle
     core:
-        label: Core
+        label: CORE
         order: 1
         default_expanded: true
         labelKey: components.SidebarNav.group_core
-    analysis:
-        label: Analysis
+    monitor:
+        label: MONITOR
         order: 2
         default_expanded: true
-        labelKey: components.SidebarNav.group_analysis
-    evals:
-        label: Evals
+        labelKey: components.SidebarNav.group_monitor
+    configure:
+        label: CONFIGURE
         order: 3
-        default_expanded: true
-        labelKey: components.SidebarNav.group_evals
-    schemas:
-        label: Schemas
+        default_expanded: false
+        labelKey: components.SidebarNav.group_configure
+    admin:
+        label: ADMIN
         order: 4
-        default_expanded: true
-        labelKey: components.SidebarNav.group_schemas
-    remy:
-        label: Remy
-        order: 5
-        default_expanded: true
-        labelKey: components.SidebarNav.group_remy
-    settings:
-        label: Settings
-        order: 6
-        default_expanded: true
-        labelKey: components.SidebarNav.group_settings
-    access-control:
-        label: Access Control
-        order: 7
-        default_expanded: true
-        labelKey: components.SidebarNav.group_access_control
-    cost-management:
-        label: Cost Management
-        order: 8
-        default_expanded: true
-        labelKey: components.SidebarNav.group_cost_management
-    system:
-        label: System
-        order: 9
-        default_expanded: true
-        labelKey: components.SidebarNav.group_system
-    monitoring:
-        label: Monitoring
-        order: 10
-        default_expanded: true
-        labelKey: components.SidebarNav.group_monitoring
-    extensions:
-        label: Extensions
-        order: 11
-        default_expanded: true
-        labelKey: components.SidebarNav.group_extensions
+        default_expanded: false
+        labelKey: components.SidebarNav.group_admin
