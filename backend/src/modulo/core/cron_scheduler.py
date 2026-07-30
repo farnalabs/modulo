@@ -534,10 +534,8 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
             _log.exception("Failed to fetch cron triggers from database")
             return []
 
-    @property
-    def max_interval(self) -> int:
-        """Maximum sleep between ticks — 30 seconds."""
-        return 30
+    # max_interval: class attribute (not @property) so Celery can set it
+    max_interval: int = 30
 
 
 # ---------------------------------------------------------------------------

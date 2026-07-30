@@ -564,7 +564,5 @@ class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does n
             _log.exception("Failed to fetch scheduled reports from database")
             return []
 
-    @property
-    def max_interval(self) -> int:
-        """Maximum sleep between ticks — 60 seconds."""
-        return 60
+    # max_interval: class attribute (not @property) so Celery can set it
+    max_interval: int = 60
