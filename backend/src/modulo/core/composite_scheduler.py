@@ -82,10 +82,13 @@ class CompositeScheduler(Scheduler):  # type: ignore[misc]
 
     def __init__(self, app: Celery, **kwargs: Any) -> None:
         self._schedule: dict[str, Any] = {}
-        super().__init__(app, **kwargs)
+        # Init sub-schedulers BEFORE super().__init__(), because the base
+        # class constructor calls `self.max_interval`, which reads
+        # `self._cron_scheduler.max_interval`.
         self._cron_scheduler = DatabaseCronScheduler(app, **kwargs)
         self._polling_scheduler = DatabasePollingScheduler(app, **kwargs)
         self._report_scheduler = DatabaseReportScheduler(app, **kwargs)
+        super().__init__(app, **kwargs)
         self._stale_entry: StaleRecoveryEntry | None = None
 
     def setup_schedule(self) -> None:
