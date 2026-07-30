@@ -1,4 +1,4 @@
-﻿"""Celery beat scheduler that reads cron trigger rows from the database.
+"""Celery beat scheduler that reads cron trigger rows from the database.
 
 Architecture
 ------------
@@ -247,6 +247,7 @@ async def fire_cron_trigger(
                 )
             )
             today_cost = cost_result.scalar_one()
+            if today_cost is not None and spend_limit is not None and today_cost >= spend_limit:
                 await _log_event(
                     session,
                     trigger=trigger,
@@ -260,7 +261,6 @@ async def fire_cron_trigger(
                     "daily_spend_limit": str(spend_limit),
                     "today_cost": str(today_cost),
                 }
-
         # Resolve snapshot_id â€” auto-create from live graph if not provided
         if snapshot_id is None:
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -318,7 +318,7 @@ async def fire_cron_trigger(
         )
 
         _log.info(
-            "Cron trigger %s fired â†’ run %s (next fire: %s)",
+            "Cron trigger %s fired â†' run %s (next fire: %s)",
             trigger_id,
             run.id,
             next_fire.isoformat(),
