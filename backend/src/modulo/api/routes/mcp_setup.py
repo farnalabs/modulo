@@ -94,6 +94,7 @@ async def complete_model_backend_setup(
             try:
                 ciphertext = fernet.encrypt(payload.api_key.encode())
             except Exception as exc:
+                _log.exception("mcp_setup.complete_model_backend_setup")
                 _log.error("Failed to encrypt API key: %s", exc)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -121,12 +122,14 @@ async def complete_model_backend_setup(
     except HTTPException:
         raise
     except SQLAlchemyError as exc:
+        _log.exception("mcp_setup.complete_model_backend_setup")
         _log.error("Database error completing setup for backend %s: %s", backend_id, exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"error": "database_error", "detail": "A database error occurred"},
         ) from exc
     except Exception as exc:
+        _log.exception("mcp_setup.complete_model_backend_setup")
         _log.error("Unexpected error completing setup for backend %s: %s", backend_id, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

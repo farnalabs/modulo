@@ -86,6 +86,7 @@ async def create_contribution(
                 owner_team_id=(uuid.UUID(req.owner_team_id) if req.owner_team_id else None),
             )
     except ProgrammingError:
+        _log.exception("contributions.create_contribution")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -128,6 +129,7 @@ async def submit_for_review(
             created_by=principal.account_id,
         )
     except ProgrammingError:
+        _log.exception("contributions.submit_for_review")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -185,6 +187,7 @@ async def publish_contribution_endpoint(
             approved_by=principal.account_id,
         )
     except ProgrammingError:
+        _log.exception("contributions.publish_contribution_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -262,6 +265,7 @@ async def submit_contribution_version_endpoint(
                 owner_team_id=(uuid.UUID(req.owner_team_id) if req.owner_team_id else None),
             )
     except ProgrammingError:
+        _log.exception("contributions.submit_contribution_version_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -307,6 +311,7 @@ async def list_contribution_versions_endpoint(
             primitive_id,
         )
     except ProgrammingError:
+        _log.exception("contributions.list_contribution_versions_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -364,6 +369,7 @@ async def list_contributions_endpoint(
                 page_size=page_size,
             )
     except ProgrammingError:
+        _log.exception("contributions.list_contributions_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",

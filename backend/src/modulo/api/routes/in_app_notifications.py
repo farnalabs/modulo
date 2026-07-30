@@ -124,16 +124,19 @@ async def get_dashboard(
                 user_id=principal.account_id,
             )
     except ProgrammingError:
+        _log.exception("in_app_notifications.get_dashboard")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        _log.exception("in_app_notifications.get_dashboard")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("in_app_notifications.get_dashboard")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="A database error occurred.",
@@ -160,16 +163,19 @@ async def get_unread(
                 user_id=principal.account_id,
             )
     except ProgrammingError:
+        _log.exception("in_app_notifications.get_unread")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        _log.exception("in_app_notifications.get_unread")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("in_app_notifications.get_unread")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="A database error occurred.",
@@ -215,16 +221,19 @@ async def list_notifications(
                 status_filter=status_filter,
             )
     except ProgrammingError:
+        _log.exception("in_app_notifications.list_notifications")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        _log.exception("in_app_notifications.list_notifications")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("in_app_notifications.list_notifications")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="A database error occurred.",
@@ -256,16 +265,19 @@ async def get_notification_detail(
             if n is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
     except ProgrammingError:
+        _log.exception("in_app_notifications.get_notification_detail")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        _log.exception("in_app_notifications.get_notification_detail")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("in_app_notifications.get_notification_detail")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="A database error occurred.",
@@ -294,16 +306,19 @@ async def review_later_endpoint(
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ProgrammingError:
+        _log.exception("in_app_notifications.review_later_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        _log.exception("in_app_notifications.review_later_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("in_app_notifications.review_later_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="A database error occurred.",
@@ -348,16 +363,19 @@ async def dismiss_endpoint(
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ProgrammingError:
+        _log.exception("in_app_notifications.dismiss_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        _log.exception("in_app_notifications.dismiss_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("in_app_notifications.dismiss_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="A database error occurred.",

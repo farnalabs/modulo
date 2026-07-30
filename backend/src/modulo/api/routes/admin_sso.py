@@ -284,6 +284,7 @@ async def delete_provider_endpoint(
     try:
         deleted = await delete_provider(session, provider_id, actor_user_id=current_user.account_id)
     except IntegrityError:
+        _log.exception("admin_sso.delete_provider_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -328,6 +329,7 @@ async def test_provider_connection(
     try:
         provider = await get_provider(session, provider_id)
     except IntegrityError:
+        _log.exception("admin_sso.test_provider_connection")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -385,6 +387,7 @@ async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
             resp.raise_for_status()
             disc = resp.json()
     except Exception as exc:
+        _log.exception("admin_sso._test_oidc_connection")
         return SsoProviderTestResult(
             success=False,
             message=f"Failed to fetch discovery document: {exc}",
@@ -433,6 +436,7 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
                 resp.raise_for_status()
                 metadata_xml = resp.text
         except Exception as exc:
+            _log.exception("admin_sso._test_saml_connection")
             return SsoProviderTestResult(
                 success=False,
                 message=f"Failed to fetch metadata: {exc}",
@@ -447,6 +451,7 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
     try:
         root = ElementTree.fromstring(metadata_xml)
     except Exception as exc:
+        _log.exception("admin_sso._test_saml_connection")
         return SsoProviderTestResult(
             success=False,
             message=f"Failed to parse metadata XML: {exc}",
@@ -511,6 +516,7 @@ async def toggle_provider_endpoint(
     try:
         provider = await toggle_provider(session, provider_id, actor_user_id=current_user.account_id)
     except IntegrityError:
+        _log.exception("admin_sso.toggle_provider_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -571,6 +577,7 @@ async def set_group_mappings_endpoint(
     try:
         provider = await set_group_mappings(session, provider_id, mappings_dict)
     except IntegrityError:
+        _log.exception("admin_sso.set_group_mappings_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
