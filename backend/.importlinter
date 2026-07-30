@@ -47,3 +47,38 @@ forbidden_modules =
     modulo.core.pipeline_engine
     modulo.core.hitl_manager
     modulo.core.eval_engine
+
+[importlinter:contract:api-routes-do-not-import-core-directly]
+name = Routes use core through dependency-injected services
+type = forbidden
+source_modules =
+    modulo.api.routes
+forbidden_modules =
+    modulo.core.pipeline_engine
+    modulo.core.hitl_manager
+    modulo.core.eval_engine
+
+[importlinter:contract:core-does-not-import-api]
+name = Core layer never sees FastAPI
+type = forbidden
+source_modules =
+    modulo.core
+forbidden_modules =
+    modulo.api
+
+[importlinter:contract:db-does-not-import-core]
+name = DB layer has no business logic imports
+type = forbidden
+source_modules =
+    modulo.db
+forbidden_modules =
+    modulo.core
+    modulo.api
+
+[importlinter:contract:connectors-do-not-import-core]
+name = Connectors don't reach into core
+type = forbidden
+source_modules =
+    modulo.connectors
+forbidden_modules =
+    modulo.core

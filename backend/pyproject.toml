@@ -331,4 +331,7 @@ dev = [
     "pytest-recording>=0.13.0",
     "celery[redis]>=5.4.0",
     "pip-audit>=2.9.0",
+    "deptry>=0.20",
+    "diff-cover>=9.0",
+    "pytest-socket>=0.7",
 ]
