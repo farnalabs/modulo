@@ -156,7 +156,7 @@ const { loading, load, error } = useDataFetch(
   async () => {
     const res = await api.GET('/api/v1/admin/monitor-config')
     if (res.error) {
-      console.warn('[SettingsMonitorConfigView] Failed to load monitor config:', res.error)
+      if (error.value) console.warn("[SettingsMonitorConfigView] Failed to load monitor config:", error.value)
     }
     if (res.data) {
       fromApiPayload(res.data as Record<string, any>)
