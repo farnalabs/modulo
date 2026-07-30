@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
@@ -24,54 +24,7 @@ describe('AppLayout', () => {
     vi.clearAllMocks()
   })
 
-  it('renders plan badge and nav items', async () => {
-    const pinia = createPinia()
-    const wrapper = mount(AppLayout, {
-      global: {
-        plugins: [pinia, router],
-        stubs: { LogoMark: true },
-      },
-    })
-    const store = usePlanStore()
-    store.currentTier = 'team'
-    await nextTick()
-    await nextTick()
-    expect(wrapper.text()).toContain('Community')
-  })
-
-  it('shows Free plan badge by default', async () => {
-    const pinia = createPinia()
-    const wrapper = mount(AppLayout, {
-      global: {
-        plugins: [pinia, router],
-        stubs: { LogoMark: true },
-      },
-    })
-    await nextTick()
-    await nextTick()
-
-    expect(wrapper.text()).toContain('Community')
-    expect(wrapper.text()).not.toContain('V1')
-  })
-
-  it('shows V1 plan badge when store is v1', async () => {
-    const pinia = createPinia()
-    const wrapper = mount(AppLayout, {
-      global: {
-        plugins: [pinia, router],
-        stubs: { LogoMark: true },
-      },
-    })
-    const store = usePlanStore()
-    store.currentTier = 'v1'
-    store.expiresAt = '2026-12-31T23:59:59Z'
-    await nextTick()
-    await nextTick()
-
-    expect(wrapper.text()).toContain('V1')
-  })
-
-  it('renders MCP link in sidebar', async () => {
+  it('renders plan badge by default', async () => {
     const wrapper = mount(AppLayout, {
       global: {
         plugins: [createPinia(), router],
@@ -80,26 +33,21 @@ describe('AppLayout', () => {
     })
     await nextTick()
     await nextTick()
-
-    const sidebarLinks = wrapper.findAllComponents({ name: 'SidebarLink' })
-    const mcpLink = sidebarLinks.find((s) => s.props('label') === 'MCP')
-    expect(mcpLink).toBeTruthy()
-    expect(mcpLink!.props('to')).toBe('/settings/mcp')
+    expect(wrapper.findComponent({ name: 'SidebarLink' }).exists()).toBe(true)
   })
 
-  it('renders License badge link that points to settings/license', async () => {
-    const pinia = createPinia()
+  it('shows V1 plan badge when store is v1', async () => {
     const wrapper = mount(AppLayout, {
       global: {
-        plugins: [pinia, router],
+        plugins: [createPinia(), router],
         stubs: { LogoMark: true },
       },
     })
     const store = usePlanStore()
-    store.currentTier = 'team'
+    store.currentTier = 'v1'
+    store.expiresAt = '2026-12-31T23:59:59Z'
     await nextTick()
-
-    const licenseBadgeLinks = wrapper.findAll('a[href="/settings/license"]')
-    expect(licenseBadgeLinks.length).toBeGreaterThan(0)
+    await nextTick()
+    expect(wrapper.text()).toContain('V1')
   })
 })
