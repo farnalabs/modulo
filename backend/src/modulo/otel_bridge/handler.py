@@ -170,7 +170,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
 
     def on_chain_start(
         self,
-        serialized: dict[str, Any] | None,
+        serialized: dict[str, Any],
         _inputs: dict[str, Any],
         *,
         run_id: UUID,
@@ -178,7 +178,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> None:
+    ) -> Any:
         name = self._serialized_name(serialized)
         self._start_span(
             f"langgraph.chain.{name}",
@@ -337,14 +337,16 @@ class LangGraphOtelBridge(BaseCallbackHandler):
 
     def on_tool_start(
         self,
-        serialized: dict[str, Any] | None,
+        serialized: dict[str, Any],
         _input_str: str,
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
         tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        inputs: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> None:
+    ) -> Any:
         name = self._serialized_name(serialized)
         self._start_span(
             f"langgraph.tool.{name}",
