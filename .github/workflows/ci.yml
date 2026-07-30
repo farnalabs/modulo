@@ -1,4 +1,4 @@
-name: "CI: Fast Validation"
+﻿name: "CI: Fast Validation"
 on:
   push:
     branches: [main]
@@ -264,7 +264,7 @@ jobs:
 
   modulo-smoke-test:
     name: Run Modulo Smoke Test
-    if: github.event_name == 'pull_request' && success()
+    if: github.event_name == 'push' && success()
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     steps:
@@ -303,5 +303,3 @@ jobs:
             if [ "${STATUS}" = "failed" ]; then echo "::error::Failed: ${ERROR}"; exit 1; fi
           done
           echo "::error::Timed out"; exit 1
-
-
