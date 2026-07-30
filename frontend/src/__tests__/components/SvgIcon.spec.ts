@@ -10,7 +10,6 @@ describe('SvgIcon', () => {
   })
 
   it('registers every icon referenced by manifest navigation', () => {
-    const warn = vi.spyOn(console, 'warn')
     const iconNames = new Set(
       getNavGroups().flatMap((group) => group.items.map((item) => item.icon)),
     )
