@@ -86,7 +86,7 @@ class PipelineCreate(BaseModel):
     node_timeout_seconds: int = Field(default=300, ge=1)
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
-    max_duration_seconds: int | None = Field(None, ge=1)
+    max_duration_seconds: int = Field(3600, ge=1)
     stale_run_timeout_minutes: int | None = Field(
         None,
         ge=1,
@@ -132,6 +132,13 @@ class PipelineUpdate(BaseModel):
         description="Replace the pipeline graph (nodes + edges). Creates a new snapshot.",
     )
 
+    @field_validator("max_duration_seconds", mode="before")
+    @classmethod
+    def reject_null_max_duration(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("max_duration_seconds cannot be set to null. Use a value >= 1.")
+        return v
+
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> PipelineUpdate:
         if self.visibility == "team" and self.owner_team_id is None:
@@ -150,7 +157,7 @@ class PipelineResponse(BaseModel):
     node_timeout_seconds: int
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
-    max_duration_seconds: int | None = None
+    max_duration_seconds: int = 3600
     stale_run_timeout_minutes: int | None = None
     rate_limit_config: dict[str, Any] | None = None
     snapshot_count: int = 0

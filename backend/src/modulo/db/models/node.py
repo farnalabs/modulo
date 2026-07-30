@@ -9,7 +9,7 @@ Scheduled for removal once composite templates are migrated to use PipelineEdge 
 import uuid
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -44,7 +44,7 @@ class Node(OrgScoped):
         nullable=True,
         index=True,
     )
-    timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300, server_default=text("'300'"))
     retry_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retry_delay_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     account_id: Mapped[uuid.UUID] = mapped_column(

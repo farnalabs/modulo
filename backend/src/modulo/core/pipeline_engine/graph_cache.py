@@ -240,6 +240,7 @@ def build_graph_from_json(
     eval_definitions_by_node: dict[str, list[EvalDefinition]] | None = None,
     session_factory: Callable[..., Any] | None = None,
     org_id: uuid.UUID | None = None,
+    pipeline_node_timeout_seconds: int = 300,
 ) -> Any:
     """Compile a StateGraph from the serialised graph_json stored in a snapshot.
 
@@ -279,7 +280,7 @@ def build_graph_from_json(
     for node_def in nodes:
         node_id: str = str(node_def["id"])
         role: str | None = node_def.get("role")
-        timeout: float | None = node_def.get("timeout_seconds")
+        timeout: float | None = node_def.get("timeout_seconds") or pipeline_node_timeout_seconds
         node_type: str = node_def.get("node_type", "agent")
         max_input_length: int | None = node_def.get("max_input_length")
         token_budget: int | None = node_def.get("token_budget")
