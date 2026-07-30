@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -105,16 +105,18 @@ from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
 from modulo.core.cleanup_jobs import cleanup_scheduler_loop
-from modulo.core.scheduler import run_scheduler
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
 from modulo.core.logging_config import configure_logging
+from modulo.core.scheduler import run_scheduler
 from modulo.core.seed_data.catalog import FLAGS, TIERS
 from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
+
+_log = logging.getLogger(__name__)
 
 # Uptime tracking -- set at module import time, read by health endpoints.
 logger = logging.getLogger(__name__)
