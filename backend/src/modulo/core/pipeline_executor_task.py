@@ -31,6 +31,7 @@ from typing import Any
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session
 
 try:
     import kombu
@@ -467,7 +468,7 @@ _sync_beat_engine = None
 _sync_beat_lock = threading.Lock()
 
 
-def get_beat_sync_session():
+def get_beat_sync_session() -> Session:
     """Return a sync SQLAlchemy session for the Celery beat scheduler.
 
     Uses a dedicated engine separate from the worker's sync pool to avoid
@@ -495,7 +496,7 @@ def get_beat_sync_session():
     return sessionmaker(bind=_sync_beat_engine)()
 
 
-def dispose_beat_sync_engine():
+def dispose_beat_sync_engine() -> None:
     global _sync_beat_engine
     if _sync_beat_engine is not None:
         _sync_beat_engine.dispose()

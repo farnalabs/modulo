@@ -569,7 +569,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
         """Sync query for polling triggers due to fire — runs inside Celery beat."""
         try:
             import uuid
-            from datetime import UTC, datetime
+            from datetime import UTC, datetime, timedelta
 
             from modulo.core.pipeline_executor_task import SchedulerDBError, get_beat_sync_session
             from modulo.db.models.trigger import Trigger
@@ -613,7 +613,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                         )
                         session.add(event)
                         interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-                        next_fire = datetime.now(UTC) + datetime.timedelta(seconds=interval)
+                        next_fire = datetime.now(UTC) + timedelta(seconds=interval)
                         session.execute(update(Trigger).where(Trigger.id == row.id).values(next_fire_at=next_fire))
                         session.commit()
                         continue
