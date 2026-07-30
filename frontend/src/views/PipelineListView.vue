@@ -658,7 +658,12 @@ function getPipelineTrigger(pipelineId: string): string | undefined {
 watch(allPipelines, () => {
   loadTriggers()
   loadLastRunDates()
-}, { immediate: false })
+}, { immediate: true })
+
+watch(selectedFolderId, () => {
+  loadTriggers()
+  loadLastRunDates()
+})
 
 const folderPipelineCounts = computed(() => {
   const counts: Record<string, number> = {}
