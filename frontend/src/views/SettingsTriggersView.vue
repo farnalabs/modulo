@@ -14,7 +14,7 @@
       </Button>
     </header>
 
-    <LoadingSpinner v-if="loading" />
+    <LoadingSpinner v-if="!loaded" />
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadAll" />
 
@@ -348,13 +348,15 @@ interface TriggerForm {
   signal_source_node: string
 }
 
-const { loading, error, data: triggersData, load: loadTriggers } = useDataFetch(
+const { error, data: triggersData, load: loadTriggers, fetched: triggersLoaded } = useDataFetch(
   () => api.GET('/api/v1/triggers', { params: { query: { page: 1, page_size: 100 } } }),
 )
-const { data: pipelinesData, load: loadPipelines } = useDataFetch(
+const { data: pipelinesData, load: loadPipelines, fetched: pipelinesLoaded } = useDataFetch(
   () => api.GET('/api/v1/pipelines', {}),
   { immediate: false }
 )
+
+const loaded = computed(() => triggersLoaded.value && pipelinesLoaded.value)
 const items = computed<TriggerItem[]>(() =>
   ((triggersData.value as { items?: TriggerItem[] } | null)?.items ?? []),
 )
