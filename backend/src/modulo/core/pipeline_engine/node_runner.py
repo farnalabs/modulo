@@ -1,4 +1,4 @@
-﻿"""Factory that builds a cancellable LangGraph node function from a node definition.
+"""Factory that builds a cancellable LangGraph node function from a node definition.
 
 Node types:
   - standard (agent):  agent/connector node; runs the node body, then checks for
