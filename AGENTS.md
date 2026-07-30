@@ -1054,3 +1054,16 @@ mypy src/modulo/ 2>&1
 - **The runner machine (duncan-pc) can go offline.** Check `gh api repos/farnalabs/modulo/actions/runners --jq '.runners[] | [.name, .status, .busy]'`. Restart with `Start-Process -FilePath "C:\actions-runner\run.cmd" -WindowStyle Hidden`.
 - **Force pushes lose CI results.** After a force push (rebase), CI won't automatically re-trigger on the new SHA. The next `pull_request` event (from a new commit or PR reopen) will trigger it.
 - **Concurrent run limits on triggers** default to 1. When a pipeline gets a burst of webhooks, increase `max_concurrent_runs` on the trigger to match expected burst volume.
+
+### After raising a PR, poll checks until they pass or fail
+
+After creating a PR via \gh pr create\, the Conductor MUST poll the PR checks until they complete (pass or fail). Do NOT exit the session or start the next task without knowing the CI outcome. The pattern:
+
+`powershell
+gh pr checks <PR-NUMBER> --watch
+` 
+
+This waits for all checks to finish and returns the result. If checks fail, investigate and fix before moving on. A PR with failing checks that gets merged will break main and block all subsequent PRs.
+
+This applies to ALL PRs, not just complex ones. Even a single-file rename can break CI (encoding issues, stale references, missing internationalisation keys). Always wait for green before calling it done.
+

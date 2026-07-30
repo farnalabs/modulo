@@ -1,5 +1,5 @@
 ---
-id: feat-BUILD-navigation-restructure
+id: feat-core-navigation-restructure
 prd: 8.26
 delivery-tasks: []
 bdd: []
@@ -14,7 +14,8 @@ code:
   - frontend/src/composables/useSidebar.ts
   - frontend/src/config/navigation.ts
   - frontend/src/manifest.yaml
-depends-on: []status: partial
+depends-on: []
+status: partial
 ---
 
 # Navigation Restructure (Frontend UX)
