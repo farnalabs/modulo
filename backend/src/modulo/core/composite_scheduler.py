@@ -123,3 +123,8 @@ class CompositeScheduler(Scheduler):  # type: ignore[misc]
             self._polling_scheduler.max_interval,
             self._report_scheduler.max_interval,
         )
+
+    @max_interval.setter
+    def max_interval(self, value: int) -> None:
+        """Ignore sets from Celery's base class - we derive from sub-schedulers."""
+        pass
