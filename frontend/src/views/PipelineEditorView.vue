@@ -288,8 +288,8 @@
             </dd>
           </div>
           <div>
-            <label class="text-muted-foreground text-xs uppercase tracking-wider">Label</label>
-            <input
+            <label for="pipeline-editor-node-label" class="text-muted-foreground text-xs uppercase tracking-wider">Label</label>
+            <input id="pipeline-editor-node-label"
               v-model="selectedNodeData.label"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium mt-1"
               placeholder="Enter node label"
@@ -298,8 +298,8 @@
             />
           </div>
           <div>
-            <label class="text-muted-foreground text-xs uppercase tracking-wider">Description</label>
-            <textarea
+            <label for="pipeline-editor-node-desc" class="text-muted-foreground text-xs uppercase tracking-wider">Description</label>
+            <textarea id="pipeline-editor-node-desc"
               v-model="selectedNodeData.description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm mt-1"
               placeholder="Optional description"
