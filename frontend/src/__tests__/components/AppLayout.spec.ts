@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+﻿import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
@@ -9,6 +9,14 @@ vi.mock('../../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkBtb2R1bG8ucnVuIiwib3JnX3JvbGUiOiJhZG1pbiJ9.fakesignature'),
   clearAccessToken: vi.fn(),
 }))
+
+beforeEach(() => {
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 import AppLayout from '../../components/AppLayout.vue'
 import { usePlanStore } from '../../stores/planStore'
