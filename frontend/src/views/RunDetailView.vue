@@ -151,19 +151,33 @@
         <pre class="bg-muted/30 rounded-lg p-4 text-sm overflow-x-auto whitespace-pre-wrap">{{ formattedOutput }}</pre>
       </div>
 
+      <!-- Failed Run Diagnostics -->
+      <div v-if="run.status === 'failed' && run.error_detail" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 mb-4">
+        <h3 class="text-sm font-semibold text-destructive mb-1">Run Error</h3>
+        <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
+      </div>
+
+      <div v-if="run.status === 'failed' && !run.error_detail && runIO?.input_payload" class="rounded-lg border border-border bg-card p-4 mb-4">
+        <h3 class="text-sm font-semibold mb-1">Run Input</h3>
+        <pre class="text-xs whitespace-pre-wrap font-mono text-muted-foreground">{{ JSON.stringify(runIO.input_payload, null, 2) }}</pre>
+      </div>
+
       <!-- Per-Node Execution Trace -->
       <section class="space-y-4 rounded-lg border bg-card p-6">
         <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.execution_trace') }}</h2>
 
-        <div v-if="nodeEntries.length === 0" class="py-4 text-center text-sm text-muted-foreground">
+        <div v-if="nodeEntries.length === 0 && run.status !== 'failed'" class="py-4 text-center text-sm text-muted-foreground">
           {{ $t('views.RunDetailView.no_node_data') }}
+        </div>
+        <div v-else-if="nodeEntries.length === 0 && run.status === 'failed'" class="py-4 text-center text-sm text-muted-foreground">
+          No node-level data recorded for this failed run. The error may have occurred during pipeline setup or before any node started execution.
         </div>
 
         <table v-else class="w-full text-left text-sm">
           <thead>
             <tr class="border-b text-xs uppercase text-muted-foreground">
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.node') }}</th>
-              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.status') }}</th>
+              <th class="pb-2 pr-4 font-medium capitalize">{{ $t('views.RunDetailView.status') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.duration') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.input_tokens') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.output_tokens') }}</th>
@@ -182,7 +196,7 @@
             >
               <td class="py-3 pr-4 font-medium">{{ node.name }}</td>
               <td class="py-3 pr-4">
-                <span :class="nodeStatusBadgeClass(node)">{{ node.status }}</span>
+                <span :class="[nodeStatusBadgeClass(node), 'capitalize']">{{ node.status }}</span>
               </td>
               <td class="py-3 pr-4 tabular-nums text-muted-foreground">{{ node.duration }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.inputTokens ?? '—' }}</td>
@@ -297,7 +311,7 @@
               :class="workspaceStatusClass"
             >
               <span class="h-1.5 w-1.5 rounded-full" :class="workspaceDotClass" />
-              {{ workspaceLease.status }}
+              <span class="capitalize">{{ workspaceLease.status }}</span>
             </span>
           </div>
           <div v-if="workspaceLease.sandbox_id" class="flex items-center gap-2">
