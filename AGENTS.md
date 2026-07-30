@@ -1018,6 +1018,10 @@ uv python install 3.12 2>&1 | tail -3
 pre-commit install
 git add -A
 git commit -m "..."     # triggers ruff, semgrep, bandit via pre-commit hooks
+
+NEVER use `git commit --no-verify` or `git commit -n`. Pre-commit hooks are mandatory.
+If a hook fails, fix the issue -- do not bypass it.
+
 ```
 
 If you cannot use pre-commit (build-time constraints), run tools directly:
@@ -1061,9 +1065,8 @@ After creating a PR via \gh pr create\, the Conductor MUST poll the PR checks un
 
 `powershell
 gh pr checks <PR-NUMBER> --watch
-` 
+`
 
 This waits for all checks to finish and returns the result. If checks fail, investigate and fix before moving on. A PR with failing checks that gets merged will break main and block all subsequent PRs.
 
 This applies to ALL PRs, not just complex ones. Even a single-file rename can break CI (encoding issues, stale references, missing internationalisation keys). Always wait for green before calling it done.
-
