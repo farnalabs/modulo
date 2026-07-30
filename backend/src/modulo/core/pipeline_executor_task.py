@@ -174,7 +174,8 @@ if _CELERY_SIGNALS_AVAILABLE:
 
 def dispatch(run_id: str, org_id: str, queue: str) -> None:
     """Dispatch a run to Celery and record dispatched_at (best-effort)."""
-    from modulo.celery_app import app as celery_app  # type: ignore[attr-defined]
+    from modulo.celery_app import get_celery_app
+    celery_app = get_celery_app()
 
     celery_app.send_task(
         _TASK_NAME,
