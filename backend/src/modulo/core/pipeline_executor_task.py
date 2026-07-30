@@ -450,6 +450,58 @@ async def _stale_run_recovery_sweep() -> dict[str, Any]:
         }
 
 
+class SchedulerDBError(Exception):
+    """Raised when a scheduler DB query fails transiently."""
+
+    pass
+
+
+def _make_sync_url(database_url: str) -> str:
+    """Convert async DB URL to sync by replacing async driver with sync equivalent."""
+    return (
+        database_url.replace("+asyncpg", "+psycopg").replace("+aiomysql", "+mysqldb").replace("+aiosqlite", "+pysqlite")
+    )
+
+
+_sync_beat_engine = None
+_sync_beat_lock = threading.Lock()
+
+
+def get_beat_sync_session():
+    """Return a sync SQLAlchemy session for the Celery beat scheduler.
+
+    Uses a dedicated engine separate from the worker's sync pool to avoid
+    contention between beat polling and task execution.
+    """
+    global _sync_beat_engine
+    if _sync_beat_engine is None:
+        with _sync_beat_lock:
+            if _sync_beat_engine is None:
+                from modulo.settings import get_settings
+
+                s = get_settings()
+                sync_url = _make_sync_url(str(s.database_url))
+                _sync_beat_engine = create_engine(
+                    sync_url,
+                    pool_size=s.modulo_celery_db_pool_sync_size,
+                    max_overflow=s.modulo_celery_db_pool_sync_overflow,
+                    pool_pre_ping=True,
+                    pool_recycle=300,
+                    pool_use_lifo=False,  # FIFO
+                    pool_timeout=s.modulo_celery_db_pool_sync_timeout,
+                )
+    from sqlalchemy.orm import sessionmaker
+
+    return sessionmaker(bind=_sync_beat_engine)()
+
+
+def dispose_beat_sync_engine():
+    global _sync_beat_engine
+    if _sync_beat_engine is not None:
+        _sync_beat_engine.dispose()
+        _sync_beat_engine = None
+
+
 try:
     from modulo.celery_app import get_celery_app as _get_celery_app
 
