@@ -1,4 +1,4 @@
-﻿import { test, expect } from './setup/fixtures'
+import { test, expect } from './setup/fixtures'
 import AxeBuilder from '@axe-core/playwright'
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
@@ -18,12 +18,16 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
   for (const { path, name } of pages) {
     test(`${name} â€” light mode has no unexpected WCAG AA violations`, async ({ page }) => {
       await page.goto(path)
+      await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
       // Guard: storageState may redirect /login to / (dashboard)
       if (path === '/login' && !page.url().includes('/login')) {
         console.log(`  Skipping ${path} — redirected by valid session`)
         return
       }
+
+      // Wait for page to be fully stable before running axe
+      await page.waitForTimeout(300)
 
       await page.evaluate(() => {
         document.documentElement.classList.add('light')
@@ -49,12 +53,16 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
 
     test(`${name} â€” dark mode has no unexpected WCAG AA violations`, async ({ page }) => {
       await page.goto(path)
+      await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
       // Guard: storageState may redirect /login to / (dashboard)
       if (path === '/login' && !page.url().includes('/login')) {
         console.log(`  Skipping ${path} — redirected by valid session`)
         return
       }
+
+      // Wait for page to be fully stable before running axe
+      await page.waitForTimeout(300)
 
       await page.evaluate(() => {
         document.documentElement.classList.remove('light')
