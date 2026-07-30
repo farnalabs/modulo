@@ -1524,7 +1524,7 @@ export default {
     },
     "SidebarNav": {
       "main_navigation": "Main navigation",
-      "group_core": "CORE",
+      "group_build": "BUILD",
       "group_monitor": "MONITOR",
       "group_configure": "CONFIGURE",
       "group_admin": "ADMIN",

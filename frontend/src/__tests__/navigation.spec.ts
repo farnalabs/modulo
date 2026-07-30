@@ -1,8 +1,8 @@
-﻿import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockManifest = vi.hoisted(() => ({
   sidebar_groups: {
-    core: { label: 'CORE', order: 1, default_expanded: true, labelKey: 'components.SidebarNav.group_core' },
+    core: { label: 'BUILD', order: 1, default_expanded: true, labelKey: 'components.SidebarNav.group_build' },
     monitor: { label: 'MONITOR', order: 2, default_expanded: true, labelKey: 'components.SidebarNav.group_monitor' },
     configure: { label: 'CONFIGURE', order: 3, default_expanded: false, labelKey: 'components.SidebarNav.group_configure' },
     admin: { label: 'ADMIN', order: 4, default_expanded: false, labelKey: 'components.SidebarNav.group_admin' },
@@ -226,7 +226,7 @@ describe('navigation.ts', () => {
 
   it('sets group labelKey from manifest labelKey', () => {
     const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.labelKey).toBe('components.SidebarNav.group_core')
+    expect(core.labelKey).toBe('components.SidebarNav.group_build')
 
     const monitor = navGroups.find((g) => g.id === 'monitor')!
     expect(monitor.labelKey).toBe('components.SidebarNav.group_monitor')
