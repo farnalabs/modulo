@@ -50,7 +50,9 @@ rules:
       include: ["**/backend/src/**"]
 
   - id: env-vars-extra-at-end
-    pattern: "**env_vars_extra"
+    patterns:
+      - pattern: |
+          $X(**env_vars_extra)
     message: "`**env_vars_extra` must precede system env vars (GITHUB_TOKEN, APP_MODULO_OPENCODE_API_KEY, etc.) to prevent pipeline from overriding them — move `**env_vars_extra` before system vars"
     languages: [python]
     severity: WARNING
