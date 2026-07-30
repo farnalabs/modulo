@@ -1,4 +1,4 @@
-﻿"""v2 — Pipeline & Runtime Engine.
+"""v2 — Pipeline & Runtime Engine.
 
 Combines 0003 (pipeline execution) and 0004 (runtime engine) to resolve
 cross-dependency: agents in 0003 references model_backends in 0004.

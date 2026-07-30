@@ -1,4 +1,4 @@
-﻿"""Celery CLI entry point — provides a module-level ``app`` for ``celery -A``.
+"""Celery CLI entry point — provides a module-level ``app`` for ``celery -A``.
 
 Usage::
 

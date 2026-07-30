@@ -1,4 +1,4 @@
-﻿"""Integration tests for VariantGroup CRUD.
+"""Integration tests for VariantGroup CRUD.
 
 RLS is set to test_org; all inserts are rolled back after each test.
 Requires Postgres via testcontainers.
@@ -304,4 +304,3 @@ async def test_no_coverage_gaps_when_all_evals_present(
 
     gaps = await get_coverage_gaps(rls_session, group)
     assert len(gaps) == 0
-

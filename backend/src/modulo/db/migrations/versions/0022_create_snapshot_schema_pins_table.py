@@ -1,4 +1,4 @@
-﻿"""Create snapshot_schema_pins table
+"""Create snapshot_schema_pins table
 
 Revision ID: 0022_create_snapshot_schema_pins_table
 Revises: 0021_add_system_bool_to_schemas
