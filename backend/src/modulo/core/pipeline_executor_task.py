@@ -323,7 +323,7 @@ async def _load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID) -> 
             return None, None
 
     settings = _get_settings()
-    conn_string = str(settings.database_url).replace("+asyncpg", "+psycopg")
+    conn_string = str(settings.database_url).replace("+asyncpg", "").replace("+psycopg", "")
     executor = PipelineExecutor(aeng, checkpointer_conn_string=conn_string)
     return cur, executor
 
