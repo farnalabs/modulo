@@ -486,6 +486,7 @@ class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does n
     Entry = DatabaseReportEntry
 
     def __init__(self, app: Celery, **kwargs: Any) -> None:
+        self._schedule: dict[str, Any] = {}
         super().__init__(app, **kwargs)
         self._schedule: dict[str, DatabaseReportEntry] = {}
 
