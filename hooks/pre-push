@@ -1,0 +1,12 @@
+﻿#!/usr/bin/env pwsh
+# Pre-push hook: run ruff check and block push on lint errors
+$ErrorActionPreference = "Stop"
+$repoRoot = git rev-parse --show-toplevel
+if (-not $repoRoot) { exit 0 }
+$result = uv --directory "$repoRoot/backend" run --no-sync ruff check . 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ RUFF CHECK FAILED — push blocked. Fix lint errors first."
+    Write-Host $result
+    exit 1
+}
+exit 0
