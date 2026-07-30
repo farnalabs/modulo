@@ -73,9 +73,9 @@ async def _run_scheduler_loop(
                             snapshot_id=trigger.config_json.get("snapshot_id") if trigger.config_json else None,
                             factory=factory,
                         )
-                        if bg_worker is not None and result_dict.get("status") == "fired":
-                            run_id_str = result_dict.get("run_id")
-                            if run_id_str:
+                        if result_dict.get("status") == "fired" and result_dict.get("run_id"):
+                            run_id_str = result_dict["run_id"]
+                            if bg_worker is not None:
                                 try:
                                     bg_worker.submit(
                                         run_id=uuid.UUID(run_id_str),
@@ -85,6 +85,15 @@ async def _run_scheduler_loop(
                                 except Exception:
                                     _log.exception(
                                         "Failed to submit cron-triggered run %s to background worker",
+                                        run_id_str,
+                                    )
+                            else:
+                                try:
+                                    from modulo.core.pipeline_executor_task import dispatch
+                                    dispatch(run_id_str, str(trigger.organisation_id), "runs_automated")
+                                except Exception:
+                                    _log.exception(
+                                        "Failed to dispatch cron-triggered run %s to Celery",
                                         run_id_str,
                                     )
             except asyncio.CancelledError:
