@@ -78,6 +78,9 @@ _MAX_ARTIFACT_LOG = 102400
 _MAX_OTEL_LOG_ATTR = 32768
 _MAX_ERROR_MSG = 500
 
+_OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after command times out
+_DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
+
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
     """Evaluate an eval-reference condition using the given operator.
@@ -653,7 +656,10 @@ def make_sandbox_agent_fn(
     from e2b import AsyncSandbox  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
 
-    @cancellable_node(timeout=(timeout or sandbox_timeout) + 30, role="sandbox_agent")  # +30s buffer
+    @cancellable_node(
+        timeout=(timeout or sandbox_timeout) + _OUTPUT_READ_TIMEOUT + _DECORATOR_GRACE,
+        role="sandbox_agent",
+    )
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
 
         run_context: dict[str, Any] = state.get("run_context") or {}
@@ -717,7 +723,6 @@ def make_sandbox_agent_fn(
                     sandbox.commands.run(
                         agent_command,
                         timeout=sandbox_timeout,
-
                         envs={
                             # System env vars first -- provide defaults from the host.
                             # DO NOT move env_vars_extra before these. Pipelines need
@@ -774,7 +779,7 @@ def make_sandbox_agent_fn(
             raw_output: str = ""
             output_json: Any = None
             try:
-                _remaining_after_cmd = max(30.0, sandbox_timeout - (time.monotonic() - start_time))
+                _remaining_after_cmd = max(_OUTPUT_READ_TIMEOUT, sandbox_timeout - (time.monotonic() - start_time))
                 raw_output = await sandbox.files.read(
                     "/home/user/output.json",
                     request_timeout=_remaining_after_cmd,
@@ -929,8 +934,8 @@ def make_sandbox_agent_fn(
             if sandbox is not None:
                 try:
                     await asyncio.wait_for(
-                        sandbox.kill(request_timeout=30),
-                        timeout=30,
+                        sandbox.kill(request_timeout=_OUTPUT_READ_TIMEOUT),
+                        timeout=_OUTPUT_READ_TIMEOUT,
                     )
                 except Exception:
                     _log.exception(
