@@ -250,7 +250,7 @@ class ExecuteRunTask(Task):  # type: ignore[misc]
             _log.exception("on_failure handler failed for run %s", run_id)
 
 
-async def _do_execute(run_id: str, org_id: str, task_instance: Task) -> None:
+async def _do_execute(run_id: str, org_id: str, _task_instance: Task) -> None:
     """Execute a single pipeline run from claim through completion."""
     aeng = _get_async_engine()
     rid = uuid.UUID(run_id)

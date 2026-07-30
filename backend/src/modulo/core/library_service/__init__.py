@@ -1891,7 +1891,7 @@ async def publish_contribution(
     org_id: uuid.UUID,
     primitive_id: uuid.UUID,
     *,
-    approved_by: uuid.UUID,
+    _approved_by: uuid.UUID,
 ) -> LibraryPrimitive:
     """Publish a reviewed fixture contribution to the community library.
 

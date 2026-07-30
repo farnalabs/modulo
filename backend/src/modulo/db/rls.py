@@ -128,8 +128,8 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
     @event.listens_for(engine.sync_engine, "checkout")
     def _reset_org_on_checkout(
         dbapi_connection: object,
-        connection_record: object,
-        connection_proxy: object,
+        _connection_record: object,
+        _connection_proxy: object,
     ) -> None:
         try:
             cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
