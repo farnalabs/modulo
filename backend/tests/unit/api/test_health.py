@@ -1,4 +1,4 @@
-﻿"""Tests for readiness endpoint — aggregation logic, degraded/unavailable status, and check structure."""
+"""Tests for readiness endpoint — aggregation logic, degraded/unavailable status, and check structure."""
 
 from collections.abc import Generator
 from unittest.mock import AsyncMock, patch

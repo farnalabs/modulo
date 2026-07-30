@@ -389,8 +389,7 @@ async def _scan_duplicate_triggers(session: AsyncSession, org_id: uuid.UUID) -> 
                 select(Trigger)
                 .join(
                     dup_subq,
-                    (Trigger.pipeline_id == dup_subq.c.pipeline_id)
-                    & (Trigger.trigger_type == dup_subq.c.trigger_type),
+                    (Trigger.pipeline_id == dup_subq.c.pipeline_id) & (Trigger.trigger_type == dup_subq.c.trigger_type),
                 )
                 .where(
                     Trigger.organisation_id == org_id,
@@ -417,7 +416,7 @@ async def _scan_duplicate_triggers(session: AsyncSession, org_id: uuid.UUID) -> 
                     id=str(t.id),
                     name=f"Trigger {ttype} for pipeline {pid}",
                     detail=f"Duplicate {ttype} trigger — {len(triggers)} total on this pipeline. "
-                           f"Created: {t.created_at.isoformat() if t.created_at else 'N/A'}",
+                    f"Created: {t.created_at.isoformat() if t.created_at else 'N/A'}",
                     created_at=t.created_at.isoformat() if t.created_at else None,
                 )
             )
@@ -468,10 +467,7 @@ async def _scan_stale_api_keys(session: AsyncSession, org_id: uuid.UUID) -> list
                 select(OrgApiKey).where(
                     OrgApiKey.organisation_id == org_id,
                     OrgApiKey.revoked_at.is_(None),
-                    (
-                        (OrgApiKey.last_used_at.is_(None))
-                        | (OrgApiKey.last_used_at < four_weeks_ago)
-                    ),
+                    ((OrgApiKey.last_used_at.is_(None)) | (OrgApiKey.last_used_at < four_weeks_ago)),
                 )
             )
         )
@@ -492,9 +488,7 @@ async def _scan_stale_api_keys(session: AsyncSession, org_id: uuid.UUID) -> list
 async def _scan_unused_sso_providers(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """SSO providers with no accounts using SSO authentication in this org."""
     providers = (
-        (await session.execute(select(SsoProvider).where(SsoProvider.organisation_id == org_id)))
-        .scalars()
-        .all()
+        (await session.execute(select(SsoProvider).where(SsoProvider.organisation_id == org_id))).scalars().all()
     )
     if not providers:
         return []
@@ -530,9 +524,9 @@ async def _scan_unused_sso_providers(session: AsyncSession, org_id: uuid.UUID) -
 
 async def _scan_empty_teams(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Teams with no active user members."""
-    teams_with_members = select(TeamMembership.team_id).where(
-        TeamMembership.organisation_id == org_id
-    ).distinct().subquery()
+    teams_with_members = (
+        select(TeamMembership.team_id).where(TeamMembership.organisation_id == org_id).distinct().subquery()
+    )
 
     teams = (
         (
@@ -595,25 +589,12 @@ async def _scan_unused_parameter_schemas(session: AsyncSession, org_id: uuid.UUI
 async def _scan_unused_schemas(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Schemas not referenced by any agent (input/output) or snapshot schema pin. Excludes system schemas."""
     # IDs used by agents (input or output schema)
-    agent_input_ids = (
-        select(Agent.input_schema_id)
-        .where(Agent.organisation_id == org_id)
-        .distinct()
-        .subquery()
-    )
-    agent_output_ids = (
-        select(Agent.output_schema_id)
-        .where(Agent.organisation_id == org_id)
-        .distinct()
-        .subquery()
-    )
+    agent_input_ids = select(Agent.input_schema_id).where(Agent.organisation_id == org_id).distinct().subquery()
+    agent_output_ids = select(Agent.output_schema_id).where(Agent.organisation_id == org_id).distinct().subquery()
 
     # IDs used by snapshot schema pins
     pin_schema_ids = (
-        select(SnapshotSchemaPin.schema_id)
-        .where(SnapshotSchemaPin.organisation_id == org_id)
-        .distinct()
-        .subquery()
+        select(SnapshotSchemaPin.schema_id).where(SnapshotSchemaPin.organisation_id == org_id).distinct().subquery()
     )
 
     schemas = (
