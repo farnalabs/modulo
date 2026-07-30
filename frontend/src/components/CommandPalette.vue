@@ -87,18 +87,18 @@ const searchItems = computed<SearchItem[]>(() => {
     }
   }
   const extras: SearchItem[] = [
-    { label: 'Dashboard', path: '/', icon: 'LayoutDashboard', section: 'Core' },
-    { label: 'Pipelines', path: '/pipelines', icon: 'GitFork', section: 'Core' },
-    { label: 'Library', path: '/library', icon: 'BookOpen', section: 'Core' },
-    { label: 'Stages Board', path: '/stages', icon: 'Columns', section: 'Core' },
-    { label: 'Runs', path: '/runs', icon: 'CirclePlay', section: 'Core' },
-    { label: 'Evals', path: '/evals', icon: 'CheckSquare', section: 'Analysis' },
-    { label: 'Schemas', path: '/schemas', icon: 'Database', section: 'Schemas' },
-    { label: 'Connectors', path: '/admin/connectors', icon: 'Plug', section: 'Admin' },
-    { label: 'Settings', path: '/settings', icon: 'Settings', section: 'Admin' },
-    { label: 'Organization', path: '/admin/org', icon: 'Building', section: 'Admin' },
-    { label: 'System', path: '/admin/system', icon: 'Settings', section: 'Admin' },
-    { label: 'Cost Management', path: '/admin/costs', icon: 'DollarSign', section: 'Admin' },
+    { label: 'Dashboard', path: '/', icon: 'LayoutDashboard', section: 'CORE' },
+    { label: 'Pipelines', path: '/pipelines', icon: 'GitFork', section: 'CORE' },
+    { label: 'Library', path: '/library', icon: 'BookOpen', section: 'CORE' },
+    { label: 'Stages Board', path: '/stages', icon: 'Columns', section: 'CORE' },
+    { label: 'Runs', path: '/runs', icon: 'CirclePlay', section: 'CORE' },
+    { label: 'Evals', path: '/evals', icon: 'CheckSquare', section: 'MONITOR' },
+    { label: 'Schemas', path: '/schemas', icon: 'Database', section: 'CONFIGURE' },
+    { label: 'Connectors', path: '/admin/connectors', icon: 'Plug', section: 'ADMIN' },
+    { label: 'Settings', path: '/settings', icon: 'Settings', section: 'ADMIN' },
+    { label: 'Organization', path: '/admin/org', icon: 'Building', section: 'ADMIN' },
+    { label: 'System', path: '/admin/system', icon: 'Settings', section: 'ADMIN' },
+    { label: 'Cost Management', path: '/admin/costs', icon: 'DollarSign', section: 'ADMIN' },
   ]
   for (const extra of extras) {
     if (seen.has(extra.path)) continue
@@ -139,6 +139,8 @@ function open() {
 function close() {
   isOpen.value = false
 }
+
+defineExpose({ open })
 
 function navigate() {
   const items = filteredItems.value
