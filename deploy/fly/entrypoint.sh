@@ -52,9 +52,6 @@ echo "=== Bootstrapping modulo_app role ==="
 echo "=== Running DB migrations ==="
 .venv/bin/alembic upgrade heads && echo "  Migrations complete" || echo "  WARNING: migrations failed (will retry in lifespan)"
 
-echo "=== Starting Celery beat (cron/polling/report scheduler) ==="
-.venv/bin/celery -A modulo.cli_celery beat --loglevel=info --pidfile=/tmp/celery-beat.pid &
-CELERY_BEAT_PID=$!
 
 echo "=== Starting Celery worker (pipeline execution, concurrency=2) ==="
 .venv/bin/celery -A modulo.cli_celery worker --loglevel=info --concurrency=2 --pidfile=/tmp/celery-worker.pid &

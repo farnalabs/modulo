@@ -105,6 +105,7 @@ from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
 from modulo.api.routes.webhooks import router as webhooks_router
 from modulo.core.cleanup_jobs import cleanup_scheduler_loop
+from modulo.core.scheduler import run_scheduler
 from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
@@ -740,11 +741,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     get_runtime_config_store()
 
-    # Background pipeline execution is handled by Celery workers.
-    # The in-process BackgroundPipelineWorker and in-process cron scheduler
-    # have been replaced by the Celery single-ingress ExecuteRunTask.
-    # Celery beat (CompositeScheduler) runs in its own process.
-    logger.info("startup.celery_workers_handle_pipeline_execution")
+    # Cron scheduling runs in-process via run_scheduler().  Celery beat
+    # has async event-loop conflicts with the async DB engine and is not
+    # used -- Celery workers handle pipeline execution only.
+    _scheduler_stop = asyncio.Event()
+    _scheduler_task = asyncio.create_task(run_scheduler(_scheduler_stop))
+    _scheduler_task.add_done_callback(
+        lambda t: _log.error("Cron scheduler exited", exc_info=t.exception())
+        if not t.cancelled() and t.exception() else None
+    )
+    logger.info("startup.cron_scheduler_started")
 
     # Initialise the graceful shutdown manager with the configured timeout.
     # Two session factories exist:
@@ -800,6 +806,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     session_manager._task_group = _mcp_tg
 
     yield
+
+    # Shutdown cron scheduler.
+    _scheduler_stop.set()
+    _scheduler_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await _scheduler_task
 
     await _mcp_tg.__aexit__(None, None, None)
     retention_task.cancel()
