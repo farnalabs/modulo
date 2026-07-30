@@ -106,7 +106,7 @@ def _get_engines() -> tuple[Engine, AsyncEngine]:
             pool_pre_ping=True,
             pool_recycle=1800,
             pool_timeout=5,
-            connect_args={"timeout": s.modulo_celery_db_pool_connect_timeout},
+            connect_args={"timeout": s.modulo_celery_db_pool_connect_timeout, "ssl": False},
         )
         _log.info(
             "Engines created: sync(pool=%d, overflow=%d, timeout=%ds) async(pool=%d, overflow=%d, timeout=%ds)",
