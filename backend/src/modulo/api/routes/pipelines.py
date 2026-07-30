@@ -233,6 +233,7 @@ class PipelineGraphNode(BaseModel):
         default=None,
         description="Inline JSON Schema defining the node's output shape.",
     )
+    description: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
     def validate_node_type(self) -> PipelineGraphNode:
