@@ -113,14 +113,6 @@ class TestContextSetterRole:
 
         result = await context_setter_node({"run_context": {"cancelled": False, "input": {}}})
         assert result["run_context"]["model_tier"] == "tier-1"
-
-    @pytest.mark.asyncio
-    async def test_context_setter_with_empty_input_does_not_crash(self) -> None:
-        @cancellable_node(role="context_setter")
-        async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
-            return {"run_context": {"model_tier": "tier-1", "estimated_tokens": 0, "complexity_reason": "ok"}}
-
-        result = await context_setter_node({"run_context": {"cancelled": False, "input": {}}})
         assert result["run_context"]["estimated_tokens"] == 0
 
     @pytest.mark.asyncio
