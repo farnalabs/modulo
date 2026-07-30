@@ -1,4 +1,4 @@
-# Security Audit Policy
+﻿# Security Audit Policy
 # ---------------------
 # Dependency versions are pinned to minimums that fix known CVEs where possible.
 # Run `pip-audit` after any dependency change. The CI workflow
@@ -197,6 +197,7 @@ ignore = [
 "src/modulo/core/cron_scheduler.py" = ["UP017"]
 "src/modulo/core/reports/scheduler.py" = ["UP017"]
 "src/modulo/core/trigger_engine/polling.py" = ["UP017"]
+"src/modulo/core/housekeeping.py" = ["E501"]
 
 "tests/unit/test_mcp_security.py" = ["E402"]
 "tests/unit/test_multi_backend_sqlite.py" = ["E402"]
