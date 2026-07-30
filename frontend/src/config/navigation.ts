@@ -10,6 +10,7 @@ export interface NavItem {
   requiredRoles?: string[] | null
   requiredTier?: string | null
   requiredPermissions?: string[] | null
+  children?: NavItem[]
 }
 
 export interface NavGroup {
@@ -18,7 +19,6 @@ export interface NavGroup {
   labelKey: string
   items: NavItem[]
   defaultCollapsed: boolean
-  simpleMode: boolean
   systemAdminOnly?: boolean
 }
 
@@ -83,17 +83,62 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
 
 const groupLabelKeyMap: Record<string, string> = {
   core: 'components.SidebarNav.group_core',
-  analysis: 'components.SidebarNav.group_analysis',
-  schemas: 'components.SidebarNav.group_schemas',
-  evals: 'components.SidebarNav.group_evals',
-  remy: 'components.SidebarNav.group_remy',
-  settings: 'components.SidebarNav.group_settings',
-  'access-control': 'components.SidebarNav.group_access_control',
-  'cost-management': 'components.SidebarNav.group_cost_management',
-  system: 'components.SidebarNav.group_system',
-  monitoring: 'components.SidebarNav.group_monitoring',
-  extensions: 'components.SidebarNav.group_extensions',
-  'system-admin': 'components.SidebarNav.group_system_admin',
+  monitor: 'components.SidebarNav.group_monitor',
+  configure: 'components.SidebarNav.group_configure',
+  admin: 'components.SidebarNav.group_admin',
+}
+
+const subItemConfig: Record<string, Omit<NavItem, 'children'>[]> = {
+  '/evals/editor': [
+    { to: '/evals/proposals', icon: 'Clipboard', label: 'Proposals', labelKey: 'nav.eval_proposals', visibility: 'private_preview' },
+    { to: '/variants/compare', icon: 'GitFork', label: 'Variants', labelKey: 'nav.variant_compare', visibility: 'private_preview' },
+    { to: '/variants/ab-test', icon: 'FlaskConical', label: 'AB Test', labelKey: 'nav.ab_test_models', visibility: 'private_preview' },
+  ],
+  '/settings/observability': [
+    { to: '/settings/monitoring', icon: 'Eye', label: 'Browser Monitoring', labelKey: 'nav.browser_monitoring' },
+    { to: '/admin/errors', icon: 'AlertTriangle', label: 'Error Dashboard', labelKey: 'nav.error_dashboard' },
+    { to: '/admin/notification-delivery', icon: 'Bell', label: 'Notification Log', labelKey: 'nav.notification_log' },
+    { to: '/api-changelog', icon: 'History', label: 'API Changelog', labelKey: 'nav.api_changelog' },
+    { to: '/team-comparison', icon: 'BarChart', label: 'Team Comparison', labelKey: 'nav.team_comparison' },
+  ],
+  '/schemas': [
+    { to: '/schemas/editor/:id', icon: 'FileText', label: 'Editor', labelKey: 'nav.schema_editor' },
+    { to: '/schemas/infer', icon: 'Search', label: 'Infer', labelKey: 'nav.schema_infer', visibility: 'private_preview' },
+  ],
+  '/settings/license': [
+    { to: '/settings/sso', icon: 'Shield', label: 'SSO', labelKey: 'nav.sso' },
+    { to: '/settings/teams', icon: 'Users', label: 'Teams', labelKey: 'nav.teams' },
+    { to: '/admin/audit', icon: 'FileText', label: 'Audit Log', labelKey: 'nav.audit_log' },
+  ],
+  '/admin/users': [
+    { to: '/admin/org', icon: 'Building', label: 'Org Settings', labelKey: 'nav.org_settings' },
+    { to: '/settings/hitl-review', icon: 'ShieldQuestion', label: 'HITL Review', labelKey: 'nav.hitl_review' },
+  ],
+  '/admin/remy': [
+    { to: '/settings/remy', icon: 'Bot', label: 'Remy Skills', labelKey: 'nav.remy_skills', visibility: 'private_preview' },
+  ],
+  '/admin/feature-flags': [
+    { to: '/admin/environments', icon: 'Container', label: 'Environments', labelKey: 'nav.environments' },
+    { to: '/admin/run-retention', icon: 'Clock', label: 'Run Retention', labelKey: 'nav.run_retention' },
+    { to: '/admin/views', icon: 'Eye', label: 'Saved Views', labelKey: 'nav.saved_views' },
+    { to: '/admin/node-categories', icon: 'Tag', label: 'Node Categories', labelKey: 'nav.node_categories' },
+    { to: '/settings/email', icon: 'Mail', label: 'Email', labelKey: 'nav.email_settings' },
+    { to: '/admin/plugins', icon: 'Puzzle', label: 'Plugins', labelKey: 'nav.plugins' },
+    { to: '/settings/error-forwarders', icon: 'AlertTriangle', label: 'Error Forwarders', labelKey: 'nav.error_forwarders' },
+    { to: '/admin/housekeeping', icon: 'Settings', label: 'Housekeeping', labelKey: 'nav.housekeeping' },
+  ],
+  '/admin/model-backends': [
+    { to: '/settings/mcp', icon: 'Cable', label: 'MCP', labelKey: 'nav.mcp' },
+  ],
+  '/settings/triggers': [
+    { to: '/settings/runtime-config', icon: 'Settings', label: 'Runtime Config', labelKey: 'nav.runtime_config' },
+    { to: '/environment-profiles', icon: 'Container', label: 'Env Profiles', labelKey: 'nav.env_profiles' },
+  ],
+  '/admin/costs': [
+    { to: '/admin/costs/limits', icon: 'CreditCard', label: 'Spend Limits', labelKey: 'nav.spend_limits' },
+    { to: '/admin/costs/controls', icon: 'SlidersHorizontal', label: 'Cost Controls', labelKey: 'nav.cost_controls' },
+    { to: '/settings/rate-limits', icon: 'Gauge', label: 'Rate Limits', labelKey: 'nav.rate_limits' },
+  ],
 }
 
 interface ManifestRoute {
@@ -113,7 +158,6 @@ interface ManifestSidebarGroup {
   label: string
   order: number
   default_expanded: boolean
-  simple_mode: boolean
   labelKey?: string
   system_admin_only?: boolean
 }
@@ -168,6 +212,7 @@ function buildSidebarGroups(): NavGroup[] {
       requiredRoles: route.required_roles || null,
       requiredTier: route.required_tier || null,
       requiredPermissions: route.required_permissions || null,
+      children: undefined,
     })
   }
 
@@ -179,6 +224,15 @@ function buildSidebarGroups(): NavGroup[] {
     })
   }
 
+  for (const group of Object.values(itemsByGroup)) {
+    for (const item of group) {
+      const children = subItemConfig[item.to]
+      if (children && children.length > 0) {
+        item.children = children as NavItem[]
+      }
+    }
+  }
+
   return Object.entries(m.sidebar_groups)
     .sort(([, a], [, b]) => a.order - b.order)
     .map(([id, sg]) => ({
@@ -187,7 +241,6 @@ function buildSidebarGroups(): NavGroup[] {
       labelKey: sg.labelKey || groupLabelKeyMap[id] || `components.SidebarNav.group_${id}`,
       items: itemsByGroup[id] || [],
       defaultCollapsed: !sg.default_expanded,
-      simpleMode: sg.simple_mode,
       systemAdminOnly: sg.system_admin_only || undefined,
     }))
     .filter((g) => g.items.length > 0)

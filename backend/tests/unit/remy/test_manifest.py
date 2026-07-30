@@ -80,18 +80,10 @@ class TestManifestLoad:
         manifest = load_manifest()
         groups = manifest.get("sidebar_groups", {})
         expected_groups = {
-            "lifecycle",
             "core",
-            "analysis",
-            "evals",
-            "schemas",
-            "remy",
-            "settings",
-            "access-control",
-            "cost-management",
-            "system",
-            "monitoring",
-            "extensions",
+            "monitor",
+            "configure",
+            "admin",
         }
         assert set(groups.keys()) == expected_groups
 

@@ -7,7 +7,7 @@ test.describe('Navigation Flow', { tag: "@regression" }, () => {
 
     await page.goto('/')
 
-    const pipelinesLink = page.locator('a.sidebar-link', { hasText: 'My Pipelines' }).first()
+    const pipelinesLink = page.locator('a.sidebar-link', { hasText: 'Pipelines' }).first()
     await expect(pipelinesLink).toBeVisible()
     await pipelinesLink.click()
 
