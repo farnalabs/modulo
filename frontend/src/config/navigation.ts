@@ -1,4 +1,4 @@
-﻿import manifest from '@/manifest.yaml'
+import manifest from '@/manifest.yaml'
 
 export interface NavItem {
   to: string
@@ -82,7 +82,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
 }
 
 const groupLabelKeyMap: Record<string, string> = {
-  core: 'components.SidebarNav.group_core',
+  core: 'components.SidebarNav.group_build',
   monitor: 'components.SidebarNav.group_monitor',
   configure: 'components.SidebarNav.group_configure',
   admin: 'components.SidebarNav.group_admin',

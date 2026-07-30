@@ -772,10 +772,10 @@ elements:
 
 sidebar_groups:
     core:
-        label: CORE
+        label: BUILD
         order: 1
         default_expanded: true
-        labelKey: components.SidebarNav.group_core
+        labelKey: components.SidebarNav.group_build
     monitor:
         label: MONITOR
         order: 2

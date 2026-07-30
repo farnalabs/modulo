@@ -1,5 +1,5 @@
 ---
-id: feat-core-navigation-restructure
+id: feat-BUILD-navigation-restructure
 prd: 8.26
 delivery-tasks: []
 bdd: []
@@ -27,8 +27,8 @@ See [ADR 017](../../adr/017-navigation-sidebar-restructure.md) for full rational
 
 ## Behaviours
 
-- [x] Sidebar with 4 groups (CORE, MONITOR, CONFIGURE, ADMIN)
-- [x] CORE and MONITOR expanded by default (daily drivers)
+- [x] Sidebar with 4 groups (BUILD, MONITOR, CONFIGURE, ADMIN)
+- [x] BUILD and MONITOR expanded by default (daily drivers)
 - [x] CONFIGURE and ADMIN collapsed by default (set-and-forget pages)
 - [x] Expand/collapse per group with chevron indicators, persisted to localStorage
 - [x] Expandable sub-items within groups (chevron on parent item shows children inline)
@@ -46,7 +46,7 @@ See [ADR 017](../../adr/017-navigation-sidebar-restructure.md) for full rational
 - [ ] Malformed `manifest.yaml` causes `buildSidebarGroups()` to return empty array — sidebar renders blank
 - [ ] Route references non-existent `sidebar_group` — logged as `console.warn`, item skipped
 - [ ] JWT token missing `sub`, `org_role`, or `is_system_admin` claims — defaults to `""`, `null`, `false`
-- [ ] `localStorage` unavailable (private browsing, quota exceeded) — `useStorage` from `@vueuse/core` catches silently, defaults used
+- [ ] `localStorage` unavailable (private browsing, quota exceeded) — `useStorage` from `@vueuse/BUILD` catches silently, defaults used
 - [ ] Plan/tier fetch fails (`planStore.fetchPlan` catches with `.catch(() => {})`) — sidebar renders all tier-gated items as not visible
 - [ ] Expandable sub-item path does not exist in manifest — `subItemConfig` entry points to orphaned route
 
@@ -78,4 +78,4 @@ See [ADR 017](../../adr/017-navigation-sidebar-restructure.md) for full rational
 
 ## QA History
 
-- **2026-07-29 — Sidebar Restructure**: Replaced 11 groups with 4 (CORE/MONITOR/CONFIGURE/ADMIN). Added expandable sub-items. Removed Essentials/All Features toggle. Added search button in header. Added Command Palette. See ADR 017 for full rationale and UX research.
+- **2026-07-29 — Sidebar Restructure**: Replaced 11 groups with 4 (BUILD/MONITOR/CONFIGURE/ADMIN). Added expandable sub-items. Removed Essentials/All Features toggle. Added search button in header. Added Command Palette. See ADR 017 for full rationale and UX research.
