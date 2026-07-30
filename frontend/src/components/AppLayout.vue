@@ -37,7 +37,17 @@
         </div>
 
         <div class="flex items-center justify-between pb-2 mb-1 gap-2">
-          <NotificationBell />
+          <div class="flex items-center gap-1">
+            <NotificationBell />
+            <button
+              @click="openCommandPalette"
+              class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              :title="`Search pages... (${navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+K)`"
+              :aria-label="$t('components.AppLayout.search_pages')"
+            >
+              <Search class="h-[18px] w-[18px]" aria-hidden="true" />
+            </button>
+          </div>
           <label for="applayout-field-2" class="toggle-switch" :class="isLight ? 'light' : 'dark'">
             <span class="track">
               <span class="thumb" />
@@ -77,6 +87,14 @@
         <X v-else class="h-[22px] w-[22px]" aria-hidden="true" />
       </button>
       <NotificationBell class="ml-auto" />
+      <button
+        @click="openCommandPalette"
+        class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        :title="`Search pages... (${navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+K)`"
+        :aria-label="$t('components.AppLayout.search_pages')"
+      >
+        <Search class="h-[22px] w-[22px]" aria-hidden="true" />
+      </button>
       <label for="applayout-field-1" class="toggle-switch ml-2" :class="isLight ? 'light' : 'dark'">
         <span class="track">
           <span class="thumb" />
@@ -165,7 +183,7 @@
     </div>
 
     <SpotlightOverlay />
-    <CommandPalette />
+    <CommandPalette ref="commandPaletteRef" />
     <RemyPanel v-if="planStore.devMode" />
   </div>
   </TooltipProvider>
@@ -192,6 +210,7 @@ import { Sun } from "@lucide/vue";
 import { Moon } from "@lucide/vue";
 import { Menu } from "@lucide/vue";
 import { X } from "@lucide/vue";
+import { Search } from "@lucide/vue";
 
 const planStore = usePlanStore();
 const remyStore = useRemyStore();
@@ -199,6 +218,7 @@ const remyStore = useRemyStore();
 const mobileOpen = ref(false);
 const mobileSidebarRef = ref<HTMLElement | null>(null);
 const mobileButtonRef = ref<HTMLElement | null>(null);
+const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
 
 const isLight = ref(document.documentElement.classList.contains("light"));
 
@@ -211,6 +231,10 @@ function toggleTheme() {
   root.classList.toggle("light");
   root.classList.toggle("dark");
   isLight.value = root.classList.contains("light");
+}
+
+function openCommandPalette() {
+  commandPaletteRef.value?.open()
 }
 
 function logout() {
@@ -297,5 +321,3 @@ onMounted(() => {
   cursor: pointer;
 }
 </style>
-
-
