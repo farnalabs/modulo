@@ -42,7 +42,7 @@
             <button
               @click="openCommandPalette"
               class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              :title="`Search pages... (${navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+K)`"
+              :title="`Search pages... (${isMac ? 'Cmd' : 'Ctrl'}+K)`"
               :aria-label="$t('components.AppLayout.search_pages')"
             >
               <Search class="h-[18px] w-[18px]" aria-hidden="true" />
@@ -90,7 +90,7 @@
       <button
         @click="openCommandPalette"
         class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-        :title="`Search pages... (${navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+K)`"
+        :title="`Search pages... (${isMac ? 'Cmd' : 'Ctrl'}+K)`"
         :aria-label="$t('components.AppLayout.search_pages')"
       >
         <Search class="h-[22px] w-[22px]" aria-hidden="true" />
@@ -285,6 +285,8 @@ const isSystemAdmin = computed(
 );
 
 const userRole = computed(() => jwtPayload.value?.org_role || null);
+
+const isMac = computed(() => typeof navigator !== 'undefined' && navigator.platform.includes('Mac'));
 
 onMounted(() => {
   planStore.fetchPlan().catch(() => {});
