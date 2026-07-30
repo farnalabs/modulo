@@ -112,10 +112,10 @@ def _get_engines() -> tuple[Engine, AsyncEngine]:
             "Engines created: sync(pool=%d, overflow=%d, timeout=%ds) async(pool=%d, overflow=%d, timeout=%ds)",
             s.modulo_celery_db_pool_sync_size,
             s.modulo_celery_db_pool_sync_overflow,
-            s.modulo_celery_db_pool_timeout,
+            s.modulo_celery_db_pool_connect_timeout,
             s.modulo_celery_db_pool_async_size,
             s.modulo_celery_db_pool_async_overflow,
-            s.modulo_celery_db_pool_timeout,
+            s.modulo_celery_db_pool_connect_timeout,
         )
     return _SYNC_ENGINE, _ASYNC_ENGINE
 
