@@ -2,19 +2,19 @@
 
 const mockManifest = vi.hoisted(() => ({
   sidebar_groups: {
-    core: { label: 'CORE', order: 1, default_expanded: true, labelKey: 'components.SidebarNav.group_core' },
+    BUILD: { label: 'build', order: 1, default_expanded: true, labelKey: 'components.SidebarNav.group_build' },
     monitor: { label: 'MONITOR', order: 2, default_expanded: true, labelKey: 'components.SidebarNav.group_monitor' },
     configure: { label: 'CONFIGURE', order: 3, default_expanded: false, labelKey: 'components.SidebarNav.group_configure' },
     admin: { label: 'ADMIN', order: 4, default_expanded: false, labelKey: 'components.SidebarNav.group_admin' },
   },
   routes: {
-    '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'core', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
+    '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'build', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/notifications': { name: 'notifications', breadcrumb: 'Notifications', sidebar_group: null, sidebar_order: null, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
-    '/pipelines': { name: 'pipeline-list', breadcrumb: 'Pipelines', sidebar_group: 'core', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
-    '/library': { name: 'library', breadcrumb: 'Library', sidebar_group: 'core', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
-    '/runs': { name: 'runs-list', breadcrumb: 'Runs', sidebar_group: 'core', sidebar_order: 5, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
-    '/stages': { name: 'stages', breadcrumb: 'Stages Board', sidebar_group: 'core', sidebar_order: 7, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
-    '/runs/:id': { name: 'run-detail', breadcrumb: 'Run Detail', sidebar_group: 'core', sidebar_order: 8, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null },
+    '/pipelines': { name: 'pipeline-list', breadcrumb: 'Pipelines', sidebar_group: 'build', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
+    '/library': { name: 'library', breadcrumb: 'Library', sidebar_group: 'build', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
+    '/runs': { name: 'runs-list', breadcrumb: 'Runs', sidebar_group: 'build', sidebar_order: 5, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
+    '/stages': { name: 'stages', breadcrumb: 'Stages Board', sidebar_group: 'build', sidebar_order: 7, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/runs/:id': { name: 'run-detail', breadcrumb: 'Run Detail', sidebar_group: 'build', sidebar_order: 8, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null },
     '/lifecycle-maps': { name: 'lifecycle-maps', breadcrumb: 'Lifecycle Maps', sidebar_group: null, sidebar_order: null, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/runs/diff': { name: 'runs-diff', breadcrumb: 'Output Diff', sidebar_group: 'monitor', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/evals/editor': { name: 'eval-editor', breadcrumb: 'Evals', sidebar_group: 'monitor', sidebar_order: 2, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
@@ -70,12 +70,12 @@ describe('navigation.ts', () => {
   it('populates sidebar groups from manifest', () => {
     expect(navGroups.length).toBe(4)
     const groupIds = navGroups.map((g) => g.id)
-    expect(groupIds).toEqual(['core', 'monitor', 'configure', 'admin'])
+    expect(groupIds).toEqual(['build', 'monitor', 'configure', 'admin'])
   })
 
   it('sets defaultCollapsed based on default_expanded', () => {
-    const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.defaultCollapsed).toBe(false)
+    const BUILD = navGroups.find((g) => g.id === 'build')!
+    expect(BUILD.defaultCollapsed).toBe(false)
 
     const configure = navGroups.find((g) => g.id === 'configure')!
     expect(configure.defaultCollapsed).toBe(true)
@@ -85,22 +85,22 @@ describe('navigation.ts', () => {
   })
 
   it('groups are sorted by manifest order', () => {
-    expect(navGroups[0].id).toBe('core')
+    expect(navGroups[0].id).toBe('build')
     expect(navGroups[1].id).toBe('monitor')
     expect(navGroups[2].id).toBe('configure')
     expect(navGroups[3].id).toBe('admin')
   })
 
   it('items within groups are sorted by sidebar_order', () => {
-    const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items.length).toBe(5)
-    expect(core.items[0].to).toBe('/')
-    expect(core.items.map(i => i.to)).toEqual(['/', '/pipelines', '/library', '/runs', '/stages'])
+    const BUILD = navGroups.find((g) => g.id === 'build')!
+    expect(BUILD.items.length).toBe(5)
+    expect(BUILD.items[0].to).toBe('/')
+    expect(BUILD.items.map(i => i.to)).toEqual(['/', '/pipelines', '/library', '/runs', '/stages'])
   })
 
   it('excludes detail_page items from sidebar', () => {
-    const core = navGroups.find((g) => g.id === 'core')!
-    const runDetail = core.items.find((item) => item.to === '/runs/:id')
+    const BUILD = navGroups.find((g) => g.id === 'build')!
+    const runDetail = BUILD.items.find((item) => item.to === '/runs/:id')
     expect(runDetail).toBeUndefined()
   })
 
@@ -219,14 +219,14 @@ describe('navigation.ts', () => {
   })
 
   it('sets labelKey from routeLabelKeyMap for known routes', () => {
-    const core = navGroups.find((g) => g.id === 'core')!
-    const dash = core.items.find((item) => item.to === '/')!
+    const BUILD = navGroups.find((g) => g.id === 'build')!
+    const dash = BUILD.items.find((item) => item.to === '/')!
     expect(dash.labelKey).toBe('components.SidebarNav.item_dashboard')
   })
 
   it('sets group labelKey from manifest labelKey', () => {
-    const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.labelKey).toBe('components.SidebarNav.group_core')
+    const BUILD = navGroups.find((g) => g.id === 'build')!
+    expect(BUILD.labelKey).toBe('components.SidebarNav.group_build')
 
     const monitor = navGroups.find((g) => g.id === 'monitor')!
     expect(monitor.labelKey).toBe('components.SidebarNav.group_monitor')
@@ -242,9 +242,9 @@ describe('navigation.ts', () => {
     expect(admin.defaultCollapsed).toBe(true)
   })
 
-  it('core has exactly 5 items (lifecycle-maps removed, connectors moved)', () => {
-    const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items.length).toBe(5)
+  it('BUILD has exactly 5 items (lifecycle-maps removed, connectors moved)', () => {
+    const BUILD = navGroups.find((g) => g.id === 'build')!
+    expect(BUILD.items.length).toBe(5)
   })
 
   it('monitor has evals, diff, observability, etc', () => {

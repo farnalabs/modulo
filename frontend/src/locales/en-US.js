@@ -1,4 +1,4 @@
-export default {
+﻿export default {
   "views": {
     "TeamComparisonView": {
       "failed_to_load_data": "Failed to load data:",
@@ -16,7 +16,7 @@ export default {
       "awaiting": "Awaiting",
       "failed": "Failed",
       "idle": "Idle",
-      "pipeline_eval_breakdown": "{name} — Pipeline Eval Breakdown",
+      "pipeline_eval_breakdown": "{name} â€” Pipeline Eval Breakdown",
       "pipeline_count": "{count} pipeline | {count} pipelines",
       "no_eval_data_available": "No eval data available for this team's pipelines.",
       "no_teams_found": "No teams found. Create teams in Settings to see comparison data.",
@@ -36,10 +36,10 @@ export default {
       "preview_badge": "Preview",
       "native_library": "Native Library",
       "community_tab": "Community",
-      "community_disclaimer": "Contributed by users. Not maintained or verified by Modulo — use your judgment.",
+      "community_disclaimer": "Contributed by users. Not maintained or verified by Modulo â€” use your judgment.",
       "loading": "Loading...",
       "modulo_badge": "Modulo",
-      "community_badge": "Community — not verified",
+      "community_badge": "Community â€” not verified",
       "type_workflows": "Workflows",
       "type_agents": "Agents",
       "type_schemas": "Schemas",
@@ -63,7 +63,7 @@ export default {
       "users_with_the_selected_organisation_roles_will_have_access_": "Users with the selected organisation roles will have access to Remy. Admin is selected by default.",
       "default_model_configuration": "Default Model Configuration",
       "allowed_providers": "Allowed Providers",
-      "api_key_configured_remy_can_route_to": "API key configured — Remy can route to",
+      "api_key_configured_remy_can_route_to": "API key configured â€” Remy can route to",
       "can_create_and_manage_pipelines_use_remy": "Can create and manage pipelines, use Remy.",
       "failed_to_toggle_skill": "Failed to toggle skill:",
       "base_system_prompt_that_guides_remys_behaviour": "Base system prompt that guides Remy's behaviour",
@@ -82,8 +82,8 @@ export default {
       "no_teams_found": "No teams found",
       "no_teams_selected": "No teams selected",
       "no_users_found": "No users found",
-      "no_users_selected": "No users selected — all org members can use Remy",
-      "api_keys_configured_for_each_llm_provider_remy_will_use_thes": "API keys configured for each LLM provider — Remy will use these to route requests",
+      "no_users_selected": "No users selected â€” all org members can use Remy",
+      "api_keys_configured_for_each_llm_provider_remy_will_use_thes": "API keys configured for each LLM provider â€” Remy will use these to route requests",
       "additional_instructions": "Additional instructions...",
       "delete_skill": "Delete skill",
       "access_list": "Access List",
@@ -101,7 +101,7 @@ export default {
       "you_are_a_helpful_ai_assistant": "You are a helpful AI assistant...",
       "configure_a_deepseek_api_key_to_enable_deepseek_models_deeps": "Configure a DeepSeek API key to enable DeepSeek models (DeepSeek V3, DeepSeek R1).",
       "additional_guidance": "Additional Guidance",
-      "readonly_access_can_view_but_not_edit_use_remy": "Read-only access — can view but not edit, use Remy.",
+      "readonly_access_can_view_but_not_edit_use_remy": "Read-only access â€” can view but not edit, use Remy.",
       "full_access_to_all_settings_and_remy_configuration": "Full access to all settings and Remy configuration.",
       "configured_providers": "Configured Providers",
       "configure_a_groq_api_key_to_enable_fast_inference_on_openwei": "Configure a Groq API key to enable fast inference on open-weight models.",
@@ -109,7 +109,7 @@ export default {
       "edit_skill_1": "Edit skill",
       "save_guidance": "Save Guidance",
       "save_model_config": "Save Model Config",
-      "manage_model_backends": "Manage model backends →",
+      "manage_model_backends": "Manage model backends â†’",
       "google_gemini": "Google Gemini",
       "save_default_model_provider_and_allowed_model_configuration": "Save default model, provider, and allowed model configuration.",
       "configure_a_google_ai_api_key_to_enable_gemini_models_gemini": "Configure a Google AI API key to enable Gemini models (Gemini 2.5 Pro, Gemini 2.0 Flash).",
@@ -225,13 +225,13 @@ export default {
       "save": "Save",
       "alert_thresholds": "Alert Thresholds",
       "receive_notifications_when_spend_reaches_thresholds": "Receive notifications when spend reaches these thresholds",
-      "caution_50": "50% — Caution",
+      "caution_50": "50% â€” Caution",
       "notify_when_half_budget_consumed": "Notify when half the budget is consumed",
-      "warning_75": "75% — Warning",
+      "warning_75": "75% â€” Warning",
       "notify_when_three_quarters_consumed": "Notify when three-quarters of the budget is consumed",
-      "critical_90": "90% — Critical",
+      "critical_90": "90% â€” Critical",
       "notify_when_budget_nearly_exhausted": "Notify when budget is nearly exhausted",
-      "exceeded_100": "100% — Exceeded",
+      "exceeded_100": "100% â€” Exceeded",
       "notify_when_budget_exceeded": "Notify when the budget has been exceeded",
       "circuit_breaker": "Circuit Breaker",
       "automatically_stop_agent_runs_when_budget_exceeded": "Automatically stop agent runs when budget is exceeded",
@@ -428,7 +428,7 @@ export default {
     "AdminSystemConfigView": {
       "deploymentwide_system_configuration_system_admin_only": "Deployment-wide system configuration (system admin only)",
       "failed_to_load_system_config": "Failed to load system config:",
-      "system_admin_config": "System Admin — Config"
+      "system_admin_config": "System Admin â€” Config"
     },
     "FeedbackInboxView": {
       "all_pipelines": "All Pipelines",
@@ -481,7 +481,7 @@ export default {
       "post_apiv1adminorgs": "POST /api/v1/admin/orgs",
       "post_apiv1adminorgsorgidusers": "POST /api/v1/admin/orgs/{org_id}/users",
       "crosstenant_organisation_management_system_admin_only": "Cross-tenant organisation management (system admin only)",
-      "system_admin_organisations": "System Admin — Organisations",
+      "system_admin_organisations": "System Admin â€” Organisations",
       "create_user_in_organisation": "Create User in Organisation"
     },
     "AdminErrorsView": {
@@ -724,7 +724,7 @@ export default {
       "run_detail": "Run Detail",
       "hide": "Hide",
       "show": "Show",
-      "prompt_hidden_click_to_reveal": "[Prompt hidden — click to reveal]",
+      "prompt_hidden_click_to_reveal": "[Prompt hidden â€” click to reveal]",
       "prompt_dialog_description": "Rendered prompt sent to the LLM for this node.",
       "copied": "Copied!",
       "prompt_reveal_error": "Failed to reveal prompt.",
@@ -825,7 +825,7 @@ export default {
     },
     "AdminNotificationDeliveryLogView": {
       "retry_all_request_failed": "Retry all request failed:",
-      "retrying_all": "Retrying All…",
+      "retrying_all": "Retrying Allâ€¦",
       "run_failed": "Run Failed",
       "hitl_awaiting": "HITL Awaiting",
       "endpoint_url": "Endpoint URL",
@@ -836,7 +836,7 @@ export default {
       "no_delivery_logs_found": "No delivery logs found",
       "retry_succeeded": "Retry succeeded",
       "cannot_retry_missing_endpoint_id": "Cannot retry: missing endpoint ID",
-      "retrying": "Retrying…",
+      "retrying": "Retryingâ€¦",
       "last_error": "Last error",
       "http_response_code": "HTTP Response Code:",
       "error_details": "Error Details",
@@ -912,7 +912,7 @@ export default {
       "schema_name": "Schema name",
       "description": "Description",
       "fields": "Fields",
-      "fields_hint": "(read-only — re-infer to change)",
+      "fields_hint": "(read-only â€” re-infer to change)",
       "confirm_save_schema": "Confirm & Save Schema",
       "saving": "Saving...",
       "schema_saved": "Schema \"{name}\" saved."
@@ -1073,7 +1073,7 @@ export default {
       "validate_desc": "Test a set of values against this schema's validation rules.",
       "validate": "Validate",
       "validating": "Validating...",
-      "validation_passed": "Validation passed — all values are valid.",
+      "validation_passed": "Validation passed â€” all values are valid.",
       "validation_failed": "Validation failed:"
     },
   "pipeline": {
@@ -1085,7 +1085,7 @@ export default {
     "SettingsRuntimeConfigView": {
       "failed_to_reload_config": "Failed to reload config:",
       "requires_server_restart": "Requires server restart",
-      "some_values_differ_from_environment_restart_to_sync": "Some values differ from environment — restart to sync.",
+      "some_values_differ_from_environment_restart_to_sync": "Some values differ from environment â€” restart to sync.",
       "expected_env": "Expected (env)",
       "failed_to_load_runtime_config": "Failed to load runtime config:",
       "current_value": "Current Value",
@@ -1144,7 +1144,7 @@ export default {
     "SettingsMonitorConfigView": {
       "feature_locked": "Monitoring configuration is not available on your current plan.",
       "browser_monitoring": "Browser Monitoring",
-      "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately — no rebuild or page reload required."
+      "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately â€” no rebuild or page reload required."
     },
     "ABTestModelsView": {
       "model_backend": "Model Backend",
@@ -1152,12 +1152,12 @@ export default {
       "run_failed": "Run failed:",
       "group_name": "Group Name",
       "run_ab_test": "Run A/B Test",
-      "running": "Running…",
-      "select_model": "Select model…",
+      "running": "Runningâ€¦",
+      "select_model": "Select modelâ€¦",
       "existing_group": "Existing group:",
       "failed_to_create_group": "Failed to create group:",
       "run_failed_with_status": "Run failed with status:",
-      "select_a_pipeline": "Select a pipeline…",
+      "select_a_pipeline": "Select a pipelineâ€¦",
       "ab_test_models": "A/B Test Models",
       "ab_test": "AB Test",
       "compare_accuracy_and_cost_across_model_providers": "Compare accuracy and cost across model providers",
@@ -1309,8 +1309,8 @@ export default {
     "variantCompare": {
       "title": "Variant Comparison",
       "subtitle": "Side-by-side eval scores, token costs, and output diffs across A/B test variants",
-      "selectGroup": "Select a variant group…",
-      "running": "Running…",
+      "selectGroup": "Select a variant groupâ€¦",
+      "running": "Runningâ€¦",
       "runVariants": "Run Variants",
       "runs": "{count} run | {count} runs",
       "node": "Node",
@@ -1319,7 +1319,7 @@ export default {
       "statusFail": "fail",
       "statusPartial": "partial",
       "noRunData": "No run data yet. Click Run Variants above to execute a comparison run.",
-      "waitingForRuns": "Waiting for runs to complete…",
+      "waitingForRuns": "Waiting for runs to completeâ€¦",
       "summary": "Summary",
       "pass": "pass",
       "cost": "${cost}",
@@ -1524,7 +1524,7 @@ export default {
     },
     "SidebarNav": {
       "main_navigation": "Main navigation",
-      "group_core": "CORE",
+      "group_build": "BUILD",
       "group_monitor": "MONITOR",
       "group_configure": "CONFIGURE",
       "group_admin": "ADMIN",

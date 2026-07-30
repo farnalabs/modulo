@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <Teleport to="body">
     <div v-if="isOpen" class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]">
       <div class="fixed inset-0 bg-black/50" @click="close" />
@@ -87,11 +87,11 @@ const searchItems = computed<SearchItem[]>(() => {
     }
   }
   const extras: SearchItem[] = [
-    { label: 'Dashboard', path: '/', icon: 'LayoutDashboard', section: 'CORE' },
-    { label: 'Pipelines', path: '/pipelines', icon: 'GitFork', section: 'CORE' },
-    { label: 'Library', path: '/library', icon: 'BookOpen', section: 'CORE' },
-    { label: 'Stages Board', path: '/stages', icon: 'Columns', section: 'CORE' },
-    { label: 'Runs', path: '/runs', icon: 'CirclePlay', section: 'CORE' },
+    { label: 'Dashboard', path: '/', icon: 'LayoutDashboard', section: 'BUILD' },
+    { label: 'Pipelines', path: '/pipelines', icon: 'GitFork', section: 'BUILD' },
+    { label: 'Library', path: '/library', icon: 'BookOpen', section: 'BUILD' },
+    { label: 'Stages Board', path: '/stages', icon: 'Columns', section: 'BUILD' },
+    { label: 'Runs', path: '/runs', icon: 'CirclePlay', section: 'BUILD' },
     { label: 'Evals', path: '/evals', icon: 'CheckSquare', section: 'MONITOR' },
     { label: 'Schemas', path: '/schemas', icon: 'Database', section: 'CONFIGURE' },
     { label: 'Connectors', path: '/admin/connectors', icon: 'Plug', section: 'ADMIN' },
