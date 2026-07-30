@@ -165,7 +165,7 @@ class BackgroundPipelineWorker:
                                 JOIN pipelines p ON p.id = r.pipeline_id
                                 WHERE r.status IN ('running', 'pending')
                                   AND r.updated_at < NOW()
-                                    - COALESCE(p.stale_run_timeout_minutes, 30) * INTERVAL '1 minute'
+                                    - p.stale_run_timeout_minutes * INTERVAL '1 minute'
                                   AND (r.outputs_json IS NULL OR r.outputs_json::jsonb = '{}'::jsonb)
                                   AND r.claimed_by IS NOT NULL
                             """)
@@ -179,7 +179,7 @@ class BackgroundPipelineWorker:
                                 "Killed stale run %s (%s) \u2014 stuck >%s min with no node progress",
                                 run_id,
                                 status,
-                                timeout or 60,
+                                timeout,
                             )
                             killed += 1
                 except Exception:

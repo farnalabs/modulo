@@ -87,10 +87,10 @@ class PipelineCreate(BaseModel):
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
     max_duration_seconds: int | None = Field(None, ge=1)
-    stale_run_timeout_minutes: int | None = Field(
-        None,
+    stale_run_timeout_minutes: int = Field(
+        30,
         ge=1,
-        description="Override the global stale-run timeout for this pipeline. Null = use global default (60 min).",
+        description="Max minutes a run can stay in pending/running without progress before being killed.",
     )
     folder_id: uuid.UUID | None = None
     rate_limit_config: dict[str, Any] | None = Field(
@@ -121,8 +121,16 @@ class PipelineUpdate(BaseModel):
     stale_run_timeout_minutes: int | None = Field(
         None,
         ge=1,
-        description="Override the global stale-run timeout for this pipeline. Null = use global default (60 min).",
+        description="Override the stale-run timeout for this pipeline.",
     )
+
+    @field_validator("stale_run_timeout_minutes", mode="before")
+    @classmethod
+    def reject_null_stale_timeout(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("stale_run_timeout_minutes cannot be set to null. Use a value >= 1.")
+        return v
+
     rate_limit_config: dict[str, Any] | None = Field(
         None,
         description="Rate limit config. Set to {} to clear.",
@@ -151,7 +159,7 @@ class PipelineResponse(BaseModel):
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
     max_duration_seconds: int | None = None
-    stale_run_timeout_minutes: int | None = None
+    stale_run_timeout_minutes: int = 30
     rate_limit_config: dict[str, Any] | None = None
     snapshot_count: int = 0
     archived_at: datetime | None = None
