@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -749,8 +749,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     _scheduler_stop = asyncio.Event()
     _scheduler_task = asyncio.create_task(run_scheduler(_scheduler_stop))
     _scheduler_task.add_done_callback(
-        lambda t: _log.error("Cron scheduler exited", exc_info=t.exception())
-        if not t.cancelled() and t.exception() else None
+        lambda t: (
+            _log.error("Cron scheduler exited", exc_info=t.exception()) if not t.cancelled() and t.exception() else None
+        )
     )
     logger.info("startup.cron_scheduler_started")
 

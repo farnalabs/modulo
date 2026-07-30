@@ -90,6 +90,7 @@ async def _run_scheduler_loop(
                             else:
                                 try:
                                     from modulo.core.pipeline_executor_task import dispatch
+
                                     dispatch(run_id_str, str(trigger.organisation_id), "runs_automated")
                                 except Exception:
                                     _log.exception(

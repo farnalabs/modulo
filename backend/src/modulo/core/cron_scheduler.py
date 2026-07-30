@@ -1,4 +1,4 @@
-﻿"""Celery beat scheduler that reads cron trigger rows from the database.
+"""Celery beat scheduler that reads cron trigger rows from the database.
 
 Architecture
 ------------
@@ -412,9 +412,8 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
     Entry = DatabaseCronEntry
 
     def __init__(self, app: Celery, **kwargs: Any) -> None:
-        self._schedule: dict[str, Any] = {}
-        super().__init__(app, **kwargs)
         self._schedule: dict[str, DatabaseCronEntry] = {}
+        super().__init__(app, **kwargs)
 
     def setup_schedule(self) -> None:
         """Populate the schedule from the database."""

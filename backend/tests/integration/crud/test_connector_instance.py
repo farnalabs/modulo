@@ -1,4 +1,4 @@
-﻿"""Integration tests for ConnectorInstance CRUD.
+"""Integration tests for ConnectorInstance CRUD.
 
 RLS is set to test_org; all ORM changes are rolled back after each test.
 """
@@ -76,7 +76,7 @@ async def test_update_connector_instance(rls_session: AsyncSession, test_org: uu
     assert updated.name == "Renamed Connector"
 
 
-@pytest.mark.skip(reason='flaky: asyncpg connection race in teardown')
+@pytest.mark.skip(reason="flaky: asyncpg connection race in teardown")
 async def test_update_connector_instance_unknown_returns_none(
     rls_session: AsyncSession,
 ) -> None:
