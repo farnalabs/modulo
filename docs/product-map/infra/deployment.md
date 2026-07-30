@@ -1,6 +1,7 @@
 ---
 id: feat-infra-deployment
 prd: 10
+delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/deployment.py
 bdd:

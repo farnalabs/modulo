@@ -10,6 +10,7 @@ code:
   - frontend/src/components/AppLayout.vue
   - frontend/src/composables/useSidebar.ts
   - frontend/src/config/navigation.ts
+depends-on: []
 status: partial
 ---
 

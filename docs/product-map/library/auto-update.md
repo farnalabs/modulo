@@ -10,6 +10,7 @@ code:
   - frontend/src/views/LibraryView.vue
 bdd:
   - backend/tests/bdd/features/library/auto_update.feature
+unit-tests: []
 depends-on: [feat-core-contribution-update]
 status: covered
 ---

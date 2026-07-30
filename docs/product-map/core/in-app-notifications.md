@@ -7,7 +7,10 @@ bdd:
   - backend/tests/bdd/features/in_app_notifications/dismiss_flow.feature
   - backend/tests/bdd/features/in_app_notifications/notification_filters.feature
   - backend/tests/bdd/features/in_app_notifications/sse_integration.feature
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/api/test_notifications_endpoint.py
+  - backend/tests/unit/db/test_notification_endpoint_json.py
+  - backend/tests/unit/notifier/test_notification_endpoints_api.py
 code:
   - backend/src/modulo/api/routes/in_app_notifications.py
   - backend/src/modulo/db/models/notification.py
