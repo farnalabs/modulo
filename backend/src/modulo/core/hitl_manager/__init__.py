@@ -300,7 +300,7 @@ class HITLManager:
                 await session.execute(
                     update(HitlClaim)
                     .where(HitlClaim.id == claimed_id)
-                    .values(account_id=None, claimed_at=None, claim_token=None, expires_at=None)
+                    .values(account_id=None, claimed_at=None, claim_token=None, expires_at=now)
                 )
                 raise NotTeamMemberError(
                     run_id=run_id,

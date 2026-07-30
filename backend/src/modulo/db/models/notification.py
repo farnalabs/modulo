@@ -40,7 +40,7 @@ class Notification(OrgScoped):
         nullable=False,
         server_default="false",
     )
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class Dismissal(Base):
