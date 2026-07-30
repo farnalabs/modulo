@@ -213,13 +213,13 @@ async def update_observability_settings(
             "observability.put.timeout",
             extra={"org_id": str(principal.organisation_id)},
         )
-        raise
+        raise HTTPException(status_code=504, detail="Gateway timeout.") from None
     except Exception:
         _log.exception(
             "observability.put.failed",
             extra={"org_id": str(principal.organisation_id)},
         )
-        raise
+        raise HTTPException(status_code=500, detail="Internal server error.") from None
 
 
 @router.post("/test", response_model=TestSpanResult, dependencies=[require_feature("observability")])
