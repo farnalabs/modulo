@@ -36,7 +36,7 @@
           </router-link>
         </div>
 
-        <div class="flex items-center justify-between pb-2 mb-1 gap-2">
+        <div class="flex items-center pb-2 mb-1 gap-2">
           <NotificationBell />
           <label for="applayout-field-2" class="toggle-switch" :class="isLight ? 'light' : 'dark'">
             <span class="track">
@@ -54,6 +54,7 @@
               :checked="isLight"
             />
           </label>
+          <div class="flex-1" />
         </div>
 
         <SidebarNav class="flex-1" :is-system-admin="isSystemAdmin" :user-role="userRole" />
@@ -297,5 +298,3 @@ onMounted(() => {
   cursor: pointer;
 }
 </style>
-
-
