@@ -106,16 +106,16 @@ def _get_engines() -> tuple[Engine, AsyncEngine]:
             pool_pre_ping=True,
             pool_recycle=1800,
             pool_timeout=5,
-            connect_args={"connect_timeout": s.modulo_celery_db_pool_connect_timeout},
+            connect_args={"timeout": s.modulo_celery_db_pool_connect_timeout},
         )
         _log.info(
             "Engines created: sync(pool=%d, overflow=%d, timeout=%ds) async(pool=%d, overflow=%d, timeout=%ds)",
             s.modulo_celery_db_pool_sync_size,
             s.modulo_celery_db_pool_sync_overflow,
-            s.modulo_celery_db_pool_connect_timeout,
+            s.modulo_celery_db_pool_timeout,
             s.modulo_celery_db_pool_async_size,
             s.modulo_celery_db_pool_async_overflow,
-            s.modulo_celery_db_pool_connect_timeout,
+            s.modulo_celery_db_pool_timeout,
         )
     return _SYNC_ENGINE, _ASYNC_ENGINE
 
@@ -258,7 +258,7 @@ async def _do_execute(run_id: str, org_id: str, task_instance: Task) -> None:
 
     claimed = _claim_run(str(rid), str(oid))
     if not claimed:
-        _log.warning("Run %s not claimed — already handled or in wrong state", run_id)
+        _log.warning("Run %s not claimed â€” already handled or in wrong state", run_id)
         return
 
     cur, executor = await _load_and_setup(aeng, rid, oid)
@@ -457,4 +457,4 @@ try:
     _celery_app.register_task(ExecuteRunTask())
     _celery_app.register_task(StaleRunRecoveryTask())
 except Exception:
-    _log.warning("Could not register Celery tasks — Celery may not be configured")
+    _log.warning("Could not register Celery tasks â€” Celery may not be configured")
