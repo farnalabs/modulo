@@ -1,6 +1,7 @@
 ---
 id: feat-observability-monitoring-config
 prd: 8.25.1
+delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/admin_monitor_config.py
   - frontend/src/views/SettingsMonitorConfigView.vue

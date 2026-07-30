@@ -1,10 +1,12 @@
 ---
 id: feat-infra-health
 prd: N/A
+delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/health.py
 unit-tests:
   - backend/tests/unit/api/test_health.py
+bdd: []
 depends-on: []
 status: partial
 ---

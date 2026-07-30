@@ -1,6 +1,7 @@
 ---
 id: feat-core-lifecycle-maps
 prd: 8.31
+delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/lifecycle_maps/crud.feature
   - backend/tests/bdd/features/lifecycle_maps/graduation.feature
@@ -14,6 +15,7 @@ code:
   - frontend/src/stores/lifecycleMaps.ts
   - frontend/src/types/lifecycleMap.ts
   - frontend/src/views/lifecycle-map/
+unit-tests: []
 depends-on: [feat-core-pipeline-execution]
 status: partial
 ---
