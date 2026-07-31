@@ -59,7 +59,7 @@
                     class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
                     data-testid="schema-deprecate"
                     :aria-label="$t('views.SchemaListView.deprecate_schema')"
-                    :title="$t('views.SchemaListView.deprecate_schema_1')"
+                    :title="$t('views.SchemaListView.deprecate_schema')"
                     @click="confirmDeprecate(schema)"
                   >
                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
