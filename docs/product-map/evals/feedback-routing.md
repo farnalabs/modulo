@@ -11,7 +11,7 @@ bdd:
   - backend/tests/bdd/features/hitl/feedback_handler.feature
 unit-tests:
   - backend/tests/unit/api/test_feedback_endpoint.py
-  - backend/tests/unit/api/test_feedback_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
   - backend/tests/integration/feedback_manager/test_feedback_flow.py
 depends-on:

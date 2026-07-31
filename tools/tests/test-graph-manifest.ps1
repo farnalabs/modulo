@@ -58,6 +58,10 @@ export default {
     # Create Vue templates for element testid matching
     $vueDir = Join-Path (Join-Path (Join-Path $TestDir "frontend") "src") "views"
     New-Item -ItemType Directory -Path $vueDir -Force | Out-Null
+
+    # Create a route module so code-path validation has a real file to resolve
+    Set-Content -Path (Join-Path $routesDir "existing_route.py") -Value "def route(): pass`n"
+
     Set-Content -Path (Join-Path $vueDir "DashboardView.vue") -Value @'
 <template>
   <div>
@@ -246,5 +250,33 @@ elements: {}
 "@
         $result = Invoke-ManifestValidator $nullMapManifest
         $result.ExitCode | Should -Be 0
+    }
+}
+
+Describe "Code path validation in product map entries" {
+
+    It "fails when a code: ref points to a missing file" {
+        $badEntry = "---`nid: feat-codepath-broken`nprd: N/A`nstatus: partial`ncode:`n  - backend/src/modulo/api/routes/missing_route.py`n---"
+        $badPath = Join-Path (Join-Path $TestDir "docs") "product-map" "feat-codepath-broken.md"
+        Set-Content -Path $badPath -Value $badEntry
+        try {
+            $result = Invoke-GraphValidator $WellFormedManifest
+            $result.ExitCode | Should -Be 1
+            $result.Output | Select-String -SimpleMatch "missing_route.py" | Should -Not -Be $null
+        } finally {
+            Remove-Item -LiteralPath $badPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "passes when all code: refs exist" {
+        $goodEntry = "---`nid: feat-codepath-ok`nprd: N/A`nstatus: partial`ncode:`n  - backend/src/modulo/api/routes/existing_route.py`n---"
+        $goodPath = Join-Path (Join-Path $TestDir "docs") "product-map" "feat-codepath-ok.md"
+        Set-Content -Path $goodPath -Value $goodEntry
+        try {
+            $result = Invoke-GraphValidator $WellFormedManifest
+            $result.ExitCode | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath $goodPath -Force -ErrorAction SilentlyContinue
+        }
     }
 }

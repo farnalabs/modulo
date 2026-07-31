@@ -26,16 +26,15 @@ code:
   - backend/src/modulo/api/routes/admin.py
   - backend/src/modulo/core/workflow_import_export/__init__.py
   - backend/src/modulo/core/library_service/__init__.py
-  - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
-  - backend/src/modulo/db/migrations/versions/0025_team_visibility_rls.py
-  - backend/src/modulo/db/migrations/versions/0014_team_cost_attribution.py
+  - backend/src/modulo/db/migrations/versions/0001_v2_identity_org.py
+  - backend/src/modulo/db/migrations/versions/0003_v2_pipeline_runtime.py
 unit-tests:
-  - backend/tests/unit/api/test_ownership_picker_bdd.py
-  - backend/tests/unit/core/library_service/test_workflow_import_export_resilience.py
+  - backend/tests/bdd/steps/test_ownership_picker.py
+  - backend/tests/unit/library_service/test_workflow_import_export_resilience.py
   - backend/tests/unit/core/library_service/test_contribute.py
   - backend/tests/unit/api/test_contributions.py
   - backend/tests/unit/db/test_schema.py
-  - backend/tests/unit/db/test_migration_0025.py
+  - backend/tests/unit/db/test_migration_team_visibility_rls.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -167,3 +166,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - No BDD scenarios for the `visibility=team + owner_team_id=NULL` invalid state DB constraint
 - No BDD scenarios for team deletion blocked by owned resources at the API level
 - No integration tests for ownership change with concurrent active runs 
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE refs: `0001_initial_schema.py`/`0025_team_visibility_rls.py`/`0014_team_cost_attribution.py` renamed in v2 squash → `0001_v2_identity_org.py` + `0003_v2_pipeline_runtime.py`. Mapped `test_migration_0025.py` → `test_migration_team_visibility_rls.py`.
