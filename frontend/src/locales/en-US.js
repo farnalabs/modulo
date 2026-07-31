@@ -1600,6 +1600,34 @@ export default {
       "runFailed": "Run failed:",
       "failedToRunVariants": "Failed to run variants:",
       "runFailedStatus": "Run failed with status:"
+    },
+    "AdminHousekeepingView": {
+      "confirm_cleanup": "Confirm Cleanup"
+    },
+    "LifecycleMapsView": {
+      "lifecycle_maps": "Lifecycle Maps",
+      "no_lifecycle_maps_yet": "No lifecycle maps yet",
+      "create_lifecycle_map": "Create Lifecycle Map",
+      "name": "Name",
+      "description": "Description"
+    },
+    "LifecycleMapList": {
+      "create_lifecycle_map": "Create Lifecycle Map",
+      "name": "Name",
+      "description": "Description"
+    },
+    "LifecycleMapView": {
+      "version_label": "Version:"
+    },
+    "EnvironmentProfileList": {
+      "try_a_different_search_term": "Try a different search term.",
+      "no_environment_profiles": "No environment profiles",
+      "soft_delete_warning": "This will soft-delete the profile. Existing runs using it are unaffected."
+    },
+    "CompositeEditorView": {
+      "save_as_composite": "Save as Composite",
+      "name": "Name",
+      "description": "Description"
     }
   },
   "components": {
@@ -2021,34 +2049,6 @@ export default {
     "DashboardNotificationsPanel": {
       "failed_to_dismiss_notification": "Failed to dismiss notification",
       "notifications": "Notifications"
-    },
-    "LifecycleMapsView": {
-      "lifecycle_maps": "Lifecycle Maps",
-      "no_lifecycle_maps_yet": "No lifecycle maps yet",
-      "create_lifecycle_map": "Create Lifecycle Map",
-      "name": "Name",
-      "description": "Description"
-    },
-    "LifecycleMapList": {
-      "create_lifecycle_map": "Create Lifecycle Map",
-      "name": "Name",
-      "description": "Description"
-    },
-    "LifecycleMapView": {
-      "version_label": "Version:"
-    },
-    "AdminHousekeepingView": {
-      "confirm_cleanup": "Confirm Cleanup"
-    },
-    "EnvironmentProfileList": {
-      "try_a_different_search_term": "Try a different search term.",
-      "no_environment_profiles": "No environment profiles",
-      "soft_delete_warning": "This will soft-delete the profile. Existing runs using it are unaffected."
-    },
-    "CompositeEditorView": {
-      "save_as_composite": "Save as Composite",
-      "name": "Name",
-      "description": "Description"
     },
     "SidebarLink": {
       "preview": "Preview",
