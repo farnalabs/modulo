@@ -1,5 +1,7 @@
 """Unit tests for Notifier dispatch, HMAC signing, retry, and dead-letter logic."""
 
+import hashlib
+import hmac
 import json
 import uuid
 from typing import Any
@@ -151,26 +153,20 @@ def _make_filter_endpoint(events: Any) -> NotificationEndpoint:
 
 def test_filter_subscribed_accepts_list() -> None:
     ep = _make_filter_endpoint(["hitl_awaiting", "run_failed"])
-    from modulo.core.notifier import Notifier as NotifierCls
-
-    n = NotifierCls(MagicMock(), _KEY)
+    n = Notifier(MagicMock(), _KEY)
     assert n._filter_subscribed([ep], "run_failed") == [ep]
     assert n._filter_subscribed([ep], "hitl_overdue") == []
 
 
 def test_filter_subscribed_parses_json_string_events() -> None:
     ep = _make_filter_endpoint('["hitl_awaiting","run_failed"]')
-    from modulo.core.notifier import Notifier as NotifierCls
-
-    n = NotifierCls(MagicMock(), _KEY)
+    n = Notifier(MagicMock(), _KEY)
     assert n._filter_subscribed([ep], "run_failed") == [ep]
 
 
 def test_filter_subscribed_skips_unparseable_events() -> None:
     ep = _make_filter_endpoint("not-json")
-    from modulo.core.notifier import Notifier as NotifierCls
-
-    n = NotifierCls(MagicMock(), _KEY)
+    n = Notifier(MagicMock(), _KEY)
     assert n._filter_subscribed([ep], "run_failed") == []
 
 
@@ -189,14 +185,11 @@ async def test_sign_payload_returns_hmac(notifier: Notifier) -> None:
 
 
 async def test_sign_payload_matches_expected_hmac(notifier: Notifier) -> None:
-    import hashlib
-    import hmac as hmac_mod
-
     ep = _fake_endpoint(secret="test-secret")
     body = b'{"hello":"world"}'
 
     sig = await notifier._sign_payload(body, ep)
-    expected_digest = hmac_mod.new(b"test-secret", body, hashlib.sha256).hexdigest()
+    expected_digest = hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
     assert sig == f"sha256={expected_digest}"
 
 
