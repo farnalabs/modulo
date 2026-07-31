@@ -8,10 +8,12 @@ code:
   - frontend/src/monitor/
   - frontend/src/manifest.yaml
   - frontend/src/router/index.ts
-bdd: []
+bdd:
+  - backend/tests/bdd/features/observability/monitor_config.feature
 unit-tests:
   - frontend/src/__tests__/monitor-config.spec.ts
-depends-on: []
+  - backend/tests/unit/api/test_admin_monitor_config.py
+depends-on: [feat-core-system-config]
 status: partial
 ---
 
@@ -28,11 +30,24 @@ Admin-level configuration for monitoring backends (Sentry, DataDog RUM, Grafana 
 - [x] Missing DB table returns 501 Not Implemented
 - [x] DB errors return 503 Service Unavailable
 - [x] Known backend names validated on PUT
+- [x] Unknown backend name returns 422
+- [x] Empty backend list returns 422
+- [x] Missing credentials return 401/403
+- [x] Stored config is merged with defaults on read
 - [ ] Support for additional monitoring backends
+
+## Error Handling
+
+- [x] `ProgrammingError` (missing table) → 501 Not Implemented with migration hint
+- [x] `SQLAlchemyError` → 503 Service Unavailable
+- [x] Unexpected `Exception` → 500 Internal Server Error
+- [x] Non-admin (viewer) role → 403 Forbidden
 
 ## Known Gaps
 
-- No backend unit tests — the route file `admin_monitor_config.py` has zero test coverage
-- No BDD feature files for monitoring config — no Gherkin scenarios cover the GET/PUT endpoints
-- The existing frontend test (`frontend/src/__tests__/monitor-config.spec.ts`) tests only the legacy `config.ts` loader, not the API integration or the SettingsMonitorConfigView component
-- "Runtime validation of backend config schemas" — per-backend field validation (e.g. that Sentry's DSN is required when Sentry is enabled) is not implemented. The PUT endpoint validates backend names are from the known set but does not validate per-backend field schemas.
+- Per-backend field validation (e.g. that Sentry's DSN is required when Sentry is enabled) is not implemented. The PUT endpoint validates backend names are from the known set but does not validate per-backend field schemas.
+- The frontend test (`frontend/src/__tests__/monitor-config.spec.ts`) tests only the legacy `config.ts` loader, not the `SettingsMonitorConfigView` component or the API integration.
+
+## QA History
+
+- 2026-07-31: improve-architecture: Fixed MAJOR — removed duplicated `@router.get`/`@router.put` decorators in `admin_monitor_config.py` that double-registered the routes (the inner registration served the raw, unwrapped handler, making `handle_db_errors` dead code). Added 13 backend unit tests covering GET/PUT success, auth 401/403, 422 validation, and 501/503/500 error paths. Added BDD feature file (8 scenarios) + step definitions for monitor config (defaults, stored config, update, unknown/empty backends, viewer 403, 501, 503). Status: partial (per-backend field validation remains).

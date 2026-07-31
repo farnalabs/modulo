@@ -27,6 +27,7 @@ def mock_hvac() -> MagicMock:
     ):
         mh.exceptions.InvalidPath = type("InvalidPath", (Exception,), {})
         mh.exceptions.Forbidden = type("Forbidden", (Exception,), {})
+        mh.exceptions.VaultError = type("VaultError", (Exception,), {})
         yield mh
 
 
@@ -135,3 +136,23 @@ class TestVaultSecretsBackend:
         backend = _make_backend(mock_hvac)
         with pytest.raises(ValueError, match="invalid secret key"):
             await backend.delete_secret("../traversal")
+
+    async def test_secret_path_normalizes_trailing_slash(self, mock_hvac: MagicMock) -> None:
+        backend = _make_backend(mock_hvac)
+        backend._path_prefix = "modulo/secrets/"
+        assert backend._secret_path("my-key") == "modulo/secrets/my-key"
+
+    async def test_ensure_client_auth_failure_raises_runtime_error(self, mock_hvac: MagicMock) -> None:
+        backend = VaultSecretsBackend()
+        backend._token = None
+        backend._role_id = "role-id"
+        backend._secret_id = "secret-id"
+        backend._client = None
+
+        def login(**kwargs):
+            raise mock_hvac.exceptions.VaultError("invalid credentials")
+
+        mock_hvac.Client.return_value.auth.approle.login = login
+
+        with pytest.raises(RuntimeError, match="failed to authenticate to Vault"):
+            await backend._ensure_client()

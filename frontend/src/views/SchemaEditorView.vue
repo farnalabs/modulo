@@ -366,6 +366,23 @@ interface SchemaVersion {
 
 let fieldKeyCounter = 0
 
+function parseDefinitionToFields(def: Record<string, any>): SchemaField[] {
+  const loadedFields: SchemaField[] = []
+  if (def.properties && typeof def.properties === 'object') {
+    for (const [name, prop] of Object.entries(def.properties as Record<string, any>)) {
+      loadedFields.push({
+        _key: ++fieldKeyCounter,
+        name,
+        type: prop.type ?? 'string',
+        required: Array.isArray(def.required) && def.required.includes(name),
+        description: prop.description ?? '',
+        defaultValue: prop.default !== undefined ? String(prop.default) : '',
+      })
+    }
+  }
+  return loadedFields
+}
+
 const route = useRoute()
 
 const schemas = ref<SchemaItem[]>([])
@@ -545,21 +562,7 @@ async function loadLatestVersion(schemaId: string) {
     if (data.items && data.items.length > 0) {
       const latest = data.items[0]
       schemaVersion.value = latest.version
-      const def = latest.definition_json
-      if (def.properties && typeof def.properties === 'object') {
-        const loadedFields: SchemaField[] = []
-        for (const [name, prop] of Object.entries(def.properties as Record<string, any>)) {
-          loadedFields.push({
-            _key: ++fieldKeyCounter,
-            name,
-            type: prop.type ?? 'string',
-            required: Array.isArray(def.required) && def.required.includes(name),
-            description: prop.description ?? '',
-            defaultValue: prop.default !== undefined ? String(prop.default) : '',
-          })
-        }
-        fields.value = loadedFields
-      }
+      fields.value = parseDefinitionToFields(latest.definition_json as Record<string, any>)
     }
   } catch (e) {
     console.warn('Failed to load schema', e)
@@ -576,7 +579,8 @@ async function loadVersions(schemaId: string) {
     if (!res.ok) return
     const data = await res.json()
     versions.value = data.items ?? []
-  } catch {
+  } catch (e) {
+    console.warn('Failed to load schema versions', e)
     versions.value = []
   } finally {
     loadingVersions.value = false
@@ -729,22 +733,8 @@ async function saveSchema() {
 }
 
 async function restoreVersion(version: SchemaVersion) {
-  const def = version.definition_json
   schemaVersion.value = version.version
-  if (def.properties && typeof def.properties === 'object') {
-    const loadedFields: SchemaField[] = []
-    for (const [name, prop] of Object.entries(def.properties as Record<string, any>)) {
-      loadedFields.push({
-        _key: ++fieldKeyCounter,
-        name,
-        type: prop.type ?? 'string',
-        required: Array.isArray(def.required) && def.required.includes(name),
-        description: prop.description ?? '',
-        defaultValue: prop.default !== undefined ? String(prop.default) : '',
-      })
-    }
-    fields.value = loadedFields
-  }
+  fields.value = parseDefinitionToFields(version.definition_json as Record<string, any>)
 }
 
 function formatDate(dateStr: string): string {
