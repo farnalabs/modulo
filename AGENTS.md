@@ -237,7 +237,7 @@ Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 ### LangGraph
 - State type is `dict[str, Any]` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no dynamic TypedDicts.
 - `run_context` and `artifact` are sibling keys in state. Non-context-setter agents must not write to `run_context`.
-- `StateGraph` cached keyed by `(pipeline_id, snapshot_id)` with LRU eviction.
+- `StateGraph` cached keyed by `(pipeline_id, snapshot_id, node_timeout_seconds)` with LRU eviction.
 
 ### Credentials
 - Decrypted credentials never enter LangGraph state, checkpoint blobs, OTel spans, or logs. Semgrep-enforced.

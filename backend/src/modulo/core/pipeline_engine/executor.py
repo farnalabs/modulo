@@ -572,6 +572,7 @@ class PipelineExecutor:
                 org_id=org_id,
                 pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
             ),
+            pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
         )
 
         config = {"configurable": {"thread_id": thread_id}}
@@ -775,6 +776,7 @@ class PipelineExecutor:
                     org_id=org_id,
                     pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
                 ),
+                pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
             )
 
             initial_state = _seed_state(snapshot, input_payload)

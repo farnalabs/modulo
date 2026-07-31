@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 class Node(OrgScoped):
     __tablename__ = "nodes"
     __table_args__ = (
-        CheckConstraint("timeout_seconds IS NULL OR timeout_seconds > 0", name="ck_nodes_timeout_seconds"),
+        CheckConstraint("timeout_seconds > 0", name="ck_nodes_timeout_seconds"),
         CheckConstraint("retry_count IS NULL OR retry_count >= 0", name="ck_nodes_retry_count"),
         CheckConstraint(
             "retry_delay_seconds IS NULL OR retry_delay_seconds >= 0",
