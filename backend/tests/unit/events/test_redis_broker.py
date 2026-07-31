@@ -30,6 +30,21 @@ async def broker(mock_redis: MagicMock) -> RedisEventBroker:
 
 
 # ---------------------------------------------------------------------------
+# URL redaction
+# ---------------------------------------------------------------------------
+
+
+def test_redact_url_masks_password():
+    broker = RedisEventBroker("redis://localhost:6379/0")
+    assert broker._redact_url("redis://:secret@localhost:6379/0") == "redis://:****@localhost:6379/0"
+
+
+def test_redact_url_without_password_is_unchanged():
+    broker = RedisEventBroker("redis://localhost:6379/0")
+    assert broker._redact_url("redis://localhost:6379/0") == "redis://localhost:6379/0"
+
+
+# ---------------------------------------------------------------------------
 # connect
 # ---------------------------------------------------------------------------
 
@@ -52,6 +67,15 @@ async def test_connect_creates_two_connections():
 
         assert broker._pub is mock_client
         assert broker._sub is mock_client
+
+
+async def test_connect_is_idempotent_when_already_connected(broker, mock_redis):
+    with patch("modulo.core.events.redis_broker.aioredis.from_url") as mock_from_url:
+        await broker.connect()
+
+    mock_from_url.assert_not_called()
+    assert broker._pub is mock_redis
+    assert broker._sub is mock_redis
 
 
 # ---------------------------------------------------------------------------

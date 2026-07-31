@@ -1,5 +1,3 @@
-"""Tests for the global search endpoint."""
-
 import uuid
 from collections.abc import Generator
 from typing import Self
@@ -130,6 +128,14 @@ def _mock_rows(data: list[tuple[int, object, object, object]]) -> MagicMock:
     return m
 
 
+def _data_query_params(call: object) -> dict[str, object]:
+    """Return the SQL parameter binding for a session.execute(text, params) call."""
+    args, kwargs = call.args, call.kwargs  # type: ignore[attr-defined]
+    if len(args) > 1:
+        return args[1]
+    return kwargs["params"]
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -140,7 +146,7 @@ class TestGlobalSearchAuth:
         app = _make_app(mock_db)
         client = TestClient(app)
         resp = client.get("/api/v1/admin/search?q=test")
-        assert resp.status_code in (401, 403)
+        assert resp.status_code == 401
 
     def test_viewer_cannot_search(self, viewer_client: TestClient) -> None:
         resp = viewer_client.get("/api/v1/admin/search?q=test")
@@ -156,11 +162,19 @@ class TestGlobalSearchAuth:
         )
         app = _make_app(mock_db)
         app.dependency_overrides[get_current_user] = lambda: principal
-        mock_db.execute.return_value = _mock_rows([])
+        mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
         mock_db.execute.side_effect = None
         client = TestClient(app)
         resp = client.get("/api/v1/admin/search?q=test")
         assert resp.status_code == 200
+        body = resp.json()
+        assert body["results"] == []
+        assert body["total_by_type"] == {
+            "pipeline": 0,
+            "run": 0,
+            "audit": 0,
+            "library": 0,
+        }
 
 
 class TestGlobalSearchEndpoint:
@@ -269,7 +283,8 @@ class TestGlobalSearchEndpoint:
         resp = client.get("/api/v1/admin/search?q=data")
         assert resp.status_code == 200
         body = resp.json()
-        assert len(body["results"]) >= 1
+        assert len(body["results"]) == 4
+        assert {item["type"] for item in body["results"]} == {"pipeline", "run", "audit", "library"}
         assert body["total_by_type"] == {
             "pipeline": 1,
             "run": 1,
@@ -277,7 +292,7 @@ class TestGlobalSearchEndpoint:
             "library": 1,
         }
 
-    def test_limit_and_offset(self, client: TestClient, mock_db: AsyncMock) -> None:
+    def test_limit_and_offset_are_applied_to_query_and_response(self, client: TestClient, mock_db: AsyncMock) -> None:
         pipe_id = uuid.uuid4()
         pipe_row = MagicMock()
         pipe_row.relevance = 2
@@ -299,6 +314,19 @@ class TestGlobalSearchEndpoint:
 
         resp = client.get("/api/v1/admin/search?q=pipeline&type=pipeline&limit=5&offset=0")
         assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_by_type"] == {"pipeline": 1, "run": 0, "audit": 0, "library": 0}
+        assert len(body["results"]) == 1
+        assert body["results"][0]["id"] == str(pipe_id)
+
+        # Intentionally brittle: the LIMIT substring isolates the data query from the count
+        # query; this will fail loudly if the generated SQL shape changes.
+        data_calls = [c for c in mock_db.execute.call_args_list if "LIMIT" in str(c.args[0])]
+        assert len(data_calls) == 1
+        params = _data_query_params(data_calls[0])
+        assert params["lim"] == 5
+        assert params["off"] == 0
+        assert params["org_id"] == ORG_ID
 
     def test_relevance_ordering(self, client: TestClient, mock_db: AsyncMock) -> None:
         id_a = uuid.uuid4()
@@ -331,9 +359,21 @@ class TestGlobalSearchEndpoint:
 
         resp = client.get("/api/v1/admin/search?q=exact&type=pipeline")
         assert resp.status_code == 200
+        body = resp.json()
+        titles = [item["title"] for item in body["results"]]
+        assert titles[0] == "Exact Match Pipeline"
+        assert set(titles[1:]) == {"Another pipeline mention", "Something with pipeline in name"}
+        assert sorted(titles[1:]) == titles[1:]
 
     def test_org_scoping(self, client: TestClient, mock_db: AsyncMock) -> None:
         mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
 
         resp = client.get("/api/v1/admin/search?q=test")
         assert resp.status_code == 200
+
+        # Intentionally brittle: pins the exact query count (4 types x data+count queries);
+        # will fail loudly if the endpoint adds or removes queries.
+        assert mock_db.execute.call_count == 8
+        for call in mock_db.execute.call_args_list:
+            params = _data_query_params(call)
+            assert params["org_id"] == ORG_ID, "every search query must be scoped to the caller's organisation id"

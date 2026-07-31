@@ -70,10 +70,21 @@ async def test_correlation_id_consistent(app: FastAPI) -> None:
 async def test_correlation_id_contextvar_propagated(app: FastAPI) -> None:
     from modulo.core.logging_config import correlation_id_var
 
+    seen: dict[str, str] = {}
+
+    @app.get("/capture-cid")
+    async def capture_cid(request: Request) -> JSONResponse:
+        seen["during_request"] = correlation_id_var.get()
+        return JSONResponse({"correlation_id": request.state.correlation_id})
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/test")
-    resp.json()["correlation_id"]
+        resp = await client.get("/capture-cid")
+
+    cid = resp.json()["correlation_id"]
+    # contextvar must be set for the duration of the request...
+    assert seen["during_request"] == cid
+    # ...and cleared afterwards so it cannot leak across requests
     assert correlation_id_var.get() is None
 
 

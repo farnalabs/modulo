@@ -123,84 +123,17 @@
       />
 
       <div v-else-if="section === 'native' && nativePrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div
+        <LibraryPrimitiveCard
           v-for="prim in nativePrimitives"
           :key="prim.id"
-          class="card card-hover p-5 flex flex-col"
-          :data-testid="`library-item-${prim.id}`"
-        >
-          <div class="flex items-start justify-between mb-3">
-            <div>
-              <span :class="typeBadgeClass(prim.primitive_type)">
-                {{ prim.primitive_type }}
-              </span>
-              <h3 class="mt-2 text-base font-medium text-foreground">{{ prim.name }}</h3>
-            </div>
-            <div v-if="prim.source === 'modulo'" class="text-xs text-primary font-medium bg-primary/10 px-2 py-0.5 rounded">
-              {{ $t('views.LibraryView.modulo_badge') }}
-            </div>
-            <div
-              v-else-if="prim.source === 'community'"
-              class="text-xs text-muted-foreground font-medium bg-muted px-2 py-0.5 rounded"
-              data-testid="library-community-badge"
-            >
-              {{ $t('views.LibraryView.community_badge') }}
-            </div>
-          </div>
-
-          <p v-if="prim.description" class="text-sm text-muted-foreground flex-1 mb-4 line-clamp-2">
-            {{ prim.description }}
-          </p>
-
-          <div class="flex items-center gap-2 flex-wrap mb-4">
-            <span
-              v-for="tag in (prim.tags || []).slice(0, 3)"
-              :key="tag"
-              class="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded"
-            >
-              {{ tag }}
-            </span>
-            <span v-if="(prim.tags || []).length > 3" class="text-xs text-muted-foreground">
-              +{{ prim.tags.length - 3 }}
-            </span>
-          </div>
-
-          <div v-if="prim.forked_from" class="flex items-center gap-2 mb-3">
-            <span class="text-xs text-muted-foreground">{{ $t('views.LibraryView.auto_update') }}</span>
-            <button
-              class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50"
-              :class="prim.auto_update ? 'bg-primary' : 'bg-muted'"
-              role="switch"
-              :aria-checked="prim.auto_update"
-              :disabled="toggleLoading[prim.id]"
-              @click="toggleAutoUpdate(prim)"
-              :data-testid="`auto-update-toggle-${prim.id}`"
-            >
-              <span
-                class="inline-block h-3.5 w-3.5 rounded-full bg-background transition-transform"
-                :class="prim.auto_update ? 'translate-x-[18px]' : 'translate-x-[2px]'"
-              />
-            </button>
-          </div>
-
-          <div class="flex items-center gap-2 mt-auto">
-            <button
-              v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
-              class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
-              @click="createPipeline(prim)"
-              data-testid="library-create-pipeline"
-            >
-              {{ $t('views.LibraryView.create_pipeline') }}
-            </button>
-            <button
-              class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
-              @click="viewPrimitive(prim)"
-              data-testid="library-view-details"
-            >
-              {{ $t('views.LibraryView.view_details') }}
-            </button>
-          </div>
-        </div>
+          :prim="prim"
+          badge="modulo"
+          show-auto-update
+          :toggle-loading="toggleLoading"
+          @create-pipeline="createPipeline"
+          @view-details="viewPrimitive"
+          @toggle-auto-update="toggleAutoUpdate"
+        />
       </div>
 
       <details v-if="section === 'native' && previewPrimitives.length > 0" class="rounded-lg border bg-card" data-testid="library-preview-section">
@@ -208,104 +141,29 @@
           {{ $t('views.LibraryView.preview_integrations_count', { count: previewPrimitives.length }, previewPrimitives.length) }}
         </summary>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 border-t p-4">
-          <div
+          <LibraryPrimitiveCard
             v-for="prim in previewPrimitives"
             :key="prim.id"
-            class="card card-hover p-5 flex flex-col"
-            :data-testid="`library-item-${prim.id}`"
-          >
-            <div class="flex items-start justify-between mb-3">
-              <div>
-                <span :class="typeBadgeClass(prim.primitive_type)">
-                  {{ prim.primitive_type }}
-                </span>
-                <h3 class="mt-2 text-base font-medium text-foreground">{{ prim.name }}</h3>
-              </div>
-              <span class="badge badge-context-amber text-xs">{{ $t('views.LibraryView.preview_badge') }}</span>
-            </div>
-
-            <p v-if="prim.description" class="text-sm text-muted-foreground flex-1 mb-4 line-clamp-2">
-              {{ prim.description }}
-            </p>
-
-            <div class="flex items-center gap-2 mt-auto">
-            <button
-              v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
-              class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
-              @click="createPipeline(prim)"
-              data-testid="library-create-pipeline"
-            >
-              {{ $t('views.LibraryView.create_pipeline') }}
-            </button>
-            <button
-              class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
-              @click="viewPrimitive(prim)"
-              data-testid="library-view-details"
-            >
-              {{ $t('views.LibraryView.view_details') }}
-            </button>
-            </div>
-          </div>
+            :prim="prim"
+            badge="preview"
+            :show-tags="false"
+            @create-pipeline="createPipeline"
+            @view-details="viewPrimitive"
+            @toggle-auto-update="toggleAutoUpdate"
+          />
         </div>
       </details>
 
       <div v-if="section === 'community' && communityPrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div
+        <LibraryPrimitiveCard
           v-for="prim in communityPrimitives"
           :key="prim.id"
-          class="card card-hover p-5 flex flex-col"
-          :data-testid="`library-item-${prim.id}`"
-        >
-          <div class="flex items-start justify-between mb-3">
-            <div>
-              <span :class="typeBadgeClass(prim.primitive_type)">
-                {{ prim.primitive_type }}
-              </span>
-              <h3 class="mt-2 text-base font-medium text-foreground">{{ prim.name }}</h3>
-            </div>
-            <div
-              class="text-xs text-muted-foreground font-medium bg-muted px-2 py-0.5 rounded"
-              data-testid="library-community-badge"
-            >
-              {{ $t('views.LibraryView.community_badge') }}
-            </div>
-          </div>
-
-          <p v-if="prim.description" class="text-sm text-muted-foreground flex-1 mb-4 line-clamp-2">
-            {{ prim.description }}
-          </p>
-
-          <div class="flex items-center gap-2 flex-wrap mb-4">
-            <span
-              v-for="tag in (prim.tags || []).slice(0, 3)"
-              :key="tag"
-              class="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded"
-            >
-              {{ tag }}
-            </span>
-            <span v-if="(prim.tags || []).length > 3" class="text-xs text-muted-foreground">
-              +{{ prim.tags.length - 3 }}
-            </span>
-          </div>
-
-          <div class="flex items-center gap-2 mt-auto">
-            <button
-              v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
-              class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
-              @click="createPipeline(prim)"
-              data-testid="library-create-pipeline"
-            >
-              {{ $t('views.LibraryView.create_pipeline') }}
-            </button>
-            <button
-              class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
-              @click="viewPrimitive(prim)"
-              data-testid="library-view-details"
-            >
-              {{ $t('views.LibraryView.view_details') }}
-            </button>
-          </div>
-        </div>
+          :prim="prim"
+          badge="community"
+          @create-pipeline="createPipeline"
+          @view-details="viewPrimitive"
+          @toggle-auto-update="toggleAutoUpdate"
+        />
       </div>
 
       <div v-if="total > pageSize" class="flex justify-center items-center gap-2 mt-8">
@@ -340,31 +198,14 @@ import { Button } from '@/components/ui/button'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import LibraryPrimitiveCard from '../components/library/LibraryPrimitiveCard.vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
 import { useI18n } from 'vue-i18n'
+import type { LibraryPrimitive } from '../components/library/LibraryPrimitiveCard.vue'
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
-
-interface LibraryPrimitive {
-  id: string
-  organisation_id: string
-  source: string
-  primitive_type: string
-  name: string
-  slug: string
-  description: string | null
-  author: string
-  version: string
-  tags: string[]
-  visibility: string
-  forked_from: string | null
-  auto_update: boolean
-  tier?: 'native' | 'preview' | 'in_dev'
-  created_at: string
-  updated_at: string
-}
 
 interface ListResponse {
   items: LibraryPrimitive[]
@@ -495,19 +336,6 @@ function nextPage() {
     page.value++
     loadPrimitives()
   }
-}
-
-function typeBadgeClass(type: string): string {
-  const map: Record<string, string> = {
-    pipeline_template: 'badge badge-context-blue',
-    workflow: 'badge badge-context-teal',
-    agent: 'badge badge-context-purple',
-    schema: 'badge badge-context-amber',
-    integration: 'badge badge-context-cyan',
-    test_fixture: 'badge badge-context-pink',
-    composite: 'badge badge-context-green',
-  }
-  return map[type] ?? 'badge badge-context-slate'
 }
 
 function createPipeline(prim: LibraryPrimitive) {

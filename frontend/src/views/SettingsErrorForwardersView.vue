@@ -21,10 +21,10 @@
                   <span
                     class="inline-block h-2 w-2 rounded-full"
                     :class="fwd.last_test_ok === true ? 'bg-green-500' : fwd.last_test_ok === false ? 'bg-red-500' : 'bg-gray-400'"
-                    :title="fwd.last_test_ok === true ? 'Last test passed' : fwd.last_test_ok === false ? 'Last test failed' : 'Not tested'"
+                    :title="fwd.last_test_ok === true ? $t('views.SettingsErrorForwardersView.last_test_passed') : fwd.last_test_ok === false ? $t('views.SettingsErrorForwardersView.last_test_failed') : $t('views.SettingsErrorForwardersView.not_tested')"
                   />
                   <span class="text-xs text-muted-foreground">
-                    {{ fwd.last_test_ok === true ? 'Connected' : fwd.last_test_ok === false ? 'Failed' : 'Not tested' }}
+                    {{ fwd.last_test_ok === true ? $t('views.SettingsErrorForwardersView.connected') : fwd.last_test_ok === false ? $t('views.SettingsErrorForwardersView.failed') : $t('views.SettingsErrorForwardersView.not_tested') }}
                   </span>
                 </div>
               </div>
@@ -37,7 +37,7 @@
               <button
                 type="button"
                 class="relative inline-flex h-6 w-11 cursor-pointer items-center"
-                :aria-label="'Toggle ' + fwd.display_name"
+                :aria-label="$t('views.SettingsErrorForwardersView.toggle_forwarder', { name: fwd.display_name })"
                 @click="toggleForwarder(fwd)"
               >
                 <div
@@ -61,12 +61,12 @@
             <!-- Sentry -->
             <template v-if="fwd.forwarder_type === 'sentry'">
               <div>
-                <label for="settingserrorforwardersview-field-13" class="mb-1 block text-sm font-medium">DSN</label>
+                <label for="settingserrorforwardersview-field-13" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.dsn') }}</label>
                 <input id="settingserrorforwardersview-field-13"
                   v-model="configs.sentry.dsn"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="https://key@sentry.io/123"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.dsn_placeholder')"
                 />
               </div>
               <div>
@@ -74,8 +74,8 @@
                 <input id="settingserrorforwardersview-field-12"
                   v-model="configs.sentry.org_slug"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="my-org"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.org_slug_placeholder')"
                 />
               </div>
               <div>
@@ -83,8 +83,8 @@
                 <input id="settingserrorforwardersview-field-11"
                   v-model="configs.sentry.project_slug"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="my-project"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.project_slug_placeholder')"
                 />
               </div>
             </template>
@@ -92,19 +92,19 @@
             <!-- DataDog -->
             <template v-if="fwd.forwarder_type === 'datadog'">
               <div>
-                <label for="settingserrorforwardersview-field-10" class="mb-1 block text-sm font-medium">API Key</label>
+                <label for="settingserrorforwardersview-field-10" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.api_key') }}</label>
                 <input id="settingserrorforwardersview-field-10"
                   v-model="configs.datadog.api_key"
                   type="password"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="Enter DataDog API key"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.datadog_api_key_placeholder')"
                 />
               </div>
               <div>
                 <label for="settingserrorforwardersview-datadog-site" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.site') }}</label>
-                <Select v-model="configs.datadog.site" aria-label="Site">
-                  <SelectTrigger id="settingserrorforwardersview-datadog-site" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Site">
-                    <SelectValue placeholder="Select site" />
+                <Select v-model="configs.datadog.site" :aria-label="$t('views.SettingsErrorForwardersView.site')">
+                  <SelectTrigger id="settingserrorforwardersview-datadog-site" class="input-base" :aria-label="$t('views.SettingsErrorForwardersView.site')">
+                    <SelectValue :placeholder="$t('views.SettingsErrorForwardersView.select_site')" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="datadoghq.com">US (datadoghq.com)</SelectItem>
@@ -124,8 +124,8 @@
                 <input id="settingserrorforwardersview-field-8"
                   v-model="configs.pagerduty.routing_key"
                   type="password"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="Enter PagerDuty routing key"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.pagerduty_routing_key_placeholder')"
                 />
               </div>
             </template>
@@ -137,8 +137,8 @@
                 <input id="settingserrorforwardersview-field-7"
                   v-model="configs.rollbar.access_token"
                   type="password"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="Enter Rollbar access token"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.rollbar_access_token_placeholder')"
                 />
               </div>
               <div>
@@ -146,8 +146,8 @@
                 <input id="settingserrorforwardersview-field-6"
                   v-model="configs.rollbar.environment"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="production"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.environment_placeholder')"
                 />
               </div>
             </template>
@@ -155,12 +155,12 @@
             <!-- OpsGenie -->
             <template v-if="fwd.forwarder_type === 'opsgenie'">
               <div>
-                <label for="settingserrorforwardersview-field-5" class="mb-1 block text-sm font-medium">API Key</label>
+                <label for="settingserrorforwardersview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.api_key') }}</label>
                 <input id="settingserrorforwardersview-field-5"
                   v-model="configs.opsgenie.api_key"
                   type="password"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="Enter OpsGenie API key"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.opsgenie_api_key_placeholder')"
                 />
               </div>
               <div>
@@ -168,8 +168,8 @@
                 <input id="settingserrorforwardersview-field-4"
                   v-model="configs.opsgenie.team"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="sre"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.team_placeholder')"
                 />
               </div>
             </template>
@@ -181,8 +181,8 @@
                 <input id="settingserrorforwardersview-field-3"
                   v-model="configs.loki.push_url"
                   type="url"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="https://loki.example.com/loki/api/v1/push"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.push_url_placeholder')"
                 />
               </div>
               <div>
@@ -190,8 +190,8 @@
                 <input id="settingserrorforwardersview-field-2"
                   v-model="configs.loki.tenant_id"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="my-tenant"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.tenant_id_placeholder')"
                 />
               </div>
               <div>
@@ -199,10 +199,10 @@
                 <input id="settingserrorforwardersview-field-1"
                   v-model="configs.loki.labels"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="app=modulo, env=prod"
+                  class="input-base"
+                  :placeholder="$t('views.SettingsErrorForwardersView.labels_placeholder')"
                 />
-                <p class="mt-1 text-xs text-muted-foreground">Comma-separated key=value pairs</p>
+                <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.SettingsErrorForwardersView.labels_hint') }}</p>
               </div>
             </template>
 
@@ -213,7 +213,7 @@
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
                 @click="testConnection(fwd)"
               >
-                {{ testing[fwd.forwarder_type] ? 'Testing...' : 'Test Connection' }}
+                {{ testing[fwd.forwarder_type] ? $t('views.SettingsErrorForwardersView.testing') : $t('views.SettingsErrorForwardersView.test_connection') }}
               </button>
               <Button
                 type="button"
@@ -221,7 +221,7 @@
                 :disabled="saving[fwd.forwarder_type]"
                 @click="saveConfig(fwd)"
               >
-                {{ saving[fwd.forwarder_type] ? 'Saving...' : 'Save' }}
+                {{ saving[fwd.forwarder_type] ? $t('views.SettingsErrorForwardersView.saving') : $t('views.SettingsErrorForwardersView.save') }}
               </Button>
             </div>
 
@@ -230,7 +230,7 @@
               class="rounded-lg border p-3 text-sm"
               :class="testResults[fwd.forwarder_type]?.ok ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive'"
             >
-              <p class="font-medium">{{ testResults[fwd.forwarder_type]?.ok ? 'Connection successful' : 'Connection failed' }}</p>
+              <p class="font-medium">{{ testResults[fwd.forwarder_type]?.ok ? $t('views.SettingsErrorForwardersView.connection_successful') : $t('views.SettingsErrorForwardersView.connection_failed') }}</p>
               <p class="mt-0.5">{{ testResults[fwd.forwarder_type]?.message }}</p>
             </div>
 
@@ -255,6 +255,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
@@ -296,6 +297,7 @@ interface ForwarderConfigs {
 }
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 const { loading, error: loadError, data: forwarders, load: loadForwarders } = useDataFetch<ForwarderItem[]>(
   async () => {
@@ -359,14 +361,14 @@ async function saveConfig(fwd: ForwarderItem) {
       },
     })
     if (err) {
-      formErrors.value[ftype] = `Save failed: ${formatApiError(err)}`
+      formErrors.value[ftype] = t('views.SettingsErrorForwardersView.save_failed', { detail: formatApiError(err) })
     } else {
-      formSuccess.value[ftype] = 'Configuration saved.'
+      formSuccess.value[ftype] = t('views.SettingsErrorForwardersView.configuration_saved')
       if (errorFwdTimeouts.value[ftype]) clearTimeout(errorFwdTimeouts.value[ftype])
       errorFwdTimeouts.value[ftype] = setTimeout(() => { formSuccess.value[ftype] = null }, 3000)
     }
   } catch (e: unknown) {
-    formErrors.value[ftype] = `Save failed: ${formatApiError(e)}`
+    formErrors.value[ftype] = t('views.SettingsErrorForwardersView.save_failed', { detail: formatApiError(e) })
   } finally {
     saving.value[ftype] = false
   }
@@ -383,7 +385,7 @@ async function testConnection(fwd: ForwarderItem) {
       body: { config_json: configJson },
     })
     if (err) {
-      testResults.value[ftype] = { ok: false, message: String(err) }
+      testResults.value[ftype] = { ok: false, message: formatApiError(err) }
     } else if (data) {
       testResults.value[ftype] = data
       if (errorFwdTimeouts.value[ftype]) clearTimeout(errorFwdTimeouts.value[ftype])

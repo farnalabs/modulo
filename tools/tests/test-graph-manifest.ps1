@@ -227,7 +227,7 @@ Describe "Code path validation in product map entries" {
 
     It "fails when a code: ref points to a missing file" {
         $badEntry = "---`nid: feat-codepath-broken`nprd: N/A`nstatus: partial`ncode:`n  - backend/src/modulo/api/routes/missing_route.py`n---"
-        $badPath = Join-Path (Join-Path $TestDir "docs") "product-map" "feat-codepath-broken.md"
+        $badPath = Join-Path (Join-Path (Join-Path $TestDir "docs") "product-map") "feat-codepath-broken.md"
         Set-Content -Path $badPath -Value $badEntry
         try {
             $result = Invoke-GraphValidator $WellFormedManifest
@@ -240,7 +240,7 @@ Describe "Code path validation in product map entries" {
 
     It "passes when all code: refs exist" {
         $goodEntry = "---`nid: feat-codepath-ok`nprd: N/A`nstatus: partial`ncode:`n  - backend/src/modulo/api/routes/existing_route.py`n---"
-        $goodPath = Join-Path (Join-Path $TestDir "docs") "product-map" "feat-codepath-ok.md"
+        $goodPath = Join-Path (Join-Path (Join-Path $TestDir "docs") "product-map") "feat-codepath-ok.md"
         Set-Content -Path $goodPath -Value $goodEntry
         try {
             $result = Invoke-GraphValidator $WellFormedManifest
@@ -252,7 +252,7 @@ Describe "Code path validation in product map entries" {
 
     It "passes when code: refs use the inline array form" {
         $inlineEntry = "---`nid: feat-codepath-inline`nprd: N/A`nstatus: partial`ncode: [backend/src/modulo/api/routes/existing_route.py]`n---"
-        $inlinePath = Join-Path (Join-Path $TestDir "docs") "product-map" "feat-codepath-inline.md"
+        $inlinePath = Join-Path (Join-Path (Join-Path $TestDir "docs") "product-map") "feat-codepath-inline.md"
         Set-Content -Path $inlinePath -Value $inlineEntry
         try {
             $result = Invoke-GraphValidator $WellFormedManifest
@@ -264,7 +264,7 @@ Describe "Code path validation in product map entries" {
 
     It "fails when an inline array code: ref points to a missing file" {
         $inlineBrokenEntry = "---`nid: feat-codepath-inline-broken`nprd: N/A`nstatus: partial`ncode: [backend/src/modulo/api/routes/missing_inline_route.py]`n---"
-        $inlineBrokenPath = Join-Path (Join-Path $TestDir "docs") "product-map" "feat-codepath-inline-broken.md"
+        $inlineBrokenPath = Join-Path (Join-Path (Join-Path $TestDir "docs") "product-map") "feat-codepath-inline-broken.md"
         Set-Content -Path $inlineBrokenPath -Value $inlineBrokenEntry
         try {
             $result = Invoke-GraphValidator $WellFormedManifest

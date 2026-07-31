@@ -306,6 +306,86 @@ async def test_get_with_rotation_does_not_call_audit_logger_when_healthy(
 
 
 # ---------------------------------------------------------------------------
+# get_with_rotation() — scan-all fallback also emits audit event
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_with_rotation_scan_all_calls_audit_logger(
+    hub: ModelBackendHub,
+    backend_a: StubModelBackend,
+    backend_b: StubModelBackend,
+) -> None:
+    """When no configured fallback is healthy and the hub scans all registered
+    backends, the chosen scan fallback must still emit a model_failover event."""
+    primary_id = uuid.uuid4()
+    other_id = uuid.uuid4()
+    hub.register(primary_id, backend_a)
+    hub.register(other_id, backend_b)
+    hub.mark_unhealthy(primary_id)
+
+    audit_logger = AsyncMock()
+    result = await hub.get_with_rotation(primary_id, audit_logger=audit_logger)
+    assert result.backend is backend_b
+    assert result.rotated is True
+    assert result.used_fallback_id == other_id
+    audit_logger.assert_awaited_once_with(
+        {
+            "event_type": "model_failover",
+            "primary_id": str(primary_id),
+            "fallback_id": str(other_id),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# get() / get_with_rotation() — audit_logger failures are isolated
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_audit_logger_failure_does_not_break_failover(
+    hub: ModelBackendHub,
+    backend_a: StubModelBackend,
+    backend_b: StubModelBackend,
+) -> None:
+    """A raising audit logger must not prevent fallback resolution."""
+    primary_id = uuid.uuid4()
+    fallback_id = uuid.uuid4()
+    hub.register(primary_id, backend_a)
+    hub.register(fallback_id, backend_b)
+    hub.mark_unhealthy(primary_id)
+    hub._fallbacks[primary_id] = [fallback_id]
+
+    async def _boom(_event: dict) -> None:
+        raise RuntimeError("audit sink down")
+
+    result = await hub.get(primary_id, audit_logger=_boom)
+    assert result is backend_b
+
+
+@pytest.mark.anyio
+async def test_get_with_rotation_audit_logger_failure_does_not_break_failover(
+    hub: ModelBackendHub,
+    backend_a: StubModelBackend,
+    backend_b: StubModelBackend,
+) -> None:
+    """A raising audit logger must not prevent rotation, even on scan-all."""
+    primary_id = uuid.uuid4()
+    other_id = uuid.uuid4()
+    hub.register(primary_id, backend_a)
+    hub.register(other_id, backend_b)
+    hub.mark_unhealthy(primary_id)
+
+    async def _boom(_event: dict) -> None:
+        raise RuntimeError("audit sink down")
+
+    result = await hub.get_with_rotation(primary_id, audit_logger=_boom)
+    assert result.backend is backend_b
+    assert result.rotated is True
+
+
+# ---------------------------------------------------------------------------
 # initialise() — reads fallback_backend_ids
 # ---------------------------------------------------------------------------
 

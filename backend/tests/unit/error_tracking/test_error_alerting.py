@@ -32,7 +32,7 @@ def _make_rule(**overrides: object) -> MagicMock:
     rule.enabled = True
     rule.condition_level = "error"
     rule.condition_min_count = 1
-    rule.condition_window_seconds = 300
+    rule.condition_window_seconds = 0
     rule.action_type = "in_app"
     rule.webhook_url = None
     rule.cooldown_seconds = 300
@@ -41,11 +41,32 @@ def _make_rule(**overrides: object) -> MagicMock:
     return rule
 
 
-def _make_session_with_rules(rules: list[MagicMock]) -> AsyncMock:
+def _make_session_with_rules(
+    rules: list[MagicMock],
+    *,
+    window_counts: list[int] | None = None,
+) -> AsyncMock:
+    """Build a session whose first ``execute`` returns *rules* and subsequent
+    ``execute`` calls return window event counts from *window_counts*.
+
+    Rules are returned first because ``evaluate()`` loads rules before it
+    computes per-rule window counts.
+    """
     session = _make_session()
-    session.execute = AsyncMock(
-        return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=rules))))
-    )
+    queue = list(window_counts or [])
+    rules_result = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=rules))))
+    rules_loaded = False
+
+    def _execute(_stmt: object) -> MagicMock:
+        nonlocal rules_loaded
+        if not rules_loaded:
+            rules_loaded = True
+            return rules_result
+        if queue:
+            return MagicMock(scalar_one=MagicMock(return_value=queue.pop(0)))
+        return rules_result
+
+    session.execute = AsyncMock(side_effect=_execute)
     return session
 
 
@@ -138,6 +159,125 @@ class TestAlertEngineEvaluate:
         assert len(alerts) == expected_alerts
         if expected_alerts > 0 and expected_action_type:
             assert alerts[0].action_type == expected_action_type
+
+
+# =========================================================================
+# Condition window — time-boxed event counting
+# =========================================================================
+
+
+class TestConditionWindow:
+    """condition_window_seconds filters alerts on events within the window."""
+
+    async def test_window_count_meets_threshold_triggers(self) -> None:
+        rule = _make_rule(condition_min_count=5, condition_window_seconds=300)
+        engine = AlertEngine(redis_client=MagicMock())
+        session = _make_session_with_rules([rule], window_counts=[5])
+
+        alerts = await engine.evaluate(
+            org_id=_ORG_ID,
+            session=session,
+            error_group_id=_GROUP_ID,
+            fingerprint="abc123",
+            level="error",
+            count=1,
+        )
+        assert len(alerts) == 1
+        assert alerts[0].count == 5
+
+    async def test_window_count_below_threshold_skips(self) -> None:
+        rule = _make_rule(condition_min_count=5, condition_window_seconds=300)
+        engine = AlertEngine(redis_client=MagicMock())
+        session = _make_session_with_rules([rule], window_counts=[4])
+
+        alerts = await engine.evaluate(
+            org_id=_ORG_ID,
+            session=session,
+            error_group_id=_GROUP_ID,
+            fingerprint="abc123",
+            level="error",
+            count=10,
+        )
+        assert len(alerts) == 0
+
+    async def test_window_zero_falls_back_to_lifetime_count(self) -> None:
+        rule = _make_rule(condition_min_count=3, condition_window_seconds=0)
+        engine = AlertEngine(redis_client=MagicMock())
+        session = _make_session_with_rules([rule])
+
+        alerts = await engine.evaluate(
+            org_id=_ORG_ID,
+            session=session,
+            error_group_id=_GROUP_ID,
+            fingerprint="abc123",
+            level="error",
+            count=3,
+        )
+        assert len(alerts) == 1
+        assert alerts[0].count == 3
+
+    async def test_window_query_failure_skips_rule(self) -> None:
+        rule = _make_rule(condition_min_count=1, condition_window_seconds=300)
+        engine = AlertEngine(redis_client=MagicMock())
+        session = _make_session()
+        rules_result = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
+        rules_loaded = False
+
+        def _execute(_stmt: object) -> MagicMock:
+            nonlocal rules_loaded
+            if not rules_loaded:
+                rules_loaded = True
+                return rules_result
+            raise RuntimeError("db unavailable")
+
+        session.execute = AsyncMock(side_effect=_execute)
+
+        alerts = await engine.evaluate(
+            org_id=_ORG_ID,
+            session=session,
+            error_group_id=_GROUP_ID,
+            fingerprint="abc123",
+            level="error",
+            count=5,
+        )
+        assert len(alerts) == 0
+
+    async def test_window_applied_per_rule_independently(self) -> None:
+        windowed = _make_rule(name="Windowed", condition_min_count=2, condition_window_seconds=300)
+        lifetime = _make_rule(name="Lifetime", condition_min_count=2, condition_window_seconds=0)
+        engine = AlertEngine(redis_client=MagicMock())
+        session = _make_session_with_rules([windowed, lifetime], window_counts=[1])
+
+        alerts = await engine.evaluate(
+            org_id=_ORG_ID,
+            session=session,
+            error_group_id=_GROUP_ID,
+            fingerprint="abc123",
+            level="error",
+            count=2,
+        )
+        assert len(alerts) == 1
+        assert alerts[0].rule_name == "Lifetime"
+
+    async def test_window_query_is_org_and_fingerprint_scoped(self) -> None:
+        rule = _make_rule(condition_min_count=1, condition_window_seconds=300)
+        engine = AlertEngine(redis_client=MagicMock())
+        session = _make_session_with_rules([rule], window_counts=[1])
+
+        await engine.evaluate(
+            org_id=_ORG_ID,
+            session=session,
+            error_group_id=_GROUP_ID,
+            fingerprint="abc123",
+            level="error",
+            count=1,
+        )
+
+        stmt = session.execute.await_args.args[0]
+        compiled = str(stmt)
+        assert "error_events" in compiled
+        assert "fingerprint" in compiled
+        assert "organisation_id" in compiled
 
 
 # =========================================================================
