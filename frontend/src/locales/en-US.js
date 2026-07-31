@@ -51,7 +51,8 @@ export default {
       "view_details": "View Details",
       "previous_page": "Previous",
       "next_page": "Next",
-      "page_of": "Page {page} of {total}"
+      "page_of": "Page {page} of {total}",
+      "all_types": "All types"
     },
     "AdminRemyView": {
       "configure_remy_ai_assistant_behaviour_access_and_skills": "Configure Remy AI assistant behaviour, access, and skills",
