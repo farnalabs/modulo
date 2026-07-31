@@ -153,12 +153,12 @@
 
       <!-- Failed Run Diagnostics -->
       <div v-if="run.status === 'failed' && run.error_detail" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 mb-4">
-        <h3 class="text-sm font-semibold text-destructive mb-1">Run Error</h3>
+        <h3 class="text-sm font-semibold text-destructive mb-1">{{ $t('views.RunDetailView.run_error') }}</h3>
         <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
       </div>
 
       <div v-if="run.status === 'failed' && !run.error_detail && runIO?.input_payload" class="rounded-lg border border-border bg-card p-4 mb-4">
-        <h3 class="text-sm font-semibold mb-1">Run Input</h3>
+        <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.run_input') }}</h3>
         <pre class="text-xs whitespace-pre-wrap font-mono text-muted-foreground">{{ JSON.stringify(runIO.input_payload, null, 2) }}</pre>
       </div>
 
@@ -170,7 +170,7 @@
           {{ $t('views.RunDetailView.no_node_data') }}
         </div>
         <div v-else-if="nodeEntries.length === 0 && run.status === 'failed'" class="py-4 text-center text-sm text-muted-foreground">
-          No node-level data recorded for this failed run. The error may have occurred during pipeline setup or before any node started execution.
+          {{ $t('views.RunDetailView.no_node_data_failed') }}
         </div>
 
         <table v-else class="w-full text-left text-sm">
