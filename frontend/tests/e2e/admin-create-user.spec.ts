@@ -1,6 +1,6 @@
 ﻿import { test, expect, setupLocalMockApi, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Admin Create User', { tag: ['@regression'] }, () => {
+test.describe('Admin Create User', { tag: "@regression" }, () => {
   test('opens create user dialog and submits user creation', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
     await setupLocalMockApi(page)

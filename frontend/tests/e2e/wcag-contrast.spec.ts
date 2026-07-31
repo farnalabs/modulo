@@ -33,7 +33,9 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
         document.documentElement.classList.add('light')
         document.documentElement.classList.remove('dark')
       })
-      await page.evaluate(() => new Promise(r => requestAnimationFrame(r)))
+      await page.evaluate(() => new Promise(r =>
+        requestAnimationFrame(() => requestAnimationFrame(r)),
+      ))
 
       const results = await new AxeBuilder({ page })
         .withTags(WCAG_TAGS)
@@ -68,7 +70,9 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
         document.documentElement.classList.remove('light')
         document.documentElement.classList.remove('dark')
       })
-      await page.evaluate(() => new Promise(r => requestAnimationFrame(r)))
+      await page.evaluate(() => new Promise(r =>
+        requestAnimationFrame(() => requestAnimationFrame(r)),
+      ))
 
       const results = await new AxeBuilder({ page })
         .withTags(WCAG_TAGS)
