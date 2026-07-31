@@ -33,21 +33,6 @@ class OrganisationMembershipRequired(HTTPException):
         )
 
 
-class OrganisationMembershipNotFound(HTTPException):
-    """401 for a principal with no active membership (removed/deactivated).
-
-    ADR 017: a user removed from the org loses access immediately â€” the JWT
-    claim alone is not sufficient.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No active membership in this organisation. Please log in again.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
 class AccountNotFound(HTTPException):
     def __init__(self) -> None:
         super().__init__(
@@ -66,6 +51,19 @@ class OrganisationNotFound(HTTPException):
         )
 
 
+class OrganisationMembershipNotFound(HTTPException):
+    """401 for a principal with no active membership (removed/deactivated).
+    ADR 017: a user removed from the org loses access immediately - the JWT
+    claim alone is not sufficient.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Organisation membership required",
+        )
+
+
 class SystemAdminRequired(HTTPException):
     def __init__(self) -> None:
         super().__init__(
@@ -78,13 +76,7 @@ async def get_current_tenant_user_optional(
     credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
     settings: Settings = Depends(get_settings),
 ) -> TenantPrincipal | None:
-    """Like get_current_tenant_user but returns None instead of 401 when no credentials.
-
-    Deliberately claim-only (ADR 017): this path must NOT do a live-role
-    membership read. Webhook receive routes use it for degraded access, and a
-    removed-member JWT must keep degrading to pipeline-org resolution at
-    ``webhooks.py:92-98`` rather than 401ing.
-    """
+    """Like get_current_tenant_user but returns None instead of 401 when no credentials."""
     if credentials is None:
         return None
     try:
@@ -126,26 +118,24 @@ async def get_current_tenant_user(
 ) -> TenantPrincipal:
     """Require the tenant claims used by organisation-scoped API routes.
 
-    Verifies the account, organisation, and active membership still exist in
-    the database, and returns the LIVE org role (ADR 017) â€” a demoted admin's
-    next request already runs at the reduced role, and a removed/deactivated
-    member is rejected with 401 immediately.
+    Also verifies the account and organisation still exist in the database.
+    Catches stale JWTs from deleted accounts/orgs — returns 401 with a clear
+    message instead of letting them surface as confusing 409 FK violations.
     """
     if current_user.organisation_id is None or current_user.org_role is None:
         raise OrganisationMembershipRequired()
 
-    live_role = await _verify_identity(current_user)
+    await _verify_identity(current_user)
 
     return TenantPrincipal(
         username=current_user.username,
         organisation_id=current_user.organisation_id,
         account_id=current_user.account_id,
-        org_role=live_role or current_user.org_role,
+        org_role=current_user.org_role,
         is_system_admin=current_user.is_system_admin,
     )
 
 
-D
 async def get_current_tenant_user_or_api_key(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_optional),
     settings: Settings = Depends(get_settings),
@@ -153,21 +143,21 @@ async def get_current_tenant_user_or_api_key(
     """Tenant principal from either a user JWT or an org API key (``mk_``).
 
     API keys are the documented credential for CI/CD and external agents
-    (PRD Â§9.3 / Â§5.2): ``runner`` keys can trigger runs and call read
+    (PRD §9.3 / §5.2): ``runner`` keys can trigger runs and call read
     endpoints; ``operator`` keys are reserved for future HITL-approval
     wiring. This dependency is only wired into ``trigger_run`` and
-    ``get_run_status`` â€” the HITL-approval routes (``observe_run_node``,
+    ``get_run_status`` — the HITL-approval routes (``observe_run_node``,
     ``recover_run_node``) and other write endpoints still require a user
     JWT, so API keys cannot approve gates or modify pipelines.
 
     Note that team-scoped keys (``team_id`` set) behave like org-wide keys
     here: ``TenantPrincipal`` carries no team info and these routes do not
     call ``set_rls_user_context``, so team restriction is not enforced for
-    run trigger/read â€” consistent with the existing user-JWT behaviour.
+    run trigger/read — consistent with the existing user-JWT behaviour.
 
     API keys are resolved with an RLS-disabled prefix lookup (the key's org is
     unknown until the record is read) and re-validated inside the key's org
-    context â€” mirroring the MCP middleware, since ``org_api_keys`` has RLS
+    context — mirroring the MCP middleware, since ``org_api_keys`` has RLS
     enabled. For JWT credentials the behaviour is identical to
     :func:`get_current_tenant_user`.
     """
@@ -196,7 +186,7 @@ async def get_current_tenant_user_or_api_key(
         factory = get_or_create_session_factory(engine)
         try:
             # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and the
-            # key's org is unknown until the record is read â€” a plain lookup in
+            # key's org is unknown until the record is read — a plain lookup in
             # an empty org context would be filtered out by RLS and reject every
             # valid key. Resolve the record with RLS disabled, then re-validate
             # inside the key's org context before trusting it.
@@ -247,14 +237,11 @@ async def get_current_tenant_user_or_api_key(
     return await get_current_tenant_user(principal)
 
 
-async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
-    """Verify the JWT's account and organisation still exist in the database.
-
 async def resolve_role_from_membership(session: AsyncSession, account_id: str, organisation_id: str) -> str | None:
     """Return the LIVE org role for the account in the org, or None if no active membership.
 
-    Filters ``deactivated_at IS NULL`` â€” a soft-deactivated membership must not
-    resolve a role (ADR 017). Lazy-imports the ORM model to avoid the auth â†’
+    Filters ``deactivated_at IS NULL`` — a soft-deactivated membership must not
+    resolve a role (ADR 017). Lazy-imports the ORM model to avoid the auth →
     api circular import; the caller already holds a session from a live factory.
     """
     from sqlalchemy import select
@@ -276,20 +263,19 @@ async def resolve_role_from_membership(session: AsyncSession, account_id: str, o
 
 async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
     """Verify the JWT's account and organisation still exist, returning the LIVE org role.
-(feat(authz): centralized JWT live-role re-read (ADR 017 A1a))
 
     Uses lazy imports to avoid a circular dependency:
-    ``auth.dependencies â†’ api.dependencies â†’ auth.dependencies``.
+    ``auth.dependencies → api.dependencies → auth.dependencies``.
 
     ADR 017 live-role re-read: after the existence checks, the account's live
     org role is read from ``org_memberships`` (deactivated rows excluded).
 
     Failure modes:
-    - missing/deactivated membership â†’ raise 401 (removed users lose access immediately)
-    - SQLAlchemyError during the read â†’ degrade-to-claim: return the JWT claim
+    - missing/deactivated membership → raise 401 (removed users lose access immediately)
+    - SQLAlchemyError during the read → degrade-to-claim: return the JWT claim
       role (log ``permission.live_role_read_failed``); a transient DB blip must
       not 401 everyone
-    - any other exception â†’ propagate (500)
+    - any other exception → propagate (500)
     """
     try:
         from sqlalchemy import text as _text
