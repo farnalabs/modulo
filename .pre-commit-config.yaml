@@ -150,7 +150,7 @@
         pass_filenames: false
       - id: validate-pipeline-configs
         name: validate pipeline configs (agent_prompt, timeout_seconds, template_id)
-        entry: uv run --directory backend --no-sync python ../scripts/validate_pipeline_configs.py
+        entry: uv run --directory backend --no-sync python scripts/validate_pipeline_configs.py
         language: system
         files: ^(backend/src/modulo/core/pipeline_engine/node_runner\.py|backend/src/modulo/api/mcp_server\.py|scripts/validate_pipeline_configs\.py)$
         pass_filenames: false

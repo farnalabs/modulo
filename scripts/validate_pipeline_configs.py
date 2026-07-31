@@ -59,6 +59,18 @@ def _scan_node_runner(path: Path) -> None:
                             "use 'opencode' template (has opencode CLI pre-installed)."
                         )
 
+    # Line-based checks for patterns that are hard to catch with AST
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        # `**env_vars_extra` at end of envs dict (after system vars)
+        stripped = line.strip()
+        if "**env_vars_extra" in stripped and "}" not in stripped:
+            _fail(
+                f"{path}:{lineno}: "
+                "`**env_vars_extra` must precede system env vars "
+                "(GITHUB_TOKEN, APP_MODULO_OPENCODE_API_KEY) — "
+                "otherwise pipeline config can override auth tokens."
+            )
+
 
 def _scan_mcp_server(path: Path) -> None:
     """AST-scan the MCP server for empty agent_prompt patterns."""

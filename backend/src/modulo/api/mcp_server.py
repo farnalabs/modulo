@@ -2786,7 +2786,7 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
     for n in nodes:
         safe = {k: v for k, v in n.items() if k not in ("agent_prompt", "agent_command")}
         result += json.dumps(safe, indent=2, default=str)[:2000] + "\n"
-        ap = n.get("agent_prompt") or ""
+        ap = n.get("agent_prompt", "") or ""
         if ap:
             result += f"    agent_prompt: {ap[:200].replace(chr(10), ' ')}...\n"
         ac = n.get("agent_command", "") or ""

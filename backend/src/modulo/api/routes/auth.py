@@ -278,7 +278,7 @@ async def refresh(
         raise
     except HTTPException:
         raise
-    except Exception:
+    except Exception:  # nosemgrep: bare-raise-in-except
         _log.exception("Unexpected error in refresh")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
