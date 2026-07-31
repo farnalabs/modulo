@@ -717,6 +717,30 @@ async def test_reject_wrong_token_raises():
         await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="wrong")
 
 
+async def test_reject_expired_token_raises():
+    past = datetime.now(UTC) - timedelta(minutes=1)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=past)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(ClaimTokenExpiredError):
+        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+
+
+async def test_reject_gate_not_found_raises():
+    session = _session_decide(update_returns_id=None, diagnosis_gate=None)
+    mgr = HITLManager()
+    with pytest.raises(GateNotFoundError):
+        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+
+
+async def test_reject_already_decided_raises():
+    gate = _gate(decision="rejected")
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(GateAlreadyDecidedError):
+        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+
+
 # ---------------------------------------------------------------------------
 # deliver_manual
 # ---------------------------------------------------------------------------
@@ -931,7 +955,6 @@ async def test_list_overdue_returns_overdue_gates():
 
 
 async def test_list_overdue_below_threshold_returns_empty():
-
     # The DB WHERE clause (claimed_at < now - threshold) excludes the recent gate.
     # The mock simulates the DB returning no rows, as it would in production.
     session = AsyncMock()

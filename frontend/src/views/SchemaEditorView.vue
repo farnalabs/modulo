@@ -36,7 +36,7 @@
               <span
                 v-if="schema.deprecated"
                 class="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive"
-              >Deprecated</span>
+              >{{ $t('views.SchemaEditorView.deprecated') }}</span>
             </div>
             <p v-if="schema.description" class="mt-0.5 truncate text-xs text-muted-foreground">{{ schema.description }}</p>
           </div>
@@ -366,19 +366,19 @@ interface SchemaVersion {
 
 let fieldKeyCounter = 0
 
-function parseDefinitionToFields(def: Record<string, any>): SchemaField[] {
+function parseDefinitionToFields(def: Record<string, unknown>): SchemaField[] {
+  const properties = def.properties
+  if (!properties || typeof properties !== 'object') return []
   const loadedFields: SchemaField[] = []
-  if (def.properties && typeof def.properties === 'object') {
-    for (const [name, prop] of Object.entries(def.properties as Record<string, any>)) {
-      loadedFields.push({
-        _key: ++fieldKeyCounter,
-        name,
-        type: prop.type ?? 'string',
-        required: Array.isArray(def.required) && def.required.includes(name),
-        description: prop.description ?? '',
-        defaultValue: prop.default !== undefined ? String(prop.default) : '',
-      })
-    }
+  for (const [name, prop] of Object.entries(properties as Record<string, any>)) {
+    loadedFields.push({
+      _key: ++fieldKeyCounter,
+      name,
+      type: prop.type ?? 'string',
+      required: Array.isArray(def.required) && def.required.includes(name),
+      description: prop.description ?? '',
+      defaultValue: prop.default !== undefined ? String(prop.default) : '',
+    })
   }
   return loadedFields
 }
@@ -560,7 +560,7 @@ async function loadLatestVersion(schemaId: string) {
     if (data.items && data.items.length > 0) {
       const latest = data.items[0]
       schemaVersion.value = latest.version
-      fields.value = parseDefinitionToFields(latest.definition_json as Record<string, any>)
+      fields.value = parseDefinitionToFields(latest.definition_json)
     }
   } catch (e) {
     console.warn('Failed to load schema', e)
@@ -575,8 +575,7 @@ async function loadVersions(schemaId: string) {
     })
     if (error) return
     versions.value = data.items ?? []
-  } catch (e) {
-    console.warn('Failed to load schema versions', e)
+  } catch {
     versions.value = []
   } finally {
     loadingVersions.value = false
@@ -714,7 +713,7 @@ async function saveSchema() {
 
 async function restoreVersion(version: SchemaVersion) {
   schemaVersion.value = version.version
-  fields.value = parseDefinitionToFields(version.definition_json as Record<string, any>)
+  fields.value = parseDefinitionToFields(version.definition_json)
 }
 
 function formatDate(dateStr: string): string {

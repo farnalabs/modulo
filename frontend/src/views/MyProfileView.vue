@@ -84,7 +84,9 @@ const { t } = useI18n()
 
 type Profile = components['schemas']['modulo__api__routes__auth__MeResponse']
 
-const profile = ref<Profile>({ id: '', email: '', display_name: '', org_role: '', active: true, created_at: '', is_system_admin: false })
+const EMPTY_PROFILE: Profile = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '', is_system_admin: false }
+
+const profile = ref<Profile>({ ...EMPTY_PROFILE })
 const currentPassword = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')
@@ -105,17 +107,14 @@ function formatMemberSince(dateStr: string): string {
 }
 
 async function loadProfile() {
-  try {
-    const { data, error } = await api.GET('/api/v1/me')
-    if (error) {
-      console.warn('Failed to load profile', error)
-      profile.value = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '', is_system_admin: false }
-      return
-    }
-    profile.value = data as Profile
-  } catch (e) {
-    console.warn('Failed to load profile', e)
-    profile.value = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '', is_system_admin: false }
+  const { data, error } = await api.GET('/api/v1/me')
+  if (error) {
+    profile.value = { ...EMPTY_PROFILE }
+    return
+  }
+  if (data) {
+    const { id, email, display_name, org_role, active, created_at, is_system_admin } = data
+    profile.value = { id, email, display_name, org_role, active, created_at, is_system_admin }
   }
 }
 
@@ -131,26 +130,21 @@ async function changePassword() {
     return
   }
   passSaving.value = true
-  try {
-    const { error } = await api.PUT('/api/v1/me/password', {
-      body: {
-        current_password: currentPassword.value,
-        new_password: newPassword.value,
-      },
-    })
-    if (error) {
-      passError.value = formatApiError(error)
-      return
-    }
+  const { error } = await api.PUT('/api/v1/me/password', {
+    body: {
+      current_password: currentPassword.value,
+      new_password: newPassword.value,
+    },
+  })
+  if (error) {
+    passError.value = formatApiError(error)
+  } else {
     passSuccess.value = t('views.MyProfileView.password_changed_successfully')
     currentPassword.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
-  } catch (e) {
-    passError.value = formatApiError(e)
-  } finally {
-    passSaving.value = false
   }
+  passSaving.value = false
 }
 
 onMounted(loadProfile)

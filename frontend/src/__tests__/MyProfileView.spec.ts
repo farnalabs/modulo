@@ -2,23 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
-const { mockPut, mockGet } = vi.hoisted(() => ({
-  mockPut: vi.fn(),
-  mockGet: vi.fn(),
-}))
-
-mockPut.mockResolvedValue({ data: {}, error: undefined })
-mockGet.mockResolvedValue({
-  data: {
-    id: '1',
-    email: 'user@example.com',
-    display_name: 'Test User',
-    org_role: 'admin',
-    active: true,
-    created_at: '2025-01-01T00:00:00Z',
-    is_system_admin: false,
-  },
-  error: undefined,
+const { mockPut, mockGet } = vi.hoisted(() => {
+  const mockPut = vi.fn().mockResolvedValue({ data: {}, error: undefined })
+  const mockGet = vi.fn().mockResolvedValue({
+    data: {
+      id: '1',
+      email: 'user@example.com',
+      display_name: 'Test User',
+      org_role: 'admin',
+      active: true,
+      created_at: '2025-01-01T00:00:00Z',
+      is_system_admin: false,
+    },
+    error: undefined,
+  })
+  return { mockPut, mockGet }
 })
 
 vi.mock('../lib/api/client', () => ({
@@ -103,7 +101,7 @@ describe('MyProfileView', () => {
   })
 
   it('shows API error message on failure', async () => {
-    mockPut.mockResolvedValueOnce({ data: undefined, error: { detail: 'Current password is incorrect' } })
+    mockPut.mockResolvedValueOnce({ data: undefined, error: 'Current password is incorrect' })
 
     const wrapper = mount(MyProfileView)
     await nextTick()
