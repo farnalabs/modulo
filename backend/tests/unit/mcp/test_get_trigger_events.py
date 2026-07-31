@@ -1,4 +1,4 @@
-"""Unit tests for the get_trigger_events MCP tool."""
+"""Unit tests for the list_trigger_events MCP tool."""
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch

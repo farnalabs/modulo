@@ -135,7 +135,7 @@ def build_system_prompt(request, ctx) -> None:
     for source_key, mode in merged.items():
         if mode == "tool":
             if source_key == "product_docs":
-                tool_lines.append("- get_documentation(query, section?) — Search product docs")
+                tool_lines.append("- search_documentation(query, section?) — Search product docs")
             elif source_key == "integration_status":
                 tool_lines.append("- get_integration_status() — Get connector health")
             elif source_key == "org_config":
@@ -164,8 +164,8 @@ def build_system_prompt(request, ctx) -> None:
     ctx["built_prompt"] = "\n\n".join(parts)
 
 
-@when(parsers.parse('the user calls get_documentation with query "{query}"'))
-def call_get_documentation(query: str, request, ctx) -> None:
+@when(parsers.parse('the user calls search_documentation with query "{query}"'))
+def call_search_documentation(query: str, request, ctx) -> None:
     entries = [
         DocEntry(
             heading_path="Pipelines > Overview",

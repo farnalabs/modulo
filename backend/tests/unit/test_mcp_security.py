@@ -41,7 +41,7 @@ class TestScopeEnforcement:
             ("viewer", "copy_library_primitive"),
             ("viewer", "list_pending_hitl"),
             ("viewer", "get_run_output"),
-            ("viewer", "get_trigger_events"),
+            ("viewer", "list_trigger_events"),
             ("runner", "create_pipeline"),
             ("runner", "create_model_backend"),
             ("runner", "update_pipeline_graph"),
@@ -55,13 +55,13 @@ class TestScopeEnforcement:
     @pytest.mark.parametrize(
         ("role", "tool"),
         [
-            ("viewer", "list_pipelines_tool"),
+            ("viewer", "list_pipelines"),
             ("viewer", "get_run_status"),
-            ("runner", "list_pipelines_tool"),
+            ("runner", "list_pipelines"),
             ("runner", "get_run_status"),
-            ("operator", "list_pipelines_tool"),
+            ("operator", "list_pipelines"),
             ("operator", "get_run_status"),
-            ("admin", "list_pipelines_tool"),
+            ("admin", "list_pipelines"),
             ("admin", "get_run_status"),
         ],
     )
@@ -271,7 +271,7 @@ class TestApiKeyRoleRestrictions:
             ("operator", "create_pipeline"),
             ("admin", "create_pipeline"),
             ("runner", "cancel_run"),
-            ("viewer", "list_pipelines_tool"),
+            ("viewer", "list_pipelines"),
         ],
     )
     def test_role_hierarchy_permits_upward(self, role: str, tool: str) -> None:

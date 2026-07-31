@@ -5,7 +5,7 @@
 **Status**: Pre-development
 **Changelog**:
 - v0.33 — §8.31 Lifecycle Map: declarative multi-diagram SDLC model with stage node types (`modulo`\|`external`\|`manual`\|`placeholder`), transition edge trigger metadata, fractal double-click navigation, graduation path from model-only to Modulo-managed. v0.31.
-- v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (get_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
+- v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (search_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
 - v0.31 — §8.25.1 Frontend Monitor Backend Abstraction: plugable MonitorBackend interface (builtin/sentry/datadog-rum/grafana-faro), dual-layer config (build-time VITE_* + runtime MODULO_MONITOR_CONFIG), ErrorTracker refactor with MonitorBackendRegistry dispatch, CSP superset strategy, per-backend privacy data sheets, unauthenticated error ingest endpoint, i18n missing-key capture, 2 existing pipeline bugfixes. ADR 009.
 - v0.30 — §8.28 Core Shared Manifest: single YAML source of truth for routes, elements, sidebar, permissions, tiers, product map refs, i18n keys. Binary consumption (frontend Vite import + backend startup load). `get_manifest(path?)` Remy tool. 7-rule pre-commit + CI validator. ADR 008.
 - v0.29 — §8.27 Remy UI Commands: frontend-mediated browser automation for Remy, 11 UI commands (navigate, click, fill, select, extract, extract_all, get_page_interactables, wait, go_back, get_url, press), permission system with 3 modes + destructive selector detection, agentic loop (multi-turn LLM within single SSE stream), shadcn/vue component support, visual feedback (highlighting, toast, overlay, turn separators), 3 new endpoints, ADR 007.
@@ -527,9 +527,9 @@ This replaces the previous "LLM driveability" stretch goal with a standards-base
 | `review_hitl` | `POST /runs/{id}/hitl/{gate_id}/review` | Unified HITL action: `action` = `claim` \| `approve` \| `reject` \| `deliver_manual`; `approve`/`reject` require `claim_token`; `reject` requires `reason`; marked `destructive: true` |
 | `list_pipelines` | `GET /api/v1/pipelines` | Summary by default; paginated |
 | `list_pending_hitl` | `GET /api/v1/runs?status=awaiting_human` | All runs awaiting human action |
-| `browse_library` | `GET /api/v1/library` | Search and filter; paginated |
+| `search_library` | `GET /api/v1/library` | Search the library with type filter, text search, cursor pagination. |
 | `copy_library_primitive` | `POST /api/v1/library/{slug}/copy` | Community (unverified) primitives: returns 403 via MCP — MCP clients cannot copy community primitives at all; only verified primitives may be copied via MCP. Browser-only: requires explicit user acknowledgement in the CopyToAdaptWizard (not a `confirm: true` API parameter — a UI gate). This prevents an autonomous LLM client from self-supplying `confirm: true` to bypass the warning. |
-| `get_trigger_events` | `GET /api/v1/triggers/{id}/events` | View trigger event log |
+| `list_trigger_events` | `GET /api/v1/triggers/{id}/events` | View trigger event log |
 | `create_pipeline` | `POST /api/v1/pipelines` | Operator role required. Creates a new pipeline definition with name, description, visibility, and default config. |
 | `update_pipeline_graph` | `PUT /api/v1/pipelines/{id}/graph` | Operator role required. Replaces the node/edge graph of a pipeline. |
 | `create_model_backend` | `POST /api/v1/model-backends` | Operator role required. Registers a new LLM provider. API key is provided via a one-time browser setup URL returned by the tool — the key never transits the LLM context. |
@@ -537,9 +537,6 @@ This replaces the previous "LLM driveability" stretch goal with a standards-base
 | `list_triggers` | `GET /api/v1/triggers` | List trigger configurations, optional pipeline_id filter. |
 | `get_run_evals` | `GET /api/v1/runs/{id}/evals` | Get eval results for a completed run. |
 | `list_eval_definitions` | `GET /api/v1/eval-definitions` | List eval configurations, optional pipeline_id filter. |
-| `search_library` | `GET /api/v1/library` | Search the library with type filter, text search, cursor pagination. (Renamed from `browse_library`; old name preserved as alias.) |
-| `search_documentation` | `GET /api/v1/docs/search` | Search product documentation with free-text query. (Renamed from `get_documentation`; old name preserved as alias.) |
-| `list_trigger_events` | `GET /api/v1/triggers/{id}/events` | View trigger event log. (Renamed from `get_trigger_events`; old name preserved as alias.) |
 | `get_integration_status` | `GET /api/v1/integrations/status` | Health status of all connectors, model backends, and triggers. |
 | `get_org_config` | `GET /api/v1/admin/config` | Org-level configuration, filterable by section (remy, plan, rate_limits). |
 | `get_available_features` | `GET /api/v1/features` | List product features enabled on the current plan tier. |
@@ -1944,7 +1941,7 @@ Remy drives the platform through two channels:
 | Channel | When | What it can do |
 |---|---|---|
 | **ViewModel API** (`/api/v1/viewmodel/current`) | Page-aware actions (same as frontend) | Everything the UI can do — CRUD pipelines, agents, schemas, triggers, connectors, run pipelines, review HITL |
-| **MCP Server** (`/mcp`) | Structured tool calls | `list_pipelines`, `trigger_pipeline`, `get_run_status`, `review_hitl`, `browse_library`, `copy_library_primitive` |
+| **MCP Server** (`/mcp`) | Structured tool calls | `list_pipelines`, `trigger_pipeline`, `get_run_status`, `review_hitl`, `search_library`, `copy_library_primitive` |
 
 The LLM decides which channel to use based on the user's request. The ViewModel API is preferred for page-specific actions (it mirrors exactly what the UI would do); MCP is preferred for cross-page or background operations.
 
@@ -2636,7 +2633,7 @@ The following sources are pre-defined and seeded on org creation:
 | `page_context` | Current route name, params, loaded entity IDs (route.watch → computed → sent in stream request body) | `always_on` | ~100 |
 | `user_profile` | User display name, role, org name, plan tier name | `always_on` | ~150 |
 | `product_primer` | Auto-generated product overview (§8.30) — key concepts, page navigation, active context summary | `always_on` | ~600–800 |
-| `product_docs` | PRD sections, FAQ entries, user-facing docs pages — retrieved via `get_documentation(query)` | `tool` | N/A |
+| `product_docs` | PRD sections, FAQ entries, user-facing docs pages — retrieved via `search_documentation(query)` | `tool` | N/A |
 | `integration_status` | Connector health, model backend status, trigger status — via `get_integration_status()` | `tool` | N/A |
 | `org_config` | Org settings, feature flags, plan limits, runtime config — via `get_org_config()` | `tool` | N/A |
 | `feature_overview` | Feature-to-tier mapping, which features are enabled on the current plan — via `get_available_features()` | `tool` | N/A |
@@ -2661,7 +2658,7 @@ The system prompt is built in this order:
 3. ## Product Overview                     — always-on primer (§8.30)
 4. ## Page Context                         — current page info
 5. ## Available Knowledge Tools            — descriptions of tool-mode sources + skills
-   - get_documentation — Search product docs and FAQ
+   - search_documentation — Search product docs and FAQ
    - get_integration_status — Connector and model backend health
    - get_org_config — Org settings and feature flags
    - get_available_features — Feature availability by plan
@@ -2678,14 +2675,14 @@ Four new MCP tool handlers registered in `mcp_server.py`:
 
 | Tool | Parameters | Returns |
 |---|---|---|
-| `get_documentation` | `query: str` — free-text search; `section: str \| None` — specific PRD/doc section | Markdown-formatted relevant sections with page titles, up to ~4000 tokens per call |
+| `search_documentation` | `query: str` — free-text search; `section: str \| None` — specific PRD/doc section | Markdown-formatted relevant sections with page titles, up to ~4000 tokens per call |
 | `get_integration_status` | None | List of all connectors (name, type, health status, last_ok), model backends (provider, model, configured), trigger counts |
 | `get_org_config` | `section: str \| None` — filter to specific config area (e.g. "remy", "rate_limits", "plan") | Org settings relevant to the request, feature flags, plan tier, run limits |
 | `get_available_features` | None | Feature-to-tier mapping showing which product features are enabled on the current plan |
 
 **Backend implementation:**
 
-`get_documentation` reads from a documentation index built at startup:
+`search_documentation` reads from a documentation index built at startup:
 - PRD sections (from `docs/prd.md` — split by `##` / `###` headings, stored with heading path as key)
 - FAQ entries (from `frontend/src/faq.yaml` or equivalent)
 - User-facing docs pages (from `Development/Website/modulo-website/src/docs/` — indexed at org creation, cached)
@@ -2763,7 +2760,7 @@ Source                    Mode          Tokens
 ◉ Product Primer          [always-on]   ~700
 ◉ Page Context            [always-on]   ~100
 ◉ User Profile            [always-on]   ~150
-○ Product Docs            [tool]        get_documentation()
+○ Product Docs            [tool]        search_documentation()
 ○ Integration Status      [tool]        get_integration_status()
 ○ Org Config              [tool]        get_org_config()
 ○ Feature Overview        [tool]        get_available_features()
@@ -2809,7 +2806,7 @@ Users can override org defaults for themselves. "Reset to org defaults" button r
 
 - `remy_context_sources` DB migration must run before the feature deploys
 - `remy_skills.source_mode` column migration runs alongside
-- `get_documentation` requires the documentation indexer (reads PRD + FAQ + website docs at startup or on first call)
+- `search_documentation` requires the documentation indexer (reads PRD + FAQ + website docs at startup or on first call)
 - All four MCP tools must be registered before any source is set to `tool` mode
 
 #### 8.29.10 Flag / Gating
@@ -2819,7 +2816,7 @@ Users can override org defaults for themselves. "Reset to org defaults" button r
 | Context source framework (modes, system prompt filtering) | Community |
 | `get_org_config` tool | Community |
 | `get_available_features` tool | Community |
-| `get_documentation` tool | Team |
+| `search_documentation` tool | Team |
 | `get_integration_status` tool | Team |
 | Per-user source overrides | Team |
 | Per-skill source_mode toggles | Team |
@@ -3296,7 +3293,7 @@ V1 Feature Tests (separate suite, not in alpha CI — these features do not exis
 **Remote MCP Server**
 - [ ] FastAPI MCP endpoint at `/mcp` (HTTP + SSE, MCP protocol)
 - [ ] MCP resources: `modulo://pipelines`, `modulo://runs/{id}`, `modulo://runs/{id}/hitl/{gate_id}`, `modulo://library`, `modulo://schemas`, `modulo://connectors`, `modulo://model-backends`; agent_output resources annotated with `content_type: agent_output`
-- [ ] MCP tools: `trigger_pipeline` (fire-and-forget, returns run_id), `get_run_status` (summary-by-default, `detail: true` param), `get_run_output`, `cancel_run`, `review_hitl` (unified claim/approve/reject with claim_token; `destructive: true`), `list_pipelines`, `list_pending_hitl`, `browse_library`, `copy_library_primitive` (requires `confirm: true`), `get_trigger_events`
+- [ ] MCP tools: `trigger_pipeline` (fire-and-forget, returns run_id), `get_run_status` (summary-by-default, `detail: true` param), `get_run_output`, `cancel_run`, `review_hitl` (unified claim/approve/reject with claim_token; `destructive: true`), `list_pipelines`, `list_pending_hitl`, `search_library`, `copy_library_primitive` (requires `confirm: true`), `list_trigger_events`
 - [ ] All list tools and run status: cursor-based pagination with `next_cursor`
 - [ ] API key bearer token auth only (alpha); OAuth 2.0 deferred to v1
 - [ ] Dual-layer scope enforcement: token middleware + ViewModel command layer
