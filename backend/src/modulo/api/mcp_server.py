@@ -195,7 +195,16 @@ async def _revalidate_live_role(token: str, account_id: uuid.UUID, org_id: uuid.
         live_role = None
 
     if len(_live_role_cache) >= _MAX_LIVE_ROLE_CACHE:
-        _live_role_cache.clear()
+        # Evict expired entries first; only if still over capacity drop the
+        # oldest few. A wholesale clear thunders every connection back to the
+        # DB simultaneously, and entries otherwise accumulate until the cap.
+        for key in [k for k, v in _live_role_cache.items() if now - v[0] >= _LIVE_ROLE_TTL_SECONDS]:
+            _live_role_cache.pop(key, None)
+        overflow = len(_live_role_cache) - _MAX_LIVE_ROLE_CACHE + 1
+        if overflow > 0:
+            oldest = sorted(_live_role_cache.items(), key=lambda kv: kv[1][0])[:overflow]
+            for key, _ in oldest:
+                _live_role_cache.pop(key, None)
     _live_role_cache[token] = (now, live_role)
     return live_role
 

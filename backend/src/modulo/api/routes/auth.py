@@ -16,7 +16,11 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
 from modulo.api.routes.remy import clear_all_session_approvals
-from modulo.auth.dependencies import get_current_user, resolve_role_from_membership
+from modulo.auth.dependencies import (
+    OrganisationMembershipNotFound,
+    get_current_user,
+    resolve_role_from_membership,
+)
 from modulo.auth.jwt import (
     AuthenticatedPrincipal,
     create_access_token,
@@ -412,12 +416,25 @@ async def ws_token(
             except SQLAlchemyError:
                 _log.warning("permission.live_role_read_failed", exc_info=True)
                 live_org_role = current_user.org_role
+            else:
+                if live_org_role is None:
+                    # ADR 017: missing/deactivated membership → deny. A removed
+                    # admin must not mint a WS token carrying the stale claim.
+                    _log.warning(
+                        "permission.membership_not_found",
+                        extra={
+                            "account_id": str(current_user.account_id),
+                            "org_id": str(current_user.organisation_id),
+                            "username": current_user.username,
+                        },
+                    )
+                    raise OrganisationMembershipNotFound()
 
         principal_json = {
             "sub": current_user.username,
             "org_id": str(current_user.organisation_id) if current_user.organisation_id else "",
             "account_id": str(current_user.account_id),
-            "org_role": live_org_role if live_org_role is not None else current_user.org_role or "",
+            "org_role": live_org_role or "",
         }
 
         from redis.asyncio import Redis
@@ -498,12 +515,25 @@ async def me(
         except SQLAlchemyError:
             _log.warning("permission.live_role_read_failed", exc_info=True)
             live_org_role = current_user.org_role
+        else:
+            if live_org_role is None:
+                # ADR 017: missing/deactivated membership → deny. A removed
+                # user must not keep the claimed admin role.
+                _log.warning(
+                    "permission.membership_not_found",
+                    extra={
+                        "account_id": str(current_user.account_id),
+                        "org_id": str(current_user.organisation_id),
+                        "username": current_user.username,
+                    },
+                )
+                raise OrganisationMembershipNotFound()
 
     return MeResponse(
         id=str(account.id),
         email=account.email,
         display_name=account.display_name,
-        org_role=live_org_role if live_org_role is not None else current_user.org_role or "",
+        org_role=live_org_role or "",
         active=account.active,
         created_at=account.created_at.isoformat(),
         is_system_admin=current_user.is_system_admin,

@@ -109,7 +109,6 @@ def login_jwt(email: str, password: str, request: Any, ctx: dict[str, Any], toke
     mock_user.password_hash = "hash"
     mock_user.active = True
     mock_user.is_system_admin = False
-    mock_user.is_system_admin = False
 
     with (
         patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
