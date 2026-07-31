@@ -94,6 +94,19 @@ async def test_programming_error_returns_empty_result() -> None:
     assert result.items == []
 
 
+async def test_programming_error_on_items_query_returns_empty_result() -> None:
+    """A ProgrammingError on the items query (after a successful count) must also degrade."""
+    session = mock_session()
+    count_result = MagicMock()
+    count_result.scalar_one.return_value = 7
+    session.execute = AsyncMock(side_effect=[count_result, ProgrammingError("stmt", {}, RuntimeError("boom"))])
+
+    result = await list_connector_instances(session)
+
+    assert result.total == 0
+    assert result.items == []
+
+
 async def test_cursor_pagination_applies_filter() -> None:
     """The cursor path must forward the tier filter into the paginated stmt."""
     session = mock_session()

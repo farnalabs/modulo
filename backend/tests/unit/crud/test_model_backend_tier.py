@@ -6,7 +6,7 @@ No DB — uses mock sessions.
 """
 
 import uuid
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.exc import ProgrammingError
 
@@ -94,6 +94,19 @@ async def test_programming_error_returns_empty_result() -> None:
     """A ProgrammingError on the count query must degrade to an empty page."""
     session = mock_session()
     session.execute = AsyncMock(side_effect=ProgrammingError("stmt", {}, RuntimeError("boom")))
+
+    result = await list_model_backends(session, org_id=_ORG_ID)
+
+    assert result.total == 0
+    assert result.items == []
+
+
+async def test_programming_error_on_items_query_returns_empty_result() -> None:
+    """A ProgrammingError on the items query (after a successful count) must also degrade."""
+    session = mock_session()
+    count_result = MagicMock()
+    count_result.scalar_one.return_value = 7
+    session.execute = AsyncMock(side_effect=[count_result, ProgrammingError("stmt", {}, RuntimeError("boom"))])
 
     result = await list_model_backends(session, org_id=_ORG_ID)
 
