@@ -114,13 +114,13 @@
           "
         >
           <template v-if="testResults[ep.id].success">
-            ✓ Test sent successfully (HTTP {{ testResults[ep.id].status_code }})
+            ✓ Test sent successfully (HTTP {{ testResults[ep.id]['status_code'] }})
           </template>
           <template v-else>
             ✗ Test failed:
             {{
               testResults[ep.id].error ||
-              "HTTP " + testResults[ep.id].status_code
+              "HTTP " + testResults[ep.id]['status_code']
             }}
           </template>
         </div>
