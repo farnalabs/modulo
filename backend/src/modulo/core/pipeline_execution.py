@@ -15,14 +15,14 @@ while the SAQ path passes its own async engine. No module-level engine globals.
 Staleness constants (plan F4 / F1 ordering):
 
     RUN_CLAIM_STALE_SECONDS        = 450  SAQ runs only
-    LEGACY_RUN_CLAIM_STALE_SECONDS = 600  Celery/legacy path (unchanged)
+    LEGACY_RUN_CLAIM_STALE_SECONDS = 180  Celery/legacy path (today's 3-minute window)
     SAQ_JOB_HEARTBEAT              = 300  SAQ job heartbeat knob
     RUN_HEARTBEAT_SECONDS          = 30   DB heartbeat cadence
 
 Both claim staleness values are configurable via settings (see the F4 Settings
-section in :mod:`modulo.settings`). The legacy sweep windows
-(never_dispatched / worker_lost) default to 600 and stay decoupled from
-``RUN_CLAIM_STALE_SECONDS``.
+section in :mod:`modulo.settings`). The legacy sweep windows default to
+never_dispatched=300 / worker_lost=600 (today's beat-sweep values, 5 and 10
+minutes) and stay decoupled from ``RUN_CLAIM_STALE_SECONDS``.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ _log = logging.getLogger(__name__)
 # Claim staleness gates (configurable via settings; module defaults are the
 # documented SAQ / legacy values).
 RUN_CLAIM_STALE_SECONDS = 450
-LEGACY_RUN_CLAIM_STALE_SECONDS = 600
+LEGACY_RUN_CLAIM_STALE_SECONDS = 180
 
 # DB heartbeat cadence (F4). Must stay well below the 300s SAQ sweep threshold.
 RUN_HEARTBEAT_SECONDS = 30
@@ -68,7 +68,8 @@ def _resolve_claim_stale_seconds(*, legacy: bool, stale_seconds: int | None) -> 
     """Resolve the claim staleness window.
 
     The SAQ path uses ``RUN_CLAIM_STALE_SECONDS`` (450); the legacy Celery path
-    keeps the historical 600s window. Both are configurable via settings.
+    keeps today's 180s window (``interval '3 minutes'``). Both are configurable
+    via settings.
     An explicit ``stale_seconds`` overrides settings (used by tests and by the
     SAQ reconcile path later).
     """
@@ -271,7 +272,7 @@ async def execute_run(
     """Execute a single pipeline run from claim through completion.
 
     Shared by the Celery task and (from PR B) the SAQ ``execute_run`` job.
-    ``legacy_claim`` selects the legacy 600s claim window (Celery) vs the SAQ
+    ``legacy_claim`` selects the legacy 180s claim window (Celery) vs the SAQ
     450s window. ``_task_instance`` is intentionally absent (plan F4: engine
     injection, no task coupling).
     """
@@ -322,8 +323,9 @@ async def stale_run_recovery_sweep(
     - Running runs with a heartbeat older than the worker-lost window and
       5+ claims are marked ``failed`` with ``worker_lost``.
 
-    Legacy windows default to 600s (settings ``SAQ_NEVER_DISPATCHED_WINDOW`` /
-    ``SAQ_WORKER_LOST_WINDOW``) and are deliberately decoupled from
+    Legacy windows default to today's beat-sweep values — never_dispatched=300s
+    (settings ``SAQ_NEVER_DISPATCHED_WINDOW``), worker_lost=600s (settings
+    ``SAQ_WORKER_LOST_WINDOW``) — and are deliberately decoupled from
     ``RUN_CLAIM_STALE_SECONDS=450`` (SAQ runs only). PR B scopes this sweep to
     legacy-dispatched runs once the ``dispatcher`` column exists.
     """

@@ -68,8 +68,8 @@ def _make_settings(**overrides: object) -> MagicMock:
     """Mock Settings with the SAQ/legacy claim staleness plumbing values."""
     base = {
         "run_claim_stale_seconds": 450,
-        "legacy_run_claim_stale_seconds": 600,
-        "saq_never_dispatched_window": 600,
+        "legacy_run_claim_stale_seconds": 180,
+        "saq_never_dispatched_window": 300,
         "saq_worker_lost_window": 600,
         "saq_enabled": False,
         "saq_job_heartbeat": 300,
@@ -126,11 +126,11 @@ class TestClaimRun:
         assert engine.conn.params[0]["stale_seconds"] == 450
         assert engine.conn.params[0]["claim_cap"] == 5
 
-    def test_legacy_path_uses_600(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_legacy_path_uses_today_180(self, monkeypatch: pytest.MonkeyPatch) -> None:
         engine = _FakeEngine(row=("id",))
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         assert pe.claim_run(engine, "run-1", "org-1", legacy=True) is True
-        assert engine.conn.params[0]["stale_seconds"] == 600
+        assert engine.conn.params[0]["stale_seconds"] == 180
 
     def test_explicit_stale_seconds_overrides_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         engine = _FakeEngine(row=("id",))
@@ -357,12 +357,12 @@ class TestHeartbeat:
 
 
 # ---------------------------------------------------------------------------
-# Stale-run recovery sweep â€” legacy windows stay 600
+# Stale-run recovery sweep — legacy windows match today's beat-sweep values
 # ---------------------------------------------------------------------------
 
 
 class TestStaleRunRecoverySweep:
-    async def test_uses_legacy_600_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_uses_legacy_300_600_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         statements: list[str] = []
 
         class _AsyncResult:
@@ -601,7 +601,7 @@ class TestSaqSettingsDefaults:
         s = self._settings(monkeypatch)
         assert s.saq_enabled is False
         assert s.run_claim_stale_seconds == 450
-        assert s.legacy_run_claim_stale_seconds == 600
+        assert s.legacy_run_claim_stale_seconds == 180
         assert s.saq_job_heartbeat == 300
         assert s.run_heartbeat_seconds == 30
         assert s.saq_hard_gate is True
@@ -612,7 +612,7 @@ class TestSaqSettingsDefaults:
         assert s.saq_e2b_idempotency is True
         assert s.saq_test_pause is False
         assert s.saq_reenqueue_window == 600
-        assert s.saq_never_dispatched_window == 600
+        assert s.saq_never_dispatched_window == 300
         assert s.saq_worker_lost_window == 600
         assert s.saq_worker_db_pool_size == 2
         assert s.saq_redis_pool_size == 5

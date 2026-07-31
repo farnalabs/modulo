@@ -86,10 +86,10 @@ class Settings(BaseSettings):
     # The flag does NOT stop the SAQ workers.
     saq_enabled: bool = Field(default=False, alias="SAQ_ENABLED")
     # Staleness gate for re-claiming a SAQ run whose heartbeat is stale. SAQ
-    # runs only — legacy Celery windows stay 600 (see below).
+    # runs only — legacy Celery keeps today's 180s window (see below).
     run_claim_stale_seconds: int = Field(default=450, alias="RUN_CLAIM_STALE_SECONDS", ge=1, le=3600)
-    # Legacy Celery-path claim window (unchanged through the migration).
-    legacy_run_claim_stale_seconds: int = Field(default=600, alias="LEGACY_RUN_CLAIM_STALE_SECONDS", ge=1, le=3600)
+    # Legacy Celery-path claim window (today's `interval '3 minutes'` = 180s).
+    legacy_run_claim_stale_seconds: int = Field(default=180, alias="LEGACY_RUN_CLAIM_STALE_SECONDS", ge=1, le=3600)
     # SAQ job heartbeat knob (per-job). The DB heartbeat cadence is
     # RUN_HEARTBEAT_SECONDS below.
     saq_job_heartbeat: int = Field(default=300, alias="SAQ_JOB_HEARTBEAT", ge=1, le=3600)
@@ -111,10 +111,12 @@ class Settings(BaseSettings):
     # TEST-ONLY pause flag — hard default off; refused when combined with
     # SAQ_ENABLED=true outside test/staging (debug=false).
     saq_test_pause: bool = Field(default=False, alias="SAQ_TEST_PAUSE")
-    # Legacy sweep windows (never_dispatched / worker_lost / re-enqueue) — stay
-    # at 600 through PR A/B, decoupled from RUN_CLAIM_STALE_SECONDS (SAQ only).
+    # Legacy sweep windows (never_dispatched / worker_lost / re-enqueue) match
+    # today's beat-sweep values (5 min / 10 min; re-enqueue is SAQ-only, 600 is
+    # unverifiable from today's Celery code), decoupled from
+    # RUN_CLAIM_STALE_SECONDS (SAQ only).
     saq_reenqueue_window: int = Field(default=600, alias="SAQ_REENQUEUE_WINDOW", ge=1, le=3600)
-    saq_never_dispatched_window: int = Field(default=600, alias="SAQ_NEVER_DISPATCHED_WINDOW", ge=1, le=3600)
+    saq_never_dispatched_window: int = Field(default=300, alias="SAQ_NEVER_DISPATCHED_WINDOW", ge=1, le=3600)
     saq_worker_lost_window: int = Field(default=600, alias="SAQ_WORKER_LOST_WINDOW", ge=1, le=3600)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
     saq_worker_db_pool_size: int = Field(default=2, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
