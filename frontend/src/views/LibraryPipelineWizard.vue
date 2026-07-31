@@ -8,7 +8,8 @@
           @click="$router.push({ name: 'library' })"
           data-testid="library-wizard-back"
         >
-          &larr; Back to Library
+          <ArrowLeft class="h-4 w-4" />
+          {{ $t('views.LibraryPipelineWizard.back_to_library') }}
         </button>
         <PageHeader :title="$t('views.LibraryPipelineWizard.create_pipeline_from_template')" />
       </div>
@@ -187,6 +188,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
 import BackLink from '../components/BackLink.vue'
+import { ArrowLeft } from '@lucide/vue'
 import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'

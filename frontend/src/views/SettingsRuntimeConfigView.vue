@@ -200,7 +200,14 @@ const editedKeys = reactive(new Set<string>())
 const items = ref<ConfigEntry[]>([])
 const { get: getUntyped } = useApi()
 const { loading, error, data: configData, load: loadConfig } = useDataFetch<ConfigResponse>(
-  async () => ({ data: await getUntyped<ConfigResponse>('/api/v1/admin/runtime-config') }),
+  async () => {
+    try {
+      const data = await getUntyped<ConfigResponse>('/api/v1/admin/runtime-config')
+      return { data, error: undefined }
+    } catch (e) {
+      return { data: undefined, error: { detail: formatApiError(e) } }
+    }
+  },
 )
 
 watch(configData, (resp) => {

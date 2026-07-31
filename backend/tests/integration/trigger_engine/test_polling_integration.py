@@ -66,7 +66,7 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
         text(
             "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
             "VALUES (:mid, :aid, :oid, 'admin') "
-            "ON CONFLICT (id) DO NOTHING",
+            "ON CONFLICT (account_id, organisation_id) DO NOTHING",
         ),
         {
             "mid": str(uuid.uuid4()),

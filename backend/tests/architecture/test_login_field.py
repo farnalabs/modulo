@@ -21,7 +21,8 @@ EXCLUDE_PATTERNS = ("connector", "bitbucket", "gitlab", "discord", "scanner", "c
 def test_login_payload_uses_email_not_username():
     violations = []
     for path in TESTS.rglob("*.py"):
-        if any(p in path.stem.lower() for p in EXCLUDE_PATTERNS):
+        rel = path.relative_to(TESTS.parent)
+        if any(p in str(rel).lower() for p in EXCLUDE_PATTERNS):
             continue
         try:
             content = path.read_text(encoding="utf-8")
@@ -30,7 +31,7 @@ def test_login_payload_uses_email_not_username():
         for i, line in enumerate(content.splitlines(), 1):
             if not LOGIN_PAYLOAD.search(line):
                 continue
-            violations.append(f"  {path.relative_to(TESTS.parent)}:{i}  {line.strip()[:120]}")
+            violations.append(f"  {rel}:{i}  {line.strip()[:120]}")
     assert not violations, (
         f"Found {len(violations)} login payloads using 'username' field.\n"
         "FastAPI login endpoint expects 'email' — change to 'email'.\n" + "\n".join(violations)
