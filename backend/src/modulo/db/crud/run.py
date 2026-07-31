@@ -473,4 +473,3 @@ async def cancel_run(
         _log.warning("CRUD cancelled run %s with error_code=%s", run_id, error_code)
         return uuid.UUID(str(row[0]))
     return None
-
