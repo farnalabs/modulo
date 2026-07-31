@@ -84,8 +84,7 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
 
                 redis_client = Redis.from_url(resolved.redis_url, decode_responses=False)
             except Exception:
-                _log.exception("errors._get_key_store")
-                _log.warning("error_tracking.redis_unavailable — falling back to in-memory key store")
+                _log.warning("error_tracking.redis_unavailable — falling back to in-memory key store", exc_info=True)
         _key_store = SessionKeyStore(redis_client=redis_client)
     return _key_store
 

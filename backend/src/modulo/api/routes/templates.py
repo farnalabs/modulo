@@ -116,7 +116,6 @@ async def list_templates_endpoint(
         ) from exc
     except Exception as e:
         logger.exception("templates.list_templates_endpoint")
-        logger.error("Unexpected error in list_templates_endpoint: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
@@ -250,5 +249,4 @@ async def create_pipeline_from_template_endpoint(
         ) from exc
     except Exception as e:
         logger.exception("templates.create_pipeline_from_template_endpoint")
-        logger.error("Unexpected error in create_pipeline_from_template_endpoint: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal server error") from e

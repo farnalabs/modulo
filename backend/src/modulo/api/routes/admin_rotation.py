@@ -151,7 +151,6 @@ async def rotate_key(
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
     except Exception as e:
         _log.exception("admin_rotation.rotate_key")
-        _log.error("Unexpected error in rotate_key: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
@@ -185,7 +184,6 @@ async def rotation_status(
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
     except Exception as e:
         _log.exception("admin_rotation.rotation_status")
-        _log.error("Unexpected error in rotation_status: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 

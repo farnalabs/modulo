@@ -387,7 +387,7 @@ async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
             resp.raise_for_status()
             disc = resp.json()
     except Exception as exc:
-        _log.exception("admin_sso._test_oidc_connection")
+        _log.warning("admin_sso._test_oidc_connection", exc_info=True)
         return SsoProviderTestResult(
             success=False,
             message=f"Failed to fetch discovery document: {exc}",
@@ -436,7 +436,7 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
                 resp.raise_for_status()
                 metadata_xml = resp.text
         except Exception as exc:
-            _log.exception("admin_sso._test_saml_connection")
+            _log.warning("admin_sso._test_saml_connection", exc_info=True)
             return SsoProviderTestResult(
                 success=False,
                 message=f"Failed to fetch metadata: {exc}",
