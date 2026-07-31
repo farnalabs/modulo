@@ -255,7 +255,7 @@ def manual_triggers_performed(count: int, request):
 
 
 @when(parsers.parse("I GET /api/triggers/events?limit={limit:d}"))
-def get_trigger_events(limit: int, client, request):
+def list_trigger_events(limit: int, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
         patch(

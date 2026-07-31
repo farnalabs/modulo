@@ -39,10 +39,10 @@ Feature: SDLC Onboarding Path
     And a published schema with abstract_name "issue-tracker"
     When I GET /api/v1/library/browse?q=issue-tracker
     Then the response contains relevant library primitives
-    And I mark "browse_library" as completed
+    And I mark "search_library" as completed
 
   Scenario: Wire pipeline completes onboarding
-    Given I have completed the browse_library step
+    Given I have completed the search_library step
     When I select a pipeline template and mark "wire_pipeline" as completed
     Then all 5 SDLC onboarding steps are completed
     And is_first_run becomes false

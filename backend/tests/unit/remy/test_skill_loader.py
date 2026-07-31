@@ -449,7 +449,7 @@ class TestSkillLoaderBuildSystemPrompt:
     ) -> None:
         prompt = await self._run(loader, org_id, user_id, config_kwargs={"system_prompt": "Base."})
         assert "Available Knowledge Tools" in prompt
-        assert "get_documentation" in prompt
+        assert "search_documentation" in prompt
         assert "get_integration_status" in prompt
         assert "get_org_config" in prompt
         assert "get_available_features" in prompt

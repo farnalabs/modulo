@@ -14,7 +14,7 @@ _SDLC_STEPS = [
     "connect_tools",
     "run_inference",
     "review_schemas",
-    "browse_library",
+    "search_library",
     "wire_pipeline",
 ]
 
