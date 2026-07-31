@@ -8,7 +8,7 @@ test.describe('Stages Board', () => {
     await expect(page.locator('h1')).toContainText(/Stage|Board/i)
   })
 
-  test('stages board shows columns and elements', async ({ page, env }) => {
+  test('stages board shows columns and elements', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/stages*', (route) => {
       route.fulfill({

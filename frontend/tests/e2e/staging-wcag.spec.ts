@@ -5,7 +5,7 @@ const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 const knownViolations = new Set(['color-contrast'])
 
 test.describe('WCAG AA audit (local)', { tag: "@regression" }, () => {
-  test('login page has no WCAG AA violations', async ({ page }) => {
+  test('login page has no WCAG AA violations', { tag: '@regression' }, async ({ page }) => {
     test.setTimeout(30000)
     await page.goto('/login')
 

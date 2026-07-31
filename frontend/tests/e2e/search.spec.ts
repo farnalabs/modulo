@@ -10,7 +10,7 @@ const samplePipelines = {
 }
 
 test.describe('Search', { tag: "@regression" }, () => {
-  test('pipelines page has search input', async ({ page, env }) => {
+  test('pipelines page has search input', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/pipelines*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(samplePipelines) })
@@ -26,7 +26,7 @@ test.describe('Search', { tag: "@regression" }, () => {
     await expect(page.locator('text=CI Pipeline')).toBeVisible()
   })
 
-  test('library page search filters results', async ({ page, env }) => {
+  test('library page search filters results', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/libraries*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({

@@ -1,7 +1,7 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Admin Connectors', { tag: "@regression" }, () => {
-  test('page loads with correct heading and add connector button', async ({ page, env }) => {
+  test('page loads with correct heading and add connector button', { tag: '@regression' }, async ({ page, env }) => {
     await page.route('**/api/v1/connectors*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: 'c1', name: 'GitHub', connector_type: 'github', status: 'connected', description: 'GitHub code repository connector', created_at: '2025-06-01T10:00:00Z' }], total: 1 }) })
     })
@@ -13,7 +13,7 @@ test.describe('Admin Connectors', { tag: "@regression" }, () => {
     await expect(page.getByTestId('admin-connectors-add')).toBeVisible()
   })
 
-  test('shows empty state with create button visible', async ({ page, env }) => {
+  test('shows empty state with create button visible', { tag: '@regression' }, async ({ page, env }) => {
     await page.route('**/api/v1/connectors*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: 'c1', name: 'GitHub', connector_type: 'github', status: 'connected', description: 'GitHub code repository connector', created_at: '2025-06-01T10:00:00Z' }], total: 1 }) })
     })

@@ -1,7 +1,7 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Admin Spend Limits', { tag: "@regression" }, () => {
-  test('page loads with correct heading', async ({ page, env }) => {
+  test('page loads with correct heading', { tag: '@regression' }, async ({ page, env }) => {
     if (env.name === 'local') {
       await page.route('**/api/v1/admin/costs/limits*', (route) => {
         route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ organisation_id: 'test-org', org_daily_spend_limit: 100, team_limits: [] }) })
@@ -17,7 +17,7 @@ test.describe('Admin Spend Limits', { tag: "@regression" }, () => {
 })
 
 test.describe('Admin Cost Controls', { tag: "@regression" }, () => {
-  test('page loads with correct heading', async ({ page, env }) => {
+  test('page loads with correct heading', { tag: '@regression' }, async ({ page, env }) => {
     if (env.name === 'local') {
       await page.route('**/api/v1/admin/costs*', (route) => {
         route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ period: 'month', group_by: 'team', items: [] }) })

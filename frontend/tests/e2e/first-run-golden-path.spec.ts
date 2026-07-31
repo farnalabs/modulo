@@ -3,7 +3,7 @@
 test.describe('First-Run Golden Path', { tag: "@regression" }, () => {
   test.skip(({ env }) => env.name !== 'local', 'Requires local mock with specific pipeline data')
 
-  test('golden path: login -> browse pipelines -> trigger run -> inspect output', async ({ page, env }) => {
+  test('golden path: login -> browse pipelines -> trigger run -> inspect output', { tag: '@regression' }, async ({ page, env }) => {
     // â”€â”€ Step 1: Navigate to app and log in â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     await loginAsAdmin(page, env)
 
@@ -83,7 +83,7 @@ test.describe('First-Run Golden Path', { tag: "@regression" }, () => {
     console.info('[golden-path] Golden path completed successfully')
   })
 
-  test('dashboard shows pipeline summary for first-run user', async ({ page, env }) => {
+  test('dashboard shows pipeline summary for first-run user', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/')
 
@@ -91,7 +91,7 @@ test.describe('First-Run Golden Path', { tag: "@regression" }, () => {
     await expect(page.getByTestId('dashboard-title')).toBeVisible({ timeout: 5000 })
   })
 
-  test('demo pipeline exists in library', async ({ page, env }) => {
+  test('demo pipeline exists in library', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/pipelines')
 

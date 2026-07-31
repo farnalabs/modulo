@@ -18,7 +18,7 @@ const sampleBackends = {
 }
 
 test.describe('Admin Model Backends', { tag: "@regression" }, () => {
-  test('page loads with correct heading and add button', async ({ page, env }) => {
+  test('page loads with correct heading and add button', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 if (env.name === 'local') {
     await page.route('**/api/v1/model-backends*', (route) => {
@@ -34,7 +34,7 @@ if (env.name === 'local') {
     }
   })
 
-  test('shows existing backends in the list', async ({ page, env }) => {
+  test('shows existing backends in the list', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 if (env.name === 'local') {
     await page.route('**/api/v1/model-backends*', (route) => {

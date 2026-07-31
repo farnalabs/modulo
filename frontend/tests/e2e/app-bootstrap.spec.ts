@@ -14,7 +14,7 @@ test.describe('App Bootstrap', () => {
     expect(relevantErrors).toHaveLength(0)
   })
 
-  test('login page displays key elements', async ({ page }) => {
+  test('login page displays key elements', { tag: '@regression' }, async ({ page }) => {
     await page.goto('/login')
 
     await expect(page.locator('h1')).toContainText('Modulo')

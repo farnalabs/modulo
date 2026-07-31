@@ -1,7 +1,7 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Remy Admin Configuration', { tag: "@regression" }, () => {
-  test('page loads with remy configuration sections', async ({ page, env }) => {
+  test('page loads with remy configuration sections', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/admin/remy/config', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ access_list: { user_ids: [], team_ids: [], org_roles: [] }, default_provider: 'anthropic', default_model: 'claude-sonnet-4-20250514', default_context_window: 200000, allowed_providers: ['anthropic', 'openai'], allowed_models: [], system_prompt: '', additional_guidance: '', permission_mode: 'safe', tool_permissions: {}, rate_limit_max_actions: 30, rate_limit_window_seconds: 60, auto_execute_threshold: 0.8, nogo_page_patterns: [], nogo_selector_patterns: [], allowed_selectors: [], allowed_page_patterns: [] }) })

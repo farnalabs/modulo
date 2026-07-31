@@ -1,7 +1,7 @@
 import { test, expect } from './setup/fixtures'
 
 test.describe('Login Flow', () => {
-  test('shows login form fields', async ({ page }) => {
+  test('shows login form fields', { tag: '@regression' }, async ({ page }) => {
     await page.goto('/login', { timeout: 60000 })
 
     await expect(page.locator('h1')).toContainText('Modulo')

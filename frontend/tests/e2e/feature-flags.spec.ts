@@ -1,7 +1,7 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Feature Flags', { tag: "@regression" }, () => {
-  test('feature flags page loads', async ({ page, env }) => {
+  test('feature flags page loads', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/feature-flags')
 

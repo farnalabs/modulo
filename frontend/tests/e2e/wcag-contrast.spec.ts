@@ -16,7 +16,7 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
   ]
 
   for (const { path, name } of pages) {
-    test(`${name} â€” light mode has no unexpected WCAG AA violations`, async ({ page }) => {
+    test(`${name} â€” light mode has no unexpected WCAG AA violations`, { tag: '@regression' }, async ({ page }) => {
       await page.goto(path)
       await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
@@ -26,14 +26,14 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
         return
       }
 
-      // Wait for page to be fully stable before running axe
-      await page.waitForTimeout(300)
+      // Wait for the Vue app to mount before running axe
+      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
 
       await page.evaluate(() => {
         document.documentElement.classList.add('light')
         document.documentElement.classList.remove('dark')
       })
-      await page.waitForTimeout(100)
+      await page.evaluate(() => new Promise(requestAnimationFrame))
 
       const results = await new AxeBuilder({ page })
         .withTags(WCAG_TAGS)
@@ -51,7 +51,7 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
       expect(violations).toEqual([])
     })
 
-    test(`${name} â€” dark mode has no unexpected WCAG AA violations`, async ({ page }) => {
+    test(`${name} â€” dark mode has no unexpected WCAG AA violations`, { tag: '@regression' }, async ({ page }) => {
       await page.goto(path)
       await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
@@ -61,14 +61,14 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
         return
       }
 
-      // Wait for page to be fully stable before running axe
-      await page.waitForTimeout(300)
+      // Wait for the Vue app to mount before running axe
+      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
 
       await page.evaluate(() => {
         document.documentElement.classList.remove('light')
         document.documentElement.classList.remove('dark')
       })
-      await page.waitForTimeout(100)
+      await page.evaluate(() => new Promise(requestAnimationFrame))
 
       const results = await new AxeBuilder({ page })
         .withTags(WCAG_TAGS)
