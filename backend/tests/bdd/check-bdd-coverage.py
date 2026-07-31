@@ -16,10 +16,16 @@ STEPS_DIR = Path(__file__).parent / "steps"
 
 def collect_covered_features() -> set[str]:
     """Return set of feature file paths (relative to FEATURES_DIR) that are
-    referenced by scenarios('...') in any step file."""
+    referenced by scenarios('...') in any step file.
+
+    Step files live in two places:
+    - ``steps/`` for domain-wide shared steps, and
+    - ``features/<subdir>/`` co-located with their feature file.
+    Both are scanned so every feature file resolves to its ``scenarios()`` call.
+    """
     pattern = re.compile(r'scenarios\s*\(\s*["\']([^"\']+)["\']\s*\)')
     covered: set[str] = set()
-    for step_file in STEPS_DIR.rglob("test_*.py"):
+    for step_file in list(STEPS_DIR.rglob("test_*.py")) + list(FEATURES_DIR.rglob("test_*.py")):
         text = step_file.read_text(encoding="utf-8")
         for match in pattern.finditer(text):
             raw = match.group(1)

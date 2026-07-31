@@ -32,6 +32,7 @@ class CandidateItem(BaseModel):
     name: str
     detail: str
     created_at: str | None = None
+    entity_type: str = ""
 
 
 class HousekeepingCategory(BaseModel):
@@ -102,6 +103,7 @@ async def list_housekeeping(
                     name=c.name,
                     detail=c.detail,
                     created_at=c.created_at,
+                    entity_type=c.entity_type,
                 )
                 for c in r.candidates
             ],
