@@ -168,6 +168,7 @@ class HITLManager:
             gate_id=gate_id,
             pipeline_id=pipeline_id,
             required_team_id=required_team_id,
+            expires_at=datetime.now(UTC) + timedelta(minutes=_DEFAULT_EXPIRY_MINUTES),
         )
         session.add(gate)
         try:
@@ -487,7 +488,7 @@ class HITLManager:
                 HitlClaim.account_id.is_not(None),
                 HitlClaim.decision.is_(None),
             )
-            .values(account_id=None, claimed_at=None, claim_token=None, expires_at=None)
+            .values(account_id=None, claimed_at=None, claim_token=None, expires_at=now)
             .returning(HitlClaim.run_id, HitlClaim.gate_id)
         )
         rows = (await session.execute(stmt)).all()
@@ -640,7 +641,7 @@ class HITLManager:
                 decision_at=now,
                 account_id=None,
                 claim_token=None,
-                expires_at=None,
+                expires_at=now,
             )
             .returning(HitlClaim.id)
         )
