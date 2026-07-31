@@ -40,4 +40,3 @@ Feature: Stale JWT Team Membership Revocation
     When user "alice" attempts to claim gate "gate-1" on run "run-1"
     Then the response status is 403
     And the HITL gate enforcement uses a DB-live membership check
-
