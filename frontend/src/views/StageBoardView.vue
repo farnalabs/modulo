@@ -40,35 +40,35 @@
     <template v-else>
       <div class="flex flex-wrap items-center gap-4">
         <div class="flex items-center gap-2">
-          <label for="stageboardview-field-8" class="text-sm font-medium text-muted-foreground">Team</label>
+          <label for="stageboardview-field-8" class="text-sm font-medium text-muted-foreground">{{ $t('views.StageBoardView.team') }}</label>
           <Select :model-value="teamFilter" @update:model-value="teamFilter = String($event); applyFilters()">
             <SelectTrigger class="w-auto min-w-[140px]" aria-label="Team" data-testid="stage-board-team-filter">
               <SelectValue placeholder="All Teams" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">All Teams</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.StageBoardView.all_teams') }}</SelectItem>
               <SelectItem v-for="t in teams" :key="t.id" :value="t.id">{{ t.name }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div class="flex items-center gap-2">
-          <label for="stageboardview-field-7" class="text-sm font-medium text-muted-foreground">Status</label>
+          <label for="stageboardview-field-7" class="text-sm font-medium text-muted-foreground capitalize">{{ $t('views.StageBoardView.status') }}</label>
           <Select :model-value="statusFilter" @update:model-value="statusFilter = String($event); applyFilters()">
             <SelectTrigger class="w-auto min-w-[140px]" aria-label="Status" data-testid="stage-board-status-filter">
               <SelectValue placeholder="All Statuses" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">All Statuses</SelectItem>
-              <SelectItem :value="RUN_STATUS.RUNNING">Running</SelectItem>
-              <SelectItem value="idle">Idle</SelectItem>
-              <SelectItem :value="RUN_STATUS.FAILED">Failed</SelectItem>
-              <SelectItem :value="RUN_STATUS.COMPLETE">Complete</SelectItem>
-              <SelectItem :value="RUN_STATUS.AWAITING_HUMAN">Awaiting Human</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.StageBoardView.all_statuses') }}</SelectItem>
+              <SelectItem :value="RUN_STATUS.RUNNING">{{ $t('views.StageBoardView.running') }}</SelectItem>
+              <SelectItem value="idle">{{ $t('views.StageBoardView.idle') }}</SelectItem>
+              <SelectItem :value="RUN_STATUS.FAILED">{{ $t('views.StageBoardView.failed') }}</SelectItem>
+              <SelectItem :value="RUN_STATUS.COMPLETE">{{ $t('views.StageBoardView.complete') }}</SelectItem>
+              <SelectItem :value="RUN_STATUS.AWAITING_HUMAN">{{ $t('views.StageBoardView.awaiting_human') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div class="flex items-center gap-2">
-          <label for="stageboardview-field-6" class="text-sm font-medium text-muted-foreground">From</label>
+          <label for="stageboardview-field-6" class="text-sm font-medium text-muted-foreground">{{ $t('views.StageBoardView.from') }}</label>
           <input id="stageboardview-field-6"
             v-model="dateFrom"
             type="date"
@@ -181,7 +181,7 @@
                     class="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize"
                     :class="statusBadgeClass(pipeline.status || 'idle')"
                   >
-                    {{ pipeline.status || 'idle' }}
+                    <span class="capitalize">{{ pipeline.status || 'idle' }}</span>
                   </span>
                 </div>
                 <div class="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
@@ -223,7 +223,7 @@
   <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" v-if="selectedStageId" class="fixed inset-0 z-50 flex items-start justify-end" @click.self="selectedStageId = null">
     <div class="h-full w-full max-w-md overflow-y-auto border-l bg-card p-6 shadow-lg">
       <div class="mb-6 flex items-center justify-between">
-        <h2 class="text-base font-semibold">Stage Details</h2>
+        <h2 class="text-base font-semibold">{{ $t('views.StageBoardView.stage_details') }}</h2>
         <button
           data-testid="stage-board-detail-close"
           :aria-label="'Close stage details'"
@@ -236,7 +236,7 @@
       <template v-if="selectedStageDetail">
         <dl class="space-y-4 text-sm">
           <div>
-            <dt class="text-muted-foreground">Name</dt>
+            <dt class="text-muted-foreground">{{ $t('views.StageBoardView.name') }}</dt>
             <dd>
               <template v-if="editingNameStageId === selectedStageDetail.id">
                 <input
@@ -257,11 +257,11 @@
             </dd>
           </div>
           <div v-if="selectedStageDetail.description">
-            <dt class="text-muted-foreground">Description</dt>
+            <dt class="text-muted-foreground">{{ $t('views.StageBoardView.description') }}</dt>
             <dd class="text-sm">{{ selectedStageDetail.description }}</dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">Position</dt>
+            <dt class="text-muted-foreground">{{ $t('views.StageBoardView.position') }}</dt>
             <dd>
               <template v-if="editingPositionStageId === selectedStageDetail.id">
                 <div class="flex items-center gap-2">
@@ -286,7 +286,7 @@
             </dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">Visibility</dt>
+            <dt class="text-muted-foreground">{{ $t('views.StageBoardView.visibility') }}</dt>
             <dd>
               <span
                 class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
@@ -297,16 +297,16 @@
             </dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">Connected Pipelines</dt>
+            <dt class="text-muted-foreground">{{ $t('views.StageBoardView.connected_pipelines') }}</dt>
             <dd>{{ stagePipelineCount(selectedStageDetail.id) }}</dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">Created</dt>
+            <dt class="text-muted-foreground">{{ $t('views.StageBoardView.created') }}</dt>
             <dd>{{ formatDate(selectedStageDetail.created_at) }}</dd>
           </div>
         </dl>
         <div class="mt-6 rounded-lg border bg-muted/30 p-4">
-          <h4 class="mb-2 text-sm font-medium">Connected Pipelines</h4>
+          <h4 class="mb-2 text-sm font-medium">{{ $t('views.StageBoardView.connected_pipelines') }}</h4>
           <ul class="space-y-1.5">
             <li
               v-for="p in connectedPipelines"
@@ -315,7 +315,7 @@
             >
               {{ p.name }}
             </li>
-            <li v-if="connectedPipelines.length === 0" class="text-xs text-muted-foreground">No pipelines assigned</li>
+            <li v-if="connectedPipelines.length === 0" class="text-xs text-muted-foreground">{{ $t('views.StageBoardView.no_pipelines_assigned') }}</li>
           </ul>
         </div>
       </template>
@@ -323,10 +323,10 @@
   </div>
   <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" v-if="showCreateDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreateDialog = false">
     <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-      <h3 class="mb-4 text-base font-semibold">Create New Stage</h3>
+      <h3 class="mb-4 text-base font-semibold">{{ $t('views.StageBoardView.create_new_stage') }}</h3>
       <div class="space-y-4">
         <div>
-          <label for="stageboardview-field-4" class="mb-1 block text-sm font-medium">Name</label>
+          <label for="stageboardview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.StageBoardView.name') }}</label>
           <input id="stageboardview-field-4"
             v-model="createName"
             data-testid="stage-board-create-name"
@@ -335,7 +335,7 @@
           />
         </div>
         <div>
-          <label for="stageboardview-field-3" class="mb-1 block text-sm font-medium">Description</label>
+          <label for="stageboardview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.StageBoardView.description') }}</label>
           <textarea id="stageboardview-field-3"
             v-model="createDescription"
             data-testid="stage-board-create-description"
@@ -345,7 +345,7 @@
           />
         </div>
         <div>
-          <label for="stageboardview-field-2" class="mb-1 block text-sm font-medium">Position</label>
+          <label for="stageboardview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.StageBoardView.position') }}</label>
           <input id="stageboardview-field-2"
             v-model.number="createPosition"
             type="number"
@@ -355,14 +355,14 @@
           />
         </div>
         <div>
-          <label for="stageboardview-field-1" class="mb-1 block text-sm font-medium">Visibility</label>
+          <label for="stageboardview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.StageBoardView.visibility') }}</label>
           <Select :model-value="createVisibility" @update:model-value="createVisibility = String($event)">
             <SelectTrigger class="w-full" aria-label="Visibility" data-testid="stage-board-create-visibility">
               <SelectValue placeholder="Select visibility" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="org">Org</SelectItem>
-              <SelectItem value="team">Team</SelectItem>
+              <SelectItem value="org">{{ $t('views.StageBoardView.org') }}</SelectItem>
+              <SelectItem value="team">{{ $t('views.StageBoardView.team') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -392,7 +392,7 @@
   <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" v-if="selectedPipeline" class="fixed inset-0 z-50 flex items-start justify-end" @click.self="selectedPipeline = null">
     <div class="h-full w-full max-w-md overflow-y-auto border-l bg-card p-6 shadow-lg">
       <div class="mb-6 flex items-center justify-between">
-        <h2 class="text-base font-semibold">Pipeline Details</h2>
+        <h2 class="text-base font-semibold">{{ $t('views.StageBoardView.pipeline_details') }}</h2>
         <button
           data-testid="stage-board-pipeline-close"
           class="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -403,30 +403,30 @@
       </div>
       <dl class="space-y-4 text-sm">
         <div>
-          <dt class="text-muted-foreground">Name</dt>
+          <dt class="text-muted-foreground">{{ $t('views.StageBoardView.name') }}</dt>
           <dd class="font-medium">{{ selectedPipeline.name }}</dd>
         </div>
         <div v-if="selectedPipeline.description">
-          <dt class="text-muted-foreground">Description</dt>
+          <dt class="text-muted-foreground">{{ $t('views.StageBoardView.description') }}</dt>
           <dd>{{ selectedPipeline.description }}</dd>
         </div>
         <div>
-          <dt class="text-muted-foreground">Status</dt>
+          <dt class="text-muted-foreground capitalize">{{ $t('views.StageBoardView.status') }}</dt>
           <dd>
             <span
               class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize"
               :class="statusBadgeClass(selectedPipeline.status || 'idle')"
             >
-              {{ selectedPipeline.status || 'idle' }}
+              <span class="capitalize">{{ selectedPipeline.status || 'idle' }}</span>
             </span>
           </dd>
         </div>
         <div>
-          <dt class="text-muted-foreground">Stage</dt>
+          <dt class="text-muted-foreground">{{ $t('views.StageBoardView.stage') }}</dt>
           <dd>{{ stageName(selectedPipeline.stage_id) || 'Unassigned' }}</dd>
         </div>
         <div>
-          <dt class="text-muted-foreground">Created</dt>
+          <dt class="text-muted-foreground">{{ $t('views.StageBoardView.created') }}</dt>
           <dd>{{ formatDate(selectedPipeline.created_at) }}</dd>
         </div>
       </dl>

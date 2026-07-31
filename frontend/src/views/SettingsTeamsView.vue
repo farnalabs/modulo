@@ -18,10 +18,10 @@
 
     <div v-if="!loading && !error">
       <div v-if="showCreateForm" class="card p-6">
-        <h2 class="mb-4 text-base font-semibold">New Team</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsTeamsView.new_team') }}</h2>
         <div class="space-y-4">
           <div>
-            <label for="settingsteamsview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <label for="settingsteamsview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTeamsView.name') }}</label>
             <input id="settingsteamsview-field-2"
               v-model="createName"
               type="text"
@@ -31,7 +31,7 @@
             />
           </div>
           <div>
-            <label for="settingsteamsview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <label for="settingsteamsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTeamsView.description') }}</label>
             <textarea id="settingsteamsview-field-1"
               v-model="createDescription"
               rows="2"
@@ -54,8 +54,8 @@
       </div>
 
       <div v-if="teams.length === 0" class="card p-8 text-center">
-        <p class="text-lg font-medium">No teams yet</p>
-        <p class="mt-1 text-sm text-muted-foreground">Create your first team to organize members and resources.</p>
+        <p class="text-lg font-medium">{{ $t('views.SettingsTeamsView.no_teams_yet') }}</p>
+        <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.SettingsTeamsView.create_your_first_team_to_organize_members_and_resources') }}</p>
       </div>
 
       <div class="space-y-3">
@@ -89,7 +89,7 @@
 
             <div v-if="deleteConfirmTeamId === team.id" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4">
               <p class="text-sm font-medium text-destructive">Delete "{{ team.name }}"?</p>
-              <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
+              <p class="mt-1 text-sm text-destructive/80">{{ $t('views.SettingsTeamsView.this_action_cannot_be_undone') }}</p>
               <div class="mt-3 flex items-center gap-2">
                 <button :disabled="deletingTeam" data-testid="settings-teams-delete-confirm" class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50" @click="deleteTeam(team.id)">
                   {{ deletingTeam ? 'Deleting...' : 'Delete' }}
@@ -101,14 +101,14 @@
               </div>
             </div>
 
-            <h3 class="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Members</h3>
+            <h3 class="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.SettingsTeamsView.members') }}</h3>
 
             <div v-if="membersLoading[team.id]" class="flex items-center justify-center py-4">
               <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
             </div>
             <div v-else-if="membersError[team.id]" class="mb-3 text-sm text-destructive">
               {{ membersError[team.id] }}
-              <button class="ml-2 underline" data-testid="settings-teams-members-retry" @click="loadMembers(team.id)">Retry</button>
+              <button class="ml-2 underline" data-testid="settings-teams-members-retry" @click="loadMembers(team.id)">{{ $t('views.SettingsTeamsView.retry') }}</button>
             </div>
             <div v-else>
               <div v-if="membersByTeam[team.id]?.length === 0" class="py-4 text-center text-sm text-muted-foreground">
@@ -117,10 +117,10 @@
               <table v-else class="w-full text-sm">
                 <thead>
                   <tr class="border-b text-left text-muted-foreground">
-                    <th class="pb-2 font-medium">Name</th>
-                    <th class="pb-2 font-medium">Email</th>
-                    <th class="pb-2 font-medium">Role</th>
-                    <th class="pb-2 font-medium">Actions</th>
+                    <th class="pb-2 font-medium">{{ $t('views.SettingsTeamsView.name') }}</th>
+                    <th class="pb-2 font-medium">{{ $t('views.SettingsTeamsView.email') }}</th>
+                    <th class="pb-2 font-medium">{{ $t('views.SettingsTeamsView.role') }}</th>
+                    <th class="pb-2 font-medium">{{ $t('views.SettingsTeamsView.actions') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -133,9 +133,9 @@
                           <SelectValue placeholder="Select role" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="viewer">Viewer</SelectItem>
-                          <SelectItem value="runner">Runner</SelectItem>
-                          <SelectItem value="operator">Operator</SelectItem>
+                          <SelectItem value="viewer">{{ $t('views.SettingsTeamsView.viewer') }}</SelectItem>
+                          <SelectItem value="runner">{{ $t('views.SettingsTeamsView.runner') }}</SelectItem>
+                          <SelectItem value="operator">{{ $t('views.SettingsTeamsView.operator') }}</SelectItem>
                         </SelectContent>
                       </Select>
                     </td>
@@ -163,9 +163,9 @@
                   <SelectValue placeholder="Select role" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="viewer">Viewer</SelectItem>
-                  <SelectItem value="runner">Runner</SelectItem>
-                  <SelectItem value="operator">Operator</SelectItem>
+                  <SelectItem value="viewer">{{ $t('views.SettingsTeamsView.viewer') }}</SelectItem>
+                  <SelectItem value="runner">{{ $t('views.SettingsTeamsView.runner') }}</SelectItem>
+                  <SelectItem value="operator">{{ $t('views.SettingsTeamsView.operator') }}</SelectItem>
                 </SelectContent>
               </Select>
               <Button :disabled="!addMemberUserId || addingMember" data-testid="settings-teams-add-member-submit" @click="addMember(team.id)">
@@ -187,7 +187,7 @@
               {{ memberActionError[team.id] }}
             </div>
 
-            <h3 class="mb-3 mt-6 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Webhook Notifications</h3>
+            <h3 class="mb-3 mt-6 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.SettingsTeamsView.webhook_notifications') }}</h3>
             <TeamNotificationEndpoints :team-id="team.id" />
           </div>
         </div>

@@ -11,8 +11,8 @@
       <!-- MCP Server Status -->
       <Card>
         <CardHeader>
-          <CardTitle>MCP Server Status</CardTitle>
-          <CardDescription>The URL clients use to connect to the MCP server</CardDescription>
+          <CardTitle>{{ $t('views.SettingsMcpView.mcp_server_status') }}</CardTitle>
+          <CardDescription>{{ $t('views.SettingsMcpView.the_url_clients_use_to_connect_to_the_mcp_server') }}</CardDescription>
         </CardHeader>
         <CardContent class="space-y-4">
           <div
@@ -28,7 +28,7 @@
 
           <div class="flex items-center justify-between rounded-lg bg-muted/30 p-4">
             <div class="min-w-0 flex-1">
-              <p class="text-sm font-medium">Server URL</p>
+              <p class="text-sm font-medium">{{ $t('views.SettingsMcpView.server_url') }}</p>
               <p class="mt-0.5 select-all cursor-text font-mono text-sm text-muted-foreground">{{ mcpUrl || 'http://localhost:8000' }}</p>
             </div>
             <div class="flex shrink-0 items-center gap-2">
@@ -52,8 +52,8 @@
       <Card>
         <CardHeader class="flex flex-row items-center justify-between">
           <div>
-            <CardTitle>API Keys</CardTitle>
-            <CardDescription>Create and manage API keys for MCP client authentication</CardDescription>
+            <CardTitle>{{ $t('views.SettingsMcpView.api_keys') }}</CardTitle>
+            <CardDescription>{{ $t('views.SettingsMcpView.create_and_manage_api_keys_for_mcp_client_authentication') }}</CardDescription>
           </div>
           <Button data-testid="settings-mcp-create-key" @click="openCreateKeyDialog">
             Create MCP API Key
@@ -67,11 +67,11 @@
           <table v-else class="w-full text-sm">
             <thead>
               <tr class="border-b text-left text-muted-foreground">
-                <th class="pb-2 font-medium">Name</th>
-                <th class="pb-2 font-medium">Key Prefix</th>
-                <th class="pb-2 font-medium">Role</th>
-                <th class="pb-2 font-medium">Status</th>
-                <th class="pb-2 font-medium">Last Used</th>
+                <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.name') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.key_prefix') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.role') }}</th>
+                <th class="pb-2 font-medium capitalize">{{ $t('views.SettingsMcpView.status') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.last_used') }}</th>
                 <th class="pb-2 font-medium" />
               </tr>
             </thead>
@@ -108,28 +108,28 @@
       <!-- Config Snippets -->
       <Card>
         <CardHeader>
-          <CardTitle>Configuration Snippets</CardTitle>
-          <CardDescription>Copy these snippets to configure MCP clients</CardDescription>
+          <CardTitle>{{ $t('views.SettingsMcpView.configuration_snippets') }}</CardTitle>
+          <CardDescription>{{ $t('views.SettingsMcpView.copy_these_snippets_to_configure_mcp_clients') }}</CardDescription>
         </CardHeader>
         <CardContent class="space-y-4">
           <div class="flex items-center gap-2">
-            <label for="settingsmcpview-client" class="text-sm font-medium whitespace-nowrap">Client:</label>
+            <label for="settingsmcpview-client" class="text-sm font-medium whitespace-nowrap">{{ $t('views.SettingsMcpView.client') }}:</label>
             <Select v-model="selectedMcpClient">
               <SelectTrigger id="settingsmcpview-client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Client">
                 <SelectValue placeholder="Select client" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="opencode">opencode / Claude Code</SelectItem>
-                <SelectItem value="claude">Claude Desktop</SelectItem>
-                <SelectItem value="cursor">Cursor</SelectItem>
-                <SelectItem value="continue">Continue.dev</SelectItem>
-                <SelectItem value="custom">Custom</SelectItem>
+                <SelectItem value="claude">{{ $t('views.SettingsMcpView.claude_desktop') }}</SelectItem>
+                <SelectItem value="cursor">{{ $t('views.SettingsMcpView.cursor') }}</SelectItem>
+                <SelectItem value="continue">{{ $t('views.SettingsMcpView.continue_dev') }}</SelectItem>
+                <SelectItem value="custom">{{ $t('views.SettingsMcpView.custom') }}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div class="rounded-lg bg-muted/30 p-4">
             <pre class="text-xs font-mono whitespace-pre-wrap break-all">{{ mcpConfigSnippet }}</pre>
-            <Button variant="outline" size="sm" class="mt-2" @click="copySnippet">Copy</Button>
+            <Button variant="outline" size="sm" class="mt-2" @click="copySnippet">{{ $t('views.SettingsMcpView.copy') }}</Button>
           </div>
         </CardContent>
       </Card>
@@ -137,12 +137,12 @@
       <!-- Registered OAuth Clients -->
       <Card>
         <CardHeader>
-          <CardTitle>Registered OAuth Clients</CardTitle>
-          <CardDescription>MCP OAuth client applications registered for token-based auth</CardDescription>
+          <CardTitle>{{ $t('views.SettingsMcpView.registered_oauth_clients') }}</CardTitle>
+          <CardDescription>{{ $t('views.SettingsMcpView.mcp_oauth_client_applications_registered_for_token_based_auth') }}</CardDescription>
         </CardHeader>
         <CardContent class="space-y-4">
-          <p class="text-sm text-muted-foreground">Configure OAuth client applications for MCP token-based auth.</p>
-          <Button variant="outline" size="sm" disabled>Register OAuth Client (coming in v0.4)</Button>
+          <p class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.configure_oauth_client_applications_for_mcp_token_based_auth') }}</p>
+          <Button variant="outline" size="sm" disabled>{{ $t('views.SettingsMcpView.register_oauth_client_coming_in_v04') }}</Button>
         </CardContent>
       </Card>
     </template>
@@ -158,7 +158,7 @@
     >
       <div class="space-y-4 py-2">
         <div>
-          <label for="settingsmcpview-field-2" class="mb-1 block text-sm font-medium">Key Name</label>
+          <label for="settingsmcpview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsMcpView.key_name') }}</label>
           <input id="settingsmcpview-field-2"
             v-model="createKeyName"
             type="text"
@@ -170,17 +170,17 @@
           <p
             v-if="createKeyNameTouched && !createKeyName.trim()"
             class="mt-1 text-sm text-destructive"
-          >Key name is required.</p>
+          >{{ $t('views.SettingsMcpView.key_name_is_required') }}</p>
         </div>
         <div>
-          <label for="settingsmcpview-role" class="mb-1 block text-sm font-medium">Role</label>
+          <label for="settingsmcpview-role" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsMcpView.role') }}</label>
           <Select v-model="createKeyRole">
             <SelectTrigger id="settingsmcpview-role" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Role" data-testid="settings-mcp-create-key-role">
               <SelectValue placeholder="Select role" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="operator">Operator</SelectItem>
-              <SelectItem value="runner">Runner</SelectItem>
+              <SelectItem value="operator">{{ $t('views.SettingsMcpView.operator') }}</SelectItem>
+              <SelectItem value="runner">{{ $t('views.SettingsMcpView.runner') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -198,7 +198,7 @@
         </DialogHeader>
         <div class="space-y-4 py-2">
           <div>
-            <p class="mb-1 text-sm font-medium">Key Name</p>
+            <p class="mb-1 text-sm font-medium">{{ $t('views.SettingsMcpView.key_name') }}</p>
             <p class="text-sm text-muted-foreground">{{ createdKeyName }}</p>
           </div>
           <div>
@@ -226,7 +226,7 @@
           </div>
         </div>
         <DialogFooter class="gap-2 sm:justify-end">
-          <Button @click="keyCreatedDialogOpen = false">Done</Button>
+          <Button @click="keyCreatedDialogOpen = false">{{ $t('views.SettingsMcpView.done') }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
