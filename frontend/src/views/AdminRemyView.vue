@@ -805,7 +805,7 @@ const availableProviders = ref<{ native: ProviderInfo[]; customTypes: ProviderIn
 })
 
 const { data: configData, loading: configLoading, load: loadConfig } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/remy/config'),
+  () => api.GET('/api/v1/admin/remy/config'),
   { immediate: false }
 )
 
@@ -843,7 +843,7 @@ const contextSaving = ref(false)
 const contextError = ref<string | null>(null)
 
 const { data: contextSourcesData, loading: contextSourcesLoading, load: loadContextSources } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/remy/context-sources'),
+  () => api.GET('/api/v1/admin/remy/context-sources'),
   { immediate: false }
 )
 
@@ -1096,7 +1096,7 @@ async function saveContextSource(sourceKey: string) {
   contextError.value = null
   try {
     const mode = contextSources.value[sourceKey]
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/context-sources/{source_key}', {
+    const { error: err } = await api.PUT('/api/v1/admin/remy/context-sources/{source_key}', {
       params: { path: { source_key: sourceKey } },
       body: { source_mode: mode },
     })
@@ -1117,7 +1117,7 @@ async function saveSkillSourceMode(skill: SkillItem) {
   skillModeSaving.value[skill.id] = true
   try {
     const mode = skillModes.value[skill.id] || 'tool'
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/context-sources/{source_key}', {
+    const { error: err } = await api.PUT('/api/v1/admin/remy/context-sources/{source_key}', {
       params: { path: { source_key: skill.id } },
       body: { source_mode: mode },
     })
@@ -1152,7 +1152,7 @@ async function regeneratePrimer() {
 }
 
 const { data: usersResp, loading: usersLoading, load: loadUsers } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/users', { params: { query: { page_size: 1000 } as any } }),
+  () => api.GET('/api/v1/admin/users', { params: { query: { page_size: 1000 } } }),
   { immediate: false }
 )
 
@@ -1165,7 +1165,7 @@ watch(() => usersResp.value, (data) => {
 })
 
 const { data: teamsResp, loading: teamsLoading, load: loadTeams } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/teams', { params: { query: { page_size: 1000 } as any } }),
+  () => api.GET('/api/v1/admin/teams', { params: { query: { page_size: 1000 } } }),
   { immediate: false }
 )
 
@@ -1191,7 +1191,7 @@ async function toggleSkillActive(skill: SkillItem) {
   skillToggling.value[skill.id] = true
   skillError.value = null
   try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/skills/{skill_id}', {
+    const { error: err } = await api.PUT('/api/v1/admin/remy/skills/{skill_id}', {
       params: { path: { skill_id: skill.id } },
       body: { active: !skill.active },
     })
@@ -1216,7 +1216,7 @@ function initSkillModes() {
 }
 
 const { data: skillsResp, loading: skillsLoading, load: loadSkills } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/remy/skills'),
+  () => api.GET('/api/v1/admin/remy/skills'),
   { immediate: false }
 )
 
@@ -1228,20 +1228,20 @@ watch(() => skillsResp.value, (data) => {
 })
 
 const { data: providersResp, loading: providersRespLoading, load: loadAvailableProviders } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/remy/available-providers'),
+  () => api.GET('/api/v1/admin/remy/available-providers'),
   { immediate: false }
 )
 
 watch(() => providersResp.value, (data) => {
   if (data) {
-    availableProviders.value = data as { native: ProviderInfo[]; customTypes: ProviderInfo[] }
+    availableProviders.value = data as unknown as { native: ProviderInfo[]; customTypes: ProviderInfo[] }
   }
 })
 
 async function loadProviders() {
   providersLoading.value = true
   try {
-    const { data, error: err } = await (api as any).GET('/api/v1/model-backends', {
+    const { data, error: err } = await api.GET('/api/v1/model-backends', {
       params: { query: { page_size: 100 } },
     })
     if (err) {
