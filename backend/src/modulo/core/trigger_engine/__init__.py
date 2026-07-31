@@ -308,11 +308,13 @@ class TriggerEngine:
                 )
                 raise DuplicateWebhookError(payload_hash)
 
-            # Flood / concurrency protection
+            # Flood / concurrency protection — accept and queue instead of rejecting.
+            # The run is created as pending and the executor queues it via
+            # _check_capacity / _retry_pending, so webhooks never get 429s.
             active_count = await self._count_active_runs(session, trigger.id)
             if active_count >= trigger.max_concurrent_runs:
                 _log.warning(
-                    "Webhook concurrency limit reached for trigger %s (%d active >= %d limit)",
+                    "Webhook concurrency limit reached for trigger %s (%d active >= %d limit) — queuing anyway",
                     trigger_id,
                     active_count,
                     trigger.max_concurrent_runs,
@@ -322,9 +324,8 @@ class TriggerEngine:
                     trigger=trigger,
                     org_id=org_id,
                     payload_hash=payload_hash,
-                    result="concurrency_limit_reached",
+                    result="concurrency_limit_reached_queued",
                 )
-                raise ConcurrentRunLimitError(trigger_id, trigger.max_concurrent_runs)
 
             # Payload mapping
             mapping: dict[str, str] = cfg.get("payload_mapping", {})
