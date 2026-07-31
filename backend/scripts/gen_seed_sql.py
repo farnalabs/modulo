@@ -17,3 +17,27 @@ for t in templates:
     slug_esc = t.slug.replace("'", "''")
     category_esc = content.get("category", "").replace("'", "''")
 
+    print(
+        "INSERT INTO library_primitives "
+        "(id, organisation_id, name, slug, description, primitive_type, "
+        "author, version, visibility, source, tags, content_json, "
+        "account_id, auto_update, category, created_at, updated_at) "
+        "VALUES ("
+        f"'{t.id}', "
+        f"'{ORG_ID}', "
+        f"'{name_esc}', "
+        f"'{slug_esc}', "
+        f"'{desc_esc}', "
+        "'pipeline_template', "
+        "'modulo', "
+        "'1.0', "
+        "'community', "
+        "'modulo', "
+        f"'{tags_json}'::json, "
+        f"'{content_json}'::json, "
+        "(SELECT id FROM accounts ORDER BY created_at LIMIT 1), "
+        "false, "
+        f"'{category_esc}', "
+        "NOW(), NOW()"
+        ") ON CONFLICT (id) DO NOTHING;"
+    )

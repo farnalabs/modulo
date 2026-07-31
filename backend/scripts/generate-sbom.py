@@ -167,7 +167,7 @@ def main():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(output + "\n", encoding="utf-8")
     else:
-        pass
+        print(output)
 
 
 if __name__ == "__main__":

@@ -454,7 +454,7 @@ async def main() -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(primer, encoding="utf-8")
     else:
-        pass
+        print(primer)
 
 
 if __name__ == "__main__":

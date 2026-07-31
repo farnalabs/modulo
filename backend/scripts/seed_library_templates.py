@@ -5,6 +5,7 @@ Usage:
 """
 
 import asyncio
+import sys
 import uuid
 
 from sqlalchemy import select
@@ -34,6 +35,7 @@ async def seed() -> None:
                 )
             ).scalar_one_or_none()
             if existing is not None:
+                print(f"  SKIP  {template.name} — already exists", file=sys.stderr)
                 continue
 
             await create_library_primitive(
@@ -60,9 +62,11 @@ async def seed() -> None:
                 visibility="org",
                 account_id=ACCOUNT_ID,
             )
+            print(f"  CREATED  {template.name}", file=sys.stderr)
 
         await session.commit()
     await engine.dispose()
+    print(f"\nSeeded {len(templates)} pipeline template definitions.", file=sys.stderr)
 
 
 if __name__ == "__main__":

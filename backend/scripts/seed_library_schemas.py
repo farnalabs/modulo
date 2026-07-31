@@ -5,6 +5,7 @@ Usage:
 """
 
 import asyncio
+import sys
 import uuid
 
 from sqlalchemy import select
@@ -33,6 +34,7 @@ async def seed() -> None:
                 )
             ).scalar_one_or_none()
             if existing is not None:
+                print(f"  SKIP  {entry['name']} — already exists", file=sys.stderr)
                 continue
 
             schema = await create_schema(
@@ -52,9 +54,11 @@ async def seed() -> None:
                 account_id=ACCOUNT_ID,
                 published=True,
             )
+            print(f"  CREATED  {entry['name']}", file=sys.stderr)
 
         await session.commit()
     await engine.dispose()
+    print(f"\nSeeded {len(SCHEMAS)} library schema definitions.", file=sys.stderr)
 
 
 if __name__ == "__main__":
