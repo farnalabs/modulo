@@ -198,4 +198,4 @@ Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gat
 - [ ] No BDD scenarios for non-approver claim, team-scoped gate claim denial, or gate listing with permissions.
 - [ ] Claim expiry job resets run status from "claimed" to "awaiting_human" (`expiry_job.py:116-121`) — but the initial run status set by the executor is "awaiting_human", not "claimed". The status "claimed" is set by the HITL claim API, not the executor. The status reset path relies on this API setting, which is not tested at BDD level.
 - [ ] Post-run suite check in executor.py queries eval_results from a fresh session — it may not see results from the streaming run if the session isn't yet committed. The run status update and suite check run in the same transaction block after the streaming session is closed.
-- [ ] No integration test for the full eval-before-interrupt → suite check → eval_failed chain end-to-end. 
+- [ ] No integration test for the full eval-before-interrupt → suite check → eval_failed chain end-to-end.

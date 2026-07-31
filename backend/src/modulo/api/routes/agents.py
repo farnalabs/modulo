@@ -261,6 +261,7 @@ async def list_agents_endpoint(
             await set_rls_org(session, principal.organisation_id)
             result = await list_agents(session, page=page, page_size=page_size)
     except ProgrammingError:
+        _log.exception("agents.list_agents_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -329,11 +330,13 @@ async def create_agent_endpoint(
                 required_environment_capabilities=req.required_environment_capabilities,
             )
     except IntegrityError:
+        _log.exception("agents.create_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Referenced schema version or model backend not found. Verify the IDs are correct.",
         ) from None
     except ProgrammingError:
+        _log.exception("agents.create_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -365,6 +368,7 @@ async def get_agent_endpoint(
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
     except ProgrammingError:
+        _log.exception("agents.get_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -399,6 +403,7 @@ async def update_agent_endpoint(
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
     except ProgrammingError:
+        _log.exception("agents.update_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -436,11 +441,13 @@ async def update_agent_endpoint(
             await set_rls_org(session, principal.organisation_id)
             updated = await update_agent(session, agent_id, updates)
     except IntegrityError:
+        _log.exception("agents.update_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("agents.update_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -482,6 +489,7 @@ async def optimize_prompt(
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
     except ProgrammingError:
+        _log.exception("agents.optimize_prompt")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -503,6 +511,7 @@ async def optimize_prompt(
                 session, req.eval_result_ids, principal.organisation_id
             )
     except ProgrammingError:
+        _log.exception("agents.optimize_prompt")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -532,6 +541,7 @@ async def optimize_prompt(
                 )
             )
     except ProgrammingError:
+        _log.exception("agents.optimize_prompt")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -620,11 +630,13 @@ async def apply_optimized_prompt(
                 eval_result_ids=req.eval_result_ids,
             )
     except IntegrityError:
+        _log.exception("agents.apply_optimized_prompt")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("agents.apply_optimized_prompt")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -658,6 +670,7 @@ async def list_prompt_versions(
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
     except ProgrammingError:
+        _log.exception("agents.list_prompt_versions")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -703,6 +716,7 @@ async def get_prompt_version_endpoint(
             await set_rls_org(session, principal.organisation_id)
             entry = await get_prompt_version(session, agent_id, version)
     except ProgrammingError:
+        _log.exception("agents.get_prompt_version_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -744,11 +758,13 @@ async def rollback_prompt(
             await set_rls_org(session, principal.organisation_id)
             agent = await rollback_prompt_version(session, agent_id, version)
     except IntegrityError:
+        _log.exception("agents.rollback_prompt")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("agents.rollback_prompt")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -789,6 +805,7 @@ async def diff_prompt_versions(
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
     except ProgrammingError:
+        _log.exception("agents.diff_prompt_versions")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -918,11 +935,13 @@ async def delete_agent_endpoint(
             await set_rls_org(session, principal.organisation_id)
             deleted = await delete_agent(session, agent_id)
     except IntegrityError:
+        _log.exception("agents.delete_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("agents.delete_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
