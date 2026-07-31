@@ -12,10 +12,10 @@ import logging
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, WithJsonSchema, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -118,11 +118,15 @@ class PipelineUpdate(BaseModel):
     run_context_defaults: dict[str, Any] | None = None
     default_autonomy_level: str | None = None
     max_duration_seconds: int | None = Field(None, ge=1)
-    stale_run_timeout_minutes: int | None = Field(
-        None,
-        ge=1,
-        description="Override the stale-run timeout for this pipeline.",
-    )
+    stale_run_timeout_minutes: Annotated[
+        int | None,
+        Field(
+            None,
+            ge=1,
+            description="Override the stale-run timeout for this pipeline.",
+        ),
+        WithJsonSchema({"type": "integer", "minimum": 1}),
+    ] = None
 
     @field_validator("stale_run_timeout_minutes", mode="before")
     @classmethod

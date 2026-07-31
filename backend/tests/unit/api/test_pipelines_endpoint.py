@@ -699,6 +699,14 @@ def test_update_pipeline_accepts_stale_run_timeout(client: TestClient) -> None:
     assert update.await_args.args[2]["stale_run_timeout_minutes"] == 45
 
 
+def test_update_pipeline_openapi_schema_not_nullable() -> None:
+    patch_schema = app.openapi()["components"]["schemas"]["PipelineUpdate"]["properties"]["stale_run_timeout_minutes"]
+
+    assert patch_schema["type"] == "integer"
+    assert "anyOf" not in patch_schema
+    assert patch_schema.get("nullable") is not True
+
+
 # ---------------------------------------------------------------------------
 # DELETE /api/v1/pipelines/{id}
 # ---------------------------------------------------------------------------
