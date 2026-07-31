@@ -292,6 +292,7 @@ async def clone_pipeline(
         run_context_defaults=copy.deepcopy(source.run_context_defaults),
         graph_nodes_json=copy.deepcopy(source.graph_nodes_json),
         default_autonomy_level=source.default_autonomy_level,
+        stale_run_timeout_minutes=source.stale_run_timeout_minutes,
     )
     session.add(cloned)
     await session.flush()

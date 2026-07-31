@@ -687,7 +687,7 @@ async def test_cleanup_stale_runs_kills_stale_runs_with_non_null_timeout() -> No
 async def test_background_worker_cleanup_kills_stale_runs() -> None:
     org_id = _ORG_ID
     stale_run_id = uuid.uuid4()
-    fresh_run_id = uuid.uuid4()
+    pending_run_id = uuid.uuid4()
 
     mock_session = _make_mock_session()
     mock_session.execute = AsyncMock(
@@ -695,7 +695,7 @@ async def test_background_worker_cleanup_kills_stale_runs() -> None:
             [(org_id,)],
             [
                 (stale_run_id, "running", 30),
-                (fresh_run_id, "pending", 30),
+                (pending_run_id, "pending", 30),
             ],
         ]
     )
@@ -723,7 +723,7 @@ async def test_background_worker_cleanup_kills_stale_runs() -> None:
 
     assert killed == 2
     mock_cancel.assert_any_await(mock_session, stale_run_id, error_code="stale_run_killed")
-    mock_cancel.assert_any_await(mock_session, fresh_run_id, error_code="stale_run_killed")
+    mock_cancel.assert_any_await(mock_session, pending_run_id, error_code="stale_run_killed")
     mock_rls.assert_awaited_once_with(mock_session, org_id)
 
 
