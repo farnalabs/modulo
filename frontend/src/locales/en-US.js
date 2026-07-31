@@ -25,6 +25,7 @@ export default {
     },
     "LibraryView": {
       "title": "Library",
+      "all_types": "All types",
       "failed_to_load_primitives": "Failed to load modules",
       "test_fixtures": "Test Fixtures",
       "failed_to_toggle_autoupdate": "Failed to toggle auto-update",
