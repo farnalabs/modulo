@@ -88,6 +88,26 @@ vi.mock('@/manifest.yaml', () => ({
         required_permissions: null,
         feature_flag: null,
       },
+      '/loop-a': {
+        name: 'loop-a',
+        breadcrumb: 'Loop A',
+        parent: '/loop-b',
+        testid: 'page-loop-a',
+        required_roles: null,
+        required_tier: 'community',
+        required_permissions: null,
+        feature_flag: null,
+      },
+      '/loop-b': {
+        name: 'loop-b',
+        breadcrumb: 'Loop B',
+        parent: '/loop-a',
+        testid: 'page-loop-b',
+        required_roles: null,
+        required_tier: 'community',
+        required_permissions: null,
+        feature_flag: null,
+      },
     },
   },
 }))
@@ -170,5 +190,18 @@ describe('Breadcrumb.vue', () => {
     expect(links.length).toBe(1)
     expect(links[0].text()).toBe('Dashboard')
     expect(current.text()).toBe('Onboarding')
+  })
+
+  it('terminates on cyclic parent chains using the visited set', async () => {
+    mockRoute.path = '/loop-a'
+    mockRoute.name = 'loop-a'
+    mockRoute.meta = { breadcrumb: 'Loop A' }
+
+    const wrapper = await mountBreadcrumb()
+    const links = wrapper.findAll('.breadcrumb-link')
+    const current = wrapper.find('.breadcrumb-current')
+
+    expect(current.text()).toBe('Loop A')
+    expect(links.map((l) => l.text())).toEqual(['Loop B'])
   })
 })

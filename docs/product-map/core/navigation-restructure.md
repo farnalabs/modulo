@@ -5,12 +5,18 @@ delivery-tasks: []
 bdd: []
 unit-tests:
   - frontend/src/__tests__/components/AppLayout.spec.ts
+  - frontend/src/__tests__/components/SidebarNav.spec.ts
+  - frontend/src/__tests__/components/SidebarGroup.spec.ts
+  - frontend/src/__tests__/components/SidebarLink.spec.ts
   - frontend/src/__tests__/navigation.spec.ts
+  - frontend/src/__tests__/navigation-errors.spec.ts
+  - frontend/src/__tests__/Breadcrumb.spec.ts
 code:
   - frontend/src/components/SidebarNav.vue
   - frontend/src/components/SidebarGroup.vue
   - frontend/src/components/SidebarLink.vue
   - frontend/src/components/AppLayout.vue
+  - frontend/src/components/Breadcrumb.vue
   - frontend/src/composables/useSidebar.ts
   - frontend/src/config/navigation.ts
   - frontend/src/manifest.yaml
@@ -20,11 +26,11 @@ status: partial
 
 # Navigation Restructure (Frontend UX)
 
-The frontend navigation system with sidebar groups, collapsible sections, expandable sub-items, and command palette search.
+The frontend navigation system with sidebar groups, collapsible sections, and command palette search.
 
 ## Architecture Decision
 
-See [ADR 017](../../adr/017-navigation-sidebar-restructure.md) for full rationale, UX research citations, and migration map.
+The sidebar was restructured from 11 groups into 4 (BUILD, MONITOR, CONFIGURE, ADMIN) with collapsible groups whose state persists to `localStorage`. Expandable sub-menus were removed in #373 — all routes render as top-level items within their group, sorted by `sidebar_order`. Groups and items are gated by role, tier, permission, visibility, and dev-mode.
 
 ## Behaviours
 
@@ -32,8 +38,8 @@ See [ADR 017](../../adr/017-navigation-sidebar-restructure.md) for full rational
 - [x] BUILD and MONITOR expanded by default (daily drivers)
 - [x] CONFIGURE and ADMIN collapsed by default (set-and-forget pages)
 - [x] Expand/collapse per group with chevron indicators, persisted to localStorage
-- [x] Expandable sub-items within groups (chevron on parent item shows children inline)
-- [x] Items without children navigate directly on click (one-click destinations)
+- [x] Groups render a flat list of top-level items (expandable sub-menus removed in #373; children are top-level items)
+- [x] Items navigate directly on click (one-click destinations)
 - [x] Bottom bar: user profile, team, dark mode toggle, sign out
 - [x] Search icon in header (Notification Bell area) opens Command Palette
 - [x] Command Palette (Cmd+K / Ctrl+K) indexes all sidebar items and extras
@@ -44,39 +50,43 @@ See [ADR 017](../../adr/017-navigation-sidebar-restructure.md) for full rational
 
 ## Error Handling
 
-- [ ] Malformed `manifest.yaml` causes `buildSidebarGroups()` to return empty array — sidebar renders blank
-- [ ] Route references non-existent `sidebar_group` — logged as `console.warn`, item skipped
-- [ ] JWT token missing `sub`, `org_role`, or `is_system_admin` claims — defaults to `""`, `null`, `false`
-- [ ] `localStorage` unavailable (private browsing, quota exceeded) — `useStorage` from `@vueuse/BUILD` catches silently, defaults used
-- [ ] Plan/tier fetch fails (`planStore.fetchPlan` catches with `.catch(() => {})`) — sidebar renders all tier-gated items as not visible
-- [ ] Expandable sub-item path does not exist in manifest — `subItemConfig` entry points to orphaned route
+- [x] Malformed `manifest.yaml` (missing `routes` or `sidebar_groups`) — `buildSidebarGroups()` returns empty array, `console.error` logged, sidebar renders blank
+- [x] Route references non-existent `sidebar_group` — logged as `console.warn`, item skipped
+- [x] Route name missing from `routeConfigMap` — falls back to generic `File` icon and `nav.<name>` labelKey
+- [x] JWT token missing `sub`, `org_role`, or `is_system_admin` claims — defaults to `""`, `null`, `false` (AppLayout.vue)
+- [x] `localStorage` unavailable (private browsing, quota exceeded) — `useStorage` from `@vueuse/core` catches and falls back to defaults (errors routed to vueuse `onError`)
+- [x] Plan/tier fetch fails (`fetchPlan` caught with `.catch(() => {})`) — sidebar renders all tier-gated items as hidden
+- [x] Route missing numeric `sidebar_order` — skipped by `isManifestRoute` guard (never rendered)
 
 ## Edge Cases
 
-- [ ] All sidebar groups hidden by tier/role — produces empty sidebar (no items in any group, filtered out by `g.items.length > 0`)
-- [ ] Single group with single item — renders one expandable group containing one link
-- [ ] Deep breadcrumb chain (6+ levels) — `Breadcrumb.vue` walks `parent` chain with `visited` Set to prevent infinite loops
-- [ ] Route path exactly `/` — sidebar groups use `item.exact` check to avoid `path.startsWith("/")` activating all groups
-- [ ] `sidebar_group` name mismatch between `manifest.yaml` route and `manifest.sidebar_groups` — logged as `console.warn`, item not rendered
-- [ ] Group with matching routes removed after being cached — `_cachedGroups` returns stale data until page reload (no invalidation mechanism)
-- [ ] `requiredRoles: []` (empty array) — `canSeeItem` returns `false` for all users (empty whitelist means no access)
-- [ ] Expandable sub-item with zero children — rendered as regular nav item (no expand chevron shown)
-- [ ] All children of an expandable item hidden by permissions — parent renders without expand chevron (no children visible)
+- [x] All sidebar groups hidden by tier/role — produces empty sidebar (groups filtered by `g.items.length > 0`)
+- [x] Single group with single item — renders one expandable group containing one link
+- [x] Deep breadcrumb chain or cyclic parent refs — `Breadcrumb.vue` walks `parent` chain with `visited` Set to prevent infinite loops
+- [x] Route path exactly `/` — sidebar groups use `item.exact` check to avoid `path.startsWith("/")` activating all groups
+- [x] `sidebar_group` name mismatch between `manifest.yaml` route and `manifest.sidebar_groups` — logged as `console.warn`, item not rendered
+- [x] Group with matching routes removed after being cached — `_cachedGroups` returns stale data until page reload (no invalidation mechanism)
+- [x] `requiredRoles: []` (empty array) — `canSeeItem` returns `false` for all users (empty whitelist means no access)
+- [x] Non-exact items activate their group for child paths — `path.startsWith(item.to)` matches nested routes
+- [x] Tier-gated item while plan is not yet loaded — `tierInfoLoaded` is false, item hidden until tiers arrive
 
 ## Security
 
-- [ ] Nav items gated by `requiredRoles` — only users with matching `org_role` see the link
-- [ ] Nav items gated by `requiredTier` — only orgs at that tier or above see the link
-- [ ] Nav items gated by `requiredPermissions` — only users with at least one matching permission see the link
-- [ ] System-admin-only groups (`systemAdminOnly`) — hidden from non-admin users
-- [ ] Expandable sub-items inherit parent's permission gating — children do not bypass parent restrictions
+- [x] Nav items gated by `requiredRoles` — only users with matching `org_role` see the link
+- [x] Nav items gated by `requiredTier` — only orgs at that tier or above see the link
+- [x] Nav items gated by `requiredPermissions` — only users with at least one matching permission see the link
+- [x] System-admin-only groups (`systemAdminOnly`) — hidden entirely for non-admin users (group-level gate; all items inherit)
+- [x] Visibility gating — `private_preview` / `in_dev` items hidden unless plan `devMode` is enabled
 
 ## Known Gaps
 
-- **No BDD coverage** — No `.feature` files for navigation behaviours (breadcrumbs, sidebar groups, view mode toggling, page tabs). Should be added under `tests/bdd/features/navigation/`.
-- **No SidebarNav unit tests** — `SidebarNav.vue` has no dedicated tests. `AppLayout.spec.ts` covers some sidebar link rendering but is limited.
-- **No expandable sub-item unit tests** — The collapse/expand logic for sidebar sub-items is untested.
+- **No BDD coverage (accepted)** — Navigation behaviours are covered by Vitest component/unit tests (`SidebarNav.spec.ts`, `SidebarGroup.spec.ts`, `SidebarLink.spec.ts`, `navigation.spec.ts`, `navigation-errors.spec.ts`, `Breadcrumb.spec.ts`). There is no pytest-bdd harness for Vue components, so a backend `.feature` file would not exercise the frontend code.
+- **No CommandPalette unit tests** — the Cmd+K palette indexing logic is untested.
+- **No SidebarFooter unit tests** — bottom-bar behaviours (profile, team, dark mode toggle, sign out) are asserted only via AppLayout smoke tests.
+- **`_cachedGroups` is never invalidated** — a runtime manifest change is not reflected until a full page reload (module-level cache in `config/navigation.ts`).
+- **`useSidebar` storage-quota path not asserted** — quota-exceeded writes route to vueuse `onError`; fallback defaults are tested only through `SidebarNav.spec.ts`.
 
 ## QA History
 
-- **2026-07-29 — Sidebar Restructure**: Replaced 11 groups with 4 (BUILD/MONITOR/CONFIGURE/ADMIN). Added expandable sub-items. Removed Essentials/All Features toggle. Added search button in header. Added Command Palette. See ADR 017 for full rationale and UX research.
+- **2026-07-31 — improve-architecture**: Verified 20 previously-unchecked Error Handling / Edge Case / Security behaviours against code and marked `[x]`. Added `SidebarNav.spec.ts` (10 tests), `SidebarGroup.spec.ts` (4), `SidebarLink.spec.ts` (3), `navigation-errors.spec.ts` (3), a breadcrumb cycle-protection test, and empty-whitelist `canSeeItem` edge cases in `navigation.spec.ts`. Fixed a broken ADR reference (pointed at a non-existent `017-navigation-sidebar-restructure.md`; ADR 017 is the Celery→SAQ migration). Aligned the entry with the current flat-list design (expandable sub-menus removed in #373).
+- **2026-07-29 — Sidebar Restructure**: Replaced 11 groups with 4 (BUILD/MONITOR/CONFIGURE/ADMIN). Added expandable sub-items. Removed Essentials/All Features toggle. Added search button in header. Added Command Palette.
