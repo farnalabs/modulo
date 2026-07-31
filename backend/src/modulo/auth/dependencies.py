@@ -130,9 +130,16 @@ async def get_current_tenant_user_or_api_key(
 
     API keys are the documented credential for CI/CD and external agents
     (PRD §9.3 / §5.2): ``runner`` keys can trigger runs and call read
-    endpoints; ``operator`` keys additionally approve HITL gates. This
-    dependency is only wired into run trigger/read routes — write endpoints
-    keep requiring a user JWT so API keys cannot modify pipelines.
+    endpoints; ``operator`` keys are reserved for future HITL-approval
+    wiring. This dependency is only wired into ``trigger_run`` and
+    ``get_run_status`` — the HITL-approval routes (``observe_run_node``,
+    ``recover_run_node``) and other write endpoints still require a user
+    JWT, so API keys cannot approve gates or modify pipelines.
+
+    Note that team-scoped keys (``team_id`` set) behave like org-wide keys
+    here: ``TenantPrincipal`` carries no team info and these routes do not
+    call ``set_rls_user_context``, so team restriction is not enforced for
+    run trigger/read — consistent with the existing user-JWT behaviour.
 
     API keys are resolved with an RLS-disabled prefix lookup (the key's org is
     unknown until the record is read) and re-validated inside the key's org
@@ -194,8 +201,8 @@ async def get_current_tenant_user_or_api_key(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database temporarily unavailable.",
             ) from None
-        if key.role not in ("runner", "operator"):
-            raise InvalidToken()
+        # Role is guaranteed to be "runner"/"operator" by the
+        # ck_org_api_keys_role DB constraint; no runtime check needed.
         return TenantPrincipal(
             username=key.name,
             organisation_id=key.organisation_id,

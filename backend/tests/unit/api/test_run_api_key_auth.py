@@ -105,7 +105,7 @@ async def test_api_key_invalid_raises_401() -> None:
 
 
 @pytest.mark.asyncio
-async def test_api_key_admin_role_is_rejected() -> None:
+async def test_api_key_operator_role_principal_is_accepted() -> None:
     settings = get_settings()
     with (
         patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
@@ -113,13 +113,17 @@ async def test_api_key_admin_role_is_rejected() -> None:
             "modulo.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(_make_session()),
         ),
-        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("admin")),
-        pytest.raises(InvalidToken),
+        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
     ):
-        await get_current_tenant_user_or_api_key(
+        principal = await get_current_tenant_user_or_api_key(
             credentials=_credentials(_KEY),
             settings=settings,
         )
+
+    assert principal.organisation_id == _ORG_ID
+    assert principal.account_id == _USER_ID
+    assert principal.org_role == "operator"
+    assert principal.is_system_admin is False
 
 
 @pytest.mark.asyncio
