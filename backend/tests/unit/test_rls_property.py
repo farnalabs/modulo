@@ -1,203 +1,131 @@
 """Hypothesis property-based tests for RLS/authz deny-by-default and cross-tenant isolation.
 
 The thesis: "One leaked cross-org row invalidates the entire pitch."
-Tests generate (org, role, resource, operation) tuples asserting deny-by-default,
-and fuzz cross-tenant access attempts.
+These tests property-fuzz the generic-backend ORM tenant filter
+(``_inject_tenant_filter``) and the org/team RBAC hierarchy, asserting the
+deny-by-default invariant holds for arbitrary inputs:
+
+* any SELECT/UPDATE/DELETE touching an org-scoped entity receives a tenant
+  predicate bound to the *caller's* org_id — and only those statements;
+* no tenant predicate is injected without an org context, for INSERTs, or for
+  entities that are not org-scoped;
+* effective team role is capped at the lower of the org and team privilege
+  levels, and unknown roles fall back to ``viewer``.
 """
 
 from __future__ import annotations
 
 import uuid
+from unittest.mock import MagicMock
 
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
+from sqlalchemy import Column, Integer, Uuid
+from sqlalchemy.orm import declarative_base
 
-from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, TEAM_ROLE_HIERARCHY, get_effective_team_role
+from modulo.db.rls import _inject_tenant_filter, set_rls_org
 
-# ── Resource/model type strategies ─────────────────────────────────────────
-
-RESOURCE_TYPES = ("pipeline", "schema", "connector", "model_backend")
-OPERATIONS = ("create", "read", "update", "delete", "list")
-ROLES = tuple(ORG_ROLE_HIERARCHY.keys())
-
-
-def _resource_id() -> st.SearchStrategy[uuid.UUID]:
-    return st.uuids()
+_Base = declarative_base()
 
 
-def _org_id() -> st.SearchStrategy[uuid.UUID]:
-    return st.uuids()
+class OrgScopedEntity(_Base):
+    """Mapped entity carrying an ``organisation_id`` column."""
+
+    __tablename__ = "org_scoped_entity"
+
+    id = Column(Integer, primary_key=True)
+    organisation_id = Column(Uuid)
 
 
-# ── Deny-by-default strategy ───────────────────────────────────────────────
+class NonOrgEntity(_Base):
+    """Mapped entity with no ``organisation_id`` column."""
 
-deny_by_default_strategy = st.tuples(
-    _org_id(),
-    st.sampled_from(ROLES),
-    st.sampled_from(RESOURCE_TYPES),
-    st.sampled_from(OPERATIONS),
-)
+    __tablename__ = "non_org_entity"
+
+    id = Column(Integer, primary_key=True)
+
+
+_ORG_SCOPED_ENTITY = OrgScopedEntity
+_NON_ORG_ENTITY = NonOrgEntity
+_ENTITY_POOL = (_ORG_SCOPED_ENTITY, _NON_ORG_ENTITY, None, object)
+_INJECTABLE_KINDS = ("select", "update", "delete")
+
+
+def _is_org_scoped(entity: object) -> bool:
+    return entity is _ORG_SCOPED_ENTITY
+
+
+class _Mapper:
+    """Stand-in for a SQLAlchemy mapper exposing ``class_``."""
+
+    def __init__(self, entity: object) -> None:
+        self.class_ = entity
+
+
+def _make_state(*, org_id: uuid.UUID | None, kind: str, entities: list) -> MagicMock:
+    state = MagicMock()
+    state.session.info = {}
+    if org_id is not None:
+        state.session.info["org_id"] = org_id
+    state.is_select = kind == "select"
+    state.is_update = kind == "update"
+    state.is_delete = kind == "delete"
+    state.statement = MagicMock()
+    # Chain injected predicates onto the same mock so call_count reflects
+    # the number of tenant predicates applied, not just the first one.
+    state.statement.where.return_value = state.statement
+    if kind == "select":
+        state.statement.column_descriptions = [{"entity": e} for e in entities]
+    elif kind in ("update", "delete"):
+        state.all_mapper_classes = [_Mapper(e) for e in entities]
+    return state
 
 
 @settings(
-    max_examples=50,
-    suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much],
+    max_examples=150,
+    suppress_health_check=[HealthCheck.too_slow],
     deadline=None,
 )
-@given(deny_by_default_strategy)
-def test_deny_by_default_isolation(triple: tuple[uuid.UUID, str, str, str]) -> None:
-    """Access from org A to org A's own resources should be permitted (baseline)."""
-    _org_id, role, resource, operation = triple
-    assume(role in ORG_ROLE_HIERARCHY)
-
-    if (
-        (resource in ("pipeline", "schema") and operation in ("read", "list"))
-        or (resource == "connector" and operation in ("read", "list"))
-        or (resource == "model_backend" and role in ("operator", "admin"))
-        or (resource == "model_backend" and operation in ("read", "list"))
-    ):
-        assert True
-    else:
-        pass
-
-
-# ── Cross-tenant isolation strategies ──────────────────────────────────────
-
-cross_tenant_strategy = st.tuples(
-    _org_id(),
-    _org_id(),
-    st.sampled_from(ROLES),
-    st.sampled_from(RESOURCE_TYPES),
-    st.sampled_from(OPERATIONS),
-    _resource_id(),
+@given(
+    org_id=st.uuids() | st.none(),
+    kind=st.sampled_from(("select", "update", "delete", "insert")),
+    entities=st.lists(st.sampled_from(_ENTITY_POOL), min_size=0, max_size=5),
 )
-
-
-@settings(
-    max_examples=100,
-    suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much],
-    deadline=None,
-)
-@given(cross_tenant_strategy)
-def test_cross_tenant_access_rejected(
-    sextuple: tuple[uuid.UUID, uuid.UUID, str, str, str, uuid.UUID],
+def test_tenant_filter_injection_invariant(
+    org_id: uuid.UUID | None,
+    kind: str,
+    entities: list,
 ) -> None:
-    """Access from org A to org B's resource must be rejected by RLS.
+    """A tenant predicate is injected iff an org context exists AND an
+    org-scoped entity is touched by a SELECT/UPDATE/DELETE."""
+    state = _make_state(org_id=org_id, kind=kind, entities=entities)
+    org_scoped_count = sum(1 for e in entities if _is_org_scoped(e))
+    expect_injection = org_id is not None and kind in _INJECTABLE_KINDS and org_scoped_count > 0
 
-    If a single cross-org row is accessible, the entire multi-tenant isolation
-    model is broken.
-    """
-    attacker_org, victim_org, role, _resource, _operation, _resource_id = sextuple
-    assume(attacker_org != victim_org)
-    assume(role in ORG_ROLE_HIERARCHY)
+    _inject_tenant_filter(state)
 
-    assert attacker_org != victim_org, f"Cross-tenant test requires different orgs, got {attacker_org} == {victim_org}"
-
-
-# ── SQL injection via tenant ID ────────────────────────────────────────────
-
-
-@settings(
-    max_examples=50,
-    suppress_health_check=[HealthCheck.too_slow],
-    deadline=None,
-)
-@given(st.text(min_size=1, max_size=100))
-def test_org_id_sanitized(injection: str) -> None:
-    """Malicious org_id values must not bypass tenant scoping."""
-    try:
-        uuid.UUID(injection)
-        valid_uuid = True
-    except (ValueError, AttributeError):
-        valid_uuid = False
-
-    if not valid_uuid:
-        assert True
-
-
-# ── Role-level access matrix (exhaustive) ──────────────────────────────────
-
-
-def _access_allowed(role: str, resource: str, operation: str) -> bool:
-    """Encode the access matrix inline for property-based validation."""
-    if role == "viewer":
-        return operation in ("read", "list")
-    if role == "runner":
-        return True
-    if role == "operator":
-        return True
-    return role == "admin"
-
-
-@settings(
-    max_examples=20,
-    suppress_health_check=[HealthCheck.too_slow],
-    deadline=None,
-)
-@given(
-    st.sampled_from(ROLES),
-    st.sampled_from(RESOURCE_TYPES),
-    st.sampled_from(OPERATIONS),
-)
-def test_role_access_matrix(role: str, resource: str, operation: str) -> None:
-    """Verify the access matrix property: viewer can only read/list."""
-    allowed = _access_allowed(role, resource, operation)
-    if role == "viewer":
-        assert not allowed or operation in ("read", "list"), f"viewer should not be able to {operation} {resource}"
+    if expect_injection:
+        assert state.statement.where.call_count == org_scoped_count, (
+            f"expected {org_scoped_count} tenant predicate(s) for kind={kind} "
+            f"entities={entities!r}, got {state.statement.where.call_count}"
+        )
+        predicate = state.statement.where.call_args[0][0]
+        assert predicate.left.name == "organisation_id"
+        assert predicate.right.value == org_id
     else:
-        pass
+        assert state.statement.where.call_count == 0, (
+            f"unexpected tenant injection for org_id={org_id} kind={kind} entities={entities!r}"
+        )
 
 
-# ── Cross-tenant via resource ID collision ─────────────────────────────────
-
-
-@settings(
-    max_examples=50,
-    suppress_health_check=[HealthCheck.too_slow],
-    deadline=None,
-)
-@given(
-    st.sampled_from(RESOURCE_TYPES),
-    st.sampled_from(OPERATIONS),
-)
-def test_resource_id_does_not_leak_org(resource: str, operation: str) -> None:
-    """Resource IDs alone must not be sufficient to access data across orgs."""
-    assume(operation in ("read", "update", "delete"))
-
-    shared_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-    attacker_org = uuid.UUID("11111111-1111-1111-1111-111111111111")
-    victim_org = uuid.UUID("22222222-2222-2222-2222-222222222222")
-
-    assert attacker_org != victim_org
-    assert shared_id is not None
-    assert True, (
-        f"Attempted to {operation} {resource} {shared_id} from {attacker_org} "
-        f"belonging to {victim_org} — RLS must reject"
-    )
-
-
-# ── Blanket deny: no resource type grants default access to all roles ──────
-
-
-@settings(
-    max_examples=20,
-    suppress_health_check=[HealthCheck.too_slow],
-    deadline=None,
-)
-@given(
-    st.sampled_from(RESOURCE_TYPES),
-    st.sampled_from(("viewer", "runner")),
-)
-def test_low_privilege_roles_cannot_write(resource: str, role: str) -> None:
-    """Low-privilege roles (viewer, runner) cannot write to any resource."""
-    for op in ("create", "update", "delete"):
-        if role == "viewer":
-            assert True
-        elif resource == "model_backend" and role == "runner" and op == "create":
-            pass
-
-
-# ── Org-scope parameter tampering property ─────────────────────────────────
+def test_no_org_context_never_injects() -> None:
+    """Explicit guard for the deny-by-default baseline: without an org in
+    ``session.info`` no tenant predicate may ever be injected."""
+    for kind in ("select", "update", "delete", "insert"):
+        state = _make_state(org_id=None, kind=kind, entities=[_ORG_SCOPED_ENTITY])
+        _inject_tenant_filter(state)
+        assert state.statement.where.call_count == 0, f"injected without org context for kind={kind}"
 
 
 @settings(
@@ -206,16 +134,58 @@ def test_low_privilege_roles_cannot_write(resource: str, role: str) -> None:
     deadline=None,
 )
 @given(
-    st.text(min_size=0, max_size=50),
-    st.sampled_from(RESOURCE_TYPES),
+    org_role=st.sampled_from(sorted(ORG_ROLE_HIERARCHY)),
+    team_role=st.sampled_from(sorted(TEAM_ROLE_HIERARCHY)),
 )
-def test_org_id_tampering(org_id_str: str, resource: str) -> None:
-    """Arbitrary org_id strings in API requests must not leak data."""
-    if not org_id_str.strip():
-        assert True
+def test_effective_team_role_level_is_min_of_org_and_team(org_role: str, team_role: str) -> None:
+    """The effective team role never exceeds either the org or team level."""
+    effective = get_effective_team_role(org_role, team_role)
+    expected = min(ORG_ROLE_HIERARCHY[org_role], TEAM_ROLE_HIERARCHY[team_role])
+    assert TEAM_ROLE_HIERARCHY[effective] == expected
 
-    try:
-        parsed = uuid.UUID(org_id_str)
-        _ = parsed
-    except (ValueError, AttributeError):
-        assert True
+
+@settings(
+    max_examples=50,
+    suppress_health_check=[HealthCheck.too_slow],
+    deadline=None,
+)
+@given(st.text(min_size=1, max_size=20))
+def test_unknown_roles_fall_back_to_viewer(role_name: str) -> None:
+    """Unrecognised org or team roles must degrade to ``viewer``."""
+    assume(role_name not in ORG_ROLE_HIERARCHY and role_name not in TEAM_ROLE_HIERARCHY)
+    assert get_effective_team_role(role_name, "viewer") == "viewer"
+    assert get_effective_team_role("viewer", role_name) == "viewer"
+    assert get_effective_team_role(role_name, role_name) == "viewer"
+
+
+def test_org_role_hierarchy_is_contiguous_total_order() -> None:
+    levels = sorted(ORG_ROLE_HIERARCHY.values())
+    assert levels == list(range(len(levels)))
+
+
+def test_team_role_hierarchy_is_contiguous_total_order() -> None:
+    levels = sorted(TEAM_ROLE_HIERARCHY.values())
+    assert levels == list(range(len(levels)))
+
+
+async def test_set_rls_org_none_is_noop() -> None:
+    """``set_rls_org(None)`` (system admin, no org claim) must not touch the
+    session — no ``set_config`` call and no ``session.info`` scoping."""
+    session = MagicMock()
+    session.info = {}
+    session.in_transaction.return_value = True
+    bind = MagicMock()
+    bind.dialect.name = "postgresql"
+    session.get_bind = _async_returning(bind)
+
+    await set_rls_org(session, None)
+
+    session.execute.assert_not_called()
+    assert "org_id" not in session.info
+
+
+def _async_returning(value: object):
+    async def _get() -> object:
+        return value
+
+    return _get
