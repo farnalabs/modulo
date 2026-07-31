@@ -126,3 +126,17 @@ def test_fernet_key_required_when_backend_is_fernet():
 def test_empty_key_raises_value_error():
     with pytest.raises(ValueError, match="non-empty"):
         validate_key("")
+
+
+def test_none_key_raises_value_error():
+    with pytest.raises(ValueError, match="non-empty"):
+        validate_key(None)  # type: ignore[arg-type]
+
+
+def test_whitespace_key_raises_value_error():
+    with pytest.raises(ValueError, match="non-empty"):
+        validate_key("   ")
+
+
+def test_validate_key_strips_whitespace():
+    assert validate_key("  my-key  ") == "my-key"
