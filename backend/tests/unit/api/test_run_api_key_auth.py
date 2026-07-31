@@ -16,6 +16,15 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _KEY = "mk_12345678_" + "x" * 32
 
 
+def _make_session() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
 class _FakeFactory:
     def __init__(self, session: AsyncMock) -> None:
         self._session = session
@@ -50,7 +59,7 @@ async def test_api_key_runner_principal_is_accepted() -> None:
         patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()) as engine_patch,
         patch(
             "modulo.api.dependencies.get_or_create_session_factory",
-            return_value=_FakeFactory(AsyncMock()),
+            return_value=_FakeFactory(_make_session()),
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")) as validate_patch,
     ):
@@ -76,7 +85,7 @@ async def test_api_key_invalid_raises_401() -> None:
         patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
             "modulo.api.dependencies.get_or_create_session_factory",
-            return_value=_FakeFactory(AsyncMock()),
+            return_value=_FakeFactory(_make_session()),
         ),
         patch("modulo.auth.api_key.validate_api_key", side_effect=ApiKeyInvalidError("bad key")),
         pytest.raises(InvalidToken),
@@ -94,7 +103,7 @@ async def test_api_key_admin_role_is_rejected() -> None:
         patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
             "modulo.api.dependencies.get_or_create_session_factory",
-            return_value=_FakeFactory(AsyncMock()),
+            return_value=_FakeFactory(_make_session()),
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("admin")),
         pytest.raises(InvalidToken),
