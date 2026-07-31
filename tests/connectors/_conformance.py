@@ -2,6 +2,10 @@
 
 This lives in the same package as the test files so it can be imported
 unambiguously regardless of pytest's conftest handling.
+
+NOTE: This module has a sibling copy for standalone root-level test collection
+(under tests/connectors/ and backend/tests/connectors/). Keep all copies of this
+file byte-identical.
 """
 
 from typing import Any
