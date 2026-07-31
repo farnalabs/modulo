@@ -119,7 +119,7 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [x] run_post_correction_eval raises specific exceptions: FeedbackRecordNotFoundError, InvalidTransitionError for each precondition violation
 - [x] run_post_correction_eval catches exceptions from engine.standalone_evaluate() � calls _escalate_record on eval crash (fixed in earlier QA sweep)
 - [x] spawn_correction_run raises FeedbackRecordNotFoundError for missing record AND FeedbackManagerError for missing run
-- [x] All 9 API routes have ProgrammingError ? 501 mapping, tested in test_feedback_programming_error.py
+- [x] All 9 API routes have ProgrammingError ? 501 mapping, tested in test_error_handling.py
 - [x] Create feedback validates empty rejection_reason (ValidationError) and unknown handler_type (ValidationError)
 - [x] update_status validates transitions via _VALID_STATUS_TRANSITIONS with descriptive error message
 - [x] HITL reject path (/hitl/{gate_id}/reject) does NOT create a FeedbackRecord � feedback records are created exclusively via the explicit POST /runs/{run_id}/feedback endpoint

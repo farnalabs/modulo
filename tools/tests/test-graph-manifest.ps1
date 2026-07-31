@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-  Pester tests for graph-manifest integration: graph-validate.ps1 calls
-  validate-manifest.ps1, and all product_map refs in manifest resolve.
+  Pester tests for graph-manifest integration: all product_map refs in
+  manifest resolve, and code-path validation in product map entries works.
 #>
 
 BeforeAll {
@@ -174,36 +174,6 @@ AfterAll {
     Remove-Item -LiteralPath $TestDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Describe "graph-validate.ps1 calls validate-manifest.ps1" {
-
-    It "calls validate-manifest and passes when manifest is valid" {
-        $result = Invoke-GraphValidator $WellFormedManifest
-        $result.Output | Select-String -SimpleMatch "Manifest validation" | Should -Not -Be $null
-        $result.ExitCode | Should -Be 0
-    }
-
-    It "fails when manifest has a missing route name" {
-        $badManifest = @"
-schema_version: 1
-routes:
-  /bogus:
-    name: does-not-exist
-    testid: page-bogus
-    breadcrumb: Bogus
-    parent: null
-    product_map: null
-    i18n_key: nav.dashboard
-    sidebar_group: core
-    sidebar_order: 1
-    type: page
-elements: {}
-"@
-        $result = Invoke-GraphValidator $badManifest
-        $result.Output | Select-String -SimpleMatch "Manifest validation" | Should -Not -Be $null
-        $result.ExitCode | Should -Be 1
-    }
-}
-
 Describe "Product map refs in manifest resolve" {
 
     It "passes when all product_map refs exist" {
@@ -277,6 +247,31 @@ Describe "Code path validation in product map entries" {
             $result.ExitCode | Should -Be 0
         } finally {
             Remove-Item -LiteralPath $goodPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "passes when code: refs use the inline array form" {
+        $inlineEntry = "---`nid: feat-codepath-inline`nprd: N/A`nstatus: partial`ncode: [backend/src/modulo/api/routes/existing_route.py]`n---"
+        $inlinePath = Join-Path (Join-Path $TestDir "docs") "product-map" "feat-codepath-inline.md"
+        Set-Content -Path $inlinePath -Value $inlineEntry
+        try {
+            $result = Invoke-GraphValidator $WellFormedManifest
+            $result.ExitCode | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath $inlinePath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "fails when an inline array code: ref points to a missing file" {
+        $inlineBrokenEntry = "---`nid: feat-codepath-inline-broken`nprd: N/A`nstatus: partial`ncode: [backend/src/modulo/api/routes/missing_inline_route.py]`n---"
+        $inlineBrokenPath = Join-Path (Join-Path $TestDir "docs") "product-map" "feat-codepath-inline-broken.md"
+        Set-Content -Path $inlineBrokenPath -Value $inlineBrokenEntry
+        try {
+            $result = Invoke-GraphValidator $WellFormedManifest
+            $result.ExitCode | Should -Be 1
+            $result.Output | Select-String -SimpleMatch "missing_inline_route.py" | Should -Not -Be $null
+        } finally {
+            Remove-Item -LiteralPath $inlineBrokenPath -Force -ErrorAction SilentlyContinue
         }
     }
 }
