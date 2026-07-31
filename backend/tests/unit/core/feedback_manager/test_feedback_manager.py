@@ -92,6 +92,16 @@ class TestCreateFeedbackRecord:
         assert record.feedback_status == "pending"
         assert record.feedback_handler_type == "human"
         mock_session.add.assert_called_once()
+        added = mock_session.add.call_args.args[0]
+        assert added.organisation_id == _ORG_ID
+        assert added.run_id == _RUN_ID
+        assert added.gate_id == _GATE_ID
+        assert added.account_id == _USER_ID
+        assert added.rejection_reason == "Wrong output"
+        assert added.rejected_output == {"result": "bad"}
+        assert added.producing_node_id == "node-b"
+        assert added.feedback_status == "pending"
+        assert added.feedback_handler_type == "human"
         mock_session.flush.assert_called_once()
 
     @pytest.mark.parametrize(

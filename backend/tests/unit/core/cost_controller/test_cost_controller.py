@@ -67,6 +67,12 @@ class TestGetOrCreateDailyCount:
         assert result.run_count == 0
         assert result.total_spend_usd == Decimal(0)
         mock_session.add.assert_called_once()
+        added = mock_session.add.call_args.args[0]
+        assert added.organisation_id == _ORG_ID
+        assert added.run_date == _TODAY
+        assert added.team_id is None
+        assert added.run_count == 0
+        assert added.total_spend_usd == Decimal(0)
         mock_session.flush.assert_awaited_once()
 
     async def test_creates_new_team_row(self, mock_session: AsyncMock) -> None:
@@ -78,6 +84,12 @@ class TestGetOrCreateDailyCount:
 
         assert result.team_id == _TEAM_ID
         mock_session.add.assert_called_once()
+        added = mock_session.add.call_args.args[0]
+        assert added.organisation_id == _ORG_ID
+        assert added.run_date == _TODAY
+        assert added.team_id == _TEAM_ID
+        assert added.run_count == 0
+        assert added.total_spend_usd == Decimal(0)
 
     async def test_uses_select_for_update(self, mock_session: AsyncMock) -> None:
         existing = _make_daily_count_row()

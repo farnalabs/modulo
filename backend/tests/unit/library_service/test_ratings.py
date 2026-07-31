@@ -310,17 +310,29 @@ class TestSubmitAbuseReport:
 
         mock_session.execute = execute_side
 
+        org_id = uuid.uuid4()
+        primitive_id = uuid.uuid4()
+        rating_id = uuid.uuid4()
+        reporter_account_id = uuid.uuid4()
+
         report = await submit_abuse_report(
             mock_session,
-            org_id=uuid.uuid4(),
-            primitive_id=uuid.uuid4(),
-            rating_id=uuid.uuid4(),
-            reporter_account_id=uuid.uuid4(),
+            org_id=org_id,
+            primitive_id=primitive_id,
+            rating_id=rating_id,
+            reporter_account_id=reporter_account_id,
             reason="This rating is inappropriate",
         )
         assert isinstance(report, PrimitiveAbuseReport)
         assert report.status == "pending"
         mock_session.add.assert_called_once()
+        added = mock_session.add.call_args.args[0]
+        assert added.organisation_id == org_id
+        assert added.primitive_id == primitive_id
+        assert added.rating_id == rating_id
+        assert added.reporter_account_id == reporter_account_id
+        assert added.reason == "This rating is inappropriate"
+        assert added.status == "pending"
         mock_session.flush.assert_awaited_once()
 
 
