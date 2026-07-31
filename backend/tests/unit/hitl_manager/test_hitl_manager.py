@@ -447,9 +447,7 @@ async def test_claim_membership_lost_between_check_and_update_undoes_claim():
     assert undo_values["account_id"] is None
     assert undo_values["claimed_at"] is None
     assert undo_values["claim_token"] is None
-    assert undo_values["expires_at"] is not None, (
-        "Undo UPDATE should settle expires_at (non-null) to release the claim"
-    )
+    assert undo_values["expires_at"] is not None, "Undo UPDATE should settle expires_at (non-null) to release the claim"
 
 
 async def test_claim_non_team_member_raises():
