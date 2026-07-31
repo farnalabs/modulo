@@ -56,6 +56,7 @@ class TestLocalRuntimeProvider:
 
     async def test_destroy_unknown_workspace(self, provider: LocalRuntimeProvider) -> None:
         await provider.destroy_workspace("nonexistent")
+        assert await provider.get_workspace_status("nonexistent") == "terminated"
 
     async def test_get_workspace_status(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec) -> None:
         ref = await provider.create_workspace(spec)

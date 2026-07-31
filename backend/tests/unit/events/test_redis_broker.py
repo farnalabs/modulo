@@ -166,6 +166,8 @@ async def test_close_is_idempotent():
     broker._pub = None
     broker._sub = None
     await broker.close()  # must not raise
+    assert broker._pub is None
+    assert broker._sub is None
 
 
 # ---------------------------------------------------------------------------

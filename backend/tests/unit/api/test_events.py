@@ -158,3 +158,5 @@ class TestEventBusSSEIntegration:
     async def test_publish_no_subscribers_does_not_raise(self):
         bus = get_event_bus()
         await bus.publish("org-empty", "run", "r1", "created", version=0)
+        # publishing to an org with no subscribers must not register a queue
+        assert bus._subscribers.get("org-empty") is None
