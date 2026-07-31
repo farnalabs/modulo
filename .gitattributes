@@ -21,4 +21,3 @@
 *.cmd text eol=crlf
 # Shell scripts must have LF line endings (CRLF breaks Linux execution)
 *.sh text eol=lf
-

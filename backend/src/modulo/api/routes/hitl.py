@@ -153,11 +153,13 @@ async def claim_gate(
             # Update run status to "claimed".
             await update_run_status(session, run_id, "claimed")
     except ProgrammingError as exc:
+        logger.exception("hitl.claim_gate")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("hitl.claim_gate")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -229,11 +231,13 @@ async def approve_gate(
             except ClaimTokenExpiredError as exc:
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
     except ProgrammingError as exc:
+        logger.exception("hitl.approve_gate")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("hitl.approve_gate")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -322,11 +326,13 @@ async def approve_gate_with_modification(
             except ClaimTokenExpiredError as exc:
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
     except ProgrammingError as exc:
+        logger.exception("hitl.approve_gate_with_modification")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("hitl.approve_gate_with_modification")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -412,11 +418,13 @@ async def reject_gate(
             except ClaimTokenExpiredError as exc:
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
     except ProgrammingError as exc:
+        logger.exception("hitl.reject_gate")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("hitl.reject_gate")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -510,11 +518,13 @@ async def deliver_manual_output(
             except ClaimTokenExpiredError as exc:
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
     except ProgrammingError as exc:
+        logger.exception("hitl.deliver_manual_output")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("hitl.deliver_manual_output")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -596,11 +606,13 @@ async def submit_manual_output(
             except NotTeamMemberError as exc:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ProgrammingError as exc:
+        logger.exception("hitl.submit_manual_output")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("hitl.submit_manual_output")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -676,11 +688,13 @@ async def list_run_pending_gates(
                 pipeline = await session.get(Pipeline, gates[0].pipeline_id)
                 pipeline_name = pipeline.name if pipeline else None
     except ProgrammingError as exc:
+        logger.exception("hitl.list_run_pending_gates")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("hitl.list_run_pending_gates")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -726,11 +740,13 @@ async def list_org_pending_gates(
                 for pid, pname in pipeline_rows.all():
                     pipeline_map[pid] = pname
     except ProgrammingError as exc:
+        logger.exception("hitl.list_org_pending_gates")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("hitl.list_org_pending_gates")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
