@@ -130,8 +130,10 @@ def _mock_rows(data: list[tuple[int, object, object, object]]) -> MagicMock:
 
 def _data_query_params(call: object) -> dict[str, object]:
     """Return the SQL parameter binding for a session.execute(text, params) call."""
-    args, _ = call.args, call.kwargs  # type: ignore[attr-defined]
-    return args[1]
+    args, kwargs = call.args, call.kwargs  # type: ignore[attr-defined]
+    if len(args) > 1:
+        return args[1]
+    return kwargs["params"]
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +319,8 @@ class TestGlobalSearchEndpoint:
         assert len(body["results"]) == 1
         assert body["results"][0]["id"] == str(pipe_id)
 
+        # Intentionally brittle: the LIMIT substring isolates the data query from the count
+        # query; this will fail loudly if the generated SQL shape changes.
         data_calls = [c for c in mock_db.execute.call_args_list if "LIMIT" in str(c.args[0])]
         assert len(data_calls) == 1
         params = _data_query_params(data_calls[0])
@@ -367,6 +371,8 @@ class TestGlobalSearchEndpoint:
         resp = client.get("/api/v1/admin/search?q=test")
         assert resp.status_code == 200
 
+        # Intentionally brittle: pins the exact query count (4 types x data+count queries);
+        # will fail loudly if the endpoint adds or removes queries.
         assert mock_db.execute.call_count == 8
         for call in mock_db.execute.call_args_list:
             params = _data_query_params(call)
