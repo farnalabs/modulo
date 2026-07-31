@@ -193,3 +193,35 @@ class TestListTriggerEvents:
     def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(self.URL)
         assert resp.status_code in (401, 403)
+
+    def _client_with_execute_error(self, client: TestClient, error: Exception) -> None:
+        session = _make_mock_session()
+        session.execute = AsyncMock(side_effect=error)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+
+    def test_programming_error_returns_501(self, client: TestClient) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+            self._client_with_execute_error(client, ProgrammingError("stmt", "params", Exception("boom")))
+            resp = client.get(self.URL)
+        assert resp.status_code == 501
+        assert "migration" in resp.json()["detail"].lower()
+
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+            self._client_with_execute_error(client, SQLAlchemyError("connection lost"))
+            resp = client.get(self.URL)
+        assert resp.status_code == 503
+
+    def test_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+            self._client_with_execute_error(client, RuntimeError("boom"))
+            resp = client.get(self.URL)
+        assert resp.status_code == 500
