@@ -1,5 +1,4 @@
 <template>
-  <FeatureGate feature-name="system_config" required-tier="team" show-disabled>
   <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('views.AdminSystemConfigView.system_admin_config')" :subtitle="$t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only')" />
@@ -52,12 +51,10 @@
       </table>
     </div>
   </div>
-  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import FeatureGate from '../components/FeatureGate.vue'
 import { Ref, ref, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'

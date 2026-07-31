@@ -1,5 +1,4 @@
 <template>
-  <FeatureGate feature-name="error_tracking" show-disabled>
   <PageTabs :tabs="[
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />
@@ -113,12 +112,10 @@
       </div>
     </template>
   </div>
-  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import FeatureGate from '../components/FeatureGate.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'

@@ -1,5 +1,4 @@
 <template>
-  <FeatureGate feature-name="notification_log" show-disabled>
     <div class="page-wide">
     <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries')" data-test-id="admin-notification-log-title" />
 
@@ -244,12 +243,10 @@
       </div>
     </template>
   </div>
-  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import FeatureGate from '../components/FeatureGate.vue'
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'

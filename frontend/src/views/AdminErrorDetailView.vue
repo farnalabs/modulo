@@ -1,5 +1,4 @@
 <template>
-  <FeatureGate feature-name="error_tracking" show-disabled>
   <BackLink to="/admin/errors" label="Back to Error Dashboard" />
   <div class="page-wide">
     <header class="flex items-center justify-between">
@@ -203,12 +202,10 @@
       </div>
     </template>
   </div>
-  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import FeatureGate from '../components/FeatureGate.vue'
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, type ErrorGroupDetail, type ErrorEventDetail } from '../lib/api/errors'
