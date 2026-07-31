@@ -115,16 +115,19 @@ async def create_api_key_endpoint(
                 expires_at=expires_at,
             )
     except IntegrityError:
+        logger.exception("api_keys.create_api_key_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("api_keys.create_api_key_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("api_keys.create_api_key_endpoint")
         logger.warning("create_api_key SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -161,11 +164,13 @@ async def list_api_keys_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             return await list_api_keys(session, principal.organisation_id)
     except ProgrammingError:
+        logger.exception("api_keys.list_api_keys_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("api_keys.list_api_keys_endpoint")
         logger.warning("list_api_keys SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -217,16 +222,19 @@ async def update_api_key_endpoint(
                 expires_at=expires_at,
             )
     except IntegrityError:
+        logger.exception("api_keys.update_api_key_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("api_keys.update_api_key_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("api_keys.update_api_key_endpoint")
         logger.warning(
             "update_api_key SQLAlchemyError",
             extra={"org_id": str(principal.organisation_id), "key_id": str(key_id)},
@@ -267,16 +275,19 @@ async def revoke_api_key_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             revoked = await revoke_api_key(session, key_id, principal.organisation_id)
     except IntegrityError:
+        logger.exception("api_keys.revoke_api_key_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("api_keys.revoke_api_key_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("api_keys.revoke_api_key_endpoint")
         logger.warning(
             "revoke_api_key SQLAlchemyError",
             extra={"org_id": str(principal.organisation_id), "key_id": str(key_id)},
