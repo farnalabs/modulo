@@ -17,18 +17,16 @@ code:
   - backend/src/modulo/api/routes/admin_orgs.py
   - backend/src/modulo/api/routes/admin.py
   - backend/src/modulo/api/routes/viewmodel.py
-  - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
-  - backend/src/modulo/db/migrations/versions/0002_rls_policies.py
-  - backend/src/modulo/db/migrations/versions/0015_org_deletion.py
+  - backend/src/modulo/db/migrations/versions/0001_v2_identity_org.py
+  - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
   - frontend/src/views/AdminOrgSettingsView.vue
 unit-tests:
   - backend/tests/unit/api/test_admin_orgs.py
   - backend/tests/unit/api/test_admin.py
-  - backend/tests/unit/api/test_org_deletion_bdd.py
+  - backend/tests/bdd/steps/test_org_deletion.py
   - backend/tests/unit/api/test_viewmodel_error_paths.py
   - backend/tests/unit/db/test_multi_backend_bdd.py
   - backend/tests/integration/crud/test_org_deletion.py
-  - backend/tests/unit/api/test_org_programming_error.py
   - frontend/src/__tests__/AdminOrgSettingsView.spec.ts
 depends-on:
   - feat-auth-jwt-auth
@@ -162,12 +160,12 @@ The Organisation entity is the root tenant entity in Modulo's multi-tenant archi
 - **Integration tests skipped**: All tests in `backend/tests/integration/crud/test_org_deletion.py` (14 tests) are marked `@pytest.mark.skip(reason="awaiting-implementation")` due to schema alignment issues.
 - **No `organisation exists` shared BDD step**: The step is only defined in library feature tests' conftest, not as a reusable fixture.
 - **No system admin orgs frontend page**: The nav link at `/admin/system/orgs` exists but no corresponding view is implemented.
-- **ProgrammingError→501 test coverage**: 15 new tests added in `test_org_programming_error.py` — these cover all route handlers but use mocking, not real DB interaction.
+- **ProgrammingError→501 test coverage**: The org programming-error tests (previously `test_org_programming_error.py`) were collapsed into parametrized patterns in `test_admin.py` during the test-suite reduction — they cover all route handlers but use mocking, not real DB interaction.
 - **No team-scoped org role cap BDD**: The PRD describes that an org-level `viewer` role cannot be elevated by a team-level `operator` role, but this isn't tested in any org-specific `.feature` file (tested in `rbac.feature` instead).
 - **RLS on organisations table**: Deliberately excluded from RLS. A system-admin bypass could enumerate org names. Acceptable by design.
 - **No `modulo-cloud` integration**: The modulo-cloud service layer (§6.2) is V3-deferred. Organisation lifecycle, plan enforcement, and subdomain routing are stubs.
 - **No Frontend smoke test for AdminOrgSettingsView**: The view has vitest tests but no Playwright E2E coverage.
-- **Website docs**: No docs page exists at Website/modulo-website/src/docs/organisation.md (stub created).
+- **Website docs**: `Website/modulo-website/src/docs/organisation.md` exists but is only a stub (title only, no content).
 - **Export summary key mismatch**: The `request_org_deletion` route in `admin.py` now uses `export.get("memberships", [])` for `user_count`, matching the CRUD export key. Fixed in 2026-07-06 QA pass.
 
 ## QA History
@@ -179,10 +177,14 @@ The Organisation entity is the root tenant entity in Modulo's multi-tenant archi
 - Added `except SQLAlchemyError → 503` with descriptive `_log.warning` detail messages to all 8 routes.
 
 **Test coverage added:**
-- Added 8 new SQLAlchemyError→503 tests in `test_org_programming_error.py` (3 test classes: `TestAdminOrgsSQLAlchemyError` with 7 routes, `TestAdminOrgProfileSQLAlchemyError` with 3 routes, `TestOrgDeletionSQLAlchemyError` with 5 routes).
+- Added 8 new SQLAlchemyError→503 tests (3 test classes: `TestAdminOrgsSQLAlchemyError` with 7 routes, `TestAdminOrgProfileSQLAlchemyError` with 3 routes, `TestOrgDeletionSQLAlchemyError` with 5 routes) — later collapsed into `test_admin.py` parametrized patterns in the test-suite reduction.
 
 **Product map updates:**
 - Added `SQLAlchemyError → 503 on all 15 DB-accessing route handlers` checkbox to Error Handling.
 - Added QA History section.
 
 All 23 org programming-error tests pass (15 ProgrammingError→501 + 8 SQLAlchemyError→503).
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE refs: `0001_initial_schema.py`/`0002_rls_policies.py`/`0015_org_deletion.py` renamed in v2 squash → `0001_v2_identity_org.py` + `0002_v2_teams_library.py`. Updated unit-test refs (org deletion tests now in `bdd/steps/test_org_deletion.py`; programming-error tests collapsed into `test_admin.py`).

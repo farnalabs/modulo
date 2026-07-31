@@ -1,4 +1,4 @@
-﻿name: "Fix: Modulo Branch Fixer"
+name: "Fix: Modulo Branch Fixer"
 
 on:
   workflow_dispatch:

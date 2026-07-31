@@ -5,11 +5,10 @@ delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/operations/run_retention.feature
 unit-tests:
-  - backend/tests/unit/cleanup_jobs/test_run_retention_cleanup.py
-  - backend/tests/unit/api/test_run_retention_bdd.py
+  - backend/tests/bdd/steps/test_run_retention.py
 code:
-  - backend/src/modulo/core/cleanup_jobs/run_retention_cleanup.py
-  - backend/src/modulo/core/cleanup_jobs/payload_cleanup.py
+  - backend/src/modulo/api/main.py
+  - backend/src/modulo/db/crud/run.py
   - backend/src/modulo/api/routes/admin.py
   - frontend/src/views/AdminRunRetentionView.vue
 depends-on: [feat-core-pipeline-execution]
@@ -77,3 +76,7 @@ Routes live in `backend/src/modulo/api/routes/admin.py` (not `admin_run_retentio
 - **Fixed (MAJOR):** Stale code frontmatter — `code:` referenced non-existent `admin_run_retention.py`. Actual routes are in `admin.py`.
 - **Fixed (MAJOR):** Stale docstring in `batch_delete_old_terminal_runs` — listed `(complete, failed, cancelled)` but code includes `eval_failed`.
 - **Fixed (MINOR):** Marked 3 resolved known gaps (eval_failed inclusion, completed_at/created_at sync, error handling chains) to match current code.
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE refs: cleanup jobs moved from `core/cleanup_jobs/` into `api/main.py` (`_run_retention_loop`) + `db/crud/run.py` (`batch_delete_old_terminal_runs`). Unit-test refs → `bdd/steps/test_run_retention.py` (only surviving test file).

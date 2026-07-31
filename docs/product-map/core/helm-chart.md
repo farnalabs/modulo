@@ -12,8 +12,8 @@ code:
   - Dockerfile.backend
   - frontend/Dockerfile.prod
   - frontend/Dockerfile
-  - .github/workflows/publish-images.yml
-  - .github/workflows/docker-build.yml
+  - .github/workflows/deploy.yml
+  - .github/workflows/ci.yml
   - backend/entrypoint.sh
 bdd: []
 depends-on: []
@@ -104,3 +104,7 @@ Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) an
 - **~50 advanced env vars still unexposed** via Helm configmap: OIDC/SAML vars (modulo_oidc_providers, modulo_saml_*), Vault credentials (vault_*), AWS credentials (aws_*), CORS max age, CSP monitor domains, SSE zombie timeout, FERNET_KEY_OLD. These are used only in edge-case configurations and can be added via `extraEnv` / `extraEnvFrom`.
 - **Vault/AWS secrets-backend credentials not in helm secrets**: MODULO_SECRETS_BACKEND=vault or =aws requires vault_*/aws_* env vars that are not in the chart's secrets template. Users must provide these via `extraEnvFrom` referencing their own Secrets.
 - ~~**Unused `modulo.databaseUrl` and `modulo.redisUrl` helper templates in `_helpers.tpl`**: These templates were defined but never invoked by any template — removed in Round 3 improve-architecture.~~
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE refs: `.github/workflows/publish-images.yml` and `docker-build.yml` were deleted in the dead-workflow cleanup → mapped to `.github/workflows/deploy.yml` and `.github/workflows/ci.yml` (the real image-build/deploy workflow).

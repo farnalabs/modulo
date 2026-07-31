@@ -13,10 +13,10 @@ code:
   - backend/src/modulo/db/rls.py
   - backend/src/modulo/db/crud/base.py
   - backend/src/modulo/db/crud/pagination.py
-  - backend/src/modulo/db/crud/*.py (41 modules)
-  - backend/src/modulo/db/models/*.py (57 model files)
+  - backend/src/modulo/db/crud/
+  - backend/src/modulo/db/models/
   - backend/src/modulo/db/migrations/env.py
-  - backend/src/modulo/db/migrations/versions/*.py (69 migrations)
+  - backend/src/modulo/db/migrations/versions/
   - backend/alembic.ini
   - backend/src/modulo/api/dependencies.py
   - backend/src/modulo/settings.py
@@ -29,7 +29,7 @@ unit-tests:
   - backend/tests/unit/db/test_rls_multibackend.py
   - backend/tests/unit/db/test_migration_remy_tables.py
   - backend/tests/unit/db/test_migration_team_visibility_rls.py
-  - backend/tests/unit/test_engine_pool_config.py
+  - backend/tests/unit/test_dependencies.py
   - backend/tests/integration/conftest.py
   - backend/tests/integration/crud/conftest.py
 depends-on: []
@@ -220,3 +220,7 @@ PRD §6.1 (Layered Architecture), §6.2 (SaaS-First Multi-Tenant).
 - Fixed B904: added `from None` to 2 `raise HTTPException` in `except ProgrammingError` blocks in `dependencies.py` (lines 123, 154).
 - Verified no CancelledError concerns (Python 3.12+), frontmatter clean (`prd: 6.1, 6.2`, `status: partial`), known gaps genuine, no dead code found.
 - All ruff checks pass.
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed bogus CODE refs: wildcard globs with counts (`*.py (41 modules)` etc.) replaced with real directory paths (`backend/src/modulo/db/crud/`, `models/`, `migrations/versions/`). Mapped `test_engine_pool_config.py` → `test_dependencies.py` (engine pool tests were consolidated there).

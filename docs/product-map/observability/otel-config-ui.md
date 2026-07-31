@@ -8,7 +8,7 @@ code:
   - backend/src/modulo/api/routes/observability.py
   - backend/src/modulo/db/crud/observability.py
   - backend/src/modulo/db/models/organisation.py
-  - backend/src/modulo/db/migrations/versions/0008_otel_config.py
+  - backend/src/modulo/db/migrations/versions/0001_v2_identity_org.py
   - backend/src/modulo/settings.py
   - frontend/src/views/SettingsObservabilityView.vue
   - frontend/src/lib/api/schema.ts
@@ -159,3 +159,7 @@ Settings page at `/settings/observability`.
 
 - **BDD step definitions are mock-only:** `otel_traces.feature` has 4 real scenarios and matching step definitions, but they use mock/patch rather than real DB or OTel exporter integration
 - **No website docs:** No observability/otel page exists under `Website/modulo-website/src/docs/`
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE ref: migration `0008_otel_config.py` renamed in v2 squash → `0001_v2_identity_org.py` (creates `organisations.otel_config_json`).

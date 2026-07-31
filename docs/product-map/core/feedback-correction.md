@@ -15,7 +15,7 @@ code:
 depends-on: [feat-evals-feedback-records, feat-evals-feedback-routing]
 unit-tests:
   - backend/tests/unit/api/test_feedback_endpoint.py
-  - backend/tests/unit/api/test_feedback_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
   - backend/tests/integration/feedback_manager/test_feedback_flow.py
 status: partial
@@ -115,7 +115,7 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 
 ### Findings fixed (index 75)
 - Added ProgrammingError→501 catch to all 9 feedback API route handlers
-- Added 9 unit tests for ProgrammingError handling (test_feedback_programming_error.py)
+- Added 9 unit tests for ProgrammingError handling (test_error_handling.py)
 - Updated frontmatter: unit-tests populated with 4 real test file refs
 - Removed stale known gap: "No BDD feature files for correction flow" (feedback_system.feature exists)
 - Added Error Handling section with 8 behaviour checkboxes
