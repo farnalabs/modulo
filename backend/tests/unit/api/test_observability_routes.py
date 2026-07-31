@@ -112,7 +112,10 @@ class TestObservabilityCache:
         assert _cached_config(_ORG_ID) is None
 
     def test_invalidate_unknown_org_does_not_raise(self) -> None:
+        _update_cache(_ORG_ID, {"otlp_endpoint": "http://collector:4318"})
         _invalidate_cache("nonexistent-org")
+        assert _cached_config("nonexistent-org") is None
+        assert _cached_config(_ORG_ID) is not None
 
     def test_cache_uses_org_id_isolation(self) -> None:
         org_a = str(uuid.uuid4())

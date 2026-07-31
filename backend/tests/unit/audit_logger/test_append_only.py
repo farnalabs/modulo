@@ -70,8 +70,11 @@ class TestAppendOnlyGuardRegistration:
 
     def test_register_idempotent(self):
         """Calling register multiple times should not error."""
+        from modulo.core.audit_logger import append_only
+
         register_append_only_guard()
         register_append_only_guard()
+        assert append_only._guard_registered is True
 
     def test_update_blocked_by_orm_listener(self):
         """UPDATE on an AuditEvent instance raises AppendOnlyViolationError."""

@@ -80,7 +80,10 @@ def test_unregister() -> None:
 
 def test_unregister_nonexistent_does_not_raise() -> None:
     hub = RuntimeProviderHub()
+    hub.register("docker", _StubProvider("docker"))
     hub.unregister("nope")  # should not raise
+    assert hub.get("docker") is not None
+    assert hub.get("nope") is None
 
 
 def test_list_providers_returns_copy() -> None:

@@ -74,7 +74,7 @@ class TestScopeEnforcement:
             check_tool_scope("viewer", "review_hitl", action="claim")
 
     def test_runner_can_claim_hitl(self) -> None:
-        check_tool_scope("runner", "review_hitl", action="claim")
+        assert check_tool_scope("runner", "review_hitl", action="claim") is None
 
     def test_viewer_cannot_approve_hitl(self) -> None:
         with pytest.raises(MCPAuthorizationError):
@@ -85,17 +85,17 @@ class TestScopeEnforcement:
             check_tool_scope("runner", "review_hitl", action="approve")
 
     def test_operator_can_approve_hitl(self) -> None:
-        check_tool_scope("operator", "review_hitl", action="approve")
+        assert check_tool_scope("operator", "review_hitl", action="approve") is None
 
     def test_admin_can_approve_hitl(self) -> None:
-        check_tool_scope("admin", "review_hitl", action="approve")
+        assert check_tool_scope("admin", "review_hitl", action="approve") is None
 
     def test_runner_cannot_create_pipeline(self) -> None:
         with pytest.raises(MCPAuthorizationError):
             check_tool_scope("runner", "create_pipeline")
 
     def test_operator_can_create_pipeline(self) -> None:
-        check_tool_scope("operator", "create_pipeline")
+        assert check_tool_scope("operator", "create_pipeline") is None
 
     def test_runner_cannot_create_model_backend(self) -> None:
         with pytest.raises(MCPAuthorizationError):
@@ -248,19 +248,19 @@ class TestApiKeyRoleRestrictions:
         assert "requires 'operator' role" in str(excinfo.value)
 
     def test_runner_key_can_trigger_pipeline(self) -> None:
-        check_tool_scope("runner", "trigger_pipeline")
+        assert check_tool_scope("runner", "trigger_pipeline") is None
 
     def test_runner_key_can_cancel_run(self) -> None:
-        check_tool_scope("runner", "cancel_run")
+        assert check_tool_scope("runner", "cancel_run") is None
 
     def test_runner_key_can_claim_hitl(self) -> None:
-        check_tool_scope("runner", "review_hitl", action="claim")
+        assert check_tool_scope("runner", "review_hitl", action="claim") is None
 
     def test_operator_key_can_create_pipeline(self) -> None:
-        check_tool_scope("operator", "create_pipeline")
+        assert check_tool_scope("operator", "create_pipeline") is None
 
     def test_operator_key_can_create_model_backend(self) -> None:
-        check_tool_scope("operator", "create_model_backend")
+        assert check_tool_scope("operator", "create_model_backend") is None
 
     @pytest.mark.parametrize(
         ("role", "tool"),
@@ -276,7 +276,7 @@ class TestApiKeyRoleRestrictions:
     )
     def test_role_hierarchy_permits_upward(self, role: str, tool: str) -> None:
         """Higher roles inherit all permissions of lower roles."""
-        check_tool_scope(role, tool)
+        assert check_tool_scope(role, tool) is None
 
 
 # ── Null session / invalid token edge cases ────────────────────────────────
