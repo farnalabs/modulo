@@ -136,7 +136,7 @@ async def _dispatch_email(
         result = await session.execute(
             select(OrgMembership).where(
                 OrgMembership.organisation_id == org_id,
-                OrgMembership.role.in_(["admin", "owner"]),
+                OrgMembership.role == "admin",
                 OrgMembership.deactivated_at.is_(None),
             )
         )

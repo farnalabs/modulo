@@ -2936,7 +2936,7 @@ The product primer is a core usability improvement for all Remy users. No tier g
 
 ### 9.2 Roles
 
-Roles apply at two scopes: **org-level** (baseline for all resources) and **team-level** (override for that team's resources). The same role set is used at both scopes.
+Roles apply at two scopes: **org-level** (baseline for all resources) and **team-level** (override for that team's resources). Team roles are a **subset** of org roles — a team role can only be `operator`, `runner`, or `viewer`; `admin` is org-only.
 
 | Role | Capabilities |
 |---|---|

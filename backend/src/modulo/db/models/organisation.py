@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, Numeric, String, Uuid, func
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Numeric, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -26,6 +26,10 @@ class Organisation(Base):
     settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     otel_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     plan_id: Mapped[str | None] = mapped_column(String(255))
+    # Tenancy-bounded authorization kill-switch (ADR 017 DECISION 3). Dedicated
+    # boolean column — NOT settings_json — atomic at statement level and
+    # multi-backend safe. Default TRUE: enforcement is on unless explicitly off.
+    authz_enforce: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     deletion_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     deletion_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
