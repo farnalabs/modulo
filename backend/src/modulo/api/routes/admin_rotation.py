@@ -111,7 +111,7 @@ async def rotate_key(
             raise
         except Exception:
             _log.exception("Failed to record fernet_key_rotation_started audit event")
-            raise
+            raise HTTPException(status_code=500, detail="Internal server error.") from None
 
         _rotation_in_progress = True
 

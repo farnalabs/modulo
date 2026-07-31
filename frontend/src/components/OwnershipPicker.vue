@@ -148,4 +148,3 @@ async function loadTeams() {
 
 onMounted(loadTeams);
 </script>
-

@@ -552,4 +552,3 @@ async function test(ep: NotificationEndpointResponse) {
 
 onMounted(() => loadEndpoints());
 </script>
-

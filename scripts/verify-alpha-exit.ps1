@@ -476,9 +476,3 @@ if ($machinePassed) {
 } else {
     exit 1
 }
-
-
-
-
-
-
