@@ -11,7 +11,7 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_variants.py
   - backend/tests/unit/db/crud/test_variant_group.py
-  - backend/tests/unit/api/test_variant_groups_bdd.py
+  - backend/tests/bdd/steps/test_variant_groups.py
   - backend/tests/integration/crud/test_variant_group.py
 depends-on: [feat-variants-variant-groups, feat-core-run-context]
 status: partial

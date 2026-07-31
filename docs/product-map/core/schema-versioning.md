@@ -5,7 +5,7 @@ bdd:
   - backend/tests/bdd/features/schemas/version.feature
 unit-tests:
   - backend/tests/unit/api/test_schemas_endpoint.py
-  - backend/tests/unit/api/test_schema_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 code:
   - backend/src/modulo/api/routes/schemas.py
   - backend/src/modulo/db/crud/schema.py

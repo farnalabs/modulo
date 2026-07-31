@@ -12,7 +12,6 @@ code:
   - backend/src/modulo/auth/scim_auth.py
 unit-tests:
   - backend/tests/unit/scim/test_scim_provisioning.py
-  - backend/tests/unit/scim/test_scim_provisioning_bdd.py
   - backend/tests/bdd/steps/test_scim_provisioning.py
   - backend/tests/unit/scim/test_scim_provisioning_programming_error.py
 depends-on: [feat-auth-team-api-keys, feat-teams-team-crud]

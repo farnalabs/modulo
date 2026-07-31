@@ -35,7 +35,7 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_stages.py
   - backend/tests/unit/api/test_pipelines_endpoint.py
-  - backend/tests/unit/api/test_stage_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/test_pipeline_node_conversion.py
   - backend/tests/unit/graph_validator/test_graph_validator.py
   - backend/tests/unit/graph_validator/test_category_validator.py
