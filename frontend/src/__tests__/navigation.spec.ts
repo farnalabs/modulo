@@ -218,6 +218,42 @@ describe('navigation.ts', () => {
     expect(canSeeItem(item, { role: 'admin', permissions: [] }, { isAtMinimumTier: () => true })).toBe(false)
   })
 
+  it('canSeeItem denies access when requiredRoles is an empty array (empty whitelist)', () => {
+    const item: NavItem = {
+      to: '/admin',
+      icon: 'Settings',
+      label: 'Admin',
+      labelKey: 'item_admin',
+      requiredRoles: [],
+    }
+    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: () => true })).toBe(false)
+    expect(canSeeItem(item, { role: 'viewer' }, { isAtMinimumTier: () => true })).toBe(false)
+  })
+
+  it('canSeeItem denies access when requiredPermissions is an empty array (empty whitelist)', () => {
+    const item: NavItem = {
+      to: '/admin',
+      icon: 'Settings',
+      label: 'Admin',
+      labelKey: 'item_admin',
+      requiredPermissions: [],
+    }
+    expect(canSeeItem(item, { role: 'admin', permissions: ['admin.read'] }, { isAtMinimumTier: () => true })).toBe(false)
+  })
+
+  it('canSeeItem treats null and undefined restrictions as no restriction', () => {
+    const item: NavItem = {
+      to: '/free',
+      icon: 'File',
+      label: 'Free',
+      labelKey: 'item_free',
+      requiredRoles: null,
+      requiredTier: null,
+      requiredPermissions: null,
+    }
+    expect(canSeeItem(item, { role: 'viewer' }, { isAtMinimumTier: () => false })).toBe(true)
+  })
+
   it('sets labelKey from routeLabelKeyMap for known routes', () => {
     const core = navGroups.find((g) => g.id === 'core')!
     const dash = core.items.find((item) => item.to === '/')!
