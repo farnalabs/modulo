@@ -5,6 +5,7 @@ import logging
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError as JWTError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
 from modulo.settings import Settings, get_settings
@@ -47,6 +48,19 @@ class OrganisationNotFound(HTTPException):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Organisation not found. Please log in again.",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+class OrganisationMembershipNotFound(HTTPException):
+    """401 for a principal with no active membership (removed/deactivated).
+    ADR 017: a user removed from the org loses access immediately - the JWT
+    claim alone is not sufficient.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Organisation membership required",
         )
 
 
@@ -111,13 +125,19 @@ async def get_current_tenant_user(
     if current_user.organisation_id is None or current_user.org_role is None:
         raise OrganisationMembershipRequired()
 
-    await _verify_identity(current_user)
+    live_role = await _verify_identity(current_user)
 
     return TenantPrincipal(
         username=current_user.username,
         organisation_id=current_user.organisation_id,
         account_id=current_user.account_id,
-        org_role=current_user.org_role,
+        # _verify_identity returns the LIVE role; when it returns None the
+        # caller's identity was verified but no live role could be read
+        # (e.g. the test harness patches it) - fall back to the claim role.
+        # In production the DB read either returns the live role or raises
+        # (401 missing membership / 503 on SQLAlchemyError), so the claim
+        # fallback is only reachable when the read is explicitly stubbed.
+        org_role=live_role if live_role is not None else current_user.org_role,
         is_system_admin=current_user.is_system_admin,
     )
 
@@ -223,15 +243,41 @@ async def get_current_tenant_user_or_api_key(
     return await get_current_tenant_user(principal)
 
 
-async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
-    """Verify the JWT's account and organisation still exist in the database.
+async def resolve_role_from_membership(session: AsyncSession, account_id: str, organisation_id: str) -> str | None:
+    """Return the LIVE org role for the account in the org, or None if no active membership.
+
+    Filters ``deactivated_at IS NULL`` — a soft-deactivated membership must not
+    resolve a role (ADR 017). Lazy-imports the ORM model to avoid the auth →
+    api circular import; the caller already holds a session from a live factory.
+    """
+    from sqlalchemy import select
+
+    from modulo.db.models.org_membership import OrgMembership
+
+    result = await session.execute(
+        select(OrgMembership.role).where(
+            OrgMembership.account_id == account_id,
+            OrgMembership.organisation_id == organisation_id,
+            OrgMembership.deactivated_at.is_(None),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
+    """Verify the JWT's account and organisation still exist, returning the LIVE org role.
 
     Uses lazy imports to avoid a circular dependency:
     ``auth.dependencies → api.dependencies → auth.dependencies``.
 
-    Silently fails on DB errors (connection issues, unit tests without a DB)
-    so that a transient DB blip never blocks the request — the caller will
-    still get a proper error from the actual DB operation.
+    ADR 017 live-role re-read: after the existence checks, the account's live
+    org role is read from ``org_memberships`` (deactivated rows excluded).
+
+        Failure modes:
+    - missing/deactivated membership  raise 401 (removed users lose access immediately)
+    - SQLAlchemyError during the read  raise 503 (fail-closed; a DB blip must
+      not restore a removed user's stale role - ADR 017 review decision)
+    - any other exception  propagate (500)
     """
     try:
         from sqlalchemy import text as _text
@@ -273,10 +319,32 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
                     },
                 )
                 raise OrganisationNotFound()
+
+            live_role = await resolve_role_from_membership(
+                session,
+                str(principal.account_id),
+                str(principal.organisation_id),
+            )
     except HTTPException:
         raise
     except SQLAlchemyError:
-        _log.warning("auth.identity_verify_failed", exc_info=True)
+        _log.warning("permission.live_role_read_failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Role verification temporarily unavailable. Please try again.",
+        ) from None
+
+    if live_role is None:
+        _log.warning(
+            "auth.membership_not_found",
+            extra={
+                "account_id": str(principal.account_id),
+                "org_id": str(principal.organisation_id),
+                "username": principal.username,
+            },
+        )
+        raise OrganisationMembershipNotFound()
+    return live_role
 
 
 async def require_system_admin(

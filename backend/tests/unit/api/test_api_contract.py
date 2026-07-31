@@ -238,7 +238,13 @@ class TestAuthEndpointSchemas:
 
     def test_me_schema(self, client: TestClient) -> None:
         account = _make_mock_account()
-        with patch("modulo.api.routes.auth.get_account_by_id", return_value=account):
+        with (
+            patch("modulo.api.routes.auth.get_account_by_id", return_value=account),
+            patch(
+                "modulo.api.routes.auth.resolve_role_from_membership",
+                new=AsyncMock(return_value="admin"),
+            ),
+        ):
             resp = client.get("/api/v1/auth/me")
 
         assert resp.status_code == 200
@@ -247,7 +253,13 @@ class TestAuthEndpointSchemas:
         validate_shape(resp.json(), MeResponse)
 
     def test_ws_token_schema(self, client: TestClient) -> None:
-        with patch("redis.asyncio.Redis.from_url") as mock_redis_factory:
+        with (
+            patch("redis.asyncio.Redis.from_url") as mock_redis_factory,
+            patch(
+                "modulo.api.routes.auth.resolve_role_from_membership",
+                new=AsyncMock(return_value="admin"),
+            ),
+        ):
             mock_redis = AsyncMock()
             mock_redis.setex = AsyncMock()
             mock_redis.aclose = AsyncMock()
