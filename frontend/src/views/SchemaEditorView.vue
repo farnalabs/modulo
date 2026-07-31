@@ -611,14 +611,15 @@ async function validateSchema(): Promise<boolean> {
     const { data, error } = await api.POST('/api/v1/schemas/validate', {
       body: { definition: JSON.parse(jsonPreview.value) as Record<string, unknown> },
     })
-    if (error) return false
-    if (!data.valid && data.errors) {
+    if (error) {
+      errors.push(`${t('views.SchemaEditorView.validate_failed')} ${formatApiError(error)}`)
+    } else if (!data.valid && data.errors) {
       for (const e of data.errors) {
         errors.push(`${e.path}: ${e.message}`)
       }
     }
   } catch (e) {
-    console.warn('Failed to validate schema', e)
+    errors.push(`${t('views.SchemaEditorView.validate_failed')} ${formatApiError(e)}`)
   }
 
   if (errors.length > 0) {

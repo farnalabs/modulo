@@ -282,6 +282,53 @@ describe('SchemaEditorView', () => {
     expect(wrapper.text()).toContain('Duplicate field name')
   })
 
+  it('surfaces schema validation API errors', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as ReturnType<typeof vi.fn>).mockImplementation((_url: string) => {
+      if (String(_url).includes('/validate')) {
+        return Promise.resolve({
+          data: undefined,
+          error: { type: 'urn:problem:modulo:bad_request', title: 'Bad Request', status: 400, detail: 'boom' },
+        })
+      }
+      return Promise.resolve({
+        data: { id: 'schema-new', name: 'New Schema' },
+        error: undefined,
+      })
+    })
+
+    const wrapper = mount(SchemaEditorView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          FeatureGate: {
+            template: '<div><slot /></div>',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    const newBtn = wrapper.find('[data-testid="schema-editor-new"]')
+    await newBtn.trigger('click')
+    await nextTick()
+
+    await wrapper.find('[data-testid="schema-editor-name"]').setValue('Test Schema')
+    await wrapper.find('[data-testid="schema-editor-version"]').setValue('1.0.0')
+
+    const addBtn = wrapper.find('[data-testid="schema-editor-add-field"]')
+    await addBtn.trigger('click')
+    await nextTick()
+
+    await wrapper.find('[data-testid="schema-editor-field-name"]').setValue('email')
+
+    const saveBtn = wrapper.find('[data-testid="schema-editor-save"]')
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('boom')
+  })
+
   it('can move fields up and down', async () => {
     const wrapper = mount(SchemaEditorView, {
       global: {

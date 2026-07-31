@@ -1032,6 +1032,7 @@ export default {
       "at_least_one_field": "At least one field is required",
       "all_fields_must_have_name": "All fields must have a name",
       "duplicate_field_name": "Duplicate field name:",
+      "validate_failed": "Schema validation failed:",
       "create_failed": "Create failed:",
       "update_failed": "Update failed:",
       "schema_created_version_failed": "Schema created but version save failed",
