@@ -71,8 +71,17 @@ def test_org_membership_role_check() -> None:
     checks = " ".join(
         str(c.sqltext) for c in Base.metadata.tables["org_memberships"].constraints if hasattr(c, "sqltext")
     )
-    for role in ("owner", "admin", "operator", "runner", "viewer"):
+    for role in ("admin", "operator", "runner", "viewer"):
         assert role in checks
+
+
+def test_org_membership_role_check_has_no_owner() -> None:
+    """The 'owner' role was dropped (ADR 017 A1a) — the model CHECK constraint
+    must not silently regress and re-admit it."""
+    checks = " ".join(
+        str(c.sqltext) for c in Base.metadata.tables["org_memberships"].constraints if hasattr(c, "sqltext")
+    )
+    assert "owner" not in checks
 
 
 def test_org_membership_account_org_unique() -> None:
