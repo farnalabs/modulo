@@ -643,6 +643,90 @@ async def test_background_worker_marks_run_failed_on_executor_error() -> None:
         mock_update.assert_awaited_once_with(mock_session, run_id, "failed", error_code="internal_error")
 
 
+@pytest.mark.asyncio
+async def test_cleanup_stale_runs_kills_stale_runs_with_non_null_timeout() -> None:
+    from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
+
+    worker = BackgroundPipelineWorker("postgresql+asyncpg://localhost/test", "postgresql+asyncpg://localhost/test")
+    run_id = uuid.uuid4()
+
+    mock_session = _make_mock_session()
+    mock_session.execute.side_effect = [
+        [(_ORG_ID,)],
+        [(run_id, "running", 30)],
+    ]
+    mock_engine = AsyncMock()
+    mock_engine.dispose = AsyncMock()
+
+    with (
+        patch("modulo.core.background_pipeline_worker.create_async_engine", return_value=mock_engine),
+        patch("modulo.core.background_pipeline_worker.async_sessionmaker") as mock_factory_cls,
+        patch("modulo.core.background_pipeline_worker.cancel_run") as mock_cancel,
+        patch("modulo.core.background_pipeline_worker.set_rls_org") as mock_rls,
+    ):
+        mock_factory = MagicMock()
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_factory_cls.return_value = mock_factory
+
+        killed = await worker.cleanup_stale_runs()
+
+    assert killed == 1
+    mock_rls.assert_awaited_once_with(mock_session, _ORG_ID)
+    mock_cancel.assert_awaited_once_with(mock_session, run_id, error_code="stale_run_killed")
+    mock_engine.dispose.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# BackgroundPipelineWorker.cleanup_stale_runs — stale runs killed after the
+# non-null stale_run_timeout_minutes change (migration 0029)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_background_worker_cleanup_kills_stale_runs() -> None:
+    org_id = _ORG_ID
+    stale_run_id = uuid.uuid4()
+    pending_run_id = uuid.uuid4()
+
+    mock_session = _make_mock_session()
+    mock_session.execute = AsyncMock(
+        side_effect=[
+            [(org_id,)],
+            [
+                (stale_run_id, "running", 30),
+                (pending_run_id, "pending", 30),
+            ],
+        ]
+    )
+
+    from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
+
+    worker = BackgroundPipelineWorker("sqlite+aiosqlite://", "sqlite+aiosqlite://")
+
+    with (
+        patch("modulo.core.background_pipeline_worker.async_sessionmaker") as mock_factory_cls,
+        patch("modulo.core.background_pipeline_worker.cancel_run") as mock_cancel,
+        patch("modulo.core.background_pipeline_worker.set_rls_org") as mock_rls,
+        patch("modulo.core.background_pipeline_worker.create_async_engine") as mock_engine_factory,
+    ):
+        mock_engine = AsyncMock()
+        mock_engine.dispose = AsyncMock()
+        mock_engine_factory.return_value = mock_engine
+
+        mock_factory = MagicMock()
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_factory_cls.return_value = mock_factory
+
+        killed = await worker.cleanup_stale_runs()
+
+    assert killed == 2
+    mock_cancel.assert_any_await(mock_session, stale_run_id, error_code="stale_run_killed")
+    mock_cancel.assert_any_await(mock_session, pending_run_id, error_code="stale_run_killed")
+    mock_rls.assert_awaited_once_with(mock_session, org_id)
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/runs/diff — node output diff across runs (task-agent-output-diff)
 # ---------------------------------------------------------------------------
