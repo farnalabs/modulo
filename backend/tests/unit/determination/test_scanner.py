@@ -223,7 +223,7 @@ async def test_connector_query_error_returns_error_in_sample() -> None:
 
 
 @respx.mock
-async def test_connector_initialisation_error_returns_no_samples() -> None:
+async def test_connector_with_no_repos_produces_repos_sample() -> None:
     ci = _fake_ci("github", creds={"token": "ghp_test"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -254,7 +254,7 @@ async def test_multiple_connectors_scanned_independently() -> None:
 
 
 @respx.mock
-async def test_all_health_checks_fail_returns_no_samples() -> None:
+async def test_all_health_checks_fail_returns_error_samples() -> None:
     ci = _fake_ci("github", creds={"token": "bad_token"})
     hub = _hub(ci)
     await hub.initialise([ci])
