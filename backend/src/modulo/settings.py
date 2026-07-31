@@ -76,6 +76,51 @@ class Settings(BaseSettings):
     )
     modulo_celery_db_pool_sync_timeout: int = Field(default=10, alias="MODULO_CELERY_DB_POOL_SYNC_TIMEOUT", ge=1, le=30)
 
+    # ------------------------------------------------------------------
+    # SAQ (Celery migration) — plan F4 Settings section
+    # ------------------------------------------------------------------
+    # SAQ_ENABLED is TRI-ROLE:
+    #   (1) dispatch routing — where dispatch_run sends execute/resume jobs,
+    #   (2) dispatcher-column write — whether the dispatcher column reads 'saq',
+    #   (3) Celery beat fire gate — whether the entrypoint starts Celery beat.
+    # The flag does NOT stop the SAQ workers.
+    saq_enabled: bool = Field(default=False, alias="SAQ_ENABLED")
+    # Staleness gate for re-claiming a SAQ run whose heartbeat is stale. SAQ
+    # runs only — legacy Celery windows stay 600 (see below).
+    run_claim_stale_seconds: int = Field(default=450, alias="RUN_CLAIM_STALE_SECONDS", ge=1, le=3600)
+    # Legacy Celery-path claim window (unchanged through the migration).
+    legacy_run_claim_stale_seconds: int = Field(default=600, alias="LEGACY_RUN_CLAIM_STALE_SECONDS", ge=1, le=3600)
+    # SAQ job heartbeat knob (per-job). The DB heartbeat cadence is
+    # RUN_HEARTBEAT_SECONDS below.
+    saq_job_heartbeat: int = Field(default=300, alias="SAQ_JOB_HEARTBEAT", ge=1, le=3600)
+    # DB heartbeat cadence for execute_run — keep well below the 300s SAQ sweep
+    # threshold (cadence equal to the sweep threshold leaves zero margin).
+    run_heartbeat_seconds: int = Field(default=30, alias="RUN_HEARTBEAT_SECONDS", ge=1, le=120)
+    # Cutover hold gate: healthz/ready 503 gating on SAQ_ENABLED=true during the
+    # hold; relaxed to degraded via an explicit deploy-time flag after the hold.
+    saq_hard_gate: bool = Field(default=True, alias="SAQ_HARD_GATE")
+    # Web UI auth — FAIL-CLOSED (system worker refuses to boot without both).
+    saq_auth_password: str | None = Field(default=None, alias="SAQ_AUTH_PASSWORD", repr=False)
+    saq_auth_username: str | None = Field(default=None, alias="SAQ_AUTH_USERNAME")
+    # SAQ retry knobs — retries=N is N TOTAL attempts (N-1 retries).
+    saq_run_retries: int = Field(default=5, alias="SAQ_RUN_RETRIES", ge=1, le=20)
+    # Deterministic fixed delay (retry_backoff=False).
+    saq_retry_delay: int = Field(default=60, alias="SAQ_RETRY_DELAY", ge=1, le=3600)
+    # Per-claim E2B idempotency key run:{id}:e2b:{claim_token} (F3a).
+    saq_e2b_idempotency: bool = Field(default=True, alias="SAQ_E2B_IDEMPOTENCY")
+    # TEST-ONLY pause flag — hard default off; refused when combined with
+    # SAQ_ENABLED=true outside test/staging (debug=false).
+    saq_test_pause: bool = Field(default=False, alias="SAQ_TEST_PAUSE")
+    # Legacy sweep windows (never_dispatched / worker_lost / re-enqueue) — stay
+    # at 600 through PR A/B, decoupled from RUN_CLAIM_STALE_SECONDS (SAQ only).
+    saq_reenqueue_window: int = Field(default=600, alias="SAQ_REENQUEUE_WINDOW", ge=1, le=3600)
+    saq_never_dispatched_window: int = Field(default=600, alias="SAQ_NEVER_DISPATCHED_WINDOW", ge=1, le=3600)
+    saq_worker_lost_window: int = Field(default=600, alias="SAQ_WORKER_LOST_WINDOW", ge=1, le=3600)
+    # SAQ worker DB pool size (per worker; Postgres budget — F4).
+    saq_worker_db_pool_size: int = Field(default=2, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
+    # SAQ Redis client pool size (Upstash connection budget — F2).
+    saq_redis_pool_size: int = Field(default=5, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
+
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)
     modulo_auth_max_attempts: int = Field(10)
@@ -253,6 +298,16 @@ class Settings(BaseSettings):
             if self.database_url.startswith("postgresql+asyncpg://"):
                 self.database_url = "mysql+aiomysql://modulo:modulo@localhost:5435/modulo"
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
+        return self
+
+    @model_validator(mode="after")
+    def _saq_test_pause_guard(self) -> "Settings":
+        """SAQ_TEST_PAUSE is TEST-ONLY: refuse it with SAQ_ENABLED outside test/staging."""
+        if self.saq_test_pause and self.saq_enabled and not self.debug:
+            raise ValueError(
+                "SAQ_TEST_PAUSE is a TEST-ONLY flag and cannot be combined with SAQ_ENABLED=true "
+                "outside test/staging (set DEBUG=true in test/staging environments)."
+            )
         return self
 
     @model_validator(mode="after")
