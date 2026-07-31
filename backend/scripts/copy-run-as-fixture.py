@@ -13,11 +13,12 @@ import sys
 import uuid
 from pathlib import Path
 
+from sqlalchemy import select
+
 from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.settings import Settings
-from sqlalchemy import select
 
 
 def build_fixture_map(

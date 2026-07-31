@@ -20,6 +20,9 @@ import logging
 import re
 from pathlib import Path
 
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
 from modulo.core.manifest import get_manifest
 from modulo.db.models import (
     Account,
@@ -30,8 +33,6 @@ from modulo.db.models import (
     Pipeline,
 )
 from modulo.settings import get_settings
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 _log = logging.getLogger(__name__)
 

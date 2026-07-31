@@ -21,9 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import sqlalchemy
 from cryptography.fernet import Fernet
-from modulo.settings import get_settings
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import create_async_engine
+
+from modulo.settings import get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 _log = logging.getLogger("migrate-checkpoint-blobs")

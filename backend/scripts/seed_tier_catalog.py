@@ -8,9 +8,10 @@ Requires DATABASE_URL env var or a running modulo instance with settings loaded.
 
 import asyncio
 
-from modulo.settings import get_settings
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+from modulo.settings import get_settings
 
 TIERS = [
     {
