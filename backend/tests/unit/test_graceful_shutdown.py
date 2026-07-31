@@ -92,7 +92,7 @@ class TestShutdownManager:
 
     async def test_request_finished_without_started(self, manager: ShutdownManager) -> None:
         manager.request_finished()
-        assert manager._active_requests >= -1
+        assert manager._active_requests == -1
 
     async def test_multiple_rapid_request_cycles(self, manager: ShutdownManager) -> None:
         for _ in range(10):

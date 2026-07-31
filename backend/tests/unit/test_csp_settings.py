@@ -31,7 +31,9 @@ class TestCspSettings:
         with pytest.raises(ValueError, match="semicolons"):
             Settings()
 
-    def test_empty_by_default(self) -> None:
+    def test_empty_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _make_settings(monkeypatch)
+        monkeypatch.delenv("MODULO_MONITOR_DOMAINS", raising=False)
         assert Settings().modulo_monitor_domains == ""
 
     def test_empty_string_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
