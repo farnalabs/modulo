@@ -195,4 +195,4 @@ Ed25519-signed publish/pull/verify protocol for community primitives. Supports 6
 **Tests added:**
 - Added 4 new tests in `test_registry_protocol_endpoints.py`: `test_download_sqlalchemy_error_returns_503`, `test_download_programming_error_returns_501`, `test_verify_hex_sqlalchemy_error_returns_503`, `test_verify_hex_programming_error_returns_501`
 
-**Status:** partial (16 known gaps remain — 14 existing + 2 new: sort_by rating misdirection, unauthenticated listing undocumented) 
+**Status:** partial (16 known gaps remain — 14 existing + 2 new: sort_by rating misdirection, unauthenticated listing undocumented)
