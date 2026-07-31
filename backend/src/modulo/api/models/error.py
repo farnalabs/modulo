@@ -48,8 +48,8 @@ class ErrorEventInput(BaseModel):
     @field_validator("source")
     @classmethod
     def _validate_source(cls, v: str) -> str:
-        if v not in ("backend", "frontend", "celery"):
-            msg = f"Invalid source '{v}'. Must be one of: backend, frontend, celery"
+        if v not in ("backend", "frontend", "celery", "saq"):
+            msg = f"Invalid source '{v}'. Must be one of: backend, frontend, celery, saq"
             raise ValueError(msg)
         return v
 

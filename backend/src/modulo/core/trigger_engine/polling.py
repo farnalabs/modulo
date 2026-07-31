@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorResult
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+from modulo.core.dispatch import dispatch_run_sync
 from modulo.core.pipeline_executor_task import SchedulerDBError
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
@@ -182,9 +183,12 @@ class PollingFireTask(Task):  # type: ignore[misc]
             )
         )
         if result.get("status") == "fired" and result.get("run_id"):
-            from modulo.core.pipeline_executor_task import dispatch
-
-            dispatch(result["run_id"], org_id, "runs_automated")
+            dispatch_run_sync(
+                result["run_id"],
+                org_id,
+                queue="runs",
+                celery_queue="runs_automated",
+            )
         return result
 
 

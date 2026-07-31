@@ -11,6 +11,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.cron_scheduler import fire_cron_trigger
+from modulo.core.dispatch import dispatch_run
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
@@ -89,9 +90,12 @@ async def _run_scheduler_loop(
                                     )
                             else:
                                 try:
-                                    from modulo.core.pipeline_executor_task import dispatch
-
-                                    dispatch(run_id_str, str(trigger.organisation_id), "runs_automated")
+                                    await dispatch_run(
+                                        run_id_str,
+                                        str(trigger.organisation_id),
+                                        queue="runs",
+                                        celery_queue="runs_automated",
+                                    )
                                 except Exception:
                                     _log.exception(
                                         "Failed to dispatch cron-triggered run %s to Celery",

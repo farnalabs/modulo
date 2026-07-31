@@ -4,7 +4,9 @@ Checks for known bug patterns in sandbox_agent pipeline configs:
 1. Empty ``agent_prompt`` that would cause opencode to hang
 2. ``timeout_seconds`` defaulting to 600 (too short for complex tasks)
 3. ``template_id`` not set to ``"opencode"``
-4. ``**env_vars_extra`` placed after system env vars (security bypass)
+4. ``**env_vars_extra`` placed before system env vars (must stay AFTER, per
+   backend/AGENTS.md and commit b0c4bde97, so pipelines can override
+   GITHUB_TOKEN for identity separation)
 """
 
 from __future__ import annotations
@@ -59,31 +61,57 @@ def _scan_node_runner(path: Path) -> None:
                             "use 'opencode' template (has opencode CLI pre-installed)."
                         )
 
-    # Line-based checks for patterns that are hard to catch with AST
-    for lineno, line in enumerate(source.splitlines(), start=1):
-        # `**env_vars_extra` at end of envs dict (after system vars)
-        stripped = line.strip()
-        if "**env_vars_extra" in stripped and "}" not in stripped:
-            _fail(
-                f"{path}:{lineno}: "
-                "`**env_vars_extra` must precede system env vars "
-                "(GITHUB_TOKEN, APP_MODULO_OPENCODE_API_KEY) — "
-                "otherwise pipeline config can override auth tokens."
-            )
+    # Line-based checks for patterns that are hard to catch with AST.
+    # NOTE: `**env_vars_extra` is intentionally placed AFTER system env vars in
+    # node_runner.py (see backend/AGENTS.md "env_vars_extra must stay AFTER
+    # system env vars"; commit b0c4bde97 restored this ordering deliberately so
+    # pipelines can override GITHUB_TOKEN for identity separation). No check
+    # fires on that correct arrangement.
 
 
 def _scan_mcp_server(path: Path) -> None:
-    """AST-scan the MCP server for empty agent_prompt patterns."""
+    """AST-scan the MCP server for empty agent_prompt patterns.
+
+    Only flags the pattern in actual dispatch contexts. Display-only resource
+    renderers (``@mcp.resource`` functions that build text previews of node
+    configs) are not opencode execution paths and are skipped.
+    """
     source = path.read_text(encoding="utf-8")
-    for lineno, line in enumerate(source.splitlines(), start=1):
+    lines = source.splitlines()
+
+    def _in_resource_renderer(lineno: int) -> bool:
+        """True if line is inside a function decorated with @mcp.resource."""
+        in_resource = False
+        current_def_indent = -1
+        for i, line in enumerate(lines[: lineno - 1], start=1):
+            stripped = line.strip()
+            indent = len(line) - len(line.lstrip())
+            if stripped.startswith("@mcp.resource"):
+                in_resource = True
+                current_def_indent = -1
+            elif stripped.startswith("async def ") or stripped.startswith("def "):
+                current_def_indent = indent
+                if in_resource:
+                    pass  # keep flag; the body below belongs to the resource fn
+            elif current_def_indent >= 0 and not stripped:
+                continue
+            elif current_def_indent >= 0 and indent <= current_def_indent:
+                in_resource = False
+                current_def_indent = -1
+        return in_resource
+
+    for lineno, line in enumerate(lines, start=1):
         stripped = line.strip()
-        if 'n.get("agent_prompt", "")' in stripped or 'n.get("agent_prompt", "") or ""' in stripped:
-            _fail(
-                f"{path}:{lineno}: "
-                "Empty agent_prompt fallback in MCP handler — "
-                "opencode will hang with no instructions. "
-                "Require a non-empty prompt template."
-            )
+        if 'n.get("agent_prompt", "")' not in stripped:
+            continue
+        if _in_resource_renderer(lineno):
+            continue
+        _fail(
+            f"{path}:{lineno}: "
+            "Empty agent_prompt fallback in MCP handler — "
+            "opencode will hang with no instructions. "
+            "Require a non-empty prompt template."
+        )
 
 
 def _scan_pipeline_config_files() -> None:
@@ -145,19 +173,23 @@ def _check_node_config(path: Path, obj: dict, prefix: str = "") -> None:
                 "increase to 1200 for complex tasks"
             )
 
-    # Check env_vars ordering
+    # Check env_vars ordering.
+    # Per backend/AGENTS.md "env_vars_extra must stay AFTER system env vars",
+    # env_vars_extra is DELIBERATELY placed last so pipelines can override
+    # GITHUB_TOKEN for identity separation (commit b0c4bde97). Flag the reverse
+    # ordering (system vars after env_vars_extra), which breaks that convention.
     envs = obj.get("envs") or obj.get("env_vars")
     if isinstance(envs, dict) and "env_vars_extra" in envs:
         keys = list(envs.keys())
         extra_idx = keys.index("env_vars_extra")
-        # Flag if env_vars_extra is not the first entry (it should be first to prevent overrides)
         for idx, key in enumerate(keys):
-            if key in ("GITHUB_TOKEN", "APP_MODULO_OPENCODE_API_KEY", "GITHUB_REVIEWBOT_PAT") and extra_idx > idx:
-                    _fail(
-                        f"{path}: env_vars_extra (index {extra_idx}) is placed after "
-                        f"'{key}' (index {idx}) in node {prefix} — "
-                        "move env_vars_extra before system env vars to prevent override"
-                    )
+            if key in ("GITHUB_TOKEN", "APP_MODULO_OPENCODE_API_KEY", "GITHUB_REVIEWBOT_PAT") and extra_idx < idx:
+                _fail(
+                    f"{path}: system env var '{key}' (index {idx}) is placed after "
+                    f"env_vars_extra (index {extra_idx}) in node {prefix} — "
+                    "env_vars_extra must stay AFTER system env vars for identity separation "
+                    "(pipelines override GITHUB_TOKEN via env_vars_extra)"
+                )
 
     # Recurse into children/edges
     for key in ("nodes", "edges", "items", "steps", "children"):

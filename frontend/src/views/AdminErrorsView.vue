@@ -1,8 +1,9 @@
 <template>
-  <PageTabs :tabs="[
-    { label: 'Dashboard', to: '/admin/errors' },
-  ]" />
-  <div class="page-wide">
+  <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
+    <PageTabs :tabs="[
+      { label: 'Dashboard', to: '/admin/errors' },
+    ]" />
+    <div class="page-wide">
     <PageHeader :title="$t('views.AdminErrorsView.error_dashboard')" :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')" />
 
     <FilterBar
@@ -20,11 +21,7 @@
           { value: 'resolved', label: 'Resolved' },
           { value: 'archived', label: 'Archived' },
         ]},
-        { key: 'source', label: 'Source', options: [
-          { value: 'backend', label: 'Backend' },
-          { value: 'frontend', label: 'Frontend' },
-          { value: 'celery', label: 'Celery' },
-        ]},
+        { key: 'source', label: 'Source', options: sourceOptions },
       ]"
       :filter-values="{ level: filterLevel, status: filterStatus, source: filterSource }"
       @update:search="filterSearch = $event"
@@ -111,7 +108,8 @@
         </div>
       </div>
     </template>
-  </div>
+    </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -129,6 +127,7 @@ import { formatApiError } from "../lib/api/formatError"
 import { Button } from '@/components/ui/button'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 
 const router = useRouter()
 
@@ -152,6 +151,24 @@ const filterStatus = ref('')
 const filterSource = ref('')
 const filterEnvironment = ref('')
 const filterSearch = ref('')
+
+const KNOWN_SOURCES = ['backend', 'frontend', 'celery']
+
+const sourceOptions = computed<Array<{ value: string; label: string }>>(() => {
+  const options = [
+    { value: 'backend', label: 'Backend' },
+    { value: 'frontend', label: 'Frontend' },
+    { value: 'celery', label: 'Celery' },
+  ]
+  // Generic-bucket fallback (plan F3d): an unknown source value (e.g. 'saq'
+  // during the shadow window) must render in a generic bucket instead of
+  // breaking the dropdown. Only add the fallback when a filter is active so
+  // the known list stays authoritative.
+  if (filterSource.value && !KNOWN_SOURCES.includes(filterSource.value)) {
+    options.push({ value: filterSource.value, label: 'Other' })
+  }
+  return options
+})
 
 function handleFilterUpdate(key: string, value: string) {
   if (key === 'level') filterLevel.value = value

@@ -46,6 +46,18 @@ from modulo.auth.oauth import (
     decode_oauth_access_token,
 )
 from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
+
+# ContextVars populated by McpAuthMiddleware before each request.
+# Propagation: this server runs FastMCP in stateless HTTP mode, where each request
+# spawns a fresh per-request server task *from the already-authenticated request
+# coroutine* (StreamableHTTPSessionManager._handle_stateless_request calls
+# task_group.start(...) at request time). asyncio/anyio copy the caller's context
+# at task-creation time, so values set here in the middleware propagate to tool
+# handlers. If a handler ever runs without this context, tenant resolution FAILS
+# CLOSED (auth error) — there must never be a process-global fallback, because
+# under concurrent multi-tenant load a global would resolve to whichever org
+# authenticated last, leaking cross-tenant data.
+from modulo.core.dispatch import dispatch_run
 from modulo.core.documentation_indexer import DocumentationIndex
 from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.core.hitl_manager import (
@@ -65,18 +77,6 @@ from modulo.core.library_service import (
     list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
-
-# ContextVars populated by McpAuthMiddleware before each request.
-# Propagation: this server runs FastMCP in stateless HTTP mode, where each request
-# spawns a fresh per-request server task *from the already-authenticated request
-# coroutine* (StreamableHTTPSessionManager._handle_stateless_request calls
-# task_group.start(...) at request time). asyncio/anyio copy the caller's context
-# at task-creation time, so values set here in the middleware propagate to tool
-# handlers. If a handler ever runs without this context, tenant resolution FAILS
-# CLOSED (auth error) — there must never be a process-global fallback, because
-# under concurrent multi-tenant load a global would resolve to whichever org
-# authenticated last, leaking cross-tenant data.
-from modulo.core.pipeline_executor_task import dispatch
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import get_run
@@ -832,7 +832,7 @@ async def trigger_pipeline(
             run_id = run.id
             thread_id = run.langgraph_thread_id
 
-        dispatch(str(run_id), str(org_id), "runs_manual")
+        await dispatch_run(str(run_id), str(org_id), queue="runs", celery_queue="runs_manual")
 
         return {
             "run_id": str(run_id),

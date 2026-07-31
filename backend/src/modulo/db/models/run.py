@@ -72,6 +72,14 @@ class Run(OrgScoped):
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     rate_limit_key: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    # SAQ dispatch tracking (PR B, migration 0030) — dispatcher reflects where
+    # the job actually went: 'saq' iff enqueued to SAQ; NULL iff Celery/legacy.
+    dispatcher: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    # SAQ job id — deterministic saq:job:{queue}:run:{id}. SAQ retries reuse it.
+    saq_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # DISTINCT per-claim value (NOT saq_job_id — SAQ retries reuse saq_job_id so a
+    # token identical to it could never be superseded). F3a claim-token fence.
+    claim_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()

@@ -97,7 +97,7 @@ class TestErrorEvent:
             c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_error_events_source"
         )
         sql = str(check.sqltext)
-        for source in ("backend", "frontend", "celery"):
+        for source in ("backend", "frontend", "celery", "saq"):
             assert f"'{source}'" in sql
 
     def test_status_check_constraint_exists(self) -> None:

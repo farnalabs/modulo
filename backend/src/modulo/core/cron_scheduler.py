@@ -41,6 +41,7 @@ from sqlalchemy.exc import InterfaceError, OperationalError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+from modulo.core.dispatch import dispatch_run_sync
 from modulo.core.pipeline_executor_task import SchedulerDBError
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import Run
@@ -181,9 +182,12 @@ class CronFireTask(Task):  # type: ignore[misc]
             result = future.result()
 
         if result.get("status") == "fired" and result.get("run_id"):
-            from modulo.core.pipeline_executor_task import dispatch
-
-            dispatch(result["run_id"], org_id, "runs_automated")
+            dispatch_run_sync(
+                result["run_id"],
+                org_id,
+                queue="runs",
+                celery_queue="runs_automated",
+            )
 
         return result
 
