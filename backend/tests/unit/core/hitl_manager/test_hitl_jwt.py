@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt as pyjwt
 import pytest
@@ -169,6 +169,106 @@ async def test_claim_succeeds_with_jwt_secret_key() -> None:
     mgr = HITLManager(secret_key=_KEY)
     result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed_gate
+
+
+def _update_bind_value(stmt: Any, column_name: str) -> Any:
+    """Extract a bound value from an UPDATE statement by column name."""
+    for col, expr in stmt._values.items():
+        if col.name == column_name:
+            return expr.value
+    raise AssertionError(f"UPDATE statement has no column {column_name!r}")
+
+
+async def test_claim_with_secret_key_writes_jwt_to_db() -> None:
+    """claim() with a secret_key actually stores a JWT-shaped token in the UPDATE."""
+    unclaimed_gate = _gate()
+    captured: list[Any] = []
+    session = _session_claim(pre_check_gate=unclaimed_gate, claimed_gate=unclaimed_gate)
+    orig_execute = session.execute
+    call_no = 0
+
+    async def _capture_execute(stmt: Any) -> Any:
+        nonlocal call_no
+        call_no += 1
+        if call_no == 2:
+            captured.append(stmt)
+        return await orig_execute(stmt)
+
+    session.execute = _capture_execute
+    mgr = HITLManager(secret_key=_KEY)
+    await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+    assert len(captured) == 1
+    # Second execute is the UPDATE … RETURNING — the token must be a JWT.
+    stored = _update_bind_value(captured[0], "claim_token")
+    assert isinstance(stored, str)
+    assert stored.count(".") == 2, "claim token should be a JWT when secret_key is configured"
+    payload = pyjwt.decode(stored, _KEY, algorithms=[_ALGORITHM])
+    assert payload["purpose"] == "claim_token"
+    assert payload["run_id"] == str(_RUN)
+    assert payload["gate_id"] == _GATE
+    assert payload["client_id"] == str(_USER)
+
+
+async def test_claim_with_secret_key_forwards_expiry_minutes() -> None:
+    """claim() passes the caller's expiry_minutes into the JWT creation."""
+    unclaimed_gate = _gate()
+    session = _session_claim(pre_check_gate=unclaimed_gate, claimed_gate=unclaimed_gate)
+
+    with patch("modulo.core.hitl_manager._create_claim_jwt") as mock_jwt:
+        mock_jwt.return_value = "signed.jwt.token"
+        mgr = HITLManager(secret_key=_KEY)
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=90)
+
+    mock_jwt.assert_called_once_with(
+        str(_USER),
+        _KEY,
+        run_id=str(_RUN),
+        gate_id=_GATE,
+        client_id=str(_USER),
+        expiry_minutes=90,
+    )
+
+
+async def test_claim_without_secret_key_generates_opaque_token() -> None:
+    """claim() without a secret_key writes an opaque token, not a JWT."""
+    unclaimed_gate = _gate()
+    captured: list[Any] = []
+    session = _session_claim(pre_check_gate=unclaimed_gate, claimed_gate=unclaimed_gate)
+    orig_execute = session.execute
+    call_no = 0
+
+    async def _capture_execute(stmt: Any) -> Any:
+        nonlocal call_no
+        call_no += 1
+        if call_no == 2:
+            captured.append(stmt)
+        return await orig_execute(stmt)
+
+    session.execute = _capture_execute
+
+    with patch("modulo.core.hitl_manager.secrets.token_urlsafe", return_value="opaque-token-abc") as mock_tok:
+        mgr = HITLManager()
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+    mock_tok.assert_called_once_with(32)
+    assert len(captured) == 1
+    assert _update_bind_value(captured[0], "claim_token") == "opaque-token-abc"
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("aaa.bbb.ccc", True),
+        ("eyJ.eyJ.sig", True),
+        ("no-dots", False),
+        ("one.dot", False),
+        ("", False),
+    ],
+)
+def test_looks_like_jwt_heuristic(token: str, expected: bool) -> None:
+    mgr = HITLManager(secret_key=_KEY)
+    assert mgr._looks_like_jwt(token) is expected
 
 
 def test_create_claim_token_roundtrip_unittest() -> None:

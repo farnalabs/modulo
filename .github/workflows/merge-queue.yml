@@ -376,4 +376,3 @@ jobs:
             -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
             -d "$BODY"
           echo "Fixer notified of CI failure"
-

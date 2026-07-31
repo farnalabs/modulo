@@ -60,11 +60,10 @@ def test_no_sensitive_data_in_logs():
 
 def _check_expr_for_sensitive_var(expr, path, lineno, violations):
     """Check if an expression references a sensitive variable name."""
-    sensitive_names = SENSITIVE_VARS
     # Look for ast.Name references
     for sub in ast.walk(expr):
         # Direct variable reference (e.g., logger.info(token))
-        if isinstance(sub, ast.Name) and sub.id in sensitive_names:
+        if isinstance(sub, ast.Name) and sub.id in SENSITIVE_VARS:
             violations.append(
                 f"  {path.relative_to(SRC.parent.parent)}:{lineno}  Variable '{sub.id}' logged — "
                 "may contain sensitive data"
@@ -76,7 +75,7 @@ def _check_expr_for_sensitive_var(expr, path, lineno, violations):
                 if (
                     isinstance(value, ast.FormattedValue)
                     and isinstance(value.value, ast.Name)
-                    and value.value.id in sensitive_names
+                    and value.value.id in SENSITIVE_VARS
                 ):
                     violations.append(
                         f"  {path.relative_to(SRC.parent.parent)}:{lineno}  f-string interpolates "

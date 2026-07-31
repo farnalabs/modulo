@@ -60,11 +60,13 @@ async def admin_get_email_settings(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
             cfg = org.settings_json or {}
     except ProgrammingError:
+        logger.exception("admin_email.admin_get_email_settings")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_email.admin_get_email_settings")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
@@ -106,11 +108,13 @@ async def admin_update_email_settings(
     try:
         org = await get_organisation(session, org_id)
     except ProgrammingError:
+        logger.exception("admin_email.admin_update_email_settings")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_email.admin_update_email_settings")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for email settings.",
@@ -146,11 +150,13 @@ async def admin_update_email_settings(
     try:
         await update_organisation(session, org_id, {"settings_json": settings_json})
     except ProgrammingError:
+        logger.exception("admin_email.admin_update_email_settings")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_email.admin_update_email_settings")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating email settings.",
@@ -188,11 +194,13 @@ async def admin_test_email_settings(
     try:
         org = await get_organisation(session, org_id)
     except ProgrammingError:
+        logger.exception("admin_email.admin_test_email_settings")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_email.admin_test_email_settings")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for test-email.",
@@ -243,4 +251,5 @@ async def admin_test_email_settings(
     except EmailSendingError as exc:
         return {"ok": False, "message": str(exc)}
     except Exception as exc:
+        logger.exception("admin_email.admin_test_email_settings")
         return {"ok": False, "message": str(exc)}

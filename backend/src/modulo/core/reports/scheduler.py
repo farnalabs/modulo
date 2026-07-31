@@ -30,9 +30,10 @@ from typing import Any
 import httpx
 from croniter import croniter
 from sqlalchemy import select, update
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core.pipeline_executor_task import SchedulerDBError
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.settings import get_settings
 
@@ -184,12 +185,22 @@ class ReportFireTask(Task):  # type: ignore[misc]  # Celery does not publish typ
     default_retry_delay = 60
 
     def run(self, report_id: str, org_id: str) -> dict[str, Any]:
-        return asyncio.run(
-            _fire_scheduled_report(
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(
+                _fire_scheduled_report(
+                    report_id=uuid.UUID(report_id),
+                    org_id=uuid.UUID(org_id),
+                )
+            )
+        else:
+            coro = _fire_scheduled_report(
                 report_id=uuid.UUID(report_id),
                 org_id=uuid.UUID(org_id),
             )
-        )
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            return future.result()
 
 
 async def _fire_scheduled_report(
@@ -500,7 +511,10 @@ class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does n
 
     def _sync_with_db(self) -> None:
         """Query the database and update the in-memory schedule."""
-        rows = asyncio.run(self._fetch_due_reports())
+        try:
+            rows = self._fetch_due_reports()
+        except SchedulerDBError:
+            return
 
         current_ids = set(self._schedule.keys())
         db_ids: set[str] = set()
@@ -526,26 +540,29 @@ class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does n
         for sid in stale:
             self._schedule.pop(sid, None)
 
-    async def _fetch_due_reports(self) -> list[dict[str, Any]]:
-        """Async query for scheduled reports due to fire."""
+    def _fetch_due_reports(self) -> list[dict[str, Any]]:
+        """Sync query for scheduled reports due to fire — runs inside Celery beat."""
         try:
-            factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
+            from datetime import UTC, datetime
 
-            async with factory() as session:
-                async with session.begin():
-                    now = datetime.datetime.now(datetime.UTC)
-                    result = await session.execute(
-                        select(
-                            ScheduledReport.id,
-                            ScheduledReport.organisation_id,
-                            ScheduledReport.cron_expression,
-                            ScheduledReport.next_send_at,
-                        ).where(
-                            ScheduledReport.active == True,  # noqa: E712
-                            ScheduledReport.next_send_at <= now,
-                        )
+            from modulo.core.pipeline_executor_task import SchedulerDBError, get_beat_sync_session
+            from modulo.db.models.scheduled_report import ScheduledReport
+
+            session = get_beat_sync_session()
+            try:
+                now = datetime.now(UTC)
+                result = session.execute(
+                    select(
+                        ScheduledReport.id,
+                        ScheduledReport.organisation_id,
+                        ScheduledReport.cron_expression,
+                        ScheduledReport.next_send_at,
+                    ).where(
+                        ScheduledReport.active,
+                        ScheduledReport.next_send_at <= now,
                     )
-                    rows = result.all()
+                )
+                rows = result.all()
 
                 reports: list[dict[str, Any]] = []
                 for row in rows:
@@ -558,11 +575,15 @@ class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does n
                         }
                     )
                 return reports
-        except asyncio.CancelledError:
-            raise
-        except Exception:
+            finally:
+                session.close()
+        except (
+            OperationalError,
+            InterfaceError,
+            TimeoutError,
+        ):
             _log.exception("Failed to fetch scheduled reports from database")
-            return []
+            raise SchedulerDBError("Report scheduler DB query failed") from None
 
     # max_interval: class attribute (not @property) so Celery can set it
     max_interval: int = 60

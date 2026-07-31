@@ -177,6 +177,7 @@ async def list_parameter_schemas_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_schemas(session, org_id=principal.organisation_id, limit=page_size)
     except IntegrityError:
+        logger.exception("parameter_schemas.list_parameter_schemas_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -270,6 +271,7 @@ async def get_parameter_schema_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await get_schema(session, schema_id)
     except IntegrityError:
+        logger.exception("parameter_schemas.get_parameter_schema_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -366,6 +368,7 @@ async def delete_parameter_schema_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await soft_delete_schema(session, schema_id)
     except IntegrityError:
+        logger.exception("parameter_schemas.delete_parameter_schema_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -639,6 +642,7 @@ async def list_parameter_sets_endpoint(
                 org_id=principal.organisation_id,
             )
     except IntegrityError:
+        logger.exception("parameter_schemas.list_parameter_sets_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -738,6 +742,7 @@ async def get_parameter_set_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             ps = await get_set(session, set_id)
     except IntegrityError:
+        logger.exception("parameter_schemas.get_parameter_set_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -845,6 +850,7 @@ async def delete_parameter_set_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
             ps = await soft_delete_set(session, set_id)
     except IntegrityError:
+        logger.exception("parameter_schemas.delete_parameter_set_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",

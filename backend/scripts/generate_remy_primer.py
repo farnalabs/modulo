@@ -18,7 +18,6 @@ import argparse
 import asyncio
 import logging
 import re
-import sys
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -454,7 +453,6 @@ async def main() -> None:
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(primer, encoding="utf-8")
-        print(f"Primer written to {out_path}", file=sys.stderr)
     else:
         print(primer)
 

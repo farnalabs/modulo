@@ -140,4 +140,4 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 - [ ] No eval run lifecycle persistence — standalone_evaluate creates ephemeral EvalDefinition per call
 - [ ] No eval results API endpoint for querying historical results (only regression alerts endpoint exists)
 - [ ] No eval run trigger via API (eval_run.feature scenarios not fully wired to real endpoints)
-- [ ] LLM judge untrusted-output prompt enforcement is documented in PRD (6.2) but not validated at the engine layer 
+- [ ] LLM judge untrusted-output prompt enforcement is documented in PRD (6.2) but not validated at the engine layer

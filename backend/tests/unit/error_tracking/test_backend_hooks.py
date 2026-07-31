@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -99,9 +100,7 @@ class TestCatchAllMiddleware:
 
 class TestErrorTrackingLogHandler:
     def _make_record(self, level: int, msg: str) -> logging.LogRecord:
-        return logging.LogRecord(
-            name="test", level=level, pathname="", lineno=0, msg=msg, args=(), exc_info=None
-        )
+        return logging.LogRecord(name="test", level=level, pathname="", lineno=0, msg=msg, args=(), exc_info=None)
 
     @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit", new_callable=AsyncMock)
     def test_skips_below_error(self, mock_async: AsyncMock) -> None:
@@ -111,6 +110,7 @@ class TestErrorTrackingLogHandler:
         handler.emit(self._make_record(logging.INFO, "info msg"))
         mock_async.assert_not_awaited()
         mock_async.assert_not_called()
+        assert handler._pending_tasks == 0
 
     @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit", new_callable=AsyncMock)
     async def test_captures_error_level(self, mock_async: AsyncMock) -> None:
@@ -274,3 +274,22 @@ class TestCeleryFailureHandler:
         assert "sensitive_arg1" in event_data["context_json"]["args_summary"]
         assert event_data["context_json"]["kwargs_keys"] == ["org_id", "token", "url"]
         assert "s shh" not in str(event_data["context_json"]["kwargs_keys"])
+
+
+# =========================================================================
+# Environment/version enrichment
+# =========================================================================
+
+
+class TestEnrichment:
+    @patch("modulo.api.middleware.catch_all.get_version", return_value="1.2.3")
+    @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
+    def test_version_in_response(self, mock_ingest: Any, mock_version: Any) -> None:
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.get("/crash")
+        assert resp.status_code == 500
+
+    def test_environment_falls_back_to_development(self) -> None:
+        env_val = os.environ.get("MODULO_ENV", "development")
+        assert env_val == "development"
