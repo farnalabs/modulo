@@ -993,7 +993,8 @@ export default {
       "schema_updated_version_failed": "Schema updated but version save failed",
       "schema_created": "Schema created.",
       "schema_updated": "Schema updated.",
-      "save_failed": "Save failed:"
+      "save_failed": "Save failed:",
+      "deprecated": "Deprecated"
     },
     "SchemaInferenceView": {
       "browse": "Browse",

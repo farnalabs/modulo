@@ -113,14 +113,19 @@ function formatMemberSince(dateStr: string): string {
 }
 
 async function loadProfile() {
-  const { data, error } = await api.GET('/api/v1/me')
-  if (error) {
+  try {
+    const { data, error } = await api.GET('/api/v1/me')
+    if (error) {
+      profile.value = { ...EMPTY_PROFILE }
+      return
+    }
+    if (data) {
+      const { id, email, display_name, org_role, active, created_at } = data
+      profile.value = { id, email, display_name, org_role, active, created_at }
+    }
+  } catch (e) {
+    console.warn('Failed to load profile', e)
     profile.value = { ...EMPTY_PROFILE }
-    return
-  }
-  if (data) {
-    const { id, email, display_name, org_role, active, created_at } = data
-    profile.value = { id, email, display_name, org_role, active, created_at }
   }
 }
 
@@ -136,21 +141,26 @@ async function changePassword() {
     return
   }
   passSaving.value = true
-  const { error } = await api.PUT('/api/v1/me/password', {
-    body: {
-      current_password: currentPassword.value,
-      new_password: newPassword.value,
-    },
-  })
-  if (error) {
-    passError.value = formatApiError(error)
-  } else {
-    passSuccess.value = t('views.MyProfileView.password_changed_successfully')
-    currentPassword.value = ''
-    newPassword.value = ''
-    confirmPassword.value = ''
+  try {
+    const { data, error } = await api.PUT('/api/v1/me/password', {
+      body: {
+        current_password: currentPassword.value,
+        new_password: newPassword.value,
+      },
+    })
+    if (error) {
+      passError.value = formatApiError(error)
+    } else if (data) {
+      passSuccess.value = t('views.MyProfileView.password_changed_successfully')
+      currentPassword.value = ''
+      newPassword.value = ''
+      confirmPassword.value = ''
+    }
+  } catch (e) {
+    passError.value = formatApiError(e)
+  } finally {
+    passSaving.value = false
   }
-  passSaving.value = false
 }
 
 onMounted(loadProfile)

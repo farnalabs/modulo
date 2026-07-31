@@ -2,12 +2,9 @@
 
 import binascii
 import uuid
-
-import pytest
-
-pytestmark = pytest.mark.skip(reason="Flaky under xdist (pytest-playwright async interaction)")
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from cryptography.fernet import Fernet
 
 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
@@ -112,6 +109,47 @@ class TestGetSecret:
 
         with pytest.raises(ValueError, match="Failed to decrypt secret"):
             await backend.get_secret("corrupted-key")
+
+    async def test_none_encrypted_value_raises_value_error(self, mock_session):
+        """A NULL encrypted_value must raise ValueError, not a raw TypeError."""
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+        row = MagicMock(spec=Secret)
+        row.encrypted_value = None
+
+        async def mock_execute(stmt, *args, **kwargs):
+            result = MagicMock()
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = row
+            return result
+
+        mock_session.execute = AsyncMock(side_effect=mock_execute)
+
+        with pytest.raises(ValueError, match="Failed to decrypt secret"):
+            await backend.get_secret("null-value-key")
+
+    async def test_old_key_fallback_decrypts(self, mock_session):
+        """Rotation: secrets encrypted with old_key must decrypt via fallback."""
+        old_key = Fernet.generate_key().decode()
+        old_fernet = Fernet(old_key.encode())
+        encrypted = old_fernet.encrypt(_SECRET_VALUE.encode())
+        row = MagicMock(spec=Secret)
+        row.encrypted_value = encrypted
+
+        async def mock_execute(stmt, *args, **kwargs):
+            result = MagicMock()
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = row
+            return result
+
+        mock_session.execute = AsyncMock(side_effect=mock_execute)
+
+        backend = FernetSecretsBackend(fernet_key=_KEY, old_key=old_key, session=mock_session)
+        value = await backend.get_secret("rotated-key")
+        assert value == _SECRET_VALUE
 
 
 class TestSetSecret:
