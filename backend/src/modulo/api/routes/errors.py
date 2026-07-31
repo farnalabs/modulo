@@ -84,7 +84,7 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
 
                 redis_client = Redis.from_url(resolved.redis_url, decode_responses=False)
             except Exception:
-                _log.warning("error_tracking.redis_unavailable — falling back to in-memory key store")
+                _log.warning("error_tracking.redis_unavailable — falling back to in-memory key store", exc_info=True)
         _key_store = SessionKeyStore(redis_client=redis_client)
     return _key_store
 
@@ -146,6 +146,7 @@ async def ingest_errors(
     try:
         ingest_request = ErrorIngestRequest(**data)
     except Exception as exc:
+        _log.exception("errors.ingest_errors")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
@@ -165,11 +166,13 @@ async def ingest_errors(
     except HTTPException:
         raise
     except ProgrammingError as exc:
+        _log.exception("errors.ingest_errors")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("errors.ingest_errors")
         _log.warning("error_tracking.db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -234,6 +237,7 @@ async def ingest_errors_public(
     try:
         ingest_request = ErrorIngestRequest(**data)
     except Exception as exc:
+        _log.exception("errors.ingest_errors_public")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
@@ -266,11 +270,13 @@ async def ingest_errors_public(
         async with session.begin():
             results = await _service.ingest_batch(session, ORPHAN_ORG_ID, events_data)
     except ProgrammingError as exc:
+        _log.exception("errors.ingest_errors_public")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("errors.ingest_errors_public")
         _log.warning("error_tracking.public_ingest_db_error", extra={"ip": client_ip})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -395,11 +401,13 @@ async def list_error_groups(
                 sample = sample_events.get(g.sample_event_id) if g.sample_event_id else None
                 items.append(_serialize_error_group_summary(g, sample))
     except ProgrammingError as exc:
+        _log.exception("errors.list_error_groups")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("errors.list_error_groups")
         _log.warning("error_tracking.list_groups_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -436,11 +444,13 @@ async def get_error_group_detail(
     except HTTPException:
         raise
     except ProgrammingError as exc:
+        _log.exception("errors.get_error_group_detail")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("errors.get_error_group_detail")
         _log.warning("error_tracking.get_group_detail_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -496,11 +506,13 @@ async def patch_error_group(
     except HTTPException:
         raise
     except ProgrammingError as exc:
+        _log.exception("errors.patch_error_group")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("errors.patch_error_group")
         _log.warning("error_tracking.patch_group_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -553,11 +565,13 @@ async def list_error_events(
     except HTTPException:
         raise
     except ProgrammingError as exc:
+        _log.exception("errors.list_error_events")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("errors.list_error_events")
         _log.warning("error_tracking.list_events_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

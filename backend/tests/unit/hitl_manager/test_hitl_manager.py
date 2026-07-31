@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
@@ -13,6 +14,8 @@ from modulo.core.hitl_manager import (
     ClaimTokenInvalidError,
     GateAlreadyDecidedError,
     GateNotFoundError,
+    GateVanishedError,
+    HITLError,
     HITLManager,
     NotTeamMemberError,
 )
@@ -152,6 +155,54 @@ async def test_create_gate_idempotent_if_exists():
     session.add.assert_not_called()
 
 
+async def test_create_gate_integrity_error_returns_existing_row():
+    """A concurrent insert racing our own insert falls back to the existing row."""
+    existing = _gate()
+    session = AsyncMock()
+    session.flush = AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("duplicate key")))
+
+    calls = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        # First _get() finds nothing (we try to insert), second finds the winner
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = existing if calls > 1 else None
+        return r
+
+    session.execute = _execute
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+
+    mgr = HITLManager()
+    result = await mgr.create_gate(session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
+    assert result is existing
+
+
+async def test_create_gate_integrity_error_lost_race_raises():
+    """If the concurrent winner vanishes between our insert and re-fetch, raise."""
+    session = AsyncMock()
+    session.flush = AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("duplicate key")))
+
+    async def _execute(stmt: Any) -> Any:
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = None
+        return r
+
+    session.execute = _execute
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+
+    mgr = HITLManager()
+    with pytest.raises(RuntimeError, match="Concurrent gate creation lost race"):
+        await mgr.create_gate(session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
+
+
 # ---------------------------------------------------------------------------
 # claim
 # ---------------------------------------------------------------------------
@@ -186,17 +237,78 @@ async def test_claim_gate_not_found_raises():
 
 
 async def test_claim_custom_expiry_minutes_is_applied():
-    """claim() with custom expiry_minutes passes the right interval to the UPDATE."""
+    """claim() with custom expiry_minutes binds a matching expires_at to the UPDATE."""
     pre_check = _gate(account_id=None)
     claimed_gate = _gate(
         account_id=_USER,
         claim_token="tok",
         expires_at=datetime.now(UTC) + timedelta(minutes=60),
     )
-    session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check)
+    captured: list[Any] = []
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    update_result = MagicMock()
+    update_result.scalar_one_or_none.return_value = uuid.uuid4()
+    get_result = MagicMock()
+    get_result.scalar_one_or_none.return_value = pre_check
+    pre_check_result = MagicMock()
+    pre_check_result.scalar_one_or_none.return_value = pre_check
+    call_count = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return pre_check_result
+        if call_count == 2:
+            captured.append(stmt)
+            return update_result
+        return get_result
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=claimed_gate)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+
     mgr = HITLManager()
     result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=60)
     assert result is claimed_gate
+
+    assert len(captured) == 1
+    expires_at = next(expr.value for col, expr in captured[0]._values.items() if col.name == "expires_at")
+    remaining = expires_at - datetime.now(UTC)
+    assert timedelta(minutes=59, seconds=55) < remaining <= timedelta(minutes=60, seconds=5)
+
+
+async def test_claim_non_positive_expiry_raises():
+    """claim() with a non-positive expiry_minutes is rejected before touching the DB."""
+    session = _session_update(rows_returned=1, gate=None, pre_check_gate=None)
+    mgr = HITLManager()
+    with pytest.raises(HITLError, match="expiry_minutes must be positive"):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=0)
+
+
+async def test_claim_already_decided_raises():
+    """claim() on a gate that already has a decision raises GateAlreadyDecidedError."""
+    decided = _gate(decision="approved")
+    session = _session_update(rows_returned=0, gate=decided, pre_check_gate=decided)
+    mgr = HITLManager()
+    with pytest.raises(GateAlreadyDecidedError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
+async def test_claim_gate_vanished_after_update_raises():
+    """claim() whose gate row disappears after the UPDATE raises GateVanishedError."""
+    unclaimed = _gate(account_id=None)
+    session = _session_update(rows_returned=1, gate=None, pre_check_gate=unclaimed)
+    mgr = HITLManager()
+    with pytest.raises(GateVanishedError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +386,66 @@ async def test_claim_team_member_can_claim():
     result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed
     assert team_check_count == 2
+
+
+async def test_claim_membership_lost_between_check_and_update_undoes_claim():
+    """If the claimant loses team membership after the pre-check, claim() is undone.
+
+    The UPDATE is followed by a second membership check (closing the TOCTOU
+    window).  When that check fails, the claim must be reverted and
+    NotTeamMemberError raised.
+    """
+    gate = _gate(account_id=None, required_team_id=_TEAM)
+    membership = MagicMock(spec=TeamMembership)
+    membership.team_id = _TEAM
+    membership.account_id = _USER
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    call_no = 0
+    undo_stmt: list[Any] = []
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no
+        call_no += 1
+        if call_no == 1:
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = gate
+            return r
+        if call_no == 2:
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = gate
+            return r
+        if call_no == 3:
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = membership
+            return r
+        if call_no == 4:
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = uuid.uuid4()
+            return r
+        if call_no == 5:
+            # Membership vanished between the check and the UPDATE
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = None
+            return r
+        if call_no == 6:
+            # Undo UPDATE — claim is released
+            undo_stmt.append(stmt)
+            return MagicMock()
+        raise AssertionError(f"Unexpected execute call #{call_no}")
+
+    session.execute = _execute
+    mgr = HITLManager()
+    with pytest.raises(NotTeamMemberError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+    assert len(undo_stmt) == 1, "Claim should be undone when membership is lost post-check"
+    assert all(expr.value is None for _, expr in undo_stmt[0]._values.items()), (
+        "Undo UPDATE should clear account_id/claim_token/expires_at"
+    )
 
 
 async def test_claim_non_team_member_raises():
@@ -411,6 +583,16 @@ async def test_approve_null_expires_at_raises_expired():
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
+        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+
+
+async def test_approve_gate_vanished_after_update_raises():
+    """approve() whose gate row disappears after the UPDATE raises GateVanishedError."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=None)
+    mgr = HITLManager()
+    with pytest.raises(GateVanishedError):
         await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
 
 

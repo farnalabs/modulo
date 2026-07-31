@@ -54,7 +54,6 @@
             <span class="flex items-center gap-1">
               <Sun v-if="isLight" class="h-3 w-3" aria-hidden="true" />
               <Moon v-else class="h-3 w-3" aria-hidden="true" />
-              <span>{{ isLight ? $t('common.light') : $t('common.dark') }}</span>
             </span>
             <input id="applayout-field-2"
               type="checkbox"
@@ -177,8 +176,8 @@
 
     <div v-if="planStore.devMode && remyStore.isExecutingUi" class="remy-execution-overlay">
       <div class="remy-execution-banner">
-        <span>Remy is performing actions on this page</span>
-        <button class="remy-stop-btn" @click="abortUiCommands">Stop</button>
+        <span>{{ $t('components.AppLayout.remy_performing_actions') }}</span>
+        <button class="remy-stop-btn" @click="abortUiCommands">{{ $t('components.AppLayout.remy_stop') }}</button>
       </div>
     </div>
 

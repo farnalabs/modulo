@@ -473,7 +473,6 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
     # 0. No-go zone check (highest priority)
     if _check_nogo(config, tool_name, args, page_context) and config.permission_mode == "full_auto":
         return "disabled"
-        return "nogo_requires_approval"
 
     # 0b. Allowlist enforcement (second priority — restricts which elements/pages are auto-allowed)
     if config.allowed_selectors and tool_name in ("click", "fill", "select", "extract"):
@@ -633,6 +632,7 @@ async def list_sessions(
 
         return {"items": items, "total": total, "page": page, "page_size": page_size}
     except ProgrammingError:
+        logger.exception("remy.list_sessions")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -709,6 +709,7 @@ async def create_session(
 
         return _serialise_session(chat_session)
     except ProgrammingError:
+        logger.exception("remy.create_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -747,6 +748,7 @@ async def get_session(
 
         return _serialise_session(chat_session, msg_count)
     except ProgrammingError:
+        logger.exception("remy.get_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -785,6 +787,7 @@ async def rename_session(
 
         return _serialise_session(chat_session)
     except ProgrammingError:
+        logger.exception("remy.rename_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -839,6 +842,7 @@ async def delete_session(
 
         return {"status": "deleted", "id": str(session_id)}
     except ProgrammingError:
+        logger.exception("remy.delete_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -897,6 +901,7 @@ async def list_messages(
             "page_size": page_size,
         }
     except ProgrammingError:
+        logger.exception("remy.list_messages")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -945,6 +950,7 @@ async def append_message(
 
         return _serialise_message(msg)
     except ProgrammingError:
+        logger.exception("remy.append_message")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -984,6 +990,7 @@ async def stream_chat(
             if chat_session is None or chat_session.user_id != principal.account_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     except ProgrammingError:
+        logger.exception("remy.stream_chat")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1548,6 +1555,7 @@ async def submit_permission_response(
             await set_rls_org(session, principal.organisation_id)
             await _validate_session_ownership(session_id, principal, session)
     except ProgrammingError:
+        logger.exception("remy.submit_permission_response")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1606,6 +1614,7 @@ async def submit_ui_command_results(
             await set_rls_org(session, principal.organisation_id)
             await _validate_session_ownership(session_id, principal, session)
     except ProgrammingError:
+        logger.exception("remy.submit_ui_command_results")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1652,6 +1661,7 @@ async def reset_session_permissions(
             await set_rls_org(session, principal.organisation_id)
             await _validate_session_ownership(session_id, principal, session)
     except ProgrammingError:
+        logger.exception("remy.reset_session_permissions")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1689,6 +1699,7 @@ async def resume_session(
             await set_rls_org(session, principal.organisation_id)
             await _validate_session_ownership(session_id, principal, session)
     except ProgrammingError:
+        logger.exception("remy.resume_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1729,6 +1740,7 @@ async def stop_session(
             await set_rls_org(session, principal.organisation_id)
             await _validate_session_ownership(session_id, principal, session)
     except ProgrammingError:
+        logger.exception("remy.stop_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1812,6 +1824,7 @@ async def get_audit_trail(
 
         return {"items": trail}
     except ProgrammingError:
+        logger.exception("remy.get_audit_trail")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1885,6 +1898,7 @@ async def undo_last_action(
             "undo_action": inverse,
         }
     except ProgrammingError:
+        logger.exception("remy.undo_last_action")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",

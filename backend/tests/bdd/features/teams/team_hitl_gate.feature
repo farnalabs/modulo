@@ -42,4 +42,3 @@ Feature: Team-Scoped HITL Gates
     When user "alice" approves gate "gate-1" on run "run-1"
     Then the response status is 200
     And the run resumes execution
-

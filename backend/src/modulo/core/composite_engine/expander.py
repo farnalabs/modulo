@@ -306,7 +306,7 @@ def _inject_parameters(prompt: str, parameter_values: dict[str, Any]) -> str:
 def _remap_edge_refs(
     edges: list[dict[str, Any]],
     parent_node_id: str,
-    node_index: int,
+    _node_index: int,
     sub_nodes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Remap edge source/target references relative to expanded nodes.

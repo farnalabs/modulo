@@ -61,7 +61,9 @@ class SecretsBackend(ABC):
 
 
 def validate_key(key: str) -> str:
-    """Validate and normalise a secret key. Raises ValueError if empty."""
+    """Validate and normalise a secret key. Raises ValueError if empty or not a string."""
+    if not isinstance(key, str):
+        raise ValueError("Secret key must be a non-empty string")
     stripped = key.strip()
     if not stripped:
         raise ValueError("Secret key must be a non-empty string")

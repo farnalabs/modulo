@@ -173,11 +173,13 @@ async def get_remy_config(
             allowed_models=value.get("allowed_models", []),
         )
     except ProgrammingError:
+        logger.exception("admin_remy.get_remy_config")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_remy.get_remy_config")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching Remy config.",
@@ -282,11 +284,13 @@ async def update_remy_config(
             allowed_models=current.get("allowed_models", []),
         )
     except ProgrammingError:
+        logger.exception("admin_remy.update_remy_config")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_remy.update_remy_config")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating Remy config.",
@@ -352,11 +356,13 @@ async def list_org_skills(
             skills = list(result.scalars())
         return [_skill_to_response(s) for s in skills]
     except ProgrammingError:
+        logger.exception("admin_remy.list_org_skills")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_remy.list_org_skills")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing skills.",
@@ -396,11 +402,13 @@ async def create_org_skill(
             await session.flush()
         return _skill_to_response(skill)
     except ProgrammingError:
+        logger.exception("admin_remy.create_org_skill")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_remy.create_org_skill")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating skill.",
@@ -441,11 +449,13 @@ async def update_org_skill(
             await session.flush()
         return _skill_to_response(skill)
     except ProgrammingError:
+        logger.exception("admin_remy.update_org_skill")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_remy.update_org_skill")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating skill.",
@@ -474,11 +484,13 @@ async def delete_org_skill(
             skill = await _get_org_skill(session, skill_id, principal.organisation_id)
             await session.delete(skill)
     except ProgrammingError:
+        logger.exception("admin_remy.delete_org_skill")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_remy.delete_org_skill")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting skill.",
@@ -520,11 +532,13 @@ async def get_org_context_sources(
             "effective": {**builtin_defaults, **org_defaults},
         }
     except ProgrammingError:
+        logger.exception("admin_remy.get_org_context_sources")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_remy.get_org_context_sources")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching context sources.",
@@ -558,11 +572,13 @@ async def set_org_context_source(
             await service.set_org_default(principal.organisation_id, source_key, req.source_mode)
             return await service.get_org_defaults(principal.organisation_id)
     except ProgrammingError:
+        logger.exception("admin_remy.set_org_context_source")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_remy.set_org_context_source")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating context source.",
@@ -599,11 +615,13 @@ async def reset_org_context_sources(
                 await session.delete(row)
         return {}
     except ProgrammingError:
+        logger.exception("admin_remy.reset_org_context_sources")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin_remy.reset_org_context_sources")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while resetting context sources.",

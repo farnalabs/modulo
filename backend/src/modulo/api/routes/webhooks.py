@@ -15,7 +15,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -51,7 +51,6 @@ _trigger_engine = TriggerEngine()
 async def receive_webhook(
     trigger_id: uuid.UUID,
     request: Request,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     engine: AsyncEngine = Depends(_get_engine),
@@ -73,6 +72,7 @@ async def receive_webhook(
         if not isinstance(raw_payload, dict):
             raise TypeError("not a JSON object")
     except Exception as exc:
+        _log.exception("webhooks.receive_webhook")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Request body must be a JSON object",
@@ -147,11 +147,13 @@ async def receive_webhook(
             detail=str(exc),
         ) from exc
     except ProgrammingError:
+        _log.exception("webhooks.receive_webhook")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("webhooks.receive_webhook")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -177,7 +179,6 @@ async def receive_webhook(
 async def replay_webhook(
     trigger_id: uuid.UUID,
     event_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     engine: AsyncEngine = Depends(_get_engine),
@@ -239,11 +240,13 @@ async def replay_webhook(
             detail=f"Concurrent run limit of {exc.limit} reached",
         ) from exc
     except ProgrammingError:
+        _log.exception("webhooks.replay_webhook")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("webhooks.replay_webhook")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -292,11 +295,13 @@ async def cleanup_expired(
             await set_rls_org(session, org_id)
             result["payloads_deleted"] = await _trigger_engine.cleanup_expired_payloads(session)
     except ProgrammingError:
+        _log.exception("webhooks.cleanup_expired")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("webhooks.cleanup_expired")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",

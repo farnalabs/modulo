@@ -7,6 +7,7 @@ Requires DATABASE_URL env var or a running modulo instance with settings loaded.
 """
 
 import asyncio
+import sys
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -220,7 +221,7 @@ async def seed() -> None:
             )
         await session.commit()
     await engine.dispose()
-    print("Tier catalog seeded successfully.")
+    print("Tier catalog seeded successfully.", file=sys.stderr)
 
 
 if __name__ == "__main__":
