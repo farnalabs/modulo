@@ -25,6 +25,7 @@ export default {
     },
     "LibraryView": {
       "title": "Library",
+      "all_types": "All types",
       "failed_to_load_primitives": "Failed to load modules",
       "test_fixtures": "Test Fixtures",
       "failed_to_toggle_autoupdate": "Failed to toggle auto-update",
@@ -51,7 +52,8 @@ export default {
       "view_details": "View Details",
       "previous_page": "Previous",
       "next_page": "Next",
-      "page_of": "Page {page} of {total}"
+      "page_of": "Page {page} of {total}",
+      "all_types": "All types"
     },
     "AdminRemyView": {
       "configure_remy_ai_assistant_behaviour_access_and_skills": "Configure Remy AI assistant behaviour, access, and skills",
@@ -697,6 +699,7 @@ export default {
       "copy": "Copy",
       "final_output": "Final Output",
       "no_node_data": "No node data available for this run.",
+      "no_node_data_failed": "No node-level data recorded for this failed run. The error may have occurred during pipeline setup or before any node started execution.",
       "node": "Node",
       "status": "Status",
       "duration": "Duration",
@@ -724,6 +727,8 @@ export default {
       "input_tokens": "Input Tokens",
       "trace_id": "Trace ID",
       "run_detail": "Run Detail",
+      "run_error": "Run Error",
+      "run_input": "Run Input",
       "hide": "Hide",
       "show": "Show",
       "prompt_hidden_click_to_reveal": "[Prompt hidden — click to reveal]",

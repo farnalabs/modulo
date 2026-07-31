@@ -112,7 +112,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
             raise
         except Exception as exc:
             logger.error("AWSSecretsManagerBackend: unexpected error reading secret %s: %s", key, exc)
-            raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error reading secret: {exc}") from exc
+            raise RuntimeError("AWSSecretsManagerBackend: unexpected error reading secret") from exc
 
         secret_string = response.get("SecretString")
         if isinstance(secret_string, str):
@@ -144,6 +144,18 @@ class AWSSecretsManagerBackend(SecretsBackend):
                     SecretString=value,
                     timeout_seconds=_TIMEOUT,
                 )
+            except client.exceptions.ResourceNotFoundException:
+                # Secret was deleted between create_secret raising
+                # ResourceExistsException and update_secret — retry the create
+                # once to close the TOCTOU window.
+                logger.warning("AWSSecretsManagerBackend: secret %s deleted mid-write, retrying create", key)
+                await run_sync(
+                    client.create_secret,
+                    Name=key,
+                    SecretString=value,
+                    Description=_SECRET_DESCRIPTION,
+                    timeout_seconds=_TIMEOUT,
+                )
             except TimeoutError:
                 logger.error("AWSSecretsManagerBackend: timeout writing secret %s", key)
                 raise RuntimeError("AWSSecretsManagerBackend: timeout writing secret") from None
@@ -151,7 +163,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
                 raise
             except Exception as exc:
                 logger.error("AWSSecretsManagerBackend: unexpected error writing secret %s: %s", key, exc)
-                raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error writing secret: {exc}") from exc
+                raise RuntimeError("AWSSecretsManagerBackend: unexpected error writing secret") from exc
         except TimeoutError:
             logger.error("AWSSecretsManagerBackend: timeout writing secret %s", key)
             raise RuntimeError("AWSSecretsManagerBackend: timeout writing secret") from None
@@ -159,7 +171,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
             raise
         except Exception as exc:
             logger.error("AWSSecretsManagerBackend: unexpected error writing secret %s: %s", key, exc)
-            raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error writing secret: {exc}") from exc
+            raise RuntimeError("AWSSecretsManagerBackend: unexpected error writing secret") from exc
 
     async def delete_secret(self, key: str) -> None:
         key = validate_key(key)
@@ -182,4 +194,4 @@ class AWSSecretsManagerBackend(SecretsBackend):
             raise
         except Exception as exc:
             logger.error("AWSSecretsManagerBackend: unexpected error deleting secret %s: %s", key, exc)
-            raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error deleting secret: {exc}") from exc
+            raise RuntimeError("AWSSecretsManagerBackend: unexpected error deleting secret") from exc

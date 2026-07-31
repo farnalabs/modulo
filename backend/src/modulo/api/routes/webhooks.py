@@ -15,7 +15,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -51,7 +51,6 @@ _trigger_engine = TriggerEngine()
 async def receive_webhook(
     trigger_id: uuid.UUID,
     request: Request,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     engine: AsyncEngine = Depends(_get_engine),
@@ -180,7 +179,6 @@ async def receive_webhook(
 async def replay_webhook(
     trigger_id: uuid.UUID,
     event_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     engine: AsyncEngine = Depends(_get_engine),

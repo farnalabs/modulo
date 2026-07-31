@@ -10,7 +10,7 @@ unit-tests:
   - backend/tests/unit/api/test_schemas_endpoint.py
   - backend/tests/unit/api/test_schema_infer_endpoint.py
   - backend/tests/unit/api/test_schema_generate_endpoint.py
-  - backend/tests/unit/api/test_schema_inference_bdd.py
+  - backend/tests/bdd/steps/test_schema_inference.py
   - backend/tests/unit/core/test_schema_inference.py
   - backend/tests/unit/core/test_schema_generation.py
   - backend/tests/unit/core/test_schema_validation.py

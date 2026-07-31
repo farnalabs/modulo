@@ -473,7 +473,6 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
     # 0. No-go zone check (highest priority)
     if _check_nogo(config, tool_name, args, page_context) and config.permission_mode == "full_auto":
         return "disabled"
-        return "nogo_requires_approval"
 
     # 0b. Allowlist enforcement (second priority — restricts which elements/pages are auto-allowed)
     if config.allowed_selectors and tool_name in ("click", "fill", "select", "extract"):
