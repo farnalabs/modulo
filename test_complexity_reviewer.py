@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import pytest
@@ -43,8 +44,6 @@ class TestComplexityReviewerDefinition:
         assert "{artifact}" in template
 
     def test_content_json_is_serializable(self) -> None:
-        import json
-
         serialized = json.dumps(COMPLEXITY_REVIEWER)
         deserialized = json.loads(serialized)
         assert deserialized["name"] == "Complexity Reviewer"
@@ -108,17 +107,23 @@ class TestContextSetterRole:
     async def test_context_setter_with_missing_run_context_defaults(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
-            state.get("run_context", {})
             return {"run_context": {"model_tier": "tier-1", "estimated_tokens": 0, "complexity_reason": "No context"}}
 
-        result = await context_setter_node({"run_context": {"cancelled": False, "input": {}}})
+        result = await context_setter_node({"cancelled": False})
         assert result["run_context"]["model_tier"] == "tier-1"
 
     @pytest.mark.asyncio
     async def test_context_setter_with_empty_input_does_not_crash(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
-            return {"run_context": {"model_tier": "tier-1", "estimated_tokens": 0, "complexity_reason": "ok"}}
+            token_estimate = len(state.get("run_context", {}).get("input", {}).get("code", "")) // 4
+            return {
+                "run_context": {
+                    "model_tier": "tier-1",
+                    "estimated_tokens": token_estimate,
+                    "complexity_reason": "ok",
+                }
+            }
 
         result = await context_setter_node({"run_context": {"cancelled": False, "input": {}}})
         assert result["run_context"]["estimated_tokens"] == 0
