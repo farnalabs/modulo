@@ -18,13 +18,12 @@ bdd:
   - backend/tests/bdd/features/teams/view_as_team_non_admin_rejected.feature
 unit-tests:
   - backend/tests/unit/api/test_teams.py
-  - backend/tests/unit/api/test_team_deletion_bdd.py
+  - backend/tests/bdd/steps/test_team_deletion.py
   - backend/tests/unit/api/test_team_gating.py
-  - backend/tests/unit/api/test_team_rbac_sqlalchemy_error.py
-  - backend/tests/unit/api/test_teams_exception_guard.py
-  - backend/tests/unit/api/test_view_as_team_bdd.py
+  - backend/tests/unit/api/test_error_handling.py
+  - backend/tests/bdd/steps/test_view_as_team.py
   - backend/tests/unit/auth/test_team_rbac.py
-  - backend/tests/unit/auth/test_sso_team_mapping_bdd.py
+  - backend/tests/bdd/steps/test_sso_team_mapping.py
   - backend/tests/unit/connectors/test_microsoft_teams.py
   - backend/tests/unit/connectors/test_teamcity.py
   - backend/tests/unit/db/crud/test_team.py

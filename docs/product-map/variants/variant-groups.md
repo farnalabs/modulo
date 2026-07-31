@@ -9,11 +9,11 @@ code:
   - backend/src/modulo/api/routes/variants.py
   - backend/src/modulo/db/models/variant_group.py
   - backend/src/modulo/db/crud/variant_group.py
-  - backend/src/modulo/db/migrations/versions/0012_variant_groups.py
+  - backend/src/modulo/db/migrations/versions/0005_v2_features_system.py
 unit-tests:
   - backend/tests/unit/api/test_variants.py
   - backend/tests/unit/db/crud/test_variant_group.py
-  - backend/tests/unit/api/test_variant_groups_bdd.py
+  - backend/tests/bdd/steps/test_variant_groups.py
   - backend/tests/integration/crud/test_variant_group.py
 depends-on: [feat-core-run-context, feat-evals-eval-engine]
 status: partial
@@ -133,3 +133,7 @@ A/B test variant management — named sets of runs against the same pipeline tha
 ## QA History
 
 - 2026-07-06: qa-iterate — Fixed CRITICAL: consolidated error handling sections into one complete section with all exception types (ProgrammingError→501, SQLAlchemyError→503, IntegrityError→409, Exception→500). Fixed MAJOR: designated this file as canonical for weighted selection, coverage gap, and prompt diff behaviours; removed duplicate copies from variant-execution.md and variant-ab-testing.md. Status: partial.
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE ref: migration `0012_variant_groups.py` renamed in v2 squash → `0005_v2_features_system.py` (creates `variant_groups` table).

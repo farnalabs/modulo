@@ -10,7 +10,7 @@ code:
   - backend/src/modulo/api/routes/variants.py
   - backend/src/modulo/db/crud/variant_group.py
   - backend/src/modulo/db/models/variant_group.py
-  - Website/modulo-website/src/docs/variants/variant-compare-ui.md
+  - Website/modulo-website/src/docs/evals/variant-compare-ui.md
 unit-tests:
   - backend/tests/unit/api/test_variants.py
   - backend/tests/unit/db/crud/test_variant_group.py
@@ -150,3 +150,7 @@ Side-by-side eval scores, token costs, and output diffs across A/B test variants
 - 2026-07-06 (Cross-cutting QA): Fixed `JSON.stringify(err)` → `formatApiError(err)` in 3 error handlers. Removed unused `VariantCompareView` locale keys from en-US.js. Created website docs stub at `evals/variant-compare-ui.md`. Added docs path to product map `code` field. Status: partial.
 - 2026-07-06: qa-iterate — Fixed MAJOR: removed `docs:` path from `unit-tests:` frontmatter field (moved to `code:`). Added `feat-variants-variant-groups` to `depends-on`. Status: partial.
 - 2026-07-07: Cross-cutting QA (index 327): Fixed MAJOR — replaced `e instanceof Error ? e.message : String(e)` with `formatApiError(e)` in 3 catch blocks for richer error detail. Fixed MAJOR — removed duplicate `@pytest.mark.asyncio` decorator in `test_variant_group.py`. Confirmed 70/70 variant tests pass (4 skipped = pre-existing batch/sequential/compare/coverage-signal gaps). Fixed minor — moved i18n-fixed note from Known Gaps to QA History. Status: partial.
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE ref: website doc lives at `Website/modulo-website/src/docs/evals/variant-compare-ui.md` (not `variants/`).

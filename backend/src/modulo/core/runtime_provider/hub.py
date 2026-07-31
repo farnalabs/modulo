@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -204,6 +204,7 @@ class RuntimeProviderHub:
             provider_ref=provider_ref,
             status="running",
             lease_started_at=datetime.now(UTC),
+            lease_expires_at=datetime.now(UTC) + timedelta(minutes=30),
         )
         session.add(lease)
         return lease

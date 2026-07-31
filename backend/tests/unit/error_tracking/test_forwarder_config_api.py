@@ -12,7 +12,36 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
-def _make_app():
+def _make_session_mock() -> MagicMock:
+    session = MagicMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__.return_value = session
+    begin_cm.__aexit__.return_value = None
+    session.begin.return_value = begin_cm
+
+    exec_result = MagicMock()
+    exec_result.scalar_one_or_none.return_value = None
+    exec_result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=exec_result)
+    session.flush = AsyncMock()
+    return session
+
+
+class _AllFeatures:
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+    def list_enabled_features(self) -> list:
+        return []
+
+    def tier(self) -> str:
+        return "enterprise"
+
+    def has_license_key(self) -> bool:
+        return True
+
+
+def _make_app(org_role: str = "admin") -> FastAPI:
     app = FastAPI()
 
     from modulo.api.routes.error_forwarder_config import router as forwarder_config_router
@@ -21,45 +50,20 @@ def _make_app():
 
     async def _override_user():
         return AuthenticatedPrincipal(
-            username="admin",
+            username=org_role,
             organisation_id=_ORG_ID,
             account_id=uuid.uuid4(),
-            org_role="admin",
+            org_role=org_role,
         )
 
     async def _override_db():
-        session = MagicMock()
-        begin_cm = AsyncMock()
-        begin_cm.__aenter__.return_value = session
-        begin_cm.__aexit__.return_value = None
-        session.begin.return_value = begin_cm
-
-        exec_result = MagicMock()
-        exec_result.scalar_one_or_none.return_value = None
-        exec_result.scalars.return_value.all.return_value = []
-        session.execute = AsyncMock(return_value=exec_result)
-        session.flush = AsyncMock()
-
-        return session
+        return _make_session_mock()
 
     from modulo.api.dependencies import get_db_session, get_plan_context
     from modulo.auth.dependencies import get_current_user
 
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
-
-    class _AllFeatures:
-        def feature_enabled(self, name: str) -> bool:
-            return True
-
-        def list_enabled_features(self) -> list:
-            return []
-
-        def tier(self) -> str:
-            return "enterprise"
-
-        def has_license_key(self) -> bool:
-            return True
 
     async def _override_plan_context() -> _AllFeatures:
         return _AllFeatures()
@@ -114,59 +118,9 @@ class TestConfigureForwarder:
         assert resp.status_code == 404
 
     def test_non_admin_returns_403(self):
-        app = FastAPI()
-        from modulo.api.routes.error_forwarder_config import router as forwarder_config_router
-
-        app.include_router(forwarder_config_router)
-
-        async def _override_viewer():
-            return AuthenticatedPrincipal(
-                username="viewer",
-                organisation_id=_ORG_ID,
-                account_id=uuid.uuid4(),
-                org_role="viewer",
-            )
-
-        async def _override_db():
-            session = MagicMock()
-            begin_cm = AsyncMock()
-            begin_cm.__aenter__.return_value = session
-            begin_cm.__aexit__.return_value = None
-            session.begin.return_value = begin_cm
-            exec_result = MagicMock()
-            exec_result.scalar_one_or_none.return_value = None
-            exec_result.scalars.return_value.all.return_value = []
-            session.execute = AsyncMock(return_value=exec_result)
-            session.flush = AsyncMock()
-            return session
-
-        from modulo.api.dependencies import get_db_session, get_plan_context
-        from modulo.auth.dependencies import get_current_user
-
-        app.dependency_overrides[get_current_user] = _override_viewer
-        app.dependency_overrides[get_db_session] = _override_db
-
-        class _AllFeatures2:
-            def feature_enabled(self, name: str) -> bool:
-                return True
-
-            def list_enabled_features(self) -> list:
-                return []
-
-            def tier(self) -> str:
-                return "enterprise"
-
-            def has_license_key(self) -> bool:
-                return True
-
-        async def _override_plan_context2() -> _AllFeatures2:
-            return _AllFeatures2()
-
-        app.dependency_overrides[get_plan_context] = _override_plan_context2
-
         from fastapi.testclient import TestClient
 
-        client = TestClient(app)
+        client = TestClient(_make_app(org_role="viewer"))
         resp = client.put("/api/v1/errors/forwarders/sentry", json={"enabled": True})
         assert resp.status_code == 403
 

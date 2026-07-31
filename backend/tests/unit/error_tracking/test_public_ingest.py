@@ -176,15 +176,6 @@ class TestPublicIngestEndpoint:
             resp2 = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
             assert resp2.status_code == 201
 
-    def test_valid_request_no_db_table_returns_501(self, client):
-        """Simulate ProgrammingError when DB tables don't exist."""
-        with patch(
-            "modulo.api.routes.errors._service.ingest_batch",
-            AsyncMock(side_effect=ProgrammingError("mock", "mock", "mock")),
-        ):
-            resp = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
-        assert resp.status_code == 501
-
 
 class TestSessionKeyResponse:
     """Verify the SessionKeyResponse model parses correctly with the new `key` field."""

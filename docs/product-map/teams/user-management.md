@@ -36,25 +36,20 @@ code:
   - backend/src/modulo/api/routes/admin.py
 unit-tests:
   - backend/tests/unit/api/test_teams.py
-  - backend/tests/unit/api/test_teams_exception_guard.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/api/test_team_admin_rls_context.py
-  - backend/tests/unit/api/test_team_deletion_bdd.py
+  - backend/tests/bdd/steps/test_team_deletion.py
   - backend/tests/unit/api/test_team_gating.py
-  - backend/tests/unit/api/test_team_rbac_programming_error.py
-  - backend/tests/unit/api/test_team_rbac_sqlalchemy_error.py
   - backend/tests/unit/auth/test_team_rbac.py
-  - backend/tests/unit/auth/test_sso_team_mapping_bdd.py
-  - backend/tests/unit/api/test_api_key.py
-  - backend/tests/unit/api/test_api_keys_programming_error.py
-  - backend/tests/unit/api/test_auth_programming_error.py
+  - backend/tests/bdd/steps/test_sso_team_mapping.py
+  - backend/tests/unit/auth/test_api_key.py
   - backend/tests/unit/api/test_auth_rate_limiter.py
-  - backend/tests/unit/api/test_login_endpoint.py
-  - backend/tests/unit/api/test_user_offboarding_programming_error.py
+  - backend/tests/unit/auth/test_login_endpoint.py
   - backend/tests/unit/auth/test_jwt.py
   - backend/tests/unit/auth/test_passwords.py
   - backend/tests/unit/auth/test_sso.py
-  - backend/tests/unit/auth/test_sso_oidc_bdd.py
-  - backend/tests/unit/auth/test_sso_saml_bdd.py
+  - backend/tests/bdd/steps/test_sso_oidc.py
+  - backend/tests/bdd/steps/test_sso_saml.py
   - backend/tests/unit/db/crud/test_team.py
   - backend/tests/unit/db/crud/test_team_membership.py
   - backend/tests/integration/crud/test_team_isolation.py

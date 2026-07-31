@@ -263,7 +263,6 @@ async def fire_cron_trigger(
                     "daily_spend_limit": str(spend_limit),
                     "today_cost": str(today_cost),
                 }
-
         # Resolve snapshot_id — auto-create from live graph if not provided
         if snapshot_id is None:
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
