@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 const { mockGet, mockPost } = vi.hoisted(() => ({
@@ -80,6 +81,7 @@ function mountWithItems(items: any[]) {
 
 describe('WebhookRetryUI', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
