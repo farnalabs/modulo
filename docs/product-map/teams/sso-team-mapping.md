@@ -99,4 +99,4 @@ Group-to-team mapping from OIDC/SAML identity provider group claims to Modulo te
 - SAML clock skew detection logs a warning but does not expose this to the frontend — admins troubleshooting failed logins see no clock skew indicator
 - `apply_group_mappings` silently skips mappings with invalid `team_id` UUID (logs a warning only) — no feedback to the admin who configured the mapping
 - No frontend view exists for configuring group mappings — only accessible via API/MCP
-- OIDC `groups` claim type coercion (`not isinstance(raw_groups, list) → raw_groups = []`) silently discards non-list values — an IdP sending groups as a comma-separated string loses the data entirely 
+- OIDC `groups` claim type coercion (`not isinstance(raw_groups, list) → raw_groups = []`) silently discards non-list values — an IdP sending groups as a comma-separated string loses the data entirely

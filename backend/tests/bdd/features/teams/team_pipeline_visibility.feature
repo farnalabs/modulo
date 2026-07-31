@@ -52,4 +52,3 @@ Feature: Team Pipeline Visibility
     When I update pipeline "shared-pipeline" visibility to "org"
     Then the response status is 200
     And the pipeline visibility is "org"
-

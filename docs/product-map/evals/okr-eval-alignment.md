@@ -149,4 +149,4 @@ Status: partial (10 known gaps remain — all infrastructure/features, not code 
 5. Gap Freshness: All 9 known gaps still accurate. No stale entries.
 6. Resilience: TimeoutError caught for both queries (info_q + trend_q). DB connection failures → SQLAlchemyError → 503. TimeoutError → Exception → 500.
 
-**Test results:** All 59+ OKR progress tests pass. No code changes — product map only. 
+**Test results:** All 59+ OKR progress tests pass. No code changes — product map only.

@@ -318,6 +318,7 @@ async def download_registry_primitive_endpoint(
                 account_id=principal.account_id,
             )
     except ProgrammingError:
+        _log.exception("registry.download_registry_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -594,11 +595,13 @@ async def verify_registry_primitive_v2(
                     trust_tier = db_pub.trust_tier
                     publisher_name = db_pub.name
         except ProgrammingError:
+            _log.exception("registry.verify_registry_primitive_v2")
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
             ) from None
         except SQLAlchemyError:
+            _log.exception("registry.verify_registry_primitive_v2")
             _log.warning(
                 "DB error in verify_registry_primitive_v2: public_key_hex path, slug=%s, fp=%s",
                 slug,
