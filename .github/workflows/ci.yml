@@ -172,7 +172,7 @@ jobs:
 
   notify-pr-failure:
     name: Trigger Branch Fixer
-    if: github.event_name == 'pull_request' && (failure() || cancelled())
+    if: github.event_name == 'pull_request' && always()
     needs: [backend-lint, backend-test, root-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     permissions:
@@ -181,6 +181,7 @@ jobs:
     steps:
       - name: Check retry limit
         id: retry-check
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -210,7 +211,7 @@ jobs:
           fi
 
       - name: Trigger Modulo Branch Fixer
-        if: steps.retry-check.outputs.exhausted == 'false'
+        if: (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && steps.retry-check.outputs.exhausted == 'false'
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -246,6 +247,11 @@ jobs:
           else
             echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
           fi
+
+      - name: All checks passed
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+        shell: bash
+        run: echo "All required checks passed on PR #${{ github.event.pull_request.number }}. No branch fixer trigger needed."
 
   notify-pr-review:
     name: Trigger PR Reviewer
@@ -302,11 +308,12 @@ jobs:
 
   modulo-smoke-test:
     name: Run Modulo Smoke Test
-    if: github.event_name == 'push' && success()
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     needs: [backend-lint, backend-test, root-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     steps:
       - name: Trigger Sandbox E2E Test and verify completion
+        if: github.event_name == 'push' && success()
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_SMOKE_TEST_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_SMOKE_TEST_HMAC_SECRET }}
@@ -341,3 +348,8 @@ jobs:
             if [ "${STATUS}" = "failed" ]; then echo "::error::Failed: ${ERROR}"; exit 1; fi
           done
           echo "::error::Timed out"; exit 1
+
+      - name: Smoke test not applicable on this event
+        if: github.event_name != 'push'
+        shell: bash
+        run: echo "Smoke test only runs on push to main. Skipping on ${{ github.event_name }} event."
