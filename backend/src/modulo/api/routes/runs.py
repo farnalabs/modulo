@@ -25,7 +25,7 @@ from modulo.api.dependencies import (
     pg_connection_string,
 )
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.celery_app import get_celery_app as _get_celery_app
 from modulo.core.pipeline_engine.executor import PipelineExecutor
@@ -312,7 +312,7 @@ async def trigger_run(
     req: TriggerRunRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
 ) -> RunResponse:
     """Manually trigger a pipeline run.
 
@@ -487,7 +487,7 @@ async def get_run_heatmap_endpoint(
 async def get_run_status(
     run_id: uuid.UUID,
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
 ) -> RunResponse:
     try:
         run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))

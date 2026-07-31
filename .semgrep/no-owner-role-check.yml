@@ -1,0 +1,20 @@
+rules:
+  - id: no-owner-as-org-role
+    patterns:
+      - pattern-either:
+          - pattern: '... in (..., "owner", ...)'
+          - pattern: '... not in (..., "owner", ...)'
+          - pattern: '... .in_(..., "owner", ...)'
+          - patterns:
+              - pattern: '$X == "owner"'
+              - metavariable-regex:
+                  metavariable: $X
+                  regex: 'role'
+    message: >
+      The 'owner' org role was dropped (ADR 017 A1a). Do not check 'owner' as a
+      role — use 'admin' instead. Resource ownership (owner_team_id, owner_id)
+      is unaffected by this rule.
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

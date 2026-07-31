@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.audit_logger import append_only
 from modulo.core.audit_logger.append_only import (
     AppendOnlyViolationError,
     register_append_only_guard,
@@ -72,6 +73,7 @@ class TestAppendOnlyGuardRegistration:
         """Calling register multiple times should not error."""
         register_append_only_guard()
         register_append_only_guard()
+        assert append_only._guard_registered is True
 
     def test_update_blocked_by_orm_listener(self):
         """UPDATE on an AuditEvent instance raises AppendOnlyViolationError."""

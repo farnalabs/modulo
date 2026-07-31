@@ -11,7 +11,7 @@ class OrgMembership(OrgScoped):
     __tablename__ = "org_memberships"
     __table_args__ = (
         UniqueConstraint("account_id", "organisation_id", name="uq_org_memberships_account_org"),
-        CheckConstraint("role IN ('owner', 'admin', 'operator', 'runner', 'viewer')", name="ck_org_memberships_role"),
+        CheckConstraint("role IN ('admin', 'operator', 'runner', 'viewer')", name="ck_org_memberships_role"),
     )
 
     account_id: Mapped[uuid.UUID] = mapped_column(

@@ -24,9 +24,9 @@
       <table class="w-full">
         <thead>
           <tr class="border-b text-left text-sm font-medium text-muted-foreground">
-            <th class="px-4 py-3">Key</th>
-            <th class="px-4 py-3">Value</th>
-            <th class="px-4 py-3">Updated</th>
+            <th class="px-4 py-3">{{ $t('views.AdminSystemConfigView.key') }}</th>
+            <th class="px-4 py-3">{{ $t('views.AdminSystemConfigView.value') }}</th>
+            <th class="px-4 py-3">{{ $t('views.AdminSystemConfigView.updated') }}</th>
           </tr>
         </thead>
         <tbody>

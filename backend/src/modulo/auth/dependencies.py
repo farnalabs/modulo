@@ -12,6 +12,7 @@ from modulo.settings import Settings, get_settings
 _log = logging.getLogger(__name__)
 
 _bearer = HTTPBearer()
+_bearer_optional = HTTPBearer(auto_error=False)
 
 
 class InvalidToken(HTTPException):
@@ -119,6 +120,107 @@ async def get_current_tenant_user(
         org_role=current_user.org_role,
         is_system_admin=current_user.is_system_admin,
     )
+
+
+async def get_current_tenant_user_or_api_key(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_optional),
+    settings: Settings = Depends(get_settings),
+) -> TenantPrincipal:
+    """Tenant principal from either a user JWT or an org API key (``mk_``).
+
+    API keys are the documented credential for CI/CD and external agents
+    (PRD §9.3 / §5.2): ``runner`` keys can trigger runs and call read
+    endpoints; ``operator`` keys are reserved for future HITL-approval
+    wiring. This dependency is only wired into ``trigger_run`` and
+    ``get_run_status`` — the HITL-approval routes (``observe_run_node``,
+    ``recover_run_node``) and other write endpoints still require a user
+    JWT, so API keys cannot approve gates or modify pipelines.
+
+    Note that team-scoped keys (``team_id`` set) behave like org-wide keys
+    here: ``TenantPrincipal`` carries no team info and these routes do not
+    call ``set_rls_user_context``, so team restriction is not enforced for
+    run trigger/read — consistent with the existing user-JWT behaviour.
+
+    API keys are resolved with an RLS-disabled prefix lookup (the key's org is
+    unknown until the record is read) and re-validated inside the key's org
+    context — mirroring the MCP middleware, since ``org_api_keys`` has RLS
+    enabled. For JWT credentials the behaviour is identical to
+    :func:`get_current_tenant_user`.
+    """
+    if credentials is None:
+        raise InvalidToken()
+
+    token = credentials.credentials
+    if token.startswith("mk_"):
+        from sqlalchemy import select, text
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from modulo.api.dependencies import (
+            get_or_create_engine,
+            get_or_create_session_factory,
+        )
+        from modulo.auth.api_key import (
+            _MK_PREFIX,
+            _PREFIX_LEN,
+            ApiKeyInvalidError,
+            validate_api_key,
+        )
+        from modulo.db.models.api_key import OrgApiKey
+        from modulo.db.rls import _ensure_active_transaction, set_rls_org
+
+        engine = get_or_create_engine(settings)
+        factory = get_or_create_session_factory(engine)
+        try:
+            # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and the
+            # key's org is unknown until the record is read — a plain lookup in
+            # an empty org context would be filtered out by RLS and reject every
+            # valid key. Resolve the record with RLS disabled, then re-validate
+            # inside the key's org context before trusting it.
+            prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
+            async with factory() as session, session.begin():
+                dialect = await _ensure_active_transaction(session)
+                if dialect == "postgresql":
+                    await session.execute(text("SET LOCAL row_security TO OFF"))
+                result = await session.execute(
+                    select(OrgApiKey).where(
+                        OrgApiKey.lookup_prefix == prefix,
+                        OrgApiKey.revoked_at.is_(None),
+                    )
+                )
+                key_record = result.scalar_one_or_none()
+            if key_record is None:
+                raise ApiKeyInvalidError()
+            async with factory() as session, session.begin():
+                await set_rls_org(session, key_record.organisation_id)
+                key = await validate_api_key(session, token, org_id=key_record.organisation_id)
+        except ApiKeyInvalidError:
+            raise InvalidToken() from None
+        except SQLAlchemyError:
+            _log.warning("auth.api_key_verify_failed", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database temporarily unavailable.",
+            ) from None
+        # Role is guaranteed to be "runner"/"operator" by the
+        # ck_org_api_keys_role DB constraint; no runtime check needed.
+        return TenantPrincipal(
+            username=key.name,
+            organisation_id=key.organisation_id,
+            account_id=key.account_id,
+            org_role=key.role,
+            is_system_admin=False,
+        )
+
+    try:
+        principal = decode_principal(token, settings.secret_key)
+    except JWTError as exc:
+        _log.warning(
+            "auth.jwt_decode_failed",
+            extra={"token_prefix": token[:10] + "...", "error": str(exc)},
+        )
+        raise InvalidToken() from exc
+
+    return await get_current_tenant_user(principal)
 
 
 async def _verify_identity(principal: AuthenticatedPrincipal) -> None:

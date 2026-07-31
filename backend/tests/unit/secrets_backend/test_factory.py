@@ -6,7 +6,8 @@ from unittest.mock import patch
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.core.secrets_backend import create_secrets_backend, validate_key
+from modulo.core.license import LicenseData, LicenseValidation
+from modulo.core.secrets_backend import _check_external_secrets_licensed, create_secrets_backend, validate_key
 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 
 _KEY = Fernet.generate_key().decode()
@@ -58,6 +59,72 @@ def test_aws_backend_created_by_name():
 def test_unknown_backend_raises_value_error():
     with pytest.raises(ValueError, match="Unknown"):
         create_secrets_backend(fernet_key=_KEY, backend_name="nonexistent")
+
+
+@pytest.mark.parametrize("backend_name", ["vault", "aws"])
+def test_external_backend_falls_back_to_fernet_without_license(backend_name):
+    """Without a license permitting external secrets, the factory must fall back to fernet."""
+    with patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False):
+        backend = create_secrets_backend(fernet_key=_KEY, backend_name=backend_name)
+    assert isinstance(backend, FernetSecretsBackend), f"Expected fernet fallback for {backend_name}"
+
+
+@pytest.mark.parametrize("backend_name", ["vault", "aws"])
+def test_external_backend_fallback_requires_fernet_key(backend_name):
+    with (
+        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False),
+        pytest.raises(ValueError, match="fernet_key is required"),
+    ):
+        create_secrets_backend(fernet_key=None, backend_name=backend_name)
+
+
+def _team_license() -> LicenseData:
+    return LicenseData(
+        tier="team",
+        features=[],
+        expires_at="",
+        org_id="",
+        raw_payload={},
+        raw_key="",
+    )
+
+
+def test_external_secrets_licensed_when_license_file_present():
+    """A stored team-tier license unlocks the external_secrets flag."""
+    with (
+        patch("modulo.core.license.get_license", return_value=_team_license()),
+        patch.dict(os.environ, {"MODULO_LICENSE_KEY": ""}, clear=False),
+    ):
+        assert _check_external_secrets_licensed() is True
+
+
+def test_external_secrets_not_licensed_when_community():
+    with (
+        patch("modulo.core.license.get_license", return_value=None),
+        patch.dict(os.environ, {"MODULO_LICENSE_KEY": ""}),
+    ):
+        assert _check_external_secrets_licensed() is False
+
+
+def test_external_secrets_licensed_via_env_key():
+    """With no stored license, a valid MODULO_LICENSE_KEY enables the flag."""
+    validation = LicenseValidation(valid=True, license_data=_team_license())
+    with (
+        patch("modulo.core.license.get_license", return_value=None),
+        patch("modulo.core.license.parse_and_verify", return_value=validation),
+        patch.dict(os.environ, {"MODULO_LICENSE_KEY": "some-key"}),
+    ):
+        assert _check_external_secrets_licensed() is True
+
+
+def test_external_secrets_not_licensed_with_invalid_env_key():
+    invalid = LicenseValidation(valid=False, error="Signature verification failed")
+    with (
+        patch("modulo.core.license.get_license", return_value=None),
+        patch("modulo.core.license.parse_and_verify", return_value=invalid),
+        patch.dict(os.environ, {"MODULO_LICENSE_KEY": "bad-key"}),
+    ):
+        assert _check_external_secrets_licensed() is False
 
 
 def test_env_var_used_when_no_backend_name():

@@ -77,7 +77,7 @@ def _resolve_admin_auth(token: str | None) -> str | None:
         try:
             settings = get_settings()
             principal = decode_principal(raw, settings.secret_key)
-            if principal.org_role not in ("admin", "owner"):
+            if principal.org_role != "admin":
                 raise click.ClickException("Token is not an admin-level JWT")
             return str(principal.user_id)
         except asyncio.CancelledError:
@@ -98,7 +98,7 @@ async def _verify_admin_access(session: Any, org_id: uuid.UUID, admin_user_id: s
     membership = await get_membership_by_account_and_org(session, account.id, org_id)
     if membership is None:
         raise click.ClickException("Admin account does not belong to the target organisation")
-    if membership.role not in ("admin", "owner"):
+    if membership.role != "admin":
         raise click.ClickException("Account does not have admin-level access")
 
 

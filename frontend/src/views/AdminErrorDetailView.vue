@@ -18,19 +18,19 @@
     <template v-else-if="group">
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div class="card p-4">
-          <span class="text-xs font-medium text-muted-foreground">Level</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.level') }}</span>
           <p class="mt-0.5">
             <span :class="levelBadgeClass(group.level_peak)">{{ group.level_peak }}</span>
           </p>
         </div>
         <div class="card p-4">
-          <span class="text-xs font-medium text-muted-foreground">Status</span>
+          <span class="text-xs font-medium text-muted-foreground capitalize">{{ $t('views.AdminErrorDetailView.status') }}</span>
           <p class="mt-0.5">
-            <span :class="statusBadgeClass(group.status)">{{ group.status }}</span>
+            <span :class="statusBadgeClass(group.status)" class="capitalize">{{ group.status }}</span>
           </p>
         </div>
         <div class="card p-4">
-          <span class="text-xs font-medium text-muted-foreground">Occurrences</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.occurrences') }}</span>
           <p class="mt-0.5 text-lg font-semibold">{{ group.count }}</p>
         </div>
       </div>
@@ -47,7 +47,7 @@
       </div>
 
       <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">Actions</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminErrorDetailView.actions') }}</h2>
         <div class="flex flex-wrap items-center gap-3">
           <button
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
@@ -87,7 +87,7 @@
       </div>
 
       <div v-if="sampleEvent" class="card p-4">
-        <h2 class="mb-2 text-base font-semibold">Message</h2>
+        <h2 class="mb-2 text-base font-semibold">{{ $t('views.AdminErrorDetailView.message') }}</h2>
         <p class="rounded-lg bg-muted p-3 text-sm font-mono">{{ sampleEvent.message }}</p>
 
         <div v-if="sampleEvent.stacktrace" class="mt-4">
@@ -134,15 +134,15 @@
 
         <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
           <div>
-            <span class="text-xs font-medium text-muted-foreground">Source</span>
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.source') }}</span>
             <p class="mt-0.5 capitalize">{{ sampleEvent.source }}</p>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted-foreground">Environment</span>
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.environment') }}</span>
             <p class="mt-0.5 capitalize">{{ sampleEvent.environment || '—' }}</p>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted-foreground">Version</span>
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.version') }}</span>
             <p class="mt-0.5">{{ sampleEvent.version || '—' }}</p>
           </div>
           <div>

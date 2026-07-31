@@ -160,18 +160,11 @@ class TestResponseModelCoverage:
         with_rm = [r for r in routes if r["response_model"] is not None]
         missing_rm = [r for r in routes if r["response_model"] is None]
 
-        if missing_rm:
-            for r in sorted(missing_rm, key=lambda x: (x["methods"], x["path"])):
-                pass
-
-        for r in sorted(with_rm, key=lambda x: (x["methods"], x["path"])):
-            rm = r["response_model"]
-            if hasattr(rm, "__name__"):
-                pass
-            elif hasattr(rm, "__origin__"):
-                str(rm)
-            else:
-                str(rm)
+        assert with_rm, "no /api/ routes declare a response model"
+        assert len(with_rm) > len(missing_rm), (
+            "the majority of /api/ routes must declare a response model; "
+            f"got {len(with_rm)} declared vs {len(missing_rm)} missing"
+        )
 
     def test_response_model_is_pydantic_model(self) -> None:
         routes = get_api_routes()
@@ -190,9 +183,12 @@ class TestResponseModelCoverage:
             else:
                 non_pydantic.append((r["methods"][0], r["path"], str(rm)))
 
-        if non_pydantic:
-            for method, path, rm_str in non_pydantic:
-                pass
+        assert pydantic_count > 0
+        assert pydantic_count >= len(non_pydantic), (
+            "most response models must be pydantic models; "
+            f"got {pydantic_count} pydantic vs {len(non_pydantic)} non-pydantic: "
+            f"{non_pydantic[:5]}"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -63,7 +63,7 @@ The Organisation entity is the root tenant entity in Modulo's multi-tenant archi
 - [x] User-to-organisation membership via `OrgMembership` entity
 - [x] `account_id` UUID FK → accounts.id (CASCADE on delete)
 - [x] `organisation_id` UUID FK → organisations.id (via OrgScoped)
-- [x] `role` enum: `owner` | `admin` | `operator` | `runner` | `viewer`
+- [x] `role` enum: `admin` | `operator` | `runner` | `viewer`
 - [x] Unique constraint: `(account_id, organisation_id)`
 - [x] `joined_at` (DateTime, auto-set)
 - [x] `deactivated_at` (nullable DateTime)
@@ -98,7 +98,7 @@ The Organisation entity is the root tenant entity in Modulo's multi-tenant archi
 - [x] Audit event written on deletion request (`org_deletion_requested`)
 - [x] Cascade delete removes all org-scoped resources
 - [x] Old terminal runs batch-deleted before FK cascade
-- [x] `_require_org_admin` gate: system_admin OR org_role in (admin, owner) → 403 otherwise
+- [x] `_require_org_admin` gate: system_admin OR org_role == admin → 403 otherwise
 - [x] Already-deleted org → 409 on new deletion request
 - [x] Invalid/expired token → 409 on confirm
 - [x] No pending deletion → 409 on cancel

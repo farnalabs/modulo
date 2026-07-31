@@ -34,10 +34,10 @@
       <template v-else-if="filteredProfiles.length === 0">
         <div v-if="search" class="card p-8 text-center">
           <p class="text-lg font-medium">No profiles match "{{ search }}"</p>
-          <p class="mt-1 text-sm text-muted-foreground">Try a different search term.</p>
+          <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.EnvironmentProfileList.try_a_different_search_term') }}</p>
         </div>
         <div v-else class="card p-8 text-center">
-          <p class="text-lg font-medium">No environment profiles</p>
+          <p class="text-lg font-medium">{{ $t('views.EnvironmentProfileList.no_environment_profiles') }}</p>
           <p class="mt-1 text-sm text-muted-foreground">
             Create one to define a sandbox template for pipeline nodes that need shell access.
           </p>
@@ -77,7 +77,7 @@
                 class="h-1.5 w-1.5 rounded-full"
                 :class="profile.status === 'active' ? 'bg-success' : 'bg-muted-foreground'"
               />
-              {{ profile.status === 'active' ? 'Active' : 'Deleted' }}
+              <span class="capitalize">{{ profile.status === 'active' ? 'Active' : 'Deleted' }}</span>
             </span>
           </div>
 
@@ -112,7 +112,7 @@
 
       <div v-if="deleteConfirmId" class="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4">
         <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
-        <p class="mt-1 text-sm text-destructive/80">This will soft-delete the profile. Existing runs using it are unaffected.</p>
+        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.EnvironmentProfileList.soft_delete_warning') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button
             :disabled="deleting"

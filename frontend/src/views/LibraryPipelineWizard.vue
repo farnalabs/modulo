@@ -48,9 +48,9 @@
           v-if="subGraphNodes.length > 0"
           class="card p-6 mb-6"
         >
-          <h3 class="text-base font-medium text-foreground mb-4">Pipeline Visualisation</h3>
+          <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.pipeline_visualisation') }}</h3>
           <p class="text-sm text-muted-foreground mb-4">
-            This composite runs the following sub-pipeline internally:
+            {{ $t('views.LibraryPipelineWizard.sub_pipeline_internal') }}
           </p>
           <div class="h-72 rounded-lg border bg-card overflow-hidden">
             <VueFlow
@@ -66,7 +66,7 @@
               <Background :gap="20" :size="1" />
               <template #node-agent="nodeProps">
                 <div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-3 shadow-sm">
-                  <div class="text-xs font-medium text-indigo-400">AGENT</div>
+                  <div class="text-xs font-medium text-indigo-400">{{ $t('views.LibraryPipelineWizard.agent') }}</div>
                   <div class="text-sm font-semibold text-foreground">{{ nodeProps.data.label }}</div>
                 </div>
               </template>
@@ -90,7 +90,7 @@
             </div>
 
             <div>
-              <label for="librarypipelinewizard-field-1" class="block text-sm font-medium text-foreground mb-1">Description</label>
+              <label for="librarypipelinewizard-field-1" class="block text-sm font-medium text-foreground mb-1">{{ $t('views.LibraryPipelineWizard.description') }}</label>
               <textarea id="librarypipelinewizard-field-1"
                 v-model="pipelineDescription"
                 rows="3"
@@ -103,13 +103,13 @@
         </div>
 
         <div class="card p-6 mb-6">
-          <h3 class="text-base font-medium text-foreground mb-4">Ownership</h3>
+          <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.ownership') }}</h3>
           <p class="text-sm text-muted-foreground mb-4">{{ $t('views.LibraryPipelineWizard.choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi') }}</p>
           <OwnershipPicker v-model="ownership" :label="$t('views.LibraryPipelineWizard.owner')" />
         </div>
 
         <div v-if="templateAgents.length > 0" class="card p-6 mb-6">
-          <h3 class="text-base font-medium text-foreground mb-4">Template Agents ({{ templateAgents.length }})</h3>
+          <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.template_agents', { count: templateAgents.length }) }}</h3>
           <div class="space-y-3">
             <div
               v-for="(agent, i) in templateAgents"
@@ -144,14 +144,14 @@
             @click="createPipeline"
             data-testid="library-wizard-create"
           >
-            {{ creating ? 'Creating...' : 'Create Pipeline' }}
+            {{ creating ? $t('views.LibraryPipelineWizard.creating') : $t('views.LibraryPipelineWizard.create_pipeline') }}
           </Button>
           <button
             class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
             @click="$router.push({ name: 'library' })"
             data-testid="library-wizard-cancel"
           >
-            Cancel
+            {{ $t('views.LibraryPipelineWizard.cancel') }}
           </button>
         </div>
 
@@ -161,7 +161,7 @@
         >
           <p class="font-medium">{{ $t('views.LibraryPipelineWizard.pipeline_created') }}</p>
           <p class="text-sm mt-1">
-            {{ result.name }} is ready.
+            {{ $t('views.LibraryPipelineWizard.pipeline_ready', { name: result.name }) }}
              <a :href="`/pipelines/${result.id}`" class="underline font-medium" data-testid="library-wizard-view-pipeline">{{ $t('views.LibraryPipelineWizard.view_pipeline') }}</a>
           </p>
         </div>
@@ -180,6 +180,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -193,6 +194,7 @@ import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
+import { layoutNodes } from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 
 interface LibraryPrimitive {
@@ -233,6 +235,7 @@ interface CreatePipelineResponse {
 }
 
 const route = useRoute()
+const { t } = useI18n()
 
 const primitiveId = route.params.id as string
 const pipelineName = ref('')
@@ -258,52 +261,6 @@ watch(primitive, (p) => {
     pipelineDescription.value = p.description ?? ''
   }
 }, { immediate: true })
-
-function layoutNodes(
-  nodes: Array<{ id: string; node_type?: string; label?: string }>,
-  edges: Array<{ source: string; target: string; edge_type?: string }>,
-) {
-  const w = 200
-  const h = 100
-  const xPad = 40
-  const yPad = 60
-  const inDegree: Record<string, number> = {}
-  for (const n of nodes) inDegree[n.id] = 0
-  for (const e of edges) inDegree[e.target] = (inDegree[e.target] || 0) + 1
-
-  const layers: string[][] = []
-  const remaining = new Set(nodes.map(n => n.id))
-  while (remaining.size > 0) {
-    const layer = [...remaining].filter(id => inDegree[id] === 0 || [...remaining].every(other => {
-      if (other === id) return true
-      return !edges.some(e => e.source === other && e.target === id)
-    }))
-    if (layer.length === 0) {
-      layers.push([...remaining])
-      break
-    }
-    layers.push(layer)
-    for (const id of layer) remaining.delete(id)
-    for (const id of remaining) {
-      inDegree[id] = edges.filter(e => e.target === id && !remaining.has(e.source)).length
-    }
-  }
-
-  const nodeMap = new Map(nodes.map(n => [n.id, n]))
-  return layers.flatMap((layer, li) =>
-    layer.map((id, ni) => {
-      const n = nodeMap.get(id)
-      const total = layer.length
-      const startX = (total - 1) * (w + xPad) / -2
-      return {
-        id,
-        type: n?.node_type || 'agent',
-        position: { x: startX + ni * (w + xPad), y: li * (h + yPad) },
-        data: { label: n?.label || id },
-      }
-    }),
-  )
-}
 
 const subGraphNodes = computed(() => {
   const sub = primitive.value?.content_json?.sub_pipeline_graph_json
@@ -342,7 +299,7 @@ async function createPipeline() {
     })
     result.value = data as unknown as CreatePipelineResponse
   } catch (e) {
-    createError.value = e instanceof Error ? e.message : 'Failed to create pipeline'
+    createError.value = e instanceof Error ? e.message : t('views.LibraryPipelineWizard.failed_to_create_pipeline')
   } finally {
     creating.value = false
   }

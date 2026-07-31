@@ -12,10 +12,10 @@ import logging
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, WithJsonSchema, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,10 +87,10 @@ class PipelineCreate(BaseModel):
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
     max_duration_seconds: int | None = Field(None, ge=1)
-    stale_run_timeout_minutes: int | None = Field(
-        None,
+    stale_run_timeout_minutes: int = Field(
+        30,
         ge=1,
-        description="Override the global stale-run timeout for this pipeline. Null = use global default (60 min).",
+        description="Max minutes a run can stay in pending/running without progress before being killed.",
     )
     folder_id: uuid.UUID | None = None
     rate_limit_config: dict[str, Any] | None = Field(
@@ -118,11 +118,23 @@ class PipelineUpdate(BaseModel):
     run_context_defaults: dict[str, Any] | None = None
     default_autonomy_level: str | None = None
     max_duration_seconds: int | None = Field(None, ge=1)
-    stale_run_timeout_minutes: int | None = Field(
-        None,
-        ge=1,
-        description="Override the global stale-run timeout for this pipeline. Null = use global default (60 min).",
-    )
+    stale_run_timeout_minutes: Annotated[
+        int | None,
+        Field(
+            None,
+            ge=1,
+            description="Override the stale-run timeout for this pipeline.",
+        ),
+        WithJsonSchema({"type": "integer", "minimum": 1}),
+    ] = None
+
+    @field_validator("stale_run_timeout_minutes", mode="before")
+    @classmethod
+    def reject_null_stale_timeout(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("stale_run_timeout_minutes cannot be set to null. Use a value >= 1.")
+        return v
+
     rate_limit_config: dict[str, Any] | None = Field(
         None,
         description="Rate limit config. Set to {} to clear.",
@@ -151,7 +163,7 @@ class PipelineResponse(BaseModel):
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
     max_duration_seconds: int | None = None
-    stale_run_timeout_minutes: int | None = None
+    stale_run_timeout_minutes: int = 30
     rate_limit_config: dict[str, Any] | None = None
     snapshot_count: int = 0
     archived_at: datetime | None = None
@@ -594,6 +606,7 @@ async def create_pipeline_endpoint(
                 run_context_defaults=req.run_context_defaults,
                 default_autonomy_level=req.default_autonomy_level,
                 max_duration_seconds=req.max_duration_seconds,
+                stale_run_timeout_minutes=req.stale_run_timeout_minutes,
                 folder_id=req.folder_id,
             )
     except ProgrammingError:
@@ -939,7 +952,7 @@ async def clone_pipeline_endpoint(
 
     if principal.org_role == "viewer":
         _log.warning(
-            "Copy denied: user %s has role '%s' (requires admin/owner/member)",
+            "Copy denied: user %s has role '%s' (requires admin)",
             principal.account_id,
             principal.org_role,
         )
@@ -1416,7 +1429,7 @@ async def delete_snapshot_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
-    if principal.org_role not in ("admin", "owner"):
+    if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can delete snapshots",

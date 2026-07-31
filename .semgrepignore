@@ -1,0 +1,43 @@
+# Root-level ignore for CI semgrep scans.
+#
+# CI runs `semgrep --config=.semgrep/ ... .` from the repo root so that the
+# repo-root-relative `paths.include` globs in .semgrep/*.yml (e.g.
+# `**/backend/src/**`, `**/frontend/src/**`) match. This file mirrors semgrep's
+# default ignore list EXCEPT the test-path entries (`test/`, `tests/`,
+# `*_test.go`), which are intentionally omitted so the test-focused QA lenses
+# (.semgrep/*.yml with `paths.include` for tests) scan backend/tests in CI.
+node_modules/
+build/
+dist/
+vendor/
+.env/
+.venv/
+.tox/
+*.min.js
+.npm/
+.yarn/
+.semgrep_logs/
+
+# Local caches / tooling that must never be scanned
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.import_linter_cache/
+.tool-cache/
+__pycache__/
+*.pyc
+
+# Stray legacy directories tracked in git but not part of the app
+/Website/
+/Reviews/
+
+# Local SQLite databases
+**/modulo.db
+**/test.db
+*.sqlite
+*.sqlite3
+
+# Agent worktrees / local agent state
+.agents/worktrees/
+.agent-work/

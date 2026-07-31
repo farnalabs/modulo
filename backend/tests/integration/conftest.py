@@ -67,6 +67,10 @@ def db_url(postgres_container: PostgresContainer) -> str:
 def migrated_db_url(db_url: str) -> str:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
+    # script_location is CWD-relative in alembic.ini; pin it to the absolute
+    # backend path so integration tests also run from the repo root (the
+    # pre-commit run-changed-tests hook invokes pytest from the repo root).
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
 
     async def _ensure_alembic_table() -> None:
         """Pre-create alembic_version with VARCHAR(255) to support branch migration IDs."""

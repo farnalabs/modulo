@@ -12,30 +12,30 @@
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
-              <SelectItem value="manual">Manual</SelectItem>
-              <SelectItem value="webhook">Webhook</SelectItem>
-              <SelectItem value="cron">Cron</SelectItem>
-              <SelectItem value="polling">Polling</SelectItem>
+              <SelectItem value="manual">{{ $t('views.SettingsTriggerEventLogView.manual') }}</SelectItem>
+              <SelectItem value="webhook">{{ $t('views.SettingsTriggerEventLogView.webhook') }}</SelectItem>
+              <SelectItem value="cron">{{ $t('views.SettingsTriggerEventLogView.cron') }}</SelectItem>
+              <SelectItem value="polling">{{ $t('views.SettingsTriggerEventLogView.polling') }}</SelectItem>
               <SelectItem value="agent_signal">{{ $t('views.SettingsTriggerEventLogView.agent_signal') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div>
-          <label for="settingstriggereventlogview-result" class="mb-1 block text-xs font-medium text-muted-foreground">Result</label>
+          <label for="settingstriggereventlogview-result" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.result') }}</label>
           <Select v-model="filterResult">
             <SelectTrigger id="settingstriggereventlogview-result" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Result" data-testid="settings-trigger-event-log-result">
               <SelectValue :placeholder="$t('views.SettingsTriggerEventLogView.all_results')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{{ $t('views.SettingsTriggerEventLogView.all_results') }}</SelectItem>
-              <SelectItem value="accepted">Accepted</SelectItem>
-              <SelectItem value="passed">Passed</SelectItem>
+              <SelectItem value="accepted">{{ $t('views.SettingsTriggerEventLogView.accepted') }}</SelectItem>
+              <SelectItem value="passed">{{ $t('views.SettingsTriggerEventLogView.passed') }}</SelectItem>
               <SelectItem value="condition_met">{{ $t('views.SettingsTriggerEventLogView.condition_met') }}</SelectItem>
               <SelectItem value="signal_fired">{{ $t('views.SettingsTriggerEventLogView.signal_fired') }}</SelectItem>
               <SelectItem value="no_match">{{ $t('views.SettingsTriggerEventLogView.no_match') }}</SelectItem>
               <SelectItem value="hmac_failed">{{ $t('views.SettingsTriggerEventLogView.hmac_failed') }}</SelectItem>
               <SelectItem value="schema_validation_failed">{{ $t('views.SettingsTriggerEventLogView.schema_validation_failed') }}</SelectItem>
-              <SelectItem value="deduplicated">Deduplicated</SelectItem>
+              <SelectItem value="deduplicated">{{ $t('views.SettingsTriggerEventLogView.deduplicated') }}</SelectItem>
               <SelectItem value="concurrency_limit_reached">{{ $t('views.SettingsTriggerEventLogView.concurrency_limit_reached') }}</SelectItem>
               <SelectItem value="flood_rejected">{{ $t('views.SettingsTriggerEventLogView.flood_rejected') }}</SelectItem>
               <SelectItem value="timestamp_expired">{{ $t('views.SettingsTriggerEventLogView.timestamp_expired') }}</SelectItem>
@@ -83,10 +83,10 @@
         <table class="w-full">
           <thead>
             <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
-              <th class="px-4 py-3">Type</th>
-              <th class="px-4 py-3">Result</th>
-              <th class="px-4 py-3">Timestamp</th>
-              <th class="px-4 py-3">Run</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.type') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.result') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.timestamp') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.run') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsNotificationLogView.error_detail') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.trigger_id') }}</th>
             </tr>

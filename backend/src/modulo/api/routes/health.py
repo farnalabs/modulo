@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
-from modulo.settings import get_settings
+from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -41,19 +41,54 @@ class ReadinessResponse(BaseModel):
     checks: dict[str, CheckResult]
 
 
+def _per_check_timeout(settings: Settings, override_field: str) -> float:
+    """Resolve the timeout for one dependency check.
+
+    Per-check overrides default to 0 (fall back to the global
+    ``modulo_health_timeout_seconds`` value). This gives operators a single
+    knob for the common case and a per-check knob for slow dependencies.
+    """
+    override: float = getattr(settings, override_field)
+    if override and override > 0:
+        return override
+    return settings.modulo_health_timeout_seconds
+
+
+def _timeout_result(
+    status: Literal["unavailable", "degraded"],
+    name: str,
+    timeout: float,
+    start: float,
+) -> CheckResult:
+    latency_ms = round((time.monotonic() - start) * 1000, 1)
+    return CheckResult(
+        status=status,
+        latency_ms=latency_ms,
+        detail=f"{name} check timed out after {timeout:g}s",
+    )
+
+
 async def _check_database() -> CheckResult:
     settings = get_settings()
-    engine = get_or_create_engine(settings)
+    timeout = _per_check_timeout(settings, "modulo_health_db_timeout_seconds")
     start = time.monotonic()
-    try:
+
+    async def _probe() -> None:
+        engine = get_or_create_engine(settings)
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+
+    try:
+        await asyncio.wait_for(_probe(), timeout=timeout)
         latency_ms = (time.monotonic() - start) * 1000
         return CheckResult(
             status="ok",
             latency_ms=round(latency_ms, 1),
             detail="database reachable",
         )
+    except TimeoutError:
+        _log.warning("health._check_database", exc_info=True)
+        return _timeout_result("unavailable", "database", timeout, start)
     except Exception as exc:
         _log.warning("health._check_database", exc_info=True)
         latency_ms = (time.monotonic() - start) * 1000
@@ -66,17 +101,21 @@ async def _check_database() -> CheckResult:
 
 async def _check_redis() -> CheckResult:
     settings = get_settings()
+    timeout = _per_check_timeout(settings, "modulo_health_redis_timeout_seconds")
     start = time.monotonic()
     r = None
     try:
-        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=2)
-        await r.ping()
+        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=timeout)
+        await asyncio.wait_for(r.ping(), timeout=timeout)
         latency_ms = (time.monotonic() - start) * 1000
         return CheckResult(
             status="ok",
             latency_ms=round(latency_ms, 1),
             detail="redis reachable",
         )
+    except TimeoutError:
+        _log.warning("health._check_redis", exc_info=True)
+        return _timeout_result("degraded", "redis", timeout, start)
     except Exception as exc:
         _log.warning("health._check_redis", exc_info=True)
         latency_ms = (time.monotonic() - start) * 1000
@@ -93,29 +132,44 @@ async def _check_redis() -> CheckResult:
 
 async def _check_checkpointer() -> CheckResult:
     settings = get_settings()
-    try:
+    timeout = _per_check_timeout(settings, "modulo_health_checkpointer_timeout_seconds")
+    start = time.monotonic()
+
+    async def _probe() -> tuple[Literal["ok", "degraded"], str]:
         conn_string = pg_connection_string(settings.database_url)
-        conn = await asyncpg.connect(conn_string, timeout=5)
+        conn = await asyncpg.connect(conn_string, timeout=timeout)
         try:
             await conn.fetchrow("SELECT 1 FROM checkpoint_migrations LIMIT 1")
         except Exception as exc:
             _log.warning("health._check_checkpointer", exc_info=True)
-            return CheckResult(
-                status="degraded",
-                detail=f"checkpoint_migrations table not accessible: {exc}",
-            )
+            return "degraded", f"checkpoint_migrations table not accessible: {exc}"
         finally:
             with contextlib.suppress(Exception):
                 await conn.close()
-        return CheckResult(status="ok", detail="checkpointer schema accessible")
+        return "ok", "checkpointer schema accessible"
+
+    try:
+        status, detail = await asyncio.wait_for(_probe(), timeout=timeout)
+        latency_ms = (time.monotonic() - start) * 1000
+        return CheckResult(status=status, latency_ms=round(latency_ms, 1), detail=detail)
+    except TimeoutError:
+        _log.warning("health._check_checkpointer", exc_info=True)
+        return _timeout_result("degraded", "checkpointer", timeout, start)
     except Exception as exc:
         _log.warning("health._check_checkpointer", exc_info=True)
-        return CheckResult(status="degraded", detail=str(exc) or "checkpointer check failed")
+        return CheckResult(
+            status="degraded",
+            latency_ms=round((time.monotonic() - start) * 1000, 1),
+            detail=str(exc) or "checkpointer check failed",
+        )
 
 
 async def _check_migrations() -> CheckResult:
     settings = get_settings()
-    try:
+    timeout = _per_check_timeout(settings, "modulo_health_migrations_timeout_seconds")
+    start = time.monotonic()
+
+    async def _probe() -> tuple[Literal["ok", "degraded"], str]:
         alembic_cfg = Config("alembic.ini")
         alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
 
@@ -128,15 +182,24 @@ async def _check_migrations() -> CheckResult:
             applied = {row[0] for row in result.fetchall()}
 
         if heads.issubset(applied):
-            return CheckResult(status="ok", detail="migrations up to date")
+            return "ok", "migrations up to date"
         missing = heads - applied
-        return CheckResult(
-            status="degraded",
-            detail=f"pending migrations: {', '.join(sorted(missing))}",
-        )
+        return "degraded", f"pending migrations: {', '.join(sorted(missing))}"
+
+    try:
+        status, detail = await asyncio.wait_for(_probe(), timeout=timeout)
+        latency_ms = (time.monotonic() - start) * 1000
+        return CheckResult(status=status, latency_ms=round(latency_ms, 1), detail=detail)
+    except TimeoutError:
+        _log.warning("health._check_migrations", exc_info=True)
+        return _timeout_result("degraded", "migrations", timeout, start)
     except Exception as exc:
         _log.warning("health._check_migrations", exc_info=True)
-        return CheckResult(status="degraded", detail=f"migration check failed: {exc}")
+        return CheckResult(
+            status="degraded",
+            latency_ms=round((time.monotonic() - start) * 1000, 1),
+            detail=f"migration check failed: {exc}",
+        )
 
 
 @handle_db_errors("health.liveness")

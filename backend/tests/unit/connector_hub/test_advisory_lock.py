@@ -20,8 +20,7 @@ async def test_advisory_lock_acquires(lock_service):
     result_mock.scalar_one.return_value = True
     session.execute = AsyncMock(return_value=result_mock)
 
-    await lock_service.acquire(session, uuid.uuid4())
-    # acquire() returns None on success — no exception means success
+    assert await lock_service.acquire(session, uuid.uuid4()) is None
 
 
 async def test_advisory_lock_raises_on_contention(lock_service):

@@ -1,4 +1,4 @@
-"""Unit tests for Remy context tools — get_documentation, get_integration_status, get_org_config, get_available_features."""  # noqa: E501
+"""Unit tests for Remy context tools — search_documentation, get_integration_status, get_org_config, get_available_features."""  # noqa: E501
 
 import json
 from unittest.mock import MagicMock
@@ -35,8 +35,8 @@ class TestSensitiveKeyDetection:
         assert _is_sensitive_key("Modulo_License_Key")
 
 
-class TestGetDocumentation:
-    """Tests for get_documentation tool behavior."""
+class TestSearchDocumentation:
+    """Tests for search_documentation tool behavior."""
 
     def test_search_returns_formatted_results(self) -> None:
         entries = [

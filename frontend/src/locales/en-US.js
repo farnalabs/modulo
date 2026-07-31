@@ -214,7 +214,8 @@ export default {
       "actions": "Actions",
       "input_payload_json": "Input Payload (JSON)",
       "rename_pipeline": "Rename Pipeline",
-      "delete_pipeline": "Delete Pipeline"
+      "delete_pipeline": "Delete Pipeline",
+      "invalid_json_in_advanced_payload": "Invalid JSON in advanced payload"
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
@@ -225,7 +226,9 @@ export default {
       "path_prefix": "Path Prefix",
       "max_requests": "Max Requests",
       "no_rate_limit_rules_configured": "No rate limit rules configured.",
-      "inmemory": "In-Memory"
+      "inmemory": "In-Memory",
+      "mode": "Mode",
+      "rules": "Rules"
     },
     "EvalProposalsQueueView": {
       "proposal_published_eval_definition_created": "Proposal published. Eval definition created.",
@@ -248,7 +251,15 @@ export default {
       "failed_to_update_assignee": "Failed to update assignee:",
       "event_id": "Event ID",
       "first_seen": "First Seen",
-      "failed_to_load_error_group": "Failed to load error group:"
+      "failed_to_load_error_group": "Failed to load error group:",
+      "level": "Level",
+      "status": "Status",
+      "occurrences": "Occurrences",
+      "actions": "Actions",
+      "message": "Message",
+      "source": "Source",
+      "environment": "Environment",
+      "version": "Version"
     },
     "AdminCostControlsView": {
       "failed_to_save_currency": "Failed to save currency",
@@ -286,12 +297,16 @@ export default {
       "currency": "Currency",
       "billing_period": "Billing Period",
       "monthly_budget": "Monthly Budget ({currency})",
-      "budget_updated": "Budget updated."
+      "budget_updated": "Budget updated.",
+      "monthly": "Monthly",
+      "quarterly": "Quarterly",
+      "annual": "Annual"
     },
     "LoginView": {
       "governed_orchestration_for_your_agentic_sdlc": "Governed orchestration for your agentic SDLC",
       "login_failed": "Login failed:",
-      "enter_your_password": "Enter your password"
+      "enter_your_password": "Enter your password",
+      "modulo": "Modulo"
     },
     "NotificationsPage": {
       "all_status": "All Status",
@@ -300,7 +315,8 @@ export default {
       "dismissed_scope": "Dismissed (scope)",
       "no_notifications": "No notifications",
       "view_and_manage_your_notifications": "View and manage your notifications",
-      "clear_filters": "Clear filters"
+      "clear_filters": "Clear filters",
+      "apply_filters": "Apply Filters"
     },
     "AdminEnvironmentProfilesView": {
       "no_response_body": "No response body",
@@ -347,7 +363,13 @@ export default {
     "SettingsNotificationLogView": {
       "error_detail": "Error Detail",
       "delivery_history_for_all_webhook_notifications": "Delivery history for all webhook notifications",
-      "last_attempt": "Last Attempt"
+      "last_attempt": "Last Attempt",
+      "status": "Status",
+      "delivered": "Delivered",
+      "failed": "Failed",
+      "from": "From",
+      "destination": "Destination",
+      "attempts": "Attempts"
     },
     "MyProfileView": {
       "new_password": "New Password",
@@ -552,7 +574,10 @@ export default {
     "AdminSystemConfigView": {
       "deploymentwide_system_configuration_system_admin_only": "Deployment-wide system configuration (system admin only)",
       "failed_to_load_system_config": "Failed to load system config:",
-      "system_admin_config": "System Admin — Config"
+      "system_admin_config": "System Admin — Config",
+      "key": "Key",
+      "value": "Value",
+      "updated": "Updated"
     },
     "FeedbackInboxView": {
       "all_pipelines": "All Pipelines",
@@ -618,11 +643,22 @@ export default {
       "eg_production": "e.g. production",
       "no_message": "(no message)",
       "all_statuses": "All statuses",
-      "no_error_groups_found": "No error groups found"
+      "no_error_groups_found": "No error groups found",
+      "apply_filters": "Apply Filters"
     },
     "AdminNodeCategoriesView": {
       "failed_to_load_categories": "Failed to load categories:",
-      "not_available_on_current_plan": "Node Categories are not available on your current plan."
+      "not_available_on_current_plan": "Node Categories are not available on your current plan.",
+      "new_node_category": "New Node Category",
+      "no_node_categories_configured": "No node categories configured",
+      "name": "Name",
+      "description": "Description",
+      "color": "Color",
+      "icon": "Icon",
+      "sort_order": "Sort Order",
+      "actions": "Actions",
+      "edit_node_category": "Edit Node Category",
+      "this_action_cannot_be_undone": "This action cannot be undone."
     },
     "PipelineEditorView": {
       "pipeline_editor": "Pipeline Editor",
@@ -818,7 +854,8 @@ export default {
       "valid": "Valid",
       "invalid": "Invalid",
       "inactive": "Inactive",
-      "expires": "Expires"
+      "expires": "Expires",
+      "developer_mode": "Developer Mode"
     },
     "EvalEditorView": {
       "eval_system_is_not_available_on_your_current_plan": "Eval system is not available on your current plan.",
@@ -863,7 +900,14 @@ export default {
       "tab_evals": "Evals",
       "tab_proposals": "Proposals",
       "tab_variants": "Variants",
-      "tab_ab_test": "AB Test"
+      "tab_ab_test": "AB Test",
+      "pipeline_aria": "Pipeline",
+      "node_aria": "Node",
+      "eval_type_aria": "Eval type",
+      "config_json_hint": "(JSON)",
+      "pass_threshold_aria": "Pass threshold",
+      "threshold": "threshold: {value}",
+      "node_prefix": "node: {id}"
     },
     "RunDetailView": {
       "copy_run_id": "Copy run ID",
@@ -909,7 +953,14 @@ export default {
       "logs": "Logs",
       "agent_stdout": "Agent Stdout",
       "agent_stderr": "Agent Stderr",
-      "no_agent_logs": "No agent logs for this node."
+      "no_agent_logs": "No agent logs for this node.",
+      "runs": "Runs",
+      "gate_label": "Gate:",
+      "workspace": "Workspace",
+      "status_label": "Status:",
+      "sandbox_label": "Sandbox:",
+      "duration_label": "Duration:",
+      "error_label": "Error:"
     },
     "AdminRunRetentionView": {
       "run_retention": "Run Retention",
@@ -1070,10 +1121,22 @@ export default {
       "admin_view_of_all_webhook_notification_deliveries": "Admin view of all webhook notification deliveries",
       "failed_to_load_delivery_logs": "Failed to load delivery logs:",
       "all_types": "All types",
-      "retry_all_failed_1": "Retry all failed:"
+      "retry_all_failed_1": "Retry all failed:",
+      "status": "Status",
+      "delivered": "Delivered",
+      "failed": "Failed",
+      "pending": "Pending",
+      "from": "From",
+      "timestamp": "Timestamp",
+      "destination": "Destination",
+      "attempts": "Attempts",
+      "error": "Error",
+      "actions": "Actions",
+      "dead_letter_queue": "Dead Letter Queue"
     },
     "LibraryPipelineWizard": {
       "create_pipeline": "Create Pipeline",
+      "agent": "Agent",
       "pipeline_configuration": "Pipeline Configuration",
       "version": "Version:",
       "author": "Author:",
@@ -1089,7 +1152,15 @@ export default {
       "choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi": "Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.",
       "owner": "Owner",
       "pipeline_created_from_library_template": "Pipeline created from library template",
-      "back_to_library": "Back to Library"
+      "back_to_library": "Back to Library",
+      "pipeline_visualisation": "Pipeline Visualisation",
+      "sub_pipeline_internal": "This composite runs the following sub-pipeline internally:",
+      "description": "Description",
+      "ownership": "Ownership",
+      "template_agents": "Template Agents ({count})",
+      "creating": "Creating...",
+      "cancel": "Cancel",
+      "pipeline_ready": "{name} is ready."
     },
     "SettingsMcpView": {
       "mcp_server_is_not_available_on_your_current_plan": "MCP server is not available on your current plan.",
@@ -1123,7 +1194,11 @@ export default {
     "UserRemySkillsView": {
       "my_remy_skills": "My Remy Skills",
       "manage_your_personal_skills_for_the_remy_ai_assistant": "Manage your personal skills for the Remy AI assistant",
-      "no_personal_skills_configured": "No personal skills configured"
+      "no_personal_skills_configured": "No personal skills configured",
+      "name": "Name",
+      "description": "Description",
+      "triggers": "Triggers",
+      "actions": "Actions"
     },
     "AdminOrgSettingsView": {
       "team_rbac_is_not_available_on_your_current_plan": "Team RBAC is not available on your current plan.",
@@ -1153,7 +1228,7 @@ export default {
       "failed_to_load_library": "Failed to load library",
       "sdlc_onboarding": "SDLC Onboarding",
       "review_schemas": "Review Schemas",
-      "browse_library": "Browse Library",
+      "search_library": "Search Library",
       "review_edit_and_confirm_the_inferred_schema": "Review, edit, and confirm the inferred schema",
       "get_started_with_sdlc_onboarding": "Get started with SDLC onboarding",
       "your_pipeline_is_ready_to_run": "Your pipeline is ready to run",
@@ -1176,7 +1251,18 @@ export default {
       "fields_hint": "(read-only — re-infer to change)",
       "confirm_save_schema": "Confirm & Save Schema",
       "saving": "Saving...",
-      "schema_saved": "Schema \"{name}\" saved."
+      "schema_saved": "Schema \"{name}\" saved.",
+      "create_one": "Create one",
+      "name": "Name",
+      "type": "Type",
+      "required": "Required",
+      "pipeline_templates": "Pipeline Templates",
+      "agents": "Agents",
+      "schemas": "Schemas",
+      "integrations": "Integrations",
+      "pipeline_name": "Pipeline name",
+      "selected_library_item": "Selected library item",
+      "view_runs_on_dashboard": "View runs on dashboard"
     },
     "SettingsLicenseView": {
       "paste_your_modulolicensekey_value_here": "Paste your MODULO_LICENSE_KEY value here...",
@@ -1190,7 +1276,9 @@ export default {
       "manage_your_modulo_team_license_key_and_view_plan_details": "Manage your Modulo Team license key and view plan details",
       "team_license_key_active": "Team license key active",
       "new_license_key": "New License Key",
-      "applying": "Applying..."
+      "applying": "Applying...",
+      "team": "Team",
+      "community": "Community"
     },
     "SchemaEditorView": {
       "schema_name_is_required": "Schema name is required",
@@ -1247,7 +1335,14 @@ export default {
       "schema_created": "Schema created.",
       "schema_updated": "Schema updated.",
       "save_failed": "Save failed:",
-      "deprecated": "Deprecated"
+      "deprecated": "Deprecated",
+      "name_placeholder": "My Schema",
+      "description_placeholder": "Optional description",
+      "version_placeholder": "1.0.0",
+      "field_name_placeholder": "field_name",
+      "field_type_aria": "Field type",
+      "select_type": "Select type",
+      "optional": "Optional"
     },
     "SchemaInferenceView": {
       "browse": "Browse",
@@ -1396,7 +1491,47 @@ export default {
       "error_forwarders_are_not_available_on_your_current_plan": "Error forwarders are not available on your current plan.",
       "configure_external_error_tracking_and_alerting_integrations": "Configure external error tracking and alerting integrations",
       "configuration_saved": "Configuration saved.",
-      "not_configured": "Not configured"
+      "not_configured": "Not configured",
+      "last_test_passed": "Last test passed",
+      "last_test_failed": "Last test failed",
+      "not_tested": "Not tested",
+      "connected": "Connected",
+      "failed": "Failed",
+      "toggle_forwarder": "Toggle {name}",
+      "dsn": "DSN",
+      "dsn_placeholder": "https://key@sentry.io/123",
+      "org_slug": "Org Slug",
+      "org_slug_placeholder": "my-org",
+      "project_slug": "Project Slug",
+      "project_slug_placeholder": "my-project",
+      "api_key": "API Key",
+      "datadog_api_key_placeholder": "Enter DataDog API key",
+      "site": "Site",
+      "select_site": "Select site",
+      "gov_ddog_gov_com": "Gov (ddog-gov.com)",
+      "routing_key": "Routing Key",
+      "pagerduty_routing_key_placeholder": "Enter PagerDuty routing key",
+      "access_token": "Access Token",
+      "rollbar_access_token_placeholder": "Enter Rollbar access token",
+      "environment": "Environment",
+      "environment_placeholder": "production",
+      "opsgenie_api_key_placeholder": "Enter OpsGenie API key",
+      "team": "Team",
+      "team_placeholder": "sre",
+      "push_url": "Push URL",
+      "push_url_placeholder": "https://loki.example.com/loki/api/v1/push",
+      "tenant_id": "Tenant ID",
+      "tenant_id_placeholder": "my-tenant",
+      "labels": "Labels",
+      "labels_placeholder": "app=modulo, env=prod",
+      "labels_hint": "Comma-separated key=value pairs",
+      "testing": "Testing...",
+      "test_connection": "Test Connection",
+      "saving": "Saving...",
+      "save": "Save",
+      "connection_successful": "Connection successful",
+      "connection_failed": "Connection failed",
+      "save_failed": "Save failed: {detail}"
     },
     "SettingsEmailView": {
       "email_settings": "Email Settings",
@@ -1419,7 +1554,8 @@ export default {
     "SettingsMonitorConfigView": {
       "feature_locked": "Monitoring configuration is not available on your current plan.",
       "browser_monitoring": "Browser Monitoring",
-      "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately — no rebuild or page reload required."
+      "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately — no rebuild or page reload required.",
+      "retry": "Retry"
     },
     "ABTestModelsView": {
       "model_backend": "Model Backend",
@@ -1555,12 +1691,11 @@ export default {
       "my_view": "My View"
     },
     "SchemaListView": {
-      "deprecate_schema": "'Deprecate schema'",
+      "deprecate_schema": "Deprecate schema",
       "failed_to_load_schemas": "Failed to load schemas:",
       "deprecating": "Deprecating...",
       "manage_schemas_and_deprecate_outdated_definitions": "Manage schemas and deprecate outdated definitions",
       "no_schemas_found": "No schemas found",
-      "deprecate_schema_1": "Deprecate schema",
       "name": "Name",
       "description": "Description",
       "status": "Status",
@@ -1575,38 +1710,74 @@ export default {
       "empty_hint": "Schemas are created through inference or direct creation."
     },
     "SettingsTriggersView": {
-      "failed_to_load_triggers": "Failed to load triggers:",
-      "error_toggling_trigger": "Error toggling trigger:",
-      "webhook_triggers_are_not_available_on_your_current_plan": "Webhook triggers are not available on your current plan.",
-      "please_select_a_trigger_type": "Please select a trigger type.",
-      "input_template_must_be_valid_json": "Input template must be valid JSON.",
-      "error_deleting_trigger": "Error deleting trigger:",
-      "please_select_a_pipeline": "Please select a pipeline.",
-      "headers_must_be_valid_json": "Headers must be valid JSON.",
-      "failed_to_delete_trigger": "Failed to delete trigger:",
-      "failed_to_toggle_trigger": "Failed to toggle trigger:",
+      "title": "Triggers",
+      "subtitle": "Automate pipeline execution with schedules (cron), webhooks, polling, or inter-pipeline signals. Each trigger launches a pipeline run when its conditions are met.",
+      "create_trigger": "Create Trigger",
       "no_triggers_configured": "No triggers configured",
+      "no_triggers_configured_description": "Create a trigger to automatically start pipeline runs on a schedule, webhook, or other event.",
       "pipeline": "Pipeline",
       "type": "Type",
       "status": "Status",
       "last_fired": "Last Fired",
       "next_fire": "Next Fire",
       "actions": "Actions",
-      "trigger_type": "Trigger Type",
+      "active": "Active",
+      "inactive": "Inactive",
+      "edit_trigger": "Edit Trigger",
+      "update_trigger_description": "Update the trigger configuration.",
+      "create_trigger_description": "Configure a new trigger for your pipeline.",
+      "update": "Update",
+      "create": "Create",
+      "select_pipeline": "Select pipeline",
+      "trigger_type_label": "Trigger Type",
+      "select_type": "Select type",
       "webhook": "Webhook",
       "cron": "Cron",
       "polling": "Polling",
       "agent_signal": "Agent Signal",
+      "manual": "Manual",
+      "type_label": "Type",
+      "url": "URL",
+      "url_placeholder": "https://example.com/webhook",
+      "http_method": "HTTP Method",
+      "select_method": "Select method",
       "headers_json": "Headers (JSON)",
+      "headers_placeholder": "{ \"X-Custom-Header\": \"value\" }",
       "cron_expression": "Cron Expression",
+      "cron_expression_placeholder": "*/5 * * * *",
       "timezone": "Timezone",
+      "timezone_placeholder": "UTC",
       "input_template_json": "Input Template (JSON)",
+      "input_template_placeholder": "{ \"key\": \"value\" }",
       "connector_instance_id": "Connector Instance ID",
+      "connector_instance_id_placeholder": "uuid",
       "query": "Query",
+      "query_placeholder": "SELECT * FROM table WHERE status = 'pending'",
       "poll_interval_seconds": "Poll Interval (seconds)",
-      "condition_expression_jmespath": "Condition Expression (JMESPath)",
+      "poll_interval_placeholder": "60",
+      "condition_expression": "Condition Expression (JMESPath)",
+      "condition_expression_placeholder": "length(@) > `0`",
       "source_pipeline": "Source Pipeline",
-      "source_node_id": "Source Node ID"
+      "select_source_pipeline": "Select source pipeline",
+      "source_node_id": "Source Node ID",
+      "source_node_id_placeholder": "node_abc123",
+      "delete_trigger": "Delete Trigger",
+      "delete_trigger_description": "Are you sure you want to delete this trigger? This action cannot be undone.",
+      "delete": "Delete",
+      "edit": "Edit",
+      "failed_to_update_trigger": "Failed to update trigger: {detail}",
+      "failed_to_create_trigger": "Failed to create trigger: {detail}",
+      "error_saving_trigger": "Error: {detail}",
+      "failed_to_load_triggers": "Failed to load triggers:",
+      "error_toggling_trigger": "Error toggling trigger: {detail}",
+      "webhook_triggers_are_not_available_on_your_current_plan": "Webhook triggers are not available on your current plan.",
+      "please_select_a_trigger_type": "Please select a trigger type.",
+      "input_template_must_be_valid_json": "Input template must be valid JSON.",
+      "error_deleting_trigger": "Error deleting trigger: {detail}",
+      "please_select_a_pipeline": "Please select a pipeline.",
+      "headers_must_be_valid_json": "Headers must be valid JSON.",
+      "failed_to_delete_trigger": "Failed to delete trigger: {detail}",
+      "failed_to_toggle_trigger": "Failed to toggle trigger: {detail}"
     },
     "SettingsTriggerEventLogView": {
       "no_trigger_events_found": "No trigger events found",
@@ -1628,7 +1799,18 @@ export default {
       "no_match": "No Match",
       "condition_met": "Condition Met",
       "hmac_failed": "HMAC Failed",
-      "schema_validation_failed": "Schema Validation Failed"
+      "schema_validation_failed": "Schema Validation Failed",
+      "manual": "Manual",
+      "webhook": "Webhook",
+      "cron": "Cron",
+      "polling": "Polling",
+      "result": "Result",
+      "accepted": "Accepted",
+      "passed": "Passed",
+      "deduplicated": "Deduplicated",
+      "type": "Type",
+      "timestamp": "Timestamp",
+      "run": "Run"
     },
     "variantCompare": {
       "title": "Variant Comparison",
@@ -1661,12 +1843,108 @@ export default {
       "runFailed": "Run failed:",
       "failedToRunVariants": "Failed to run variants:",
       "runFailedStatus": "Run failed with status:"
+    },
+    "AdminHousekeepingView": {
+      "confirm_cleanup": "Confirm Cleanup"
+    },
+    "LifecycleMapsView": {
+      "lifecycle_maps": "Lifecycle Maps",
+      "no_lifecycle_maps_yet": "No lifecycle maps yet",
+      "create_lifecycle_map": "Create Lifecycle Map",
+      "name": "Name",
+      "description": "Description"
+    },
+    "LifecycleMapList": {
+      "create_lifecycle_map": "Create Lifecycle Map",
+      "name": "Name",
+      "description": "Description"
+    },
+    "LifecycleMapView": {
+      "version_label": "Version:"
+    },
+    "EnvironmentProfileList": {
+      "try_a_different_search_term": "Try a different search term.",
+      "no_environment_profiles": "No environment profiles",
+      "soft_delete_warning": "This will soft-delete the profile. Existing runs using it are unaffected."
+    },
+    "CompositeEditorView": {
+      "save_as_composite": "Save as Composite",
+      "name": "Name",
+      "description": "Description"
     }
   },
   "components": {
     "ViewToggle": {
       "saved_views": "Saved Views",
       "select_a_saved_view": "Select a saved view..."
+    },
+    "lifecycle-map": {
+      "editor": {
+        "EdgeConfigPanel": {
+          "trigger_type": "Trigger Type",
+          "description": "Description",
+          "condition_expression_jmespath": "Condition Expression (JMESPath)",
+          "estimated_frequency": "Estimated Frequency",
+          "daily": "Daily",
+          "per_pr": "Per PR",
+          "hourly": "Hourly",
+          "custom": "Custom",
+          "trigger_link_optional": "Trigger Link (optional)",
+          "select_trigger_type": "Select trigger type",
+          "not_specified": "Not specified"
+        },
+        "StageConfigPanel": {
+          "name": "Name",
+          "description": "Description",
+          "type": "Type",
+          "pipeline": "Pipeline",
+          "external_url": "External URL",
+          "owner": "Owner"
+        },
+        "GraduationDialog": {
+          "graduate_stage": "Graduate Stage",
+          "simple_sequential": "Simple Sequential",
+          "hierarchical_agent": "Hierarchical Agent",
+          "parallel_processing": "Parallel Processing",
+          "graduating_stage_prefix": "You are graduating",
+          "graduating_stage_suffix": "to a Modulo-managed pipeline."
+        },
+        "LifecycleMapEditor": {
+          "stage_config": "Stage Config",
+          "edge_config": "Edge Config"
+        },
+        "VersionHistoryDropdown": {
+          "version_history": "Version History"
+        },
+        "StagePalette": {
+          "stage_types": "Stage Types"
+        }
+      }
+    },
+    "pipelines": {
+      "FolderTree": {
+        "parent_folder": "Parent folder",
+        "no_parent_root_level": "No parent (root level)"
+      }
+    },
+    "environment-profiles": {
+      "EnvironmentProfilePicker": {
+        "environment_profile": "Environment Profile",
+        "provider": "Provider:",
+        "image": "Image:",
+        "capabilities": "Capabilities:",
+        "loading_profiles": "Loading profiles...",
+        "settings": "Settings"
+      }
+    },
+    "onboarding": {
+      "OnboardingBanner": {
+        "set_up_modulo": "Set up Modulo",
+        "recommended_actions": "Recommended actions"
+      },
+      "SpotlightOverlay": {
+        "dismiss_hint": "Click anywhere to dismiss this guide"
+      }
     },
     "pipeline": {
       "composite": {
@@ -1677,17 +1955,33 @@ export default {
           "json_schema": "JSON Schema",
           "eval_name": "eval name",
           "output_validation": "Output Validation",
-          "output_field_name": "output field name"
+          "output_field_name": "output field name",
+          "name": "Name",
+          "type": "Type",
+          "regex": "Regex",
+          "retry": "Retry",
+          "block": "Block",
+          "warn": "Warn",
+          "field": "Field",
+          "pattern": "Pattern",
+          "field_optional": "Field (optional)",
+          "schema_json": "Schema (JSON)",
+          "rubric": "Rubric"
         },
         "ParameterPortForm": {
-          "portdefault_as_string": "Default value"
+          "portdefault_as_string": "Default value",
+          "select": "Select..."
         },
         "PublishCompositeFlow": {
           "a_reusable_composite_that_performs_code_review_across_multip": "A reusable composite that performs code review across multiple agents",
           "name_description": "Name & Description",
           "version": "Version *",
           "review_ports": "Review Ports",
-          "code_review_assistant": "Code Review Assistant"
+          "code_review_assistant": "Code Review Assistant",
+          "name_label": "Name",
+          "description": "Description",
+          "ports": "Ports",
+          "version_label": "Version"
         },
         "PortDefinitionPanel": {
           "parameter_ports": "Parameter Ports",
@@ -1700,7 +1994,17 @@ export default {
           "model_temperature": "Model Temperature",
           "default_value": "Default Value",
           "schema_ref": "Schema Ref",
-          "move_up": "Move up"
+          "move_up": "Move up",
+          "description": "Description",
+          "type": "Type",
+          "string": "String",
+          "number": "Number",
+          "boolean": "Boolean",
+          "select": "Select",
+          "required": "Required",
+          "multiline": "Multiline",
+          "formtype_number_07_default_value": "0.7",
+          "default_value_placeholder": "default value"
         },
         "CompositeLibraryPicker": {
           "composite_library": "Composite Library",
@@ -1710,6 +2014,19 @@ export default {
         "CompositeConfigPanel": {
           "schema_mapping_coming_soon": "Schema mapping coming soon",
           "no_composite_selected": "No composite selected."
+        },
+        "SchemaMappingPanel": {
+          "schema_mapping": "Schema Mapping",
+          "no_preceding_node_schema": "No preceding node schema",
+          "no_composite_input_schema": "No composite input schema",
+          "no_composite_output_schema": "No composite output schema",
+          "no_downstream_schema": "No downstream schema"
+        },
+        "FieldMappingPair": {
+          "passthrough": "Passthrough",
+          "source_field": "Source field",
+          "target_field": "Target field",
+          "schemas_identical_no_mapping": "Schemas are identical — no mapping needed"
         }
       }
     },
@@ -1722,7 +2039,9 @@ export default {
       "all_features": "All Features",
       "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'",
       "remy_performing_actions": "Remy is performing actions on this page",
-      "remy_stop": "Stop"
+      "remy_stop": "Stop",
+      "modulo": "Modulo",
+      "search_pages": "Search pages"
     },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",
@@ -1767,22 +2086,30 @@ export default {
         "update_the_skill_configuration": "Update the skill configuration.",
         "trigger1_trigger2": "trigger1, trigger2",
         "skill_instructions_heading": "# Skill instructions",
-        "skill_instructions_body": "Write markdown here..."
+        "skill_instructions_body": "Write markdown here...",
+        "name": "Name",
+        "description": "Description",
+        "triggers": "Triggers"
       },
       "RemySessionDrawer": {
         "no_sessions_yet": "No sessions yet",
         "start_a_new_chat": "Start a new chat",
-        "new_session": "New session"
+        "new_session": "New session",
+        "loading": "Loading..."
       },
       "RemyPanel": {
         "click_to_rename": "Click to rename session",
-        "session_label": "Session"
+        "session_label": "Session",
+        "remy": "Remy",
+        "resume": "Resume",
+        "stops_after_each_navigation": "Stops after each navigation"
       },
       "RemyChat": {
         "ask_remy": "Ask Remy...",
         "no_slash_commands": "No matching commands",
         "delete_confirm": "Delete this session?",
-        "intro_text": "Hi! I'm Remy, your Modulo AI assistant. I can help you build pipelines, run evaluations, manage your workspace, and answer questions about your data. What would you like help with?"
+        "intro_text": "Hi! I'm Remy, your Modulo AI assistant. I can help you build pipelines, run evaluations, manage your workspace, and answer questions about your data. What would you like help with?",
+        "permission_request": "Remy wants to perform actions on your behalf"
       },
       "RemySkillManager": {
         "triggers_commaseparated": "Triggers (comma-separated)",
@@ -1922,11 +2249,34 @@ export default {
       "an_unexpected_error_occurred": "An unexpected error occurred",
       "optional_description_of_this_category": "Optional description of this category",
       "eg_llm_call_connector_read": "e.g. llm-call, connector-read",
-      "sort_order": "Sort Order"
+      "sort_order": "Sort Order",
+      "name": "Name",
+      "description": "Description",
+      "color": "Color",
+      "icon": "Icon",
+      "none": "None",
+      "bot": "Bot",
+      "database": "Database",
+      "globe": "Globe",
+      "mail": "Mail",
+      "refresh": "Refresh",
+      "settings": "Settings",
+      "sliders": "Sliders",
+      "terminal": "Terminal",
+      "upload": "Upload",
+      "zap": "Zap"
     },
     "TeamNotificationEndpoints": {
       "failed_to_load_endpoints": "Failed to load endpoints:",
-      "delete_failed": "Delete failed:"
+      "delete_failed": "Delete failed:",
+      "edit_webhook": "Edit Webhook",
+      "new_webhook": "New Webhook",
+      "secret": "Secret",
+      "events": "Events",
+      "description": "Description",
+      "url": "URL",
+      "optional": "(optional)",
+      "leave_blank_to_keep_existing": "(leave blank to keep existing)"
     },
     "NotificationBell": {
       "notifications": "Notifications"
@@ -1940,7 +2290,13 @@ export default {
       "view_plans": "View Plans"
     },
     "DashboardNotificationsPanel": {
-      "failed_to_dismiss_notification": "Failed to dismiss notification"
+      "failed_to_dismiss_notification": "Failed to dismiss notification",
+      "notifications": "Notifications"
+    },
+    "SidebarLink": {
+      "preview": "Preview",
+      "dev_preview": "Dev Preview",
+      "in_dev": "In Dev"
     }
   },
   "common": {
@@ -1971,7 +2327,8 @@ export default {
     "failed_to_load": "Failed to load",
     "failed_to_save": "Failed to save",
     "configuration_saved": "Configuration saved",
-    "reset": "Reset"
+    "reset": "Reset",
+    "create": "Create"
   },
   "nav": {
     "environment-profiles": "Environment Profiles",

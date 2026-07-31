@@ -31,8 +31,8 @@
       @update:filter="handleFilterUpdate"
     >
       <template #after>
-        <Button variant="default" @click="applyFilters">Apply Filters</Button>
-        <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">Reset</button>
+        <Button variant="default" @click="applyFilters">{{ $t('views.AdminErrorsView.apply_filters') }}</Button>
+        <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
 

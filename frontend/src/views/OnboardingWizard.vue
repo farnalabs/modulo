@@ -48,7 +48,7 @@
         </div>
         <div v-else-if="connectorsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{{ connectorsError }}</div>
         <div v-else-if="connectors.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          No connectors found. <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary underline">Create one</a> first, then come back.
+          No connectors found. <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary underline">{{ $t('views.OnboardingWizard.create_one') }}</a> first, then come back.
         </div>
         <div v-else class="space-y-2">
           <span class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.select_connector_instance') }}</span>
@@ -168,10 +168,10 @@
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b text-left text-muted-foreground">
-                  <th class="pb-2 font-medium">Name</th>
-                  <th class="pb-2 font-medium">Type</th>
-                  <th class="pb-2 font-medium">Required</th>
-                  <th class="pb-2 font-medium">Description</th>
+                  <th class="pb-2 font-medium">{{ $t('views.OnboardingWizard.name') }}</th>
+                  <th class="pb-2 font-medium">{{ $t('views.OnboardingWizard.type') }}</th>
+                  <th class="pb-2 font-medium">{{ $t('views.OnboardingWizard.required') }}</th>
+                  <th class="pb-2 font-medium">{{ $t('views.OnboardingWizard.description') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -226,10 +226,10 @@
                 <SelectValue placeholder="All types" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="pipeline_template">Pipeline Templates</SelectItem>
-                <SelectItem value="agent">Agents</SelectItem>
-                <SelectItem value="schema">Schemas</SelectItem>
-                <SelectItem value="integration">Integrations</SelectItem>
+                <SelectItem value="pipeline_template">{{ $t('views.OnboardingWizard.pipeline_templates') }}</SelectItem>
+                <SelectItem value="agent">{{ $t('views.OnboardingWizard.agents') }}</SelectItem>
+                <SelectItem value="schema">{{ $t('views.OnboardingWizard.schemas') }}</SelectItem>
+                <SelectItem value="integration">{{ $t('views.OnboardingWizard.integrations') }}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -263,7 +263,7 @@
       <!-- Step 5: Wire Pipeline -->
       <div v-if="currentStep === 5" class="space-y-4">
         <div>
-          <label for="onboardingwizard-field-2" class="mb-1 block text-sm font-medium">Pipeline name</label>
+          <label for="onboardingwizard-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.pipeline_name') }}</label>
           <input id="onboardingwizard-field-2"
             v-model="wizardState.pipelineName"
             type="text"
@@ -273,7 +273,7 @@
           />
         </div>
         <div>
-          <label for="onboardingwizard-field-1" class="mb-1 block text-sm font-medium">Description</label>
+          <label for="onboardingwizard-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.description') }}</label>
           <textarea id="onboardingwizard-field-1"
             v-model="wizardState.pipelineDescription"
             rows="3"
@@ -283,7 +283,7 @@
           />
         </div>
         <div v-if="wizardState.selectedLibraryItemId && selectedLibraryItem" class="rounded-lg bg-muted p-3">
-          <p class="text-xs text-muted-foreground">Selected library item</p>
+          <p class="text-xs text-muted-foreground">{{ $t('views.OnboardingWizard.selected_library_item') }}</p>
           <p class="text-sm font-medium">{{ selectedLibraryItem.name }}</p>
           <p v-if="selectedLibraryItem.description" class="text-xs text-muted-foreground">{{ selectedLibraryItem.description }}</p>
         </div>
@@ -355,7 +355,7 @@
           </router-link>
         </div>
         <div v-if="runResult" class="rounded-lg bg-success/10 p-3 text-sm text-success">
-          Pipeline started! <router-link :to="{ name: 'dashboard' }" class="underline">View runs on dashboard</router-link>.
+          Pipeline started! <router-link :to="{ name: 'dashboard' }" class="underline">{{ $t('views.OnboardingWizard.view_runs_on_dashboard') }}</router-link>.
         </div>
         <div v-if="pipelineRunError" class="text-sm text-destructive">{{ pipelineRunError }}</div>
       </div>

@@ -555,6 +555,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import FolderTree from '../components/pipelines/FolderTree.vue'
@@ -606,6 +607,7 @@ interface PipelineListResponse {
 
 const router = useRouter()
 const planStore = usePlanStore()
+const { t } = useI18n()
 const { get, post: postUntyped, patch: patchUntyped } = useApi()
 
 const selectedFolderId = ref<string | null>(null)
@@ -1022,7 +1024,7 @@ async function triggerRun() {
       try {
         inputPayload = JSON.parse(advancedPayload.value)
       } catch {
-        runError.value = 'Invalid JSON in advanced payload'
+        runError.value = t('views.PipelineListView.invalid_json_in_advanced_payload')
         running.value = false
         return
       }

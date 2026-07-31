@@ -17,7 +17,7 @@
         :style="{ top: '100%' }"
       >
         <p class="font-medium text-foreground">{{ spotlight.message.value }}</p>
-        <p class="text-xs text-muted-foreground mt-1">Click anywhere to dismiss this guide</p>
+        <p class="text-xs text-muted-foreground mt-1">{{ $t('components.onboarding.SpotlightOverlay.dismiss_hint') }}</p>
       </div>
     </div>
 
@@ -28,7 +28,7 @@
       <p class="text-sm text-muted-foreground">
         {{ spotlight.message.value || 'Follow the next step to continue setting up Modulo.' }}
       </p>
-      <p class="text-xs text-muted-foreground mt-2">Click anywhere to dismiss this guide</p>
+      <p class="text-xs text-muted-foreground mt-2">{{ $t('components.onboarding.SpotlightOverlay.dismiss_hint') }}</p>
     </div>
   </div>
 </template>
