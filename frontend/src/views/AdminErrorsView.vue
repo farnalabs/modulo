@@ -1,4 +1,5 @@
 <template>
+  <FeatureGate feature-name="error_tracking" show-disabled>
   <PageTabs :tabs="[
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />
@@ -31,8 +32,8 @@
       @update:filter="handleFilterUpdate"
     >
       <template #after>
-        <Button variant="default" @click="applyFilters">Apply Filters</Button>
-        <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">Reset</button>
+        <Button variant="default" @click="applyFilters">{{ $t('views.AdminErrorsView.apply_filters') }}</Button>
+        <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
 
@@ -112,10 +113,12 @@
       </div>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'

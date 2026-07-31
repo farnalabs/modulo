@@ -70,7 +70,7 @@
                 />
               </div>
               <div>
-                <label for="settingserrorforwardersview-field-12" class="mb-1 block text-sm font-medium">Org Slug</label>
+                <label for="settingserrorforwardersview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.org_slug') }}</label>
                 <input id="settingserrorforwardersview-field-12"
                   v-model="configs.sentry.org_slug"
                   type="text"
@@ -79,7 +79,7 @@
                 />
               </div>
               <div>
-                <label for="settingserrorforwardersview-field-11" class="mb-1 block text-sm font-medium">Project Slug</label>
+                <label for="settingserrorforwardersview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.project_slug') }}</label>
                 <input id="settingserrorforwardersview-field-11"
                   v-model="configs.sentry.project_slug"
                   type="text"
@@ -101,7 +101,7 @@
                 />
               </div>
               <div>
-                <label for="settingserrorforwardersview-datadog-site" class="mb-1 block text-sm font-medium">Site</label>
+                <label for="settingserrorforwardersview-datadog-site" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.site') }}</label>
                 <Select v-model="configs.datadog.site" aria-label="Site">
                   <SelectTrigger id="settingserrorforwardersview-datadog-site" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Site">
                     <SelectValue placeholder="Select site" />
@@ -111,7 +111,7 @@
                     <SelectItem value="datadoghq.eu">EU (datadoghq.eu)</SelectItem>
                     <SelectItem value="us3.datadoghq.com">US3 (us3.datadoghq.com)</SelectItem>
                     <SelectItem value="us5.datadoghq.com">US5 (us5.datadoghq.com)</SelectItem>
-                    <SelectItem value="ddog-gov.com">Gov (ddog-gov.com)</SelectItem>
+                    <SelectItem value="ddog-gov.com">{{ $t('views.SettingsErrorForwardersView.gov_ddog_gov_com') }}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -120,7 +120,7 @@
             <!-- PagerDuty -->
             <template v-if="fwd.forwarder_type === 'pagerduty'">
               <div>
-                <label for="settingserrorforwardersview-field-8" class="mb-1 block text-sm font-medium">Routing Key</label>
+                <label for="settingserrorforwardersview-field-8" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.routing_key') }}</label>
                 <input id="settingserrorforwardersview-field-8"
                   v-model="configs.pagerduty.routing_key"
                   type="password"
@@ -133,7 +133,7 @@
             <!-- Rollbar -->
             <template v-if="fwd.forwarder_type === 'rollbar'">
               <div>
-                <label for="settingserrorforwardersview-field-7" class="mb-1 block text-sm font-medium">Access Token</label>
+                <label for="settingserrorforwardersview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.access_token') }}</label>
                 <input id="settingserrorforwardersview-field-7"
                   v-model="configs.rollbar.access_token"
                   type="password"
@@ -142,7 +142,7 @@
                 />
               </div>
               <div>
-                <label for="settingserrorforwardersview-field-6" class="mb-1 block text-sm font-medium">Environment</label>
+                <label for="settingserrorforwardersview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.environment') }}</label>
                 <input id="settingserrorforwardersview-field-6"
                   v-model="configs.rollbar.environment"
                   type="text"
@@ -164,7 +164,7 @@
                 />
               </div>
               <div>
-                <label for="settingserrorforwardersview-field-4" class="mb-1 block text-sm font-medium">Team</label>
+                <label for="settingserrorforwardersview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.team') }}</label>
                 <input id="settingserrorforwardersview-field-4"
                   v-model="configs.opsgenie.team"
                   type="text"
@@ -177,7 +177,7 @@
             <!-- Loki -->
             <template v-if="fwd.forwarder_type === 'loki'">
               <div>
-                <label for="settingserrorforwardersview-field-3" class="mb-1 block text-sm font-medium">Push URL</label>
+                <label for="settingserrorforwardersview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.push_url') }}</label>
                 <input id="settingserrorforwardersview-field-3"
                   v-model="configs.loki.push_url"
                   type="url"
@@ -186,7 +186,7 @@
                 />
               </div>
               <div>
-                <label for="settingserrorforwardersview-field-2" class="mb-1 block text-sm font-medium">Tenant ID</label>
+                <label for="settingserrorforwardersview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.tenant_id') }}</label>
                 <input id="settingserrorforwardersview-field-2"
                   v-model="configs.loki.tenant_id"
                   type="text"
@@ -195,7 +195,7 @@
                 />
               </div>
               <div>
-                <label for="settingserrorforwardersview-field-1" class="mb-1 block text-sm font-medium">Labels</label>
+                <label for="settingserrorforwardersview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.labels') }}</label>
                 <input id="settingserrorforwardersview-field-1"
                   v-model="configs.loki.labels"
                   type="text"

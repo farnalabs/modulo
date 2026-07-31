@@ -48,7 +48,7 @@
           v-if="subGraphNodes.length > 0"
           class="card p-6 mb-6"
         >
-          <h3 class="text-base font-medium text-foreground mb-4">Pipeline Visualisation</h3>
+          <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.pipeline_visualisation') }}</h3>
           <p class="text-sm text-muted-foreground mb-4">
             This composite runs the following sub-pipeline internally:
           </p>
@@ -90,7 +90,7 @@
             </div>
 
             <div>
-              <label for="librarypipelinewizard-field-1" class="block text-sm font-medium text-foreground mb-1">Description</label>
+              <label for="librarypipelinewizard-field-1" class="block text-sm font-medium text-foreground mb-1">{{ $t('views.LibraryPipelineWizard.description') }}</label>
               <textarea id="librarypipelinewizard-field-1"
                 v-model="pipelineDescription"
                 rows="3"
@@ -103,7 +103,7 @@
         </div>
 
         <div class="card p-6 mb-6">
-          <h3 class="text-base font-medium text-foreground mb-4">Ownership</h3>
+          <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.ownership') }}</h3>
           <p class="text-sm text-muted-foreground mb-4">{{ $t('views.LibraryPipelineWizard.choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi') }}</p>
           <OwnershipPicker v-model="ownership" :label="$t('views.LibraryPipelineWizard.owner')" />
         </div>

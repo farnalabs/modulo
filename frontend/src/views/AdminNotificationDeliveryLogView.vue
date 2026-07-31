@@ -1,21 +1,22 @@
 <template>
+  <FeatureGate feature-name="notification_log" show-disabled>
     <div class="page-wide">
     <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries')" data-test-id="admin-notification-log-title" />
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div>
-          <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
+          <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.AdminNotificationDeliveryLogView.status') }}</label>
           <Select v-model="filterStatus">
             <SelectTrigger data-testid="admin-notification-log-status" aria-label="Status" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
               <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
-              <SelectItem value="delivered">Delivered</SelectItem>
-              <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="delivered">{{ $t('views.AdminNotificationDeliveryLogView.delivered') }}</SelectItem>
+              <SelectItem value="failed">{{ $t('views.AdminNotificationDeliveryLogView.failed') }}</SelectItem>
               <SelectItem value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</SelectItem>
-              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="pending">{{ $t('views.AdminNotificationDeliveryLogView.pending') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -35,7 +36,7 @@
           </Select>
         </div>
         <div>
-          <label for="adminnotificationdeliverylogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
+          <label for="adminnotificationdeliverylogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.from') }}</label>
           <input id="adminnotificationdeliverylogview-field-2"
             v-model="filterDateFrom"
             type="date"
@@ -107,13 +108,13 @@
           <thead>
             <tr>
               <th class="w-8 table-header"></th>
-              <th class="table-header">Timestamp</th>
+              <th class="table-header">{{ $t('views.AdminNotificationDeliveryLogView.timestamp') }}</th>
               <th class="table-header">{{ $t('views.AdminAuditView.event_type') }}</th>
-              <th class="table-header">Destination</th>
-              <th class="table-header">Status</th>
-              <th class="table-header table-cell-numeric">Attempts</th>
-              <th class="table-header">Error</th>
-              <th class="table-header">Actions</th>
+              <th class="table-header">{{ $t('views.AdminNotificationDeliveryLogView.destination') }}</th>
+              <th class="table-header capitalize">{{ $t('views.AdminNotificationDeliveryLogView.status') }}</th>
+              <th class="table-header table-cell-numeric">{{ $t('views.AdminNotificationDeliveryLogView.attempts') }}</th>
+              <th class="table-header">{{ $t('views.AdminNotificationDeliveryLogView.error') }}</th>
+              <th class="table-header">{{ $t('views.AdminNotificationDeliveryLogView.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -227,7 +228,7 @@
       <div v-if="deadLetteredCount > 0" data-testid="admin-notification-log-dlq" class="rounded-lg border bg-card p-4 shadow-sm">
         <div class="flex items-center justify-between">
           <div>
-            <h3 class="text-base font-semibold">Dead Letter Queue</h3>
+            <h3 class="text-base font-semibold">{{ $t('views.AdminNotificationDeliveryLogView.dead_letter_queue') }}</h3>
             <p class="text-sm text-muted-foreground">
               {{ deadLetteredCount }} undeliverable notification{{ deadLetteredCount === 1 ? '' : 's' }} across all endpoints
             </p>
@@ -243,10 +244,12 @@
       </div>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'

@@ -137,10 +137,10 @@
       @click.self="showCreateDialog = false"
     >
       <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-base font-semibold">Create Lifecycle Map</h3>
+        <h3 class="mb-4 text-base font-semibold">{{ $t('views.LifecycleMapList.create_lifecycle_map') }}</h3>
         <div class="space-y-4">
           <div>
-            <label for="lifecyclemaplist-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <label for="lifecyclemaplist-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.LifecycleMapList.name') }}</label>
             <input id="lifecyclemaplist-field-2"
               v-model="newName"
               @keydown.space.stop
@@ -149,7 +149,7 @@
             />
           </div>
           <div>
-            <label for="lifecyclemaplist-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <label for="lifecyclemaplist-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.LifecycleMapList.description') }}</label>
             <textarea id="lifecyclemaplist-field-1"
               v-model="newDescription"
               @keydown.space.stop

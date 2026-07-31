@@ -26,8 +26,8 @@
       @update:filter="handleFilterUpdate"
     >
       <template #after>
-        <Button type="button" variant="default" @click="applyFilters">Apply Filters</Button>
-        <button type="button" class="rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors" @click="resetFilters">Reset</button>
+        <Button type="button" variant="default" @click="applyFilters">{{ $t('views.NotificationsPage.apply_filters') }}</Button>
+        <button type="button" class="rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
 

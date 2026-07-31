@@ -1,4 +1,5 @@
 <template>
+  <FeatureGate feature-name="system_config" required-tier="team" show-disabled>
   <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('views.AdminSystemConfigView.system_admin_config')" :subtitle="$t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only')" />
@@ -24,9 +25,9 @@
       <table class="w-full">
         <thead>
           <tr class="border-b text-left text-sm font-medium text-muted-foreground">
-            <th class="px-4 py-3">Key</th>
-            <th class="px-4 py-3">Value</th>
-            <th class="px-4 py-3">Updated</th>
+            <th class="px-4 py-3">{{ $t('views.AdminSystemConfigView.key') }}</th>
+            <th class="px-4 py-3">{{ $t('views.AdminSystemConfigView.value') }}</th>
+            <th class="px-4 py-3">{{ $t('views.AdminSystemConfigView.updated') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -51,10 +52,12 @@
       </table>
     </div>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import { Ref, ref, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'

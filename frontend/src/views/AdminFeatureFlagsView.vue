@@ -1,4 +1,5 @@
 <template>
+  <FeatureGate feature-name="feature_flags" required-tier="team" show-disabled>
   <div data-theme="agent" class="page-wide">
     <header>
       <PageHeader :title="$t('views.AdminFeatureFlagsView.feature_flags')" :subtitle="$t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status')" />
@@ -24,7 +25,7 @@
     <div class="mb-6 rounded-lg border bg-card p-4">
       <div class="flex items-center justify-between">
         <div>
-          <h3 class="text-sm font-semibold">Developer Mode</h3>
+          <h3 class="text-sm font-semibold">{{ $t('views.AdminFeatureFlagsView.developer_mode') }}</h3>
           <p class="text-xs text-muted-foreground">
             When enabled, preview/in-development features are shown in the sidebar. When disabled, they are hidden from all users.
           </p>
@@ -67,7 +68,7 @@
           </p>
         </div>
         <div>
-          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.status_label') }}</span>
+          <span class="text-xs font-medium text-muted-foreground capitalize">{{ $t('views.AdminFeatureFlagsView.status_label') }}</span>
           <p class="mt-0.5">
             <span :class="license.is_valid ? 'badge badge-status-success' : 'badge badge-status-destructive'">
               {{ license.is_valid ? $t('views.AdminFeatureFlagsView.valid') : $t('views.AdminFeatureFlagsView.invalid') }}
@@ -134,7 +135,7 @@
                   <tr>
                     <th class="table-header w-12"></th>
                     <th class="table-header">{{ $t('views.AdminFeatureFlagsView.flag') }}</th>
-                    <th class="table-header">{{ $t('views.AdminFeatureFlagsView.status') }}</th>
+                    <th class="table-header capitalize">{{ $t('views.AdminFeatureFlagsView.status') }}</th>
                     <th class="table-header">{{ $t('views.AdminFeatureFlagsView.description') }}</th>
                     <th class="table-header w-32 table-cell-numeric">{{ $t('views.AdminFeatureFlagsView.org_override') }}</th>
                   </tr>
@@ -243,10 +244,12 @@
       </div>
     </FormDialog>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
