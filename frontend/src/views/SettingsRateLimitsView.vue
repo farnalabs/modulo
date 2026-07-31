@@ -9,7 +9,7 @@
     <div v-else class="space-y-6">
       <div data-testid="rate-limits-mode" class="rounded-lg border bg-card p-6 shadow-sm">
         <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-base font-semibold">Mode</h2>
+          <h2 class="text-base font-semibold">{{ $t('views.SettingsRateLimitsView.mode') }}</h2>
           <span
             class="rounded-full px-3 py-1 text-xs font-medium"
             :class="mode === 'redis' ? 'badge badge-status-success' : 'badge badge-status-warning'"
@@ -23,7 +23,7 @@
       </div>
 
       <div data-testid="rate-limits-rules" class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-base font-semibold">Rules</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsRateLimitsView.rules') }}</h2>
         <table v-if="rules.length > 0" data-testid="rate-limits-table" class="w-full text-sm">
           <thead>
             <tr class="border-b text-left text-muted-foreground">

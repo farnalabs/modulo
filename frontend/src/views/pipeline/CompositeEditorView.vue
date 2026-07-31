@@ -87,10 +87,10 @@
       @click.self="showSaveAsComposite = false"
     >
       <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-base font-semibold">Save as Composite</h3>
+        <h3 class="mb-4 text-base font-semibold">{{ $t('views.CompositeEditorView.save_as_composite') }}</h3>
         <div class="space-y-4">
           <div>
-            <label for="compositeeditorview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <label for="compositeeditorview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.CompositeEditorView.name') }}</label>
             <input id="compositeeditorview-field-2"
               v-model="saveAsName"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -98,7 +98,7 @@
             />
           </div>
           <div>
-            <label for="compositeeditorview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <label for="compositeeditorview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.CompositeEditorView.description') }}</label>
             <textarea id="compositeeditorview-field-1"
               v-model="saveAsDescription"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"

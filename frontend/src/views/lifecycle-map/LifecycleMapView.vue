@@ -19,7 +19,7 @@
           </span>
         </div>
         <div v-if="mapData?.versions && mapData.versions.length > 1" class="flex items-center gap-2">
-          <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">Version:</label>
+          <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">{{ $t('views.LifecycleMapView.version_label') }}</label>
           <Select v-model="selectedVersion" @update:model-value="onVersionChange">
             <SelectTrigger data-testid="lifecycle-map-version-select" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
               <SelectValue placeholder="Select version" />
