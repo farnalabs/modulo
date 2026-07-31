@@ -8,6 +8,7 @@ table.
 from __future__ import annotations
 
 import asyncio
+import binascii
 import logging
 import uuid
 from typing import TYPE_CHECKING
@@ -46,10 +47,25 @@ class FernetSecretsBackend(SecretsBackend):
         session: AsyncSession | None = None,
         old_key: str | None = None,
     ) -> None:
-        self._fernet = Fernet(fernet_key.encode())
-        self._fernet_old = Fernet(old_key.encode()) if old_key else None
+        self._fernet = self._build_fernet(fernet_key, "fernet_key")
+        self._fernet_old = self._build_fernet(old_key, "old_key") if old_key else None
         self._session = session
         self._org_id: uuid.UUID | None = None
+
+    @staticmethod
+    def _build_fernet(fernet_key: str, field: str) -> Fernet:
+        """Build a Fernet instance, raising a clear config error for invalid keys.
+
+        ``cryptography.fernet.Fernet`` raises ``binascii.Error`` or
+        ``ValueError`` for keys that are not valid base64-encoded 32-byte
+        values; surface those as a friendly ``ValueError`` instead.
+        """
+        try:
+            return Fernet(fernet_key.encode())
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(
+                f"FernetSecretsBackend: invalid {field}: must be a base64-encoded 32-byte Fernet key"
+            ) from exc
 
     def set_session(self, session: AsyncSession) -> None:
         """Set or replace the DB session used for persistence.

@@ -98,7 +98,8 @@ class TestCatchAllMiddleware:
 
 
 class TestErrorTrackingLogHandler:
-    def test_skips_below_error(self) -> None:
+    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit")
+    def test_skips_below_error(self, mock_async: Any) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler
 
         handler = ErrorTrackingLogHandler()
@@ -106,7 +107,8 @@ class TestErrorTrackingLogHandler:
             name="test", level=logging.INFO, pathname="", lineno=0, msg="info msg", args=(), exc_info=None
         )
         handler.emit(record)
-        assert True  # emit returns None for below-error; no crash
+        mock_async.assert_not_called()
+        assert handler._pending_tasks == 0
 
     @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit")
     def test_captures_error_level(self, mock_async: Any) -> None:

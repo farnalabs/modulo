@@ -32,6 +32,7 @@ export default {
       "pipeline_templates": "Pipeline Templates",
       "search_primitives": "Search modules...",
       "no_primitives_found": "No modules found",
+      "all_types": "All types",
       "preview_integrations_count": "{count} preview integration | {count} preview integrations",
       "preview_badge": "Preview",
       "native_library": "Native Library",
@@ -41,6 +42,7 @@ export default {
       "modulo_badge": "Modulo",
       "community_badge": "Community — not verified",
       "type_workflows": "Workflows",
+      "type_pipeline_templates": "Pipeline Templates",
       "type_agents": "Agents",
       "type_schemas": "Schemas",
       "type_integrations": "Integrations",
@@ -49,7 +51,8 @@ export default {
       "view_details": "View Details",
       "previous_page": "Previous",
       "next_page": "Next",
-      "page_of": "Page {page} of {total}"
+      "page_of": "Page {page} of {total}",
+      "all_types": "All types"
     },
     "AdminRemyView": {
       "configure_remy_ai_assistant_behaviour_access_and_skills": "Configure Remy AI assistant behaviour, access, and skills",
@@ -695,6 +698,7 @@ export default {
       "copy": "Copy",
       "final_output": "Final Output",
       "no_node_data": "No node data available for this run.",
+      "no_node_data_failed": "No node-level data recorded for this failed run. The error may have occurred during pipeline setup or before any node started execution.",
       "node": "Node",
       "status": "Status",
       "duration": "Duration",
@@ -722,6 +726,8 @@ export default {
       "input_tokens": "Input Tokens",
       "trace_id": "Trace ID",
       "run_detail": "Run Detail",
+      "run_error": "Run Error",
+      "run_input": "Run Input",
       "hide": "Hide",
       "show": "Show",
       "prompt_hidden_click_to_reveal": "[Prompt hidden — click to reveal]",
@@ -863,7 +869,8 @@ export default {
       "primitivename_pipeline_from_template": "Pipeline (from template)",
       "choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi": "Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.",
       "owner": "Owner",
-      "pipeline_created_from_library_template": "Pipeline created from library template"
+      "pipeline_created_from_library_template": "Pipeline created from library template",
+      "back_to_library": "Back to Library"
     },
     "SettingsMcpView": {
       "mcp_server_is_not_available_on_your_current_plan": "MCP server is not available on your current plan."
