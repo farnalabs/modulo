@@ -140,7 +140,7 @@ class ClaimExpiryJob:
                         account_id=None,
                         claimed_at=None,
                         claim_token=None,
-                        expires_at=None,
+                        expires_at=now,
                     )
                 )
 

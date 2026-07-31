@@ -443,8 +443,12 @@ async def test_claim_membership_lost_between_check_and_update_undoes_claim():
         await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert len(undo_stmt) == 1, "Claim should be undone when membership is lost post-check"
-    assert all(expr.value is None for _, expr in undo_stmt[0]._values.items()), (
-        "Undo UPDATE should clear account_id/claim_token/expires_at"
+    undo_values = {col.name: expr.value for col, expr in undo_stmt[0]._values.items()}
+    assert undo_values["account_id"] is None
+    assert undo_values["claimed_at"] is None
+    assert undo_values["claim_token"] is None
+    assert undo_values["expires_at"] is not None, (
+        "Undo UPDATE should settle expires_at (non-null) to release the claim"
     )
 
 
