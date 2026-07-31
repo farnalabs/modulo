@@ -1336,22 +1336,6 @@ async def copy_library_primitive(
 
 
 @mcp.tool(
-    name="browse_library",
-    description=("[DEPRECATED — use search_library] Browse/search the library of primitives."),
-)
-async def browse_library_alias(
-    primitive_type: str | None = None,
-    search: str | None = None,
-    cursor: str | None = None,
-    limit: int = 20,
-) -> dict[str, Any]:
-    result = await search_library(primitive_type=primitive_type, search=search, cursor=cursor, limit=limit)
-    if not isinstance(result, dict):
-        raise RuntimeError("search_library returned an invalid response")
-    return result
-
-
-@mcp.tool(
     name="search_library",
     description=(
         "Search the library of primitives (schemas, agents, workflows, "
@@ -1405,22 +1389,6 @@ async def search_library(
     except Exception:
         _log.exception("search_library failed")
         return _tool_error("Failed to search library")
-
-
-@mcp.tool(
-    name="get_trigger_events",
-    description=("[DEPRECATED — use list_trigger_events] Get recent trigger events with cursor-based pagination."),
-)
-async def get_trigger_events_alias(
-    trigger_id: str | None = None,
-    pipeline_id: str | None = None,
-    cursor: str | None = None,
-    limit: int = 20,
-) -> dict[str, Any]:
-    result = await list_trigger_events(trigger_id=trigger_id, pipeline_id=pipeline_id, cursor=cursor, limit=limit)
-    if not isinstance(result, dict):
-        raise RuntimeError("list_trigger_events returned an invalid response")
-    return result
 
 
 @mcp.tool(
@@ -2090,17 +2058,6 @@ def _is_sensitive_key(key: str) -> bool:
 
 
 @mcp.tool(
-    name="get_documentation",
-    description=("[DEPRECATED — use search_documentation] Search product documentation."),
-)
-async def get_documentation_alias(query: str, section: str | None = None) -> dict[str, Any]:
-    result = await search_documentation(query=query, section=section)
-    if not isinstance(result, dict):
-        raise RuntimeError("search_documentation returned an invalid response")
-    return result
-
-
-@mcp.tool(
     name="search_documentation",
     description=(
         "Search product documentation for relevant sections. Supports free-text "
@@ -2588,12 +2545,6 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
         return _tool_error("Failed to perform housekeeping")
 
 
-# Backward-compatible function references for renamed tools
-browse_library = browse_library_alias
-get_documentation = get_documentation_alias
-get_trigger_events = get_trigger_events_alias
-
-
 # ---------------------------------------------------------------------------
 # Resources
 # ---------------------------------------------------------------------------
@@ -2975,7 +2926,7 @@ async def resource_model_backends() -> str:
 async def resource_library() -> str:
     """List library primitives — schemas, agents, workflows, pipeline templates, test fixtures.
 
-    For filtered browsing, use the ``browse_library`` tool instead.
+    For filtered browsing, use the ``search_library`` tool instead.
     """
     if not await validate_current_auth():
         return "error: Token revoked or expired - re-authenticate"

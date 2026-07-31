@@ -8,12 +8,13 @@ if test isolation is needed.
 """
 
 import logging
+import uuid
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.params import Depends as DependsParameter
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -22,12 +23,255 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from modulo.api.models.problem import ProblemException, ProblemType
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.auth.permissions import (
+    PermissionConfigurationError,
+    PermissionDenied,
+    assert_org_role,
+    resolve_required,
+)
+from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _tagged_dep(
+    dep: object,
+    *,
+    permission: str,
+    permission_kind: str,
+    min_role: str | None = None,
+) -> DependsParameter:
+    """Attach introspection metadata to a ``Depends`` object.
+
+    ``fastapi.params.Depends`` is a frozen dataclass, so the tags are set via
+    ``object.__setattr__``. The introspection test reads ``_dep.permission``
+    and ``_dep.permission_kind`` (and ``min_role`` for scoped-hybrid variants)
+    off the dependency default.
+    """
+    object.__setattr__(dep, "permission", permission)
+    object.__setattr__(dep, "permission_kind", permission_kind)
+    if min_role is not None:
+        object.__setattr__(dep, "min_role", min_role)
+    return cast(DependsParameter, dep)
+
+
+def require_permission(permission: str) -> DependsParameter:
+    """FastAPI dependency factory — require the current tenant's org role.
+
+    Resolves the minimum role for ``permission`` at factory-creation time so a
+    typo'd permission key fails fast at import. The dependency wraps
+    ``get_current_tenant_user`` and compares the principal's org role against
+    the hierarchy, raising 403 on denial.
+
+    .. code-block:: python
+
+       principal: TenantPrincipal = Depends(require_permission("pipeline.graph.update"))
+    """
+    required = resolve_required(permission)
+
+    async def _check(
+        principal: TenantPrincipal = Depends(get_current_tenant_user),
+    ) -> TenantPrincipal:
+        try:
+            assert_org_role(principal.org_role, required, permission)
+        except PermissionDenied as exc:
+            logger.warning(
+                "permission.denied",
+                extra={
+                    "permission": permission,
+                    "required": required,
+                    "actual": principal.org_role,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{permission}' requires '{required}' role",
+            ) from exc
+        return principal
+
+    return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant")
+
+
+def require_system_permission(permission: str) -> DependsParameter:
+    """FastAPI dependency factory — strict ``is_system_admin`` only.
+
+    No org-role fall-through (license-gate bypass). Resolves the permission
+    key at factory-creation time for import-time fail-fast, but the actual
+    gate is purely the principal's ``is_system_admin`` flag.
+
+    .. code-block:: python
+
+       current_user: AuthenticatedPrincipal = Depends(require_system_permission("org.email.manage"))
+    """
+    resolve_required(permission)
+
+    async def _check(
+        current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    ) -> AuthenticatedPrincipal:
+        if not current_user.is_system_admin:
+            logger.warning(
+                "permission.denied",
+                extra={
+                    "permission": permission,
+                    "required": "system_admin",
+                    "actual": "org_role_only",
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{permission}' requires system admin role",
+            )
+        return current_user
+
+    return _tagged_dep(Depends(_check), permission=permission, permission_kind="system")
+
+
+def require_system_or_org_admin(permission: str) -> DependsParameter:
+    """FastAPI dependency factory — the one true hybrid.
+
+    Passes if the principal is a system admin OR holds org role ``admin``
+    in the current tenant. Used for destructive org-level operations where
+    both an org admin and a system admin must be allowed.
+
+    .. code-block:: python
+
+       principal: TenantPrincipal = Depends(require_system_or_org_admin("org.delete"))
+    """
+    resolve_required(permission)
+
+    async def _check(
+        principal: TenantPrincipal = Depends(get_current_tenant_user),
+    ) -> TenantPrincipal:
+        if principal.is_system_admin:
+            return principal
+        try:
+            assert_org_role(principal.org_role, "admin", permission)
+        except PermissionDenied as exc:
+            logger.warning(
+                "permission.denied",
+                extra={
+                    "permission": permission,
+                    "required": "admin",
+                    "actual": principal.org_role,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{permission}' requires org admin role",
+            ) from exc
+        return principal
+
+    return _tagged_dep(Depends(_check), permission=permission, permission_kind="system_or_org")
+
+
+async def _resolve_live_org_role(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> str | None:
+    """Return the caller's live org role in the target org, or ``None``.
+
+    Live membership lookup filtering ``deactivated_at IS NULL``. Lazy imports
+    to avoid a circular dependency (``auth.dependencies → api.dependencies``).
+    """
+    from sqlalchemy import select
+
+    from modulo.db.models.org_membership import OrgMembership
+
+    result = await session.execute(
+        select(OrgMembership.role).where(
+            OrgMembership.account_id == account_id,
+            OrgMembership.organisation_id == org_id,
+            OrgMembership.deactivated_at.is_(None),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+def require_target_org_role(permission: str, min_role: str) -> DependsParameter:
+    """FastAPI dependency factory — scoped-hybrid reads and mutations.
+
+    Passes if the principal is a system admin OR holds a live membership in
+    the *target* org (read from the route path param ``org_id``) at ``min_role``
+    or higher. A multi-org member operating with current-org B gains access to
+    org A at the minimum role; a non-member is denied.
+
+    Reads variant: ``org.email.view``/``org.license.view`` at ``operator``.
+    Mutations variant: ``org.email.manage`` at ``admin``.
+
+    ``min_role`` must equal the permission's registry-resolved role
+    (``PERMISSIONS`` is the single source of truth); a mismatch is a
+    configuration error and fails fast at factory-creation time.
+
+    .. code-block:: python
+
+       _: AuthenticatedPrincipal = Depends(require_target_org_role("org.email.view", "operator"))
+    """
+    resolved = resolve_required(permission)
+    if min_role not in ORG_ROLE_HIERARCHY:
+        raise PermissionConfigurationError(f"min_role '{min_role}' is not a valid org role")
+    if min_role != resolved:
+        raise PermissionConfigurationError(
+            f"min_role '{min_role}' for '{permission}' does not match the registry-resolved role '{resolved}'",
+        )
+
+    async def _check(
+        request: Request,
+        current_user: AuthenticatedPrincipal = Depends(get_current_user),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> AuthenticatedPrincipal:
+        org_id_raw = request.path_params.get("org_id")
+        if org_id_raw is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing org_id path parameter",
+            )
+        if current_user.is_system_admin:
+            return current_user
+        try:
+            org_id = uuid.UUID(str(org_id_raw))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid org_id path parameter",
+            ) from None
+        try:
+            async with session.begin():
+                role = await _resolve_live_org_role(session, current_user.account_id, org_id)
+        except SQLAlchemyError:
+            logger.exception("permission.live_role_read_failed")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database temporarily unavailable.",
+            ) from None
+        try:
+            assert_org_role(role, min_role, permission)
+        except PermissionDenied as exc:
+            logger.warning(
+                "permission.denied",
+                extra={
+                    "permission": permission,
+                    "required": min_role,
+                    "actual": role,
+                    "target_org_id": str(org_id),
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{permission}' requires '{min_role}' role in target organisation",
+            ) from exc
+        return current_user
+
+    return _tagged_dep(
+        Depends(_check),
+        permission=permission,
+        permission_kind="scoped_hybrid",
+        min_role=min_role,
+    )
 
 
 def require_feature(feature_name: str) -> DependsParameter:

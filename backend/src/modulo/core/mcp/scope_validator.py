@@ -5,16 +5,27 @@ Dual-layer enforcement:
    sets _ctx_role ContextVar.
 2. ViewModel (this module): re-checks role against per-tool requirements at the
    business logic layer, preventing bypass if the middleware has a bug.
+
+The per-tool requirement map references the centralized permission registry
+(``modulo.auth.permissions.PERMISSIONS``) rather than duplicating roles — the
+registry is the single source of truth (ADR 017).
 """
 
 import types
 from logging import getLogger
 
-from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
+from modulo.auth.permissions import (
+    PermissionConfigurationError,
+    PermissionDenied,
+    assert_org_role,
+    resolve_required,
+)
+from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 
 _log = getLogger(__name__)
 
 __all__ = [
+    "READ_ONLY_TOOLS",
     "TOOL_SCOPE_REQUIREMENTS",
     "MCPAuthorizationError",
     "MCPConfigurationError",
@@ -30,41 +41,72 @@ class MCPConfigurationError(Exception):
     """Raised when a scope-requirement configuration error is detected."""
 
 
+# tool (or ``tool:action``) -> permission key in ``PERMISSIONS``
 _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
-    "trigger_pipeline": "runner",
-    "cancel_run": "runner",
-    "review_hitl": "operator",
-    "review_hitl:claim": "runner",
-    "review_hitl:approve": "operator",
-    "review_hitl:reject": "operator",
-    "copy_library_primitive": "runner",
-    "list_pending_hitl": "runner",
-    "get_run_output": "runner",
-    "get_trigger_events": "runner",
-    "create_pipeline": "operator",
-    "update_pipeline_graph": "operator",
-    "bind_connector_to_node": "operator",
-    "create_model_backend": "operator",
-    "list_runs": "runner",
-    "get_run_evals": "runner",
-    "list_eval_definitions": "runner",
-    "list_triggers": "runner",
-    "list_housekeeping": "runner",
-    "perform_housekeeping": "operator",
-    "create_connector": "operator",
-    "create_trigger": "operator",
-    "delete_pipeline": "operator",
-    "create_agent": "operator",
-    "infer_schema": "operator",
+    "trigger_pipeline": "run.trigger",
+    "cancel_run": "run.cancel",
+    "review_hitl": "hitl.review",
+    "review_hitl:claim": "hitl.claim",
+    "review_hitl:approve": "hitl.approve",
+    "review_hitl:reject": "hitl.reject",
+    "review_hitl:deliver_manual": "hitl.deliver_manual",
+    "copy_library_primitive": "library.copy",
+    "list_pending_hitl": "hitl.list",
+    "get_run_output": "run.output",
+    "create_pipeline": "pipeline.create",
+    "update_pipeline_graph": "pipeline.graph.update",
+    "bind_connector_to_node": "pipeline.bind_connector",
+    "create_model_backend": "model_backend.create",
+    "list_runs": "run.list",
+    "get_run_evals": "run.evals",
+    "list_eval_definitions": "eval.list",
+    "list_triggers": "trigger.list",
+    "list_housekeeping": "housekeeping.list",
+    "perform_housekeeping": "housekeeping.perform",
+    "create_connector": "connector.create",
+    "delete_connector": "connector.delete",
+    "create_trigger": "trigger.create",
+    "delete_pipeline": "pipeline.delete",
+    "create_agent": "agent.create",
+    "infer_schema": "schema.infer",
+    "create_secret": "secret.manage",
+    "delete_secret": "secret.manage",
+    "list_secrets": "secret.manage",
+    "list_trigger_events": "trigger.events.list",
 }
 
 TOOL_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_TOOL_SCOPE_REQUIREMENTS)
 
-_VALID_ROLES = frozenset(ORG_ROLE_HIERARCHY)
-for tool, role in _TOOL_SCOPE_REQUIREMENTS.items():
-    if role not in _VALID_ROLES:
+# Explicit read-only tools (pinned at viewer). Unmapped mutating tools FAIL
+# under deny-by-default; unmapped read-only tools are pinned at viewer here.
+READ_ONLY_TOOLS: frozenset[str] = frozenset(
+    {
+        "list_pipelines",
+        "get_pipeline_graph",
+        "get_run_status",
+        "search_library",
+        "search_documentation",
+        "get_integration_status",
+        "get_org_config",
+        "get_available_features",
+        "list_schemas",
+        "validate_payload",
+    }
+)
+
+# Import-time fail-fast validation: every tool's permission key must resolve
+# through PERMISSIONS and its resolved role must be in the role hierarchy.
+for tool, permission_key in _TOOL_SCOPE_REQUIREMENTS.items():
+    try:
+        role = resolve_required(permission_key)
+    except PermissionConfigurationError as exc:
         raise MCPConfigurationError(
-            f"Misconfigured scope requirement for '{tool}': role '{role}' is not in the role hierarchy",
+            f"Misconfigured scope requirement for '{tool}': {exc}",
+        ) from exc
+    if role not in ORG_ROLE_HIERARCHY:
+        raise MCPConfigurationError(
+            f"Misconfigured scope requirement for '{tool}': "
+            f"permission '{permission_key}' resolves to unknown role '{role}'",
         )
 
 
@@ -96,32 +138,25 @@ def check_tool_scope(
             raise MCPAuthorizationError("Action must be a string")
         act = _sanitize(action, name="action")
         key = f"{normalized}:{act}"
-        required = TOOL_SCOPE_REQUIREMENTS.get(key)
-        if required is None:
+        permission_key = TOOL_SCOPE_REQUIREMENTS.get(key)
+        if permission_key is None:
             _log.warning("Unknown action '%s' for tool '%s'", action, tool_name)
             raise MCPAuthorizationError(
                 f"Unknown action '{action}' for tool '{tool_name}'",
             )
     else:
-        required = TOOL_SCOPE_REQUIREMENTS.get(normalized)
-        if required is None:
-            return
+        permission_key = TOOL_SCOPE_REQUIREMENTS.get(normalized)
+        if permission_key is None:
+            if normalized in READ_ONLY_TOOLS:
+                permission_key = "resource.read_only"
+            else:
+                _log.warning("Tool '%s' is not registered in the scope policy", tool_name)
+                raise MCPAuthorizationError(
+                    f"Tool '{tool_name}' is not registered in the scope policy",
+                )
 
-    current_role_normalized = current_role.strip().lower()
-    current_level = org_role_level(current_role_normalized)
-    required_level = ORG_ROLE_HIERARCHY[required]
-
-    if current_level < 0:
-        _log.warning("Scope check failed: unknown role '%s'", current_role)
-        raise MCPAuthorizationError(f"Unknown role: '{current_role}'")
-
-    if current_level < required_level:
-        _log.warning(
-            "Insufficient scope for '%s': requires '%s' role, got '%s'",
-            tool_name,
-            required,
-            current_role,
-        )
-        raise MCPAuthorizationError(
-            f"Insufficient scope for '{tool_name}': requires '{required}' role, got '{current_role}'",
-        )
+    required = resolve_required(permission_key)
+    try:
+        assert_org_role(current_role, required, subject=f"MCP tool '{tool_name}'")
+    except PermissionDenied as exc:
+        raise MCPAuthorizationError(str(exc)) from exc

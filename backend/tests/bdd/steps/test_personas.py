@@ -767,7 +767,7 @@ def jordan_community_library_contains_modules(ctx):
 
 
 @when("I browse the library")
-def jordan_browse_library(ctx, request):
+def jordan_search_library(ctx, request):
     items = ctx.get("browse_items")
     if items is None:
         workflow = ctx.get("library_workflow", {})

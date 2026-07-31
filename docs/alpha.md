@@ -141,7 +141,7 @@ Two concrete implementations of every primitive type exist to validate the abstr
 
 - FastAPI MCP endpoint at `/mcp` (HTTP + SSE, MCP protocol)
 - MCP resources: pipelines, runs, HITL gates, library, schemas, connectors, model backends
-- MCP tools: `trigger_pipeline`, `get_run_status`, `get_run_output`, `cancel_run`, `review_hitl`, `list_pipelines`, `list_pending_hitl`, `browse_library`, `copy_library_primitive`, `get_trigger_events`
+- MCP tools: `trigger_pipeline`, `get_run_status`, `get_run_output`, `cancel_run`, `review_hitl`, `list_pipelines`, `list_pending_hitl`, `search_library`, `copy_library_primitive`, `list_trigger_events`
 - Cursor-based pagination on all list tools
 - API key bearer token auth (alpha); OAuth 2.0 deferred to v1
 - Dual-layer scope enforcement (token middleware + ViewModel command layer)

@@ -831,7 +831,7 @@ const contextSourceDefs = [
   { key: 'product_primer', label: 'Product Primer', descKey: 'product_primer_description', tokens: '~700' },
   { key: 'page_context', label: 'Page Context', descKey: 'page_context_description', tokens: '~100' },
   { key: 'user_profile', label: 'User Profile', descKey: 'user_profile_description', tokens: '~150' },
-  { key: 'product_docs', label: 'Product Docs', descKey: 'product_docs_description', toolCall: 'get_documentation()' },
+  { key: 'product_docs', label: 'Product Docs', descKey: 'product_docs_description', toolCall: 'search_documentation()' },
   { key: 'integration_status', label: 'Integration Status', descKey: 'integration_status_description', toolCall: 'get_integration_status()' },
   { key: 'org_config', label: 'Org Config', descKey: 'org_config_description', toolCall: 'get_org_config()' },
   { key: 'feature_overview', label: 'Feature Overview', descKey: 'feature_overview_description', toolCall: 'get_available_features()' },

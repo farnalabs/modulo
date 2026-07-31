@@ -963,7 +963,7 @@ export default {
       "failed_to_load_library": "Failed to load library",
       "sdlc_onboarding": "SDLC Onboarding",
       "review_schemas": "Review Schemas",
-      "browse_library": "Browse Library",
+      "search_library": "Search Library",
       "review_edit_and_confirm_the_inferred_schema": "Review, edit, and confirm the inferred schema",
       "get_started_with_sdlc_onboarding": "Get started with SDLC onboarding",
       "your_pipeline_is_ready_to_run": "Your pipeline is ready to run",
