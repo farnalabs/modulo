@@ -147,6 +147,7 @@ async def get_observability_settings(
                 merged = await _fetch_and_cache(session, principal.organisation_id)
         return _config_to_response(merged)
     except ProgrammingError as exc:
+        _log.exception("observability.get_observability_settings")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -195,11 +196,13 @@ async def update_observability_settings(
         _invalidate_cache(str(principal.organisation_id))
         return _config_to_response(merged)
     except ProgrammingError as exc:
+        _log.exception("observability.update_observability_settings")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("observability.update_observability_settings")
         _log.warning(
             "observability.put.db_error",
             extra={"org_id": str(principal.organisation_id)},
@@ -213,13 +216,13 @@ async def update_observability_settings(
             "observability.put.timeout",
             extra={"org_id": str(principal.organisation_id)},
         )
-        raise
+        raise HTTPException(status_code=504, detail="Gateway timeout.") from None
     except Exception:
         _log.exception(
             "observability.put.failed",
             extra={"org_id": str(principal.organisation_id)},
         )
-        raise
+        raise HTTPException(status_code=500, detail="Internal server error.") from None
 
 
 @router.post("/test", response_model=TestSpanResult, dependencies=[require_feature("observability")])
@@ -287,6 +290,7 @@ async def test_otel_connection(
             message="Connection refused — check endpoint URL and firewall",
         )
     except Exception as exc:
+        _log.exception("observability.test_otel_connection")
         return TestSpanResult(success=False, message=f"Connection failed: {exc}")
 
 
@@ -301,6 +305,7 @@ async def get_export_preview(
                 await set_rls_org(session, principal.organisation_id)
                 merged = await _fetch_and_cache(session, principal.organisation_id)
     except ProgrammingError as exc:
+        _log.exception("observability.get_export_preview")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",

@@ -125,11 +125,13 @@ async def list_profiles(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_environment_profiles(session, page=page, page_size=page_size)
     except ProgrammingError:
+        _log.exception("environment_profiles.list_profiles")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("environment_profiles.list_profiles")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -179,16 +181,19 @@ async def create_profile(
                 visibility=req.visibility,
             )
     except IntegrityError:
+        _log.exception("environment_profiles.create_profile")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An environment profile with this name already exists.",
         ) from None
     except ProgrammingError:
+        _log.exception("environment_profiles.create_profile")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("environment_profiles.create_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -217,11 +222,13 @@ async def get_profile(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             profile = await get_environment_profile(session, profile_id)
     except ProgrammingError:
+        _log.exception("environment_profiles.get_profile")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("environment_profiles.get_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -256,16 +263,19 @@ async def update_profile(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             profile = await update_environment_profile(session, profile_id, updates)
     except IntegrityError:
+        _log.exception("environment_profiles.update_profile")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An environment profile with this name already exists.",
         ) from None
     except ProgrammingError:
+        _log.exception("environment_profiles.update_profile")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("environment_profiles.update_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -296,11 +306,13 @@ async def delete_profile(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await soft_delete_environment_profile(session, profile_id)
     except ProgrammingError:
+        _log.exception("environment_profiles.delete_profile")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("environment_profiles.delete_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -328,11 +340,13 @@ async def restore_profile(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             profile = await restore_environment_profile(session, profile_id)
     except ProgrammingError:
+        _log.exception("environment_profiles.restore_profile")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("environment_profiles.restore_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",

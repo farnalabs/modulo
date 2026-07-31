@@ -112,6 +112,20 @@ class TestAWSSecretsManagerBackend:
         with pytest.raises(RuntimeError, match="unexpected error writing secret"):
             await backend.set_secret("my-key", "my-value")
 
+    async def test_set_secret_toctou_retries_create(self, mock_boto3):
+        """Secret deleted between the create/update race — create is retried."""
+        backend = _make_backend()
+        backend._client.create_secret.side_effect = [
+            backend._client.exceptions.ResourceExistsException(),
+            None,
+        ]
+        backend._client.update_secret.side_effect = backend._client.exceptions.ResourceNotFoundException()
+
+        await backend.set_secret("my-key", "my-value")
+
+        assert backend._client.create_secret.call_count == 2, "Expected create to be retried after TOCTOU race"
+        assert backend._client.update_secret.call_count == 1, "Expected update attempted once before race recovery"
+
     async def test_delete_secret_removes_from_aws(self, mock_boto3):
         backend = _make_backend()
 

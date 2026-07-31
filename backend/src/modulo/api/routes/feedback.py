@@ -120,16 +120,19 @@ async def create_feedback(
                 feedback_handler_type=req.feedback_handler_type,
             )
     except IntegrityError as exc:
+        logger.exception("feedback.create_feedback")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
         ) from exc
     except ProgrammingError as exc:
+        logger.exception("feedback.create_feedback")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("feedback.create_feedback")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -177,16 +180,19 @@ async def list_feedback(
                 page_size=page_size,
             )
     except IntegrityError as exc:
+        logger.exception("feedback.list_feedback")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
         ) from exc
     except ProgrammingError as exc:
+        logger.exception("feedback.list_feedback")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("feedback.list_feedback")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -254,16 +260,19 @@ async def list_feedback_inbox(
                 page_size=page_size,
             )
     except IntegrityError as exc:
+        logger.exception("feedback.list_feedback_inbox")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
         ) from exc
     except ProgrammingError as exc:
+        logger.exception("feedback.list_feedback_inbox")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("feedback.list_feedback_inbox")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -320,16 +329,19 @@ async def list_eval_proposals(
                             for node in graph_json.get("nodes", []):
                                 node_name_map[str(node.get("id"))] = node.get("name") or node.get("label", "")
     except IntegrityError as exc:
+        logger.exception("feedback.list_eval_proposals")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
         ) from exc
     except ProgrammingError as exc:
+        logger.exception("feedback.list_eval_proposals")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("feedback.list_eval_proposals")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -364,16 +376,19 @@ async def get_feedback(
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.get_feedback_record(record_id)
     except IntegrityError as exc:
+        logger.exception("feedback.get_feedback")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
         ) from exc
     except ProgrammingError as exc:
+        logger.exception("feedback.get_feedback")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("feedback.get_feedback")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -414,16 +429,19 @@ async def update_feedback_status(
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.update_status(record_id, req.status)
     except IntegrityError as exc:
+        logger.exception("feedback.update_feedback_status")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
         ) from exc
     except ProgrammingError as exc:
+        logger.exception("feedback.update_feedback_status")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("feedback.update_feedback_status")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -479,16 +497,19 @@ async def detect_eval_gap(
 
             is_gap = await mgr.detect_eval_gap(record, eval_suite=eval_suite)
     except IntegrityError as exc:
+        logger.exception("feedback.detect_eval_gap")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
         ) from exc
     except ProgrammingError as exc:
+        logger.exception("feedback.detect_eval_gap")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("feedback.detect_eval_gap")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -531,16 +552,19 @@ async def get_inbox_item(
                     if pipeline:
                         pipeline_name = pipeline.name
     except IntegrityError as exc:
+        logger.exception("feedback.get_inbox_item")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
         ) from exc
     except ProgrammingError as exc:
+        logger.exception("feedback.get_inbox_item")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from exc
     except SQLAlchemyError as exc:
+        logger.exception("feedback.get_inbox_item")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
@@ -627,16 +651,19 @@ async def review_feedback(
                 )
 
     except IntegrityError:
+        logger.exception("feedback.review_feedback")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
         ) from None
     except ProgrammingError:
+        logger.exception("feedback.review_feedback")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("feedback.review_feedback")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",

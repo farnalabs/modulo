@@ -185,9 +185,9 @@ def test_password_entropy_weak_short() -> None:
 
 
 def test_password_entropy_weak_low_entropy() -> None:
-    """A long but low-entropy password (only lowercase) must be rejected."""
+    """A long but low-entropy password (digits only) must be rejected."""
     with pytest.raises(ValueError, match="too weak"):
-        validate_password_strength("aaaaaaaa")
+        validate_password_strength("12345678")
 
 
 def test_password_entropy_bits_calculation() -> None:

@@ -173,6 +173,7 @@ async def list_runs_endpoint(
             lambda: _do_list_runs(factory, user, pipeline_id, run_status, trigger_type, search, page, page_size)
         )
     except IntegrityError:
+        _log.exception("runs.list_runs_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -366,11 +367,13 @@ async def trigger_run(
             )
             run_id = run.id
     except IntegrityError:
+        _log.exception("runs.trigger_run")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.trigger_run")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -421,6 +424,7 @@ async def get_run_stats_endpoint(
             await set_rls_org(session, principal.organisation_id)
             return await get_run_stats(session, period)
     except ProgrammingError:
+        _log.exception("runs.get_run_stats_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -456,6 +460,7 @@ async def get_run_heatmap_endpoint(
             await set_rls_org(session, principal.organisation_id)
             return await get_run_heatmap(session, year)
     except ProgrammingError:
+        _log.exception("runs.get_run_heatmap_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -487,12 +492,14 @@ async def get_run_status(
     try:
         run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
     except IntegrityError:
+        _log.exception("runs.get_run_status")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
 
     except ProgrammingError:
+        _log.exception("runs.get_run_status")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -547,11 +554,13 @@ async def cancel_run(
 
             await request_cancellation(session, run_id)
     except IntegrityError:
+        _log.exception("runs.cancel_run")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.cancel_run")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -645,11 +654,13 @@ async def get_run_io_endpoint(
             await set_rls_org(session, principal.organisation_id)
             result = await get_run_io(session, run_id)
     except IntegrityError:
+        _log.exception("runs.get_run_io_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.get_run_io_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -706,11 +717,13 @@ async def export_run_fixture(
             snap_result = await session.execute(select(SnapModel).where(SnapModel.id == run.snapshot_id))
             snapshot = snap_result.scalar_one_or_none()
     except IntegrityError:
+        _log.exception("runs.export_run_fixture")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.export_run_fixture")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -771,11 +784,13 @@ async def get_run_workspace_lease(
             result = await session.execute(select(WorkspaceLease).where(WorkspaceLease.run_id == run_id))
             lease = result.scalar_one_or_none()
     except IntegrityError:
+        _log.exception("runs.get_run_workspace_lease")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.get_run_workspace_lease")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -834,11 +849,13 @@ async def get_run_workspace_events(
             )
             events = result.scalars().all()
     except IntegrityError:
+        _log.exception("runs.get_run_workspace_events")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.get_run_workspace_events")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -922,11 +939,13 @@ async def get_run_node_output(
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
     except IntegrityError:
+        _log.exception("runs.get_run_node_output")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.get_run_node_output")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -998,11 +1017,13 @@ async def observe_run_node(
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
     except IntegrityError:
+        _log.exception("runs.observe_run_node")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.observe_run_node")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -1037,11 +1058,13 @@ async def observe_run_node(
                 observed_by=principal.account_id,
             )
     except IntegrityError:
+        _log.exception("runs.observe_run_node")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.observe_run_node")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -1136,11 +1159,13 @@ async def recover_run_node(
             except ConcurrentRecoveryError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError:
+        _log.exception("runs.recover_run_node")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.recover_run_node")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -1279,6 +1304,7 @@ async def _get_checkpoint_state(
             decrypted = f.decrypt(raw_checkpoint["data"].encode())
             raw_checkpoint = json.loads(decrypted.decode())
         except Exception as exc:
+            _log.exception("runs._get_checkpoint_state")
             _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
 
     if isinstance(raw_checkpoint, dict):
@@ -1442,11 +1468,13 @@ async def reveal_node_prompt(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
+        _log.exception("runs.reveal_node_prompt")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("runs.reveal_node_prompt")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
@@ -1454,6 +1482,7 @@ async def reveal_node_prompt(
     except HTTPException:
         raise
     except SQLAlchemyError as exc:
+        _log.exception("runs.reveal_node_prompt")
         _log.warning("prompt_reveal.db_error", extra={"error": str(exc)[:200]})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1514,12 +1543,14 @@ async def diff_node_output(
             run_a = await get_run(session, req.run_id_a)
             run_b = await get_run(session, req.run_id_b)
     except IntegrityError:
+        _log.exception("runs.diff_node_output")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
 
     except ProgrammingError:
+        _log.exception("runs.diff_node_output")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",

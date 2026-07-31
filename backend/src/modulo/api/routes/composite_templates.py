@@ -120,11 +120,13 @@ async def list_composite_templates_endpoint(
                 page_size=page_size,
             )
     except ProgrammingError:
+        logger.exception("composite_templates.list_composite_templates_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("composite_templates.list_composite_templates_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -170,11 +172,13 @@ async def create_composite_template_endpoint(
             )
         return CompositeTemplateResponse.model_validate(template)
     except ProgrammingError:
+        logger.exception("composite_templates.create_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("composite_templates.create_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -201,11 +205,13 @@ async def get_composite_template_endpoint(
             await set_rls_org(session, principal.organisation_id)
             template = await get_composite_template(session, template_id)
     except ProgrammingError:
+        logger.exception("composite_templates.get_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("composite_templates.get_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -242,11 +248,13 @@ async def update_composite_template_endpoint(
             await set_rls_org(session, principal.organisation_id)
             template = await update_composite_template(session, template_id, updates)
     except ProgrammingError:
+        logger.exception("composite_templates.update_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("composite_templates.update_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -276,11 +284,13 @@ async def delete_composite_template_endpoint(
             await set_rls_org(session, principal.organisation_id)
             deleted = await soft_delete_composite_template(session, template_id)
     except ProgrammingError:
+        logger.exception("composite_templates.delete_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("composite_templates.delete_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -309,11 +319,13 @@ async def restore_composite_template_endpoint(
             await set_rls_org(session, principal.organisation_id)
             template = await restore_composite_template(session, template_id)
     except ProgrammingError:
+        logger.exception("composite_templates.restore_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("composite_templates.restore_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -360,6 +372,7 @@ async def get_composite_editor_endpoint(
             await set_rls_org(session, principal.organisation_id)
             template = await get_composite_template(session, template_id)
     except ProgrammingError:
+        logger.exception("composite_templates.get_composite_editor_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -406,11 +419,13 @@ async def save_composite_editor_endpoint(
                 },
             )
     except ProgrammingError:
+        logger.exception("composite_templates.save_composite_editor_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("composite_templates.save_composite_editor_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -501,11 +516,13 @@ async def publish_composite_endpoint(
             await set_rls_org(session, principal.organisation_id)
             template = await update_composite_template(session, template_id, {"version": version})
     except ProgrammingError:
+        logger.exception("composite_templates.publish_composite_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("composite_templates.publish_composite_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",

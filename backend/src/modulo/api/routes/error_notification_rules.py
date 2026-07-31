@@ -89,11 +89,13 @@ async def list_notification_rules(
     except HTTPException:
         raise
     except ProgrammingError as exc:
+        _log.exception("error_notification_rules.list_notification_rules")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("error_notification_rules.list_notification_rules")
         _log.warning("error_tracking.list_rules_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -160,11 +162,13 @@ async def create_notification_rule(
     except HTTPException:
         raise
     except ProgrammingError as exc:
+        _log.exception("error_notification_rules.create_notification_rule")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("error_notification_rules.create_notification_rule")
         _log.warning("error_tracking.create_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -231,11 +235,13 @@ async def update_notification_rule(
     except HTTPException:
         raise
     except ProgrammingError as exc:
+        _log.exception("error_notification_rules.update_notification_rule")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("error_notification_rules.update_notification_rule")
         _log.warning("error_tracking.update_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -283,11 +289,13 @@ async def delete_notification_rule(
     except HTTPException:
         raise
     except ProgrammingError as exc:
+        _log.exception("error_notification_rules.delete_notification_rule")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("error_notification_rules.delete_notification_rule")
         _log.warning("error_tracking.delete_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
