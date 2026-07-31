@@ -14,5 +14,5 @@ def _patch_verify_identity() -> None:
     This bypasses all FastAPI dependency overrides, causing 401 errors when
     the local Postgres is running but the test UUIDs don't match real data.
     """
-    with patch("modulo.auth.dependencies._verify_identity", new_callable=AsyncMock):
+    with patch("modulo.auth.dependencies._verify_identity", new=AsyncMock(return_value=None)):
         yield

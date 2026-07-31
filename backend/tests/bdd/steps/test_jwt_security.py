@@ -108,11 +108,16 @@ def login_jwt(email: str, password: str, request: Any, ctx: dict[str, Any], toke
     mock_user.org_role = "admin"
     mock_user.password_hash = "hash"
     mock_user.active = True
+    mock_user.is_system_admin = False
 
     with (
         patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
         patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch(
+            "modulo.api.routes.auth.list_memberships_for_account",
+            new=AsyncMock(return_value=[MagicMock(organisation_id=_ORG_ID, role="admin")]),
+        ),
     ):
         resp = token_client.post(
             "/api/v1/auth/login",
@@ -218,7 +223,13 @@ def authenticated_request_me(request: Any, ctx: dict[str, Any], token_client: Te
     mock_user.active = True
     mock_user.created_at = datetime.now(UTC)
 
-    with patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)):
+    with (
+        patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
+        patch(
+            "modulo.api.routes.auth.resolve_role_from_membership",
+            new=AsyncMock(return_value="admin"),
+        ),
+    ):
         resp = token_client.get(
             "/api/v1/auth/me",
             headers={"Authorization": f"Bearer {token}"},
@@ -253,12 +264,17 @@ def logged_in_as(email: str, request: Any, ctx: dict[str, Any], token_client: Te
     mock_user.org_role = "admin"
     mock_user.password_hash = "hash"
     mock_user.active = True
+    mock_user.is_system_admin = False
 
     with (
         patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
         patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
         patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch(
+            "modulo.api.routes.auth.list_memberships_for_account",
+            new=AsyncMock(return_value=[MagicMock(organisation_id=_ORG_ID, role="admin")]),
+        ),
     ):
         resp = token_client.post(
             "/api/v1/auth/login",
@@ -276,7 +292,10 @@ def logged_in_as(email: str, request: Any, ctx: dict[str, Any], token_client: Te
 def refresh_with_stored_token(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("login_refresh_token")
     time_mod.sleep(1.0)
-    with patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False))):
+    with (
+        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False))),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+    ):
         resp = token_client.post(
             "/api/v1/auth/refresh",
             json={"refresh_token": refresh_token},
@@ -338,7 +357,10 @@ def refresh_token_seq0(request: Any, ctx: dict[str, Any]) -> None:
 @when("I refresh my tokens once")
 def refresh_once(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("theft_refresh_token")
-    with patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False))):
+    with (
+        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False))),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+    ):
         resp = token_client.post(
             "/api/v1/auth/refresh",
             json={"refresh_token": refresh_token},
@@ -349,7 +371,10 @@ def refresh_once(request: Any, ctx: dict[str, Any], token_client: TestClient) ->
 @when("I refresh my tokens again with the same refresh token")
 def refresh_again_same_token(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("theft_refresh_token")
-    with patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True))):
+    with (
+        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True))),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+    ):
         resp = token_client.post(
             "/api/v1/auth/refresh",
             json={"refresh_token": refresh_token},
@@ -383,7 +408,10 @@ def logout(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
 @then("subsequent refresh attempts are rejected")
 def refresh_rejected_after_logout(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("login_refresh_token")
-    with patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(0, True))):
+    with (
+        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(0, True))),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+    ):
         resp = token_client.post(
             "/api/v1/auth/refresh",
             json={"refresh_token": refresh_token},

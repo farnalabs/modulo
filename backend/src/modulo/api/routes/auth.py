@@ -16,7 +16,11 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
 from modulo.api.routes.remy import clear_all_session_approvals
-from modulo.auth.dependencies import get_current_user
+from modulo.auth.dependencies import (
+    OrganisationMembershipNotFound,
+    get_current_user,
+    resolve_role_from_membership,
+)
 from modulo.auth.jwt import (
     AuthenticatedPrincipal,
     create_access_token,
@@ -230,8 +234,41 @@ async def refresh(
             detail="Invalid refresh token account",
         ) from exc
 
+    sub_val = claims.get("sub")
+    org_id_val = claims.get("org_id")
+    account_id_val = account_id_claim
+    org_role_val = claims.get("org_role")
+    if any(not isinstance(value, str) for value in (sub_val, org_id_val, account_id_val)) or (
+        org_id_val is not None and not isinstance(org_id_val, str)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token payload",
+        )
+
+    # ADR 017 live-role re-read: mint from the LIVE org role, not the claim.
+    # A removed/deactivated member loses refresh access immediately (401).
+    live_org_role: str | None = None
     try:
         async with session.begin():
+            # ADR 017: check live membership BEFORE advancing the token-family
+            # sequence - a removed member's repeated refresh attempts must not
+            # keep advancing sequences needlessly.
+            if org_id_val:
+                live_org_role = await resolve_role_from_membership(
+                    session,
+                    str(account_id_val),
+                    str(org_id_val),
+                )
+            if org_id_val and live_org_role is None:
+                _log.warning(
+                    "auth.refresh_membership_not_found",
+                    extra={"account_id": str(account_id_val), "org_id": str(org_id_val)},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Account no longer has access to this organisation",
+                )
             new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence, account_uuid)
     except IntegrityError:
         _log.exception("auth.refresh")
@@ -257,7 +294,7 @@ async def refresh(
         raise
     except HTTPException:
         raise
-    except Exception:
+    except Exception:  # nosemgrep: bare-raise-in-except
         _log.exception("Unexpected error in refresh")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -268,32 +305,21 @@ async def refresh(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token has been revoked due to suspected theft",
         )
-
-    sub_val = claims.get("sub")
-    org_id_val = claims.get("org_id")
-    account_id_val = account_id_claim
-    org_role_val = claims.get("org_role")
-    if any(not isinstance(value, str) for value in (sub_val, org_id_val, account_id_val)) or (
-        org_id_val is not None and not isinstance(org_id_val, str)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token payload",
-        )
+    minted_org_role = live_org_role if live_org_role is not None else org_role_val
 
     new_access = create_access_token(
         str(sub_val),
         settings.secret_key,
         organisation_id=str(org_id_val),
         account_id=str(account_id_val),
-        org_role=str(org_role_val),
+        org_role=str(minted_org_role),
     )
     new_refresh = create_refresh_token(
         str(sub_val),
         settings.secret_key,
         organisation_id=str(org_id_val),
         account_id=str(account_id_val),
-        org_role=str(org_role_val),
+        org_role=str(minted_org_role),
         token_family=family_id_str,
         token_sequence=new_sequence,
     )
@@ -375,13 +401,45 @@ async def logout(
 async def ws_token(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
 ) -> WsTokenResponse:
     try:
+        # ADR 017: embed the LIVE org role (not the claim) so a demoted admin's
+        # WS token carries the reduced role.
+        live_org_role: str | None = None
+        if current_user.organisation_id is not None:
+            try:
+                async with session.begin():
+                    live_org_role = await resolve_role_from_membership(
+                        session,
+                        str(current_user.account_id),
+                        str(current_user.organisation_id),
+                    )
+            except SQLAlchemyError:
+                _log.warning("permission.live_role_read_failed", exc_info=True)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Role verification temporarily unavailable. Please try again.",
+                ) from None
+            else:
+                if live_org_role is None:
+                    # ADR 017: missing/deactivated membership → deny. A removed
+                    # admin must not mint a WS token carrying the stale claim.
+                    _log.warning(
+                        "permission.membership_not_found",
+                        extra={
+                            "account_id": str(current_user.account_id),
+                            "org_id": str(current_user.organisation_id),
+                            "username": current_user.username,
+                        },
+                    )
+                    raise OrganisationMembershipNotFound()
+
         principal_json = {
             "sub": current_user.username,
             "org_id": str(current_user.organisation_id) if current_user.organisation_id else "",
             "account_id": str(current_user.account_id),
-            "org_role": current_user.org_role or "",
+            "org_role": live_org_role or "",
         }
 
         from redis.asyncio import Redis
@@ -447,11 +505,43 @@ async def me(
         ) from None
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    # ADR 017: return the LIVE org role (not the claim) so the frontend stops
+    # rendering admin controls for demoted/removed users.
+    live_org_role: str | None = None
+    if current_user.organisation_id is not None:
+        try:
+            async with session.begin():
+                live_org_role = await resolve_role_from_membership(
+                    session,
+                    str(current_user.account_id),
+                    str(current_user.organisation_id),
+                )
+        except SQLAlchemyError:
+            _log.warning("permission.live_role_read_failed", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Role verification temporarily unavailable. Please try again.",
+            ) from None
+        else:
+            if live_org_role is None:
+                # ADR 017: missing/deactivated membership → deny. A removed
+                # user must not keep the claimed admin role.
+                _log.warning(
+                    "permission.membership_not_found",
+                    extra={
+                        "account_id": str(current_user.account_id),
+                        "org_id": str(current_user.organisation_id),
+                        "username": current_user.username,
+                    },
+                )
+                raise OrganisationMembershipNotFound()
+
     return MeResponse(
         id=str(account.id),
         email=account.email,
         display_name=account.display_name,
-        org_role=current_user.org_role or "",
+        org_role=live_org_role or "",
         active=account.active,
         created_at=account.created_at.isoformat(),
         is_system_admin=current_user.is_system_admin,

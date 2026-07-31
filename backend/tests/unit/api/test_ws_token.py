@@ -190,7 +190,11 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     )
 
     try:
-        yield TestClient(app)
+        with patch(
+            "modulo.api.routes.auth.resolve_role_from_membership",
+            new=AsyncMock(return_value="admin"),
+        ):
+            yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
 
@@ -227,5 +231,83 @@ def test_ws_token_endpoint_unauthenticated_returns_4xx() -> None:
     try:
         resp = TestClient(app).post("/api/v1/auth/ws-token")
         assert resp.status_code in (401, 403)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ws_token_removed_member_returns_401(mock_session: AsyncMock) -> None:
+    """ADR 017: a removed/deactivated member must not mint a WS token (401)."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    try:
+        with patch(
+            "modulo.api.routes.auth.resolve_role_from_membership",
+            new=AsyncMock(return_value=None),
+        ):
+            resp = TestClient(app).post("/api/v1/auth/ws-token")
+        assert resp.status_code == 401
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_refresh_removed_member_returns_401_without_advancing_sequence(mock_session: AsyncMock) -> None:
+    """ADR 017: a removed/deactivated member cannot refresh (401) and the
+    token-family sequence must NOT advance."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    # Build a valid refresh token for the test user
+    from modulo.auth.jwt import create_refresh_token
+    settings = _make_settings()
+    refresh_token = create_refresh_token(
+        str(_USER_ID),
+        settings.secret_key,
+        organisation_id=str(_ORG_ID),
+        account_id=str(_USER_ID),
+        org_role="admin",
+        token_family="00000000-0000-0000-0000-000000000001",
+        token_sequence=1,
+    )
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+
+    advance = AsyncMock(return_value=(2, False))
+    try:
+        with (
+            patch(
+                "modulo.api.routes.auth.resolve_role_from_membership",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "modulo.api.routes.auth.advance_sequence",
+                new=advance,
+            ),
+        ):
+            resp = TestClient(app).post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": refresh_token},
+            )
+        assert resp.status_code == 401
+        advance.assert_not_awaited()
     finally:
         app.dependency_overrides.clear()
