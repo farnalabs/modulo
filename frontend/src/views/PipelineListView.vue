@@ -56,6 +56,12 @@
       </p>
 
       <main class="flex-1 page-wide">
+      <div v-if="moveError && !showMoveToFolder" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="pipeline-list-move-error">
+        <span>{{ moveError }}</span>
+        <button class="shrink-0 text-destructive/70 hover:text-destructive" aria-label="Dismiss" @click="moveError = null">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
       <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
           <div class="h-5 w-3/4 bg-muted rounded mb-2" />
@@ -122,7 +128,7 @@
             draggable="true"
             @dragstart="onPipelineDragStart(p, $event)"
             @dragover.prevent
-            @drop="onCardDrop(p, $event)"
+            @drop="onPipelineDrop(p, $event)"
           >
             <div class="flex items-start justify-between gap-2 mb-3">
               <h3 class="text-base font-medium text-foreground truncate">{{ p.name }}</h3>
@@ -251,7 +257,7 @@
                   draggable="true"
                   @dragstart="onPipelineDragStart(row.data as PipelineItem, $event)"
                   @dragover.prevent
-                  @drop="onTablePipelineDrop(row.data as PipelineItem, $event)"
+                  @drop="onPipelineDrop(row.data as PipelineItem, $event)"
                 >
                   <td class="px-4 py-3" :style="{ paddingLeft: `${12 + (row.depth || 0) * 16}px` }">
                     <span class="font-medium text-foreground">{{ (row.data as PipelineItem).name }}</span>
@@ -737,14 +743,7 @@ function onTableFolderDrop(folderId: string, event: DragEvent) {
   }
 }
 
-function onCardDrop(targetPipeline: PipelineItem, event: DragEvent) {
-  const pipelineId = event.dataTransfer?.getData('text/plain')
-  if (pipelineId && pipelineId !== targetPipeline.id) {
-    onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? null })
-  }
-}
-
-function onTablePipelineDrop(targetPipeline: PipelineItem, event: DragEvent) {
+function onPipelineDrop(targetPipeline: PipelineItem, event: DragEvent) {
   const pipelineId = event.dataTransfer?.getData('text/plain')
   if (pipelineId && pipelineId !== targetPipeline.id) {
     onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? null })
@@ -752,8 +751,10 @@ function onTablePipelineDrop(targetPipeline: PipelineItem, event: DragEvent) {
 }
 
 async function onMovePipeline(ev: { pipelineId: string; folderId: string | null }) {
+  if (moving.value) return
   const pipeline = allPipelines.value.find(p => p.id === ev.pipelineId)
   if (!pipeline) return
+  if ((pipeline.folder_id ?? null) === ev.folderId) return
   moveTarget.value = pipeline
   moveToFolderId.value = ev.folderId
   moveError.value = null
