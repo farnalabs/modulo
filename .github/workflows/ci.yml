@@ -273,7 +273,7 @@ jobs:
               break
             elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
               DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE (attempt $i/5) ´┐¢ retrying in ${DELAY}s"
+              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
             else
               echo "::warning::PR Reviewer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"

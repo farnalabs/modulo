@@ -21,7 +21,6 @@ ignore_imports =
     modulo.api.routes.triggers -> modulo.core.trigger_engine
     modulo.api.mcp_server -> modulo.core.cron_scheduler
     modulo.api.mcp_server -> modulo.core.pipeline_executor_task
-    modulo.core.pipeline_executor_task -> modulo.core.pipeline_engine.executor
     modulo.api.routes.pipelines -> modulo.core.reports.quality_report
 
 [importlinter:contract:connectors-do-not-import-api]
