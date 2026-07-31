@@ -217,11 +217,6 @@ class TestSsoProvidersEndpoint:
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# SAML IdP metadata parsing
-# ---------------------------------------------------------------------------
-
-
 class TestSamlMetadataParsing:
     SAMPLE_IDP_METADATA = """<?xml version="1.0"?>
 <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"

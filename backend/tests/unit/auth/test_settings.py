@@ -1,5 +1,7 @@
 """Settings validation tests — SECRET_KEY and FERNET_KEY enforcement."""
 
+import logging
+
 import pytest
 from pydantic import ValidationError
 
@@ -37,8 +39,6 @@ def test_secret_key_blocked_value_raises() -> None:
 
 def test_no_auth_configured_does_not_raise(caplog: pytest.LogCaptureFixture) -> None:
     """Missing admin password + users should warn, not raise."""
-    import logging
-
     with caplog.at_level(logging.WARNING, logger="modulo.settings"):
         s = _make(modulo_admin_password="", modulo_users="")
     assert not s.modulo_admin_password
@@ -47,8 +47,6 @@ def test_no_auth_configured_does_not_raise(caplog: pytest.LogCaptureFixture) -> 
 
 
 def test_admin_password_set_no_warning(caplog: pytest.LogCaptureFixture) -> None:
-    import logging
-
     with caplog.at_level(logging.WARNING, logger="modulo.settings"):
         _make(modulo_admin_password="hunter2_but_longer_than_needed")
     assert not any("login is disabled" in r.message for r in caplog.records)

@@ -178,8 +178,6 @@ class TestOAuthClientCRUD:
 
     async def test_list_returns_dicts(self) -> None:
         c = _make_oauth_client()
-        from datetime import datetime
-
         c.created_at = datetime(2025, 1, 1, tzinfo=UTC)
         mock_scalars = MagicMock()
         mock_scalars.__iter__.return_value = iter([c])
