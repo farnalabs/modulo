@@ -229,6 +229,60 @@ async def test_dispatch_via_celery_calls_enqueue_dispatch(notifier: Notifier) ->
     assert results[0].status == "enqueued"
 
 
+async def test_dispatch_via_celery_handles_invalid_endpoint_id(notifier: Notifier) -> None:
+    """An unparseable endpoint_id from Celery must produce an error result, not crash."""
+    with patch(
+        "modulo.core.notifier.celery_tasks.enqueue_dispatch",
+        new_callable=AsyncMock,
+    ) as mock_enqueue:
+        mock_enqueue.return_value = [
+            {
+                "endpoint_id": "not-a-uuid",
+                "status": "delivered",
+                "attempt_count": 1,
+                "response_code": 200,
+                "last_error": None,
+            }
+        ]
+
+        results = await notifier._dispatch_via_celery(
+            _ORG,
+            "hitl_awaiting",
+            {"run_id": str(_RUN)},
+        )
+
+    assert len(results) == 1
+    assert results[0].status == "error"
+    assert results[0].last_error == "Invalid endpoint_id: not-a-uuid"
+
+
+async def test_dispatch_via_celery_handles_celery_enqueued_placeholder(notifier: Notifier) -> None:
+    """The 'celery-enqueued' placeholder endpoint_id maps to a DispatchResult."""
+    with patch(
+        "modulo.core.notifier.celery_tasks.enqueue_dispatch",
+        new_callable=AsyncMock,
+    ) as mock_enqueue:
+        mock_enqueue.return_value = [
+            {
+                "endpoint_id": "celery-enqueued",
+                "status": "enqueued",
+                "attempt_count": 0,
+                "response_code": None,
+                "last_error": None,
+            }
+        ]
+
+        results = await notifier._dispatch_via_celery(
+            _ORG,
+            "hitl_awaiting",
+            {"run_id": str(_RUN)},
+        )
+
+    assert len(results) == 1
+    assert results[0].status == "enqueued"
+    assert isinstance(results[0].endpoint_id, uuid.UUID)
+
+
 async def test_dispatch_via_celery_falls_back_on_exception(notifier: Notifier) -> None:
     """When enqueue_dispatch raises, _dispatch_via_celery falls back to inline."""
     with (
