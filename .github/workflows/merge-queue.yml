@@ -180,6 +180,7 @@ jobs:
               merged_prs="$merged_prs $NUM"
             else
               git merge --abort 2>/dev/null || true
+              git reset --hard HEAD 2>/dev/null || true
               echo "MERGE CONFLICT in PR #$NUM -- skipping."
               conflict_prs="$conflict_prs $NUM"
             fi
