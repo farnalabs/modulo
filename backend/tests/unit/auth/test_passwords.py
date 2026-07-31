@@ -93,7 +93,7 @@ def test_entropy(pw: str, lo: float, hi: float) -> None:
 
 
 def test_validate_strong_password() -> None:
-    validate_password_strength("CorrectHorseBattery99!")
+    assert validate_password_strength("CorrectHorseBattery99!") is None
 
 
 def test_validate_short_password() -> None:
@@ -109,4 +109,5 @@ def test_validate_low_entropy_long_password() -> None:
 
 def test_validate_all_lowercase_12_chars() -> None:
     # 12 * log2(26) = 56.4, which exceeds 30 bits
-    validate_password_strength("abcdefghijkl")
+    assert validate_password_strength("abcdefghijkl") is None
+    assert password_entropy_bits("abcdefghijkl") >= 30

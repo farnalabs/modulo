@@ -129,6 +129,8 @@ class TestEventBus:
     async def test_no_subscribers_does_not_raise(self) -> None:
         bus = EventBus()
         await bus.publish("org-empty", "run", "r1", "created", version=0)
+        # publishing to an org with no subscribers must not register a queue
+        assert bus._subscribers.get("org-empty") is None
 
     async def test_late_subscriber_does_not_receive_past_events(self) -> None:
         bus = EventBus()
@@ -164,10 +166,10 @@ class TestEventBus:
         mock_redis.publish = AsyncMock()
         await configure_event_bus(redis_broker=mock_redis)
         bus = get_event_bus()
-        import modulo.core.events.event_bus as eb
 
-        eb._event_bus = None
-        eb._event_bus = bus
         await bus.publish("org-123", "run", "r1", "created", version=0)
         await asyncio.sleep(0.01)
-        mock_redis.publish.assert_awaited_once()
+        mock_redis.publish.assert_awaited_once_with(
+            "resource:org-123",
+            {"type": "run", "id": "r1", "action": "created", "version": 0, "org_id": "org-123"},
+        )
