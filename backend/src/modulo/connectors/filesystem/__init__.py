@@ -66,6 +66,8 @@ class FilesystemConnector(ConnectorBase):
                     raise ValueError("Filesystem file query requires 'path' filter")
                 rel_path = q.filters["path"]
                 path = self._safe_path(rel_path)
+                if path.is_dir():
+                    raise IsADirectoryError(f"Cannot read directory as file: {rel_path!r}")
                 try:
                     content = await asyncio.to_thread(path.read_text, encoding="utf-8")
                 except FileNotFoundError:
