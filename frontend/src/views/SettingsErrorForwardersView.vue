@@ -65,7 +65,7 @@
                 <input id="settingserrorforwardersview-field-13"
                   v-model="configs.sentry.dsn"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.dsn_placeholder')"
                 />
               </div>
@@ -74,7 +74,7 @@
                 <input id="settingserrorforwardersview-field-12"
                   v-model="configs.sentry.org_slug"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.org_slug_placeholder')"
                 />
               </div>
@@ -83,7 +83,7 @@
                 <input id="settingserrorforwardersview-field-11"
                   v-model="configs.sentry.project_slug"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.project_slug_placeholder')"
                 />
               </div>
@@ -96,14 +96,14 @@
                 <input id="settingserrorforwardersview-field-10"
                   v-model="configs.datadog.api_key"
                   type="password"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.datadog_api_key_placeholder')"
                 />
               </div>
               <div>
                 <label for="settingserrorforwardersview-datadog-site" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.site') }}</label>
                 <Select v-model="configs.datadog.site" :aria-label="$t('views.SettingsErrorForwardersView.site')">
-                  <SelectTrigger id="settingserrorforwardersview-datadog-site" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('views.SettingsErrorForwardersView.site')">
+                  <SelectTrigger id="settingserrorforwardersview-datadog-site" class="input-base" :aria-label="$t('views.SettingsErrorForwardersView.site')">
                     <SelectValue :placeholder="$t('views.SettingsErrorForwardersView.select_site')" />
                   </SelectTrigger>
                   <SelectContent>
@@ -124,7 +124,7 @@
                 <input id="settingserrorforwardersview-field-8"
                   v-model="configs.pagerduty.routing_key"
                   type="password"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.pagerduty_routing_key_placeholder')"
                 />
               </div>
@@ -137,7 +137,7 @@
                 <input id="settingserrorforwardersview-field-7"
                   v-model="configs.rollbar.access_token"
                   type="password"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.rollbar_access_token_placeholder')"
                 />
               </div>
@@ -146,7 +146,7 @@
                 <input id="settingserrorforwardersview-field-6"
                   v-model="configs.rollbar.environment"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.environment_placeholder')"
                 />
               </div>
@@ -159,7 +159,7 @@
                 <input id="settingserrorforwardersview-field-5"
                   v-model="configs.opsgenie.api_key"
                   type="password"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.opsgenie_api_key_placeholder')"
                 />
               </div>
@@ -168,7 +168,7 @@
                 <input id="settingserrorforwardersview-field-4"
                   v-model="configs.opsgenie.team"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.team_placeholder')"
                 />
               </div>
@@ -181,7 +181,7 @@
                 <input id="settingserrorforwardersview-field-3"
                   v-model="configs.loki.push_url"
                   type="url"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.push_url_placeholder')"
                 />
               </div>
@@ -190,7 +190,7 @@
                 <input id="settingserrorforwardersview-field-2"
                   v-model="configs.loki.tenant_id"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.tenant_id_placeholder')"
                 />
               </div>
@@ -199,7 +199,7 @@
                 <input id="settingserrorforwardersview-field-1"
                   v-model="configs.loki.labels"
                   type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  class="input-base"
                   :placeholder="$t('views.SettingsErrorForwardersView.labels_placeholder')"
                 />
                 <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.SettingsErrorForwardersView.labels_hint') }}</p>
