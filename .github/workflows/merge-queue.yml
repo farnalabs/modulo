@@ -179,7 +179,9 @@ jobs:
               echo "PR #$NUM merged successfully."
               merged_prs="$merged_prs $NUM"
             else
-              git merge --abort 2>/dev/null || true
+              # git merge --abort cannot clean up squash merges (no MERGE_HEAD);
+              # hard reset to drop any leftover conflict markers from the tree.
+              git reset --hard HEAD && git clean -fd 2>/dev/null || true
               echo "MERGE CONFLICT in PR #$NUM -- skipping."
               conflict_prs="$conflict_prs $NUM"
             fi
@@ -236,6 +238,8 @@ jobs:
         if: steps.merge.outputs.merged_count != '0'
         shell: bash
         run: |
+          # Ensure checks run on a clean tree even if the last PR conflicted.
+          git reset --hard HEAD && git clean -fd
           TIMESTAMP=$(date +%s)
           git push origin merge-queue:refs/heads/merge-queue/active-$TIMESTAMP 2>&1
           echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
