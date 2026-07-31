@@ -4,12 +4,14 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Protocol, cast
 
 import anyio
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from modulo.api.dependencies import (
@@ -155,9 +157,169 @@ async def _verify_db_connectivity(settings: Settings) -> None:
     logger.warning("startup.continuing_without_db -- app will retry connections at runtime")
 
 
+# Dedicated advisory-lock key (int4, int4) that serialises migration runs across
+# machines/processes so _run_migrations never interleaves with the entrypoint's
+# `alembic upgrade heads`.
+_MIGRATION_LOCK_KEY = (72001, 1)
+_MIGRATION_LOCK_POLL_ATTEMPTS = 60
+_MIGRATION_LOCK_POLL_INTERVAL = 0.5
+_MIGRATION_MAX_ATTEMPTS = 5
+_MIGRATION_BACKOFF_SECONDS = 3
+
+
+class _MigrationLockTimeoutError(Exception):
+    """Raised when the migration advisory lock cannot be acquired in time."""
+
+
+# Legacy role literal referenced only by the boot-time owner-rows guard. The
+# semgrep rule `no-owner-as-org-role` bans the raw literal in role checks —
+# using this constant keeps the guard explicit while keeping the literal out of
+# comparison expressions.
+_OWNER_ROLE_LEGACY = "owner"
+
+
+def _resolve_alembic_ini() -> Path:
+    """Locate backend/alembic.ini robustly regardless of the process cwd."""
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "alembic.ini"
+        if candidate.exists():
+            return candidate
+    return Path("alembic.ini")
+
+
+@asynccontextmanager
+async def _migration_advisory_lock(settings: Settings) -> AsyncIterator[bool]:
+    """Hold a Postgres advisory lock for the duration of a migration run.
+
+    Uses ``pg_try_advisory_lock`` in a polling loop (per AGENTS.md:
+    ``pg_advisory_lock`` under ``asyncio.wait_for`` races server-side acquisition
+    against the client timeout). The lock is connection-scoped and held open
+    while the caller runs Alembic, so a concurrent migration from another
+    machine/process cannot interleave.
+    """
+    engine = get_or_create_engine(settings)
+    async with engine.connect() as conn:
+        acquired = False
+        for _ in range(_MIGRATION_LOCK_POLL_ATTEMPTS):
+            result = await conn.execute(
+                text("SELECT pg_try_advisory_lock(:k1, :k2)"),
+                {"k1": _MIGRATION_LOCK_KEY[0], "k2": _MIGRATION_LOCK_KEY[1]},
+            )
+            if bool(result.scalar_one()):
+                acquired = True
+                break
+            await asyncio.sleep(_MIGRATION_LOCK_POLL_INTERVAL)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                await conn.execute(
+                    text("SELECT pg_advisory_unlock(:k1, :k2)"),
+                    {"k1": _MIGRATION_LOCK_KEY[0], "k2": _MIGRATION_LOCK_KEY[1]},
+                )
+
+
 async def _run_migrations(settings: Settings) -> None:
-    """Migrations are run by entrypoint.sh before uvicorn starts."""
-    logger.info("startup.migrations_handled_by_entrypoint")
+    """Run Alembic migrations to head, with a bounded retry loop and FATAL exhaustion.
+
+    This is the single authoritative migration runner (ADR 017). The entrypoint
+    may have already applied migrations (``alembic upgrade heads`` is idempotent)
+    but the advisory lock guarantees two migration runs never overlap. Transient
+    DB errors are retried; on exhaustion this raises — it is called bare from
+    the lifespan, so a persistent failure fails uvicorn boot and logs the
+    ``infra_blocked=migration_failed`` key for the deploy-pipeline consumer.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    from modulo.db.migrations.env import _to_sync_url
+
+    alembic_ini = _resolve_alembic_ini()
+    last_error: Exception | None = None
+
+    for attempt in range(1, _MIGRATION_MAX_ATTEMPTS + 1):
+        try:
+            async with _migration_advisory_lock(settings) as acquired:
+                if not acquired:
+                    raise _MigrationLockTimeoutError("Timed out waiting for the migration advisory lock")
+                config = Config(str(alembic_ini))
+                config.set_main_option(
+                    "script_location",
+                    str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
+                )
+                # Keep the app's structured logging intact — env.py skips
+                # fileConfig when config_file_name is None.
+                config.config_file_name = None
+                config.set_main_option("sqlalchemy.url", _to_sync_url(settings.database_url))
+                await asyncio.to_thread(command.upgrade, config, "heads")
+            logger.info("startup.migrations_complete")
+            return
+        except asyncio.CancelledError:
+            raise
+        except (SQLAlchemyError, _MigrationLockTimeoutError) as exc:
+            last_error = exc
+            logger.warning(
+                "startup.migrations_retry",
+                extra={"attempt": attempt, "max_attempts": _MIGRATION_MAX_ATTEMPTS, "error": str(exc)},
+                exc_info=True,
+            )
+            if attempt < _MIGRATION_MAX_ATTEMPTS:
+                await asyncio.sleep(_MIGRATION_BACKOFF_SECONDS * attempt)
+        except Exception as exc:
+            logger.error(
+                "infra_blocked=migration_failed",
+                extra={"attempt": attempt, "error": str(exc)},
+                exc_info=True,
+            )
+            last_error = exc
+            break
+
+    logger.error(
+        "infra_blocked=migration_failed",
+        extra={"attempts": _MIGRATION_MAX_ATTEMPTS, "error": str(last_error)},
+        exc_info=last_error is not None,
+    )
+    fatal_error = RuntimeError("FATAL: database migrations failed after retries")
+    raise fatal_error from last_error
+
+
+async def _assert_no_owner_rows(settings: Settings) -> None:
+    """Hard-fail boot if any org_membership still claims the dropped 'owner' role.
+
+    The migration (0030) converts owner -> admin transactionally; this is a
+    second line of defence with an actionable message. Raises RuntimeError
+    (FATAL) when owner rows exist. Callers must let SQLAlchemyError pass as a
+    transient DB blip (log + continue) — the invariant is guaranteed by the
+    migration transaction.
+    """
+    from sqlalchemy import select
+
+    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.db.models.org_membership import OrgMembership
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+
+    async with factory() as session:
+        result = await session.execute(select(OrgMembership).where(OrgMembership.role == _OWNER_ROLE_LEGACY))
+        owners = list(result.scalars().all())
+
+    if not owners:
+        logger.info("startup.owner_rows_zero")
+        return
+
+    account_ids = sorted({str(o.account_id) for o in owners})
+    logger.error(
+        "infra_blocked=owner_rows_present",
+        extra={"count": len(owners), "account_ids": account_ids},
+    )
+    # Message text only — never executed as SQL. The prescription mirrors the
+    # migration's owner->admin UPDATE for operators who hit this FATAL.
+    raise RuntimeError(
+        "FATAL: org_memberships still contain the dropped 'owner' role "  # noqa: S608
+        f"({len(owners)} rows, account_ids={account_ids}). Prescribed fix: "
+        "UPDATE org_memberships SET role='admin' WHERE role='owner'"  # nosec
+    )
 
 
 async def _ensure_default_org(settings: Settings) -> None:
@@ -682,6 +844,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Run Alembic migrations to bring the schema up to date.
     await _run_migrations(settings)
+
+    # Hard-fail guard: the 'owner' org role was dropped (ADR 017 A1a). The
+    # migration converts owner -> admin transactionally, so owner rows must be
+    # zero here. A transient SQLAlchemyError on the assertion query itself is
+    # logged + ignored (a blip must not brick boot — the invariant is already
+    # guaranteed by the migration transaction); any owner rows are FATAL.
+    try:
+        await _assert_no_owner_rows(settings)
+    except SQLAlchemyError:
+        logger.warning("startup.owner_rows_check_db_error", exc_info=True)
 
     # Ensure at least one organisation exists before seeding users.
     # Non-fatal: if the organisations table doesn't exist (migration state

@@ -952,7 +952,7 @@ async def clone_pipeline_endpoint(
 
     if principal.org_role == "viewer":
         _log.warning(
-            "Copy denied: user %s has role '%s' (requires admin/owner/member)",
+            "Copy denied: user %s has role '%s' (requires admin)",
             principal.account_id,
             principal.org_role,
         )
@@ -1429,7 +1429,7 @@ async def delete_snapshot_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
-    if principal.org_role not in ("admin", "owner"):
+    if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can delete snapshots",

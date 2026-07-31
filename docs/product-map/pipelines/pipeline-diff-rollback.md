@@ -45,7 +45,7 @@ status: partial
 ### Auth & Permissions
 
 - [x] Unauthenticated requests return 401 (via `get_current_user` FastAPI dependency)
-- [x] Delete snapshot requires admin or owner role — operator or runner gets 403
+- [x] Delete snapshot requires admin role — operator or runner gets 403
 - [x] Snapshot access is scoped to the authenticated org via RLS
 - [x] Cross-org snapshot access returns 404 (not 403) to avoid leaking existence
 

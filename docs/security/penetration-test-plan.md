@@ -124,7 +124,7 @@ Testing follows the **OWASP Web Security Testing Guide (WSTG) v5.0** with additi
 
 - **RLS bypass**: Row-Level Security bypass via tenant ID manipulation in path/query/body parameters
 - **Team isolation**: Cross-tenant data access via team ID enumeration, project ID guessing
-- **Privilege escalation**: Role-based access control bypass (user -> admin, member -> owner)
+- **Privilege escalation**: Role-based access control bypass (user -> admin, operator -> admin)
 - **IDOR**: Insecure direct object reference in all CRUD endpoints (`/projects/{id}`, `/agents/{id}`, `/tasks/{id}`)
 - **MCP scope bypass**: Agent attempting to call tools outside its authorised scope
 - **HITL bypass**: Human-in-the-loop approval gate bypass via concurrent session manipulation or approval token replay
