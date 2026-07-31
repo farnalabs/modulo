@@ -235,8 +235,8 @@ class TestAsyncEmitEventData:
     """
 
     @pytest.fixture()
-    def async_emit_chain(self, monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock]:
-        """Install mock DB chain for ``_async_emit``; return ``(service, set_rls)`` mocks."""
+    def async_emit_chain(self, monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock, MagicMock]:
+        """Install mock DB chain for ``_async_emit``; return ``(service, set_rls, session)`` mocks."""
         session = MagicMock()
         begin_cm = MagicMock()
         begin_cm.__aenter__ = AsyncMock()
@@ -259,7 +259,7 @@ class TestAsyncEmitEventData:
         monkeypatch.setattr("modulo.settings.get_settings", MagicMock())
         monkeypatch.setattr("modulo.version.get_version", MagicMock(return_value="1.2.3"))
 
-        return service, set_rls
+        return service, set_rls, session
 
     @staticmethod
     def _make_record(level: int, msg: str = "test msg") -> logging.LogRecord:
@@ -283,13 +283,13 @@ class TestAsyncEmitEventData:
     )
     async def test_level_mapping(
         self,
-        async_emit_chain: tuple[AsyncMock, AsyncMock],
+        async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
         level: int,
         expected: str,
     ) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
-        service, _set_rls = async_emit_chain
+        service, set_rls, _session = async_emit_chain
         token = org_id_var.set(str(_ORG_ID))
         try:
             handler = ErrorTrackingLogHandler()
@@ -299,14 +299,36 @@ class TestAsyncEmitEventData:
 
         service.assert_awaited_once()
         assert service.await_args.args[2]["level"] == expected
+        assert service.await_args.args[1] == _ORG_ID
+        set_rls.assert_awaited_once_with(_session, _ORG_ID)
+
+    async def test_skips_emit_when_org_id_invalid(
+        self,
+        async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Invalid org id in the context var must not reach the DB chain."""
+        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+
+        service, set_rls, _session = async_emit_chain
+        token = org_id_var.set("not-a-valid-uuid")
+        try:
+            handler = ErrorTrackingLogHandler()
+            await handler._async_emit(self._make_record(logging.ERROR, "boom"))
+        finally:
+            org_id_var.reset(token)
+
+        service.assert_not_awaited()
+        set_rls.assert_not_awaited()
+        assert any("Ignoring log event with invalid organisation ID" in r.message for r in caplog.records)
 
     async def test_error_level_builds_event_data(
         self,
-        async_emit_chain: tuple[AsyncMock, AsyncMock],
+        async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
     ) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
-        service, set_rls = async_emit_chain
+        service, set_rls, _session = async_emit_chain
         token = org_id_var.set(str(_ORG_ID))
         try:
             handler = ErrorTrackingLogHandler()
@@ -323,15 +345,15 @@ class TestAsyncEmitEventData:
         assert event_data["context_json"]["logger"] == "test.logger"
         assert event_data["context_json"]["module"] == "pipeline"
         assert event_data["context_json"]["line"] == 42
-        set_rls.assert_awaited_once()
+        set_rls.assert_awaited_once_with(_session, _ORG_ID)
 
     async def test_message_formatting_with_args(
         self,
-        async_emit_chain: tuple[AsyncMock, AsyncMock],
+        async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
     ) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
-        service, _set_rls = async_emit_chain
+        service, _set_rls, _session = async_emit_chain
         record = logging.LogRecord(
             name="test.logger",
             level=logging.ERROR,
@@ -353,13 +375,13 @@ class TestAsyncEmitEventData:
 
     async def test_environment_from_env_var(
         self,
-        async_emit_chain: tuple[AsyncMock, AsyncMock],
+        async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         monkeypatch.setenv("MODULO_ENV", "production")
-        service, _set_rls = async_emit_chain
+        service, _set_rls, _session = async_emit_chain
         token = org_id_var.set(str(_ORG_ID))
         try:
             handler = ErrorTrackingLogHandler()
@@ -372,11 +394,11 @@ class TestAsyncEmitEventData:
 
     async def test_stacktrace_from_exc_info(
         self,
-        async_emit_chain: tuple[AsyncMock, AsyncMock],
+        async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
     ) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
-        service, _set_rls = async_emit_chain
+        service, _set_rls, _session = async_emit_chain
         try:
             raise ValueError("kaboom")
         except ValueError:
@@ -440,7 +462,7 @@ class TestCeleryFailureHandler:
     ) -> None:
         from modulo.core.error_tracking.celery_hooks import celery_task_failure_handler
 
-        self._setup_celery_mocks(mock_factory, mock_service)
+        mock_session = self._setup_celery_mocks(mock_factory, mock_service)
 
         sender = MagicMock()
         sender.name = "modulo.test_task"
@@ -457,12 +479,84 @@ class TestCeleryFailureHandler:
         mock_service.ingest.assert_called_once()
         call_args = mock_service.ingest.call_args
         assert call_args is not None
-        event_data = call_args[0][2]
+        assert call_args.args[0] is mock_session
+        assert call_args.args[1] == _ORG_ID
+        event_data = call_args.args[2]
         assert event_data["source"] == "celery"
         assert event_data["level"] == "error"
         assert "ValueError" in event_data["message"]
         assert event_data["context_json"]["task_name"] == "modulo.test_task"
         assert event_data["context_json"]["task_id"] == "task-123"
+
+    @patch("modulo.core.error_tracking.celery_hooks._SERVICE")
+    @patch("modulo.api.dependencies.get_or_create_session_factory")
+    @patch("modulo.api.dependencies.get_or_create_engine")
+    @patch("modulo.settings.get_settings")
+    def test_falls_back_to_system_org_when_org_id_invalid(
+        self,
+        mock_settings: Any,
+        mock_engine: Any,
+        mock_factory: Any,
+        mock_service: Any,
+    ) -> None:
+        from modulo.core.error_tracking.celery_hooks import (
+            _SYSTEM_ORG_ID,
+            celery_task_failure_handler,
+        )
+
+        mock_session = self._setup_celery_mocks(mock_factory, mock_service)
+        sender = MagicMock()
+        sender.name = "modulo.invalid_org_task"
+
+        celery_task_failure_handler(
+            sender=sender,
+            task_id="task-invalid-org",
+            exception=ValueError("boom"),
+            args=(),
+            kwargs={"org_id": "not-a-uuid"},
+            einfo=None,
+        )
+
+        mock_service.ingest.assert_called_once()
+        call_args = mock_service.ingest.call_args
+        assert call_args is not None
+        assert call_args.args[0] is mock_session
+        assert call_args.args[1] == _SYSTEM_ORG_ID
+
+    @patch("modulo.core.error_tracking.celery_hooks._SERVICE")
+    @patch("modulo.api.dependencies.get_or_create_session_factory")
+    @patch("modulo.api.dependencies.get_or_create_engine")
+    @patch("modulo.settings.get_settings")
+    def test_uses_system_org_when_no_org_id(
+        self,
+        mock_settings: Any,
+        mock_engine: Any,
+        mock_factory: Any,
+        mock_service: Any,
+    ) -> None:
+        from modulo.core.error_tracking.celery_hooks import (
+            _SYSTEM_ORG_ID,
+            celery_task_failure_handler,
+        )
+
+        mock_session = self._setup_celery_mocks(mock_factory, mock_service)
+        sender = MagicMock()
+        sender.name = "modulo.no_org_task"
+
+        celery_task_failure_handler(
+            sender=sender,
+            task_id="task-no-org",
+            exception=Exception("boom"),
+            args=(),
+            kwargs={},
+            einfo=None,
+        )
+
+        mock_service.ingest.assert_called_once()
+        call_args = mock_service.ingest.call_args
+        assert call_args is not None
+        assert call_args.args[0] is mock_session
+        assert call_args.args[1] == _SYSTEM_ORG_ID
 
     @patch("modulo.core.error_tracking.celery_hooks._SERVICE")
     @patch("modulo.api.dependencies.get_or_create_session_factory")
@@ -535,8 +629,8 @@ class TestCeleryFailureHandler:
 
 class TestEnrichment:
     @pytest.fixture()
-    def ingest_chain(self, monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock]:
-        """Install mock DB chain for ``_ingest_unhandled_error``; return ``(service, set_rls)`` mocks."""
+    def ingest_chain(self, monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock, MagicMock]:
+        """Install mock DB chain for ``_ingest_unhandled_error``; return ``(service, set_rls, session)`` mocks."""
         session = MagicMock()
         begin_cm = MagicMock()
         begin_cm.__aenter__ = AsyncMock()
@@ -559,7 +653,7 @@ class TestEnrichment:
         monkeypatch.setattr("modulo.settings.get_settings", MagicMock())
         monkeypatch.setattr("modulo.api.middleware.catch_all.get_version", MagicMock(return_value="1.2.3"))
 
-        return service, set_rls
+        return service, set_rls, session
 
     @staticmethod
     def _crash_request(org_id: uuid.UUID = _ORG_ID) -> Request:
@@ -581,11 +675,11 @@ class TestEnrichment:
 
     async def test_ingest_receives_version_and_environment(
         self,
-        ingest_chain: tuple[AsyncMock, AsyncMock],
+        ingest_chain: tuple[AsyncMock, AsyncMock, MagicMock],
     ) -> None:
         from modulo.api.middleware.catch_all import _ingest_unhandled_error
 
-        service, set_rls = ingest_chain
+        service, set_rls, session = ingest_chain
         await _ingest_unhandled_error(self._crash_request())
 
         service.assert_awaited_once()
@@ -595,17 +689,20 @@ class TestEnrichment:
         assert event_data["message"] == "Unhandled exception: GET /crash"
         assert event_data["context_json"]["method"] == "GET"
         assert event_data["context_json"]["path"] == "/crash"
+        assert service.await_args.args[1] == str(_ORG_ID)
         set_rls.assert_awaited_once()
+        assert set_rls.await_args.args[0] is session
+        assert set_rls.await_args.args[1] == str(_ORG_ID)
 
     async def test_ingest_environment_reflects_env_var(
         self,
-        ingest_chain: tuple[AsyncMock, AsyncMock],
+        ingest_chain: tuple[AsyncMock, AsyncMock, MagicMock],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from modulo.api.middleware.catch_all import _ingest_unhandled_error
 
         monkeypatch.setenv("MODULO_ENV", "staging")
-        service, _set_rls = ingest_chain
+        service, _set_rls, _session = ingest_chain
         await _ingest_unhandled_error(self._crash_request())
 
         service.assert_awaited_once()
