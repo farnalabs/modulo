@@ -251,13 +251,25 @@ async def refresh(
     live_org_role: str | None = None
     try:
         async with session.begin():
-            new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence, account_uuid)
+            # ADR 017: check live membership BEFORE advancing the token-family
+            # sequence - a removed member's repeated refresh attempts must not
+            # keep advancing sequences needlessly.
             if org_id_val:
                 live_org_role = await resolve_role_from_membership(
                     session,
                     str(account_id_val),
                     str(org_id_val),
                 )
+            if org_id_val and live_org_role is None:
+                _log.warning(
+                    "auth.refresh_membership_not_found",
+                    extra={"account_id": str(account_id_val), "org_id": str(org_id_val)},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Account no longer has access to this organisation",
+                )
+            new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence, account_uuid)
     except IntegrityError:
         _log.exception("auth.refresh")
         raise HTTPException(
@@ -293,16 +305,6 @@ async def refresh(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token has been revoked due to suspected theft",
         )
-    if org_id_val and live_org_role is None:
-        _log.warning(
-            "auth.refresh_membership_not_found",
-            extra={"account_id": str(account_id_val), "org_id": str(org_id_val)},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Account no longer has access to this organisation",
-        )
-
     minted_org_role = live_org_role if live_org_role is not None else org_role_val
 
     new_access = create_access_token(

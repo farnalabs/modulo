@@ -125,13 +125,13 @@ async def get_current_tenant_user(
     if current_user.organisation_id is None or current_user.org_role is None:
         raise OrganisationMembershipRequired()
 
-    await _verify_identity(current_user)
+    live_role = await _verify_identity(current_user)
 
     return TenantPrincipal(
         username=current_user.username,
         organisation_id=current_user.organisation_id,
         account_id=current_user.account_id,
-        org_role=current_user.org_role,
+        org_role=live_role,
         is_system_admin=current_user.is_system_admin,
     )
 
@@ -249,16 +249,13 @@ async def resolve_role_from_membership(session: AsyncSession, account_id: str, o
     from modulo.db.models.org_membership import OrgMembership
 
     result = await session.execute(
-        select(OrgMembership).where(
+        select(OrgMembership.role).where(
             OrgMembership.account_id == account_id,
             OrgMembership.organisation_id == organisation_id,
             OrgMembership.deactivated_at.is_(None),
         )
     )
-    membership = result.scalar_one_or_none()
-    if membership is None:
-        return None
-    return membership.role
+    return result.scalar_one_or_none()
 
 
 async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
@@ -327,7 +324,10 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
         raise
     except SQLAlchemyError:
         _log.warning("permission.live_role_read_failed", exc_info=True)
-        return principal.org_role
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Role verification temporarily unavailable. Please try again.",
+        ) from None
 
     if live_role is None:
         _log.warning(

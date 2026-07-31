@@ -173,23 +173,18 @@ async def _resolve_live_org_role(
     account_id: uuid.UUID,
     org_id: uuid.UUID,
 ) -> str | None:
-    """Return the caller's live org role in the target org, or ``None``.
+    """Return the caller's live org role in the target org, or `None`.
 
-    Live membership lookup filtering ``deactivated_at IS NULL``. Lazy imports
-    to avoid a circular dependency (``auth.dependencies → api.dependencies``).
+    Delegates to the single membership lookup in `auth.dependencies`
+    (ADR 017 live-role re-read); keeps the name for existing callers.
     """
-    from sqlalchemy import select
+    from modulo.auth.dependencies import resolve_role_from_membership
 
-    from modulo.db.models.org_membership import OrgMembership
-
-    result = await session.execute(
-        select(OrgMembership.role).where(
-            OrgMembership.account_id == account_id,
-            OrgMembership.organisation_id == org_id,
-            OrgMembership.deactivated_at.is_(None),
-        )
+    return await resolve_role_from_membership(
+        session,
+        str(account_id),
+        str(org_id),
     )
-    return result.scalar_one_or_none()
 
 
 def require_target_org_role(permission: str, min_role: str) -> DependsParameter:
