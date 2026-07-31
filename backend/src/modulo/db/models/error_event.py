@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, String, Text
+from sqlalchemy import JSON, CheckConstraint, DateTime, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -14,6 +14,7 @@ class ErrorEvent(OrgScoped):
         CheckConstraint("level IN ('error', 'warning', 'critical')", name="ck_error_events_level"),
         CheckConstraint("source IN ('backend', 'frontend', 'celery')", name="ck_error_events_source"),
         CheckConstraint("status IN ('new', 'acknowledged', 'resolved', 'archived')", name="ck_error_events_status"),
+        Index("ix_error_events_org_fingerprint_created_at", "organisation_id", "fingerprint", "created_at"),
     )
 
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
