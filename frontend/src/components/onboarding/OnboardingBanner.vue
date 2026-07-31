@@ -23,7 +23,7 @@
         </span>
       </div>
       <div class="min-w-0 flex-1">
-        <p class="text-base font-semibold">Set up Modulo</p>
+        <p class="text-base font-semibold">{{ $t('components.onboarding.OnboardingBanner.set_up_modulo') }}</p>
         <p class="text-xs text-muted-foreground">
           {{ store.completedCount }} of {{ store.totalActions }} actions completed
           <template v-if="store.currentAction"> — Next: {{ store.currentAction.title }}</template>
@@ -53,7 +53,7 @@
         </div>
       </template>
       <template v-else>
-        <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Recommended actions</p>
+        <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{{ $t('components.onboarding.OnboardingBanner.recommended_actions') }}</p>
         <div
           v-for="action in store.actions"
           :key="action.id"

@@ -32,7 +32,7 @@
             <template v-else-if="store.activeSession">
               {{ $t('components.remy.RemyPanel.session_label') }} {{ store.activeSession.session_number ? '#' + store.activeSession.session_number : shortId(store.activeSession.id) }}
             </template>
-            <template v-else>Remy</template>
+            <template v-else>{{ $t('components.remy.RemyPanel.remy') }}</template>
           </span>
         </template>
         <span v-if="store.isStreaming" class="remy-pulse-dot" />
@@ -197,7 +197,7 @@
     </div>
     <div v-if="currentSpeed === 'review' && store.activeSession" class="flex items-center justify-between px-3 py-1.5 text-xs border-b bg-muted/30">
       <span>⏸ Stops after each navigation</span>
-      <button class="text-xs font-medium underline hover:no-underline" @click="resumeUiCommands">Resume</button>
+      <button class="text-xs font-medium underline hover:no-underline" @click="resumeUiCommands">{{ $t('components.remy.RemyPanel.resume') }}</button>
     </div>
     <div class="remy-body">
       <div class="remy-sidebar" :class="{ open: showSidebar }">

@@ -11,7 +11,7 @@
       <form @submit.prevent="save" class="space-y-4">
         <div>
           <label for="remyskilldialog-field-5" class="mb-1 block text-sm font-medium"
-            >Name <span class="text-destructive">*</span></label
+            >{{ $t('components.remy.RemySkillDialog.name') }} <span class="text-destructive">*</span></label
           >
           <input id="remyskilldialog-field-5"
             v-model="form.name"
@@ -23,7 +23,7 @@
           />
         </div>
         <div>
-          <label for="remyskilldialog-field-4" class="mb-1 block text-sm font-medium">Description</label>
+          <label for="remyskilldialog-field-4" class="mb-1 block text-sm font-medium">{{ $t('components.remy.RemySkillDialog.description') }}</label>
           <textarea id="remyskilldialog-field-4"
             v-model="form.description"
             rows="2"
@@ -33,7 +33,7 @@
           />
         </div>
         <div>
-          <label for="remyskilldialog-field-3" class="mb-1 block text-sm font-medium">Triggers</label>
+          <label for="remyskilldialog-field-3" class="mb-1 block text-sm font-medium">{{ $t('components.remy.RemySkillDialog.triggers') }}</label>
           <input id="remyskilldialog-field-3"
             v-model="form.triggersInput"
             type="text"

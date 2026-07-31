@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-4">
     <div>
-      <label for="edgeconfigpanel-field-5" class="mb-1 block text-sm font-medium">Trigger Type</label>
+      <label for="edgeconfigpanel-field-5" class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.trigger_type') }}</label>
       <Select v-model="form.trigger_type">
         <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Trigger Type">
           <SelectValue placeholder="Select trigger type" />
@@ -15,7 +15,7 @@
     </div>
 
     <div>
-      <label for="edgeconfigpanel-field-4" class="mb-1 block text-sm font-medium">Description</label>
+      <label for="edgeconfigpanel-field-4" class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.description') }}</label>
       <textarea id="edgeconfigpanel-field-4"
         v-model="form.description"
         rows="2"
@@ -25,7 +25,7 @@
     </div>
 
     <div>
-      <label for="edgeconfigpanel-field-3" class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
+      <label for="edgeconfigpanel-field-3" class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.condition_expression_jmespath') }}</label>
       <input id="edgeconfigpanel-field-3"
         v-model="form.condition_expression"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -34,22 +34,22 @@
     </div>
 
     <div>
-      <label for="edgeconfigpanel-field-2" class="mb-1 block text-sm font-medium">Estimated Frequency</label>
+      <label for="edgeconfigpanel-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.estimated_frequency') }}</label>
       <Select v-model="form.estimated_frequency">
         <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Estimated Frequency">
           <SelectValue placeholder="Not specified" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="daily">Daily</SelectItem>
-          <SelectItem value="per-pr">Per PR</SelectItem>
-          <SelectItem value="hourly">Hourly</SelectItem>
-          <SelectItem value="custom">Custom</SelectItem>
+          <SelectItem value="daily">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.daily') }}</SelectItem>
+          <SelectItem value="per-pr">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.per_pr') }}</SelectItem>
+          <SelectItem value="hourly">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.hourly') }}</SelectItem>
+          <SelectItem value="custom">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.custom') }}</SelectItem>
         </SelectContent>
       </Select>
     </div>
 
     <div>
-      <label for="edgeconfigpanel-field-1" class="mb-1 block text-sm font-medium">Trigger Link (optional)</label>
+      <label for="edgeconfigpanel-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.trigger_link_optional') }}</label>
       <input id="edgeconfigpanel-field-1"
         v-model="form.trigger_link"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

@@ -2,7 +2,7 @@
   <Dialog :open="open" @update:open="$emit('close')">
     <DialogContent class="sm:max-w-lg">
       <DialogHeader>
-        <DialogTitle>Graduate Stage</DialogTitle>
+        <DialogTitle>{{ $t('components.lifecycle-map.editor.GraduationDialog.graduate_stage') }}</DialogTitle>
         <DialogDescription>
           You are graduating <strong>{{ stageName }}</strong> to a Modulo-managed pipeline.
         </DialogDescription>
@@ -48,16 +48,16 @@
               <SelectValue placeholder="Select a template..." />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="simple-sequential">Simple Sequential</SelectItem>
-              <SelectItem value="hierarchical">Hierarchical Agent</SelectItem>
-              <SelectItem value="parallel">Parallel Processing</SelectItem>
+              <SelectItem value="simple-sequential">{{ $t('components.lifecycle-map.editor.GraduationDialog.simple_sequential') }}</SelectItem>
+              <SelectItem value="hierarchical">{{ $t('components.lifecycle-map.editor.GraduationDialog.hierarchical_agent') }}</SelectItem>
+              <SelectItem value="parallel">{{ $t('components.lifecycle-map.editor.GraduationDialog.parallel_processing') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
       </div>
 
       <DialogFooter>
-        <Button variant="outline" @click="$emit('close')">Cancel</Button>
+        <Button variant="outline" @click="$emit('close')">{{ $t('common.cancel') }}</Button>
         <Button
           :disabled="!canGraduate || graduating"
           @click="handleGraduate"
