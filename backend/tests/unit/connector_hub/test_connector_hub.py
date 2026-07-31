@@ -246,15 +246,18 @@ async def test_initialise_plugin_fallback_not_registered_skips():
 async def test_initialise_is_idempotent(tmp_path):
     """Multiple initialise calls are idempotent — second call is skipped due to _initialised guard."""
     id1 = uuid.uuid4()
+    id2 = uuid.uuid4()
     base = {"base_path": str(tmp_path)}
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([_FakeCI(id=id1, connector_type_id="filesystem", config_json=base)])
         # Second call is a no-op (ConnectorHub already initialised)
-        await hub.initialise([_FakeCI(id=uuid.uuid4(), connector_type_id="filesystem", config_json=base)])
+        await hub.initialise([_FakeCI(id=id2, connector_type_id="filesystem", config_json=base)])
     # Only the first connector is accessible
-    hub.get(id1)
+    assert hub.get(id1) is not None
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(id2)
 
 
 # ---------------------------------------------------------------------------

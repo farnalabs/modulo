@@ -184,7 +184,11 @@ def test_registry_active_run_count():
 
 def test_registry_close_unknown_run_is_noop():
     registry = BrokerRegistry()
+    run_id = uuid.uuid4()
+    registry.get_or_create(run_id)
     registry.close(uuid.uuid4())  # must not raise
+    assert registry.active_run_count == 1
+    assert registry.get(run_id) is not None
 
 
 # ---------------------------------------------------------------------------

@@ -132,8 +132,11 @@ class TestRuntimeConfigStore:
 
     def test_clear_override_nonexistent_does_not_raise(self) -> None:
         self._purge_singleton()
-        store = get_runtime_config_store()
-        store.clear_override("NONEXISTENT")
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            store.clear_override("NONEXISTENT")
+            assert store.get("MODULO_LOG_LEVEL") == "DEBUG"
 
     def test_overrides_return_provenance_override(self) -> None:
         self._purge_singleton()

@@ -152,6 +152,8 @@ class TestGenericLock:
 
     async def test_release_non_existent_lock_is_noop(self, lock: GenericLock, session: AsyncMock) -> None:
         await lock.release_lock(session, "non-existent-key")
+        assert "non-existent-key" not in _generic_locks
+        assert "non-existent-key" not in _generic_owners
 
     async def test_acquire_with_timeout(self, lock: GenericLock, session: AsyncMock) -> None:
         await lock.acquire_lock(session, self._KEY, lock_timeout=5.0)

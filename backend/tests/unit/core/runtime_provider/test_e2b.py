@@ -360,6 +360,7 @@ async def test_destroy_workspace_removes_from_dict(
 async def test_destroy_workspace_unknown_is_noop() -> None:
     provider = E2BRuntimeProvider(api_key="sk-test")
     await provider.destroy_workspace("nonexistent")  # should not raise
+    assert await provider.get_workspace_status("nonexistent") == "terminated"
 
 
 @pytest.mark.asyncio

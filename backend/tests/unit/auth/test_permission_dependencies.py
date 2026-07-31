@@ -66,7 +66,8 @@ class TestRequirePermission:
     @pytest.mark.asyncio
     async def test_admin_allowed(self) -> None:
         dep = require_permission("pipeline.graph.update")
-        await dep.dependency(principal=_tenant("admin"))
+        result = await dep.dependency(principal=_tenant("admin"))
+        assert result.org_role == "admin"
 
     @pytest.mark.asyncio
     async def test_viewer_denied(self) -> None:
@@ -151,7 +152,8 @@ class TestRequireTargetOrgRoleReads:
         dep = require_target_org_role("org.email.view", "operator")
         session = _make_session(role="operator")
 
-        await dep.dependency(_request(org_id=_ORG_A), current_user=_auth(), session=session)
+        outcome = await dep.dependency(_request(org_id=_ORG_A), current_user=_auth(), session=session)
+        assert outcome.account_id == _ACCOUNT
 
     @pytest.mark.asyncio
     async def test_non_member_denied(self) -> None:
@@ -208,7 +210,8 @@ class TestRequireTargetOrgRoleMutations:
         dep = require_target_org_role("org.email.manage", "admin")
         session = _make_session(role="admin")
 
-        await dep.dependency(_request(org_id=_ORG_A), current_user=_auth(), session=session)
+        outcome = await dep.dependency(_request(org_id=_ORG_A), current_user=_auth(), session=session)
+        assert outcome.account_id == _ACCOUNT
 
     @pytest.mark.asyncio
     async def test_target_org_operator_denied(self) -> None:
