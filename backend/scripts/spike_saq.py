@@ -328,7 +328,6 @@ async def check8_ttl_semantics(redis: aioredis.Redis, q: RedisQueue) -> None:
     key = "run:ttl"
     job = await q.enqueue("spike_slow", key=key, ttl=300, timeout=5)
     pttl_enqueue = await redis.pttl(job.id)  # plain SET at enqueue -> -1 (no expiry)
-    await redis.zscore(f"saq:{QUEUE_NAME}:incomplete", job.id)
     # simulate start-origin: worker sets ACTIVE via plain SET -> still no TTL
     job.status = Status.ACTIVE
     job.started = int(time.time() * 1000)
