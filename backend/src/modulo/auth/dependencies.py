@@ -12,6 +12,7 @@ from modulo.settings import Settings, get_settings
 _log = logging.getLogger(__name__)
 
 _bearer = HTTPBearer()
+_bearer_optional = HTTPBearer(auto_error=False)
 
 
 class InvalidToken(HTTPException):
@@ -118,6 +119,72 @@ async def get_current_tenant_user(
         account_id=current_user.account_id,
         org_role=current_user.org_role,
         is_system_admin=current_user.is_system_admin,
+    )
+
+
+async def get_current_tenant_user_or_api_key(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_optional),
+    settings: Settings = Depends(get_settings),
+) -> TenantPrincipal:
+    """Tenant principal from either a user JWT or an org API key (``mk_``).
+
+    API keys are the documented credential for CI/CD and external agents
+    (PRD §9.3 / §5.2): ``runner`` keys can trigger runs and call read
+    endpoints; ``operator`` keys additionally approve HITL gates. This
+    dependency is only wired into run trigger/read routes — write endpoints
+    keep requiring a user JWT so API keys cannot modify pipelines.
+
+    For JWT credentials the behaviour is identical to
+    :func:`get_current_tenant_user`.
+    """
+    if credentials is None:
+        raise InvalidToken()
+
+    token = credentials.credentials
+    if token.startswith("mk_"):
+        from modulo.api.dependencies import (
+            get_or_create_engine,
+            get_or_create_session_factory,
+        )
+        from modulo.auth.api_key import ApiKeyInvalidError, validate_api_key
+
+        engine = get_or_create_engine(settings)
+        factory = get_or_create_session_factory(engine)
+        try:
+            async with factory() as session, session.begin():
+                key = await validate_api_key(session, token)
+        except ApiKeyInvalidError:
+            raise InvalidToken() from None
+        if key.role not in ("runner", "operator"):
+            raise InvalidToken()
+        return TenantPrincipal(
+            username=key.name,
+            organisation_id=key.organisation_id,
+            account_id=key.account_id,
+            org_role=key.role,
+            is_system_admin=False,
+        )
+
+    try:
+        principal = decode_principal(token, settings.secret_key)
+    except JWTError as exc:
+        _log.warning(
+            "auth.jwt_decode_failed",
+            extra={"token_prefix": token[:10] + "...", "error": str(exc)},
+        )
+        raise InvalidToken() from exc
+
+    if principal.organisation_id is None or principal.org_role is None:
+        raise OrganisationMembershipRequired()
+
+    await _verify_identity(principal)
+
+    return TenantPrincipal(
+        username=principal.username,
+        organisation_id=principal.organisation_id,
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+        is_system_admin=principal.is_system_admin,
     )
 
 
