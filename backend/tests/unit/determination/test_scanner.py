@@ -62,7 +62,7 @@ _LINEAR_API = "https://api.linear.app/graphql"
 
 
 @respx.mock
-async def test_github_scan():
+async def test_github_scan() -> None:
     ci = _fake_ci("github", creds={"token": "ghp_test"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -85,7 +85,7 @@ async def test_github_scan():
 
 
 @respx.mock
-async def test_gitlab_scan():
+async def test_gitlab_scan() -> None:
     ci = _fake_ci("gitlab", creds={"token": "glpat_test"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -101,7 +101,7 @@ async def test_gitlab_scan():
 
 
 @respx.mock
-async def test_jira_scan():
+async def test_jira_scan() -> None:
     ci = _fake_ci(
         "jira",
         creds={"email": "user@test.com", "api_token": "token"},
@@ -124,7 +124,7 @@ async def test_jira_scan():
 
 
 @respx.mock
-async def test_linear_scan():
+async def test_linear_scan() -> None:
     ci = _fake_ci("linear", creds={"api_key": "lin_key"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -172,7 +172,7 @@ async def test_linear_scan():
 
 
 @respx.mock
-async def test_filesystem_connector_skipped():
+async def test_filesystem_connector_skipped() -> None:
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -184,7 +184,7 @@ async def test_filesystem_connector_skipped():
 
 
 @respx.mock
-async def test_health_check_failure_still_attempts_queries():
+async def test_health_check_failure_still_attempts_queries() -> None:
     ci = _fake_ci("github", creds={"token": "bad_token"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -200,14 +200,14 @@ async def test_health_check_failure_still_attempts_queries():
 
 
 @respx.mock
-async def test_empty_hub_returns_no_samples():
+async def test_empty_hub_returns_no_samples() -> None:
     hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     samples = await run_scan(hub)
     assert len(samples) == 0
 
 
 @respx.mock
-async def test_connector_query_error_returns_error_in_sample():
+async def test_connector_query_error_returns_error_in_sample() -> None:
     ci = _fake_ci("github", creds={"token": "ghp_test"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -220,3 +220,48 @@ async def test_connector_query_error_returns_error_in_sample():
     errored = [s for s in samples if s.error]
     assert len(errored) == 1
     assert "500" in errored[0].error
+
+
+@respx.mock
+async def test_connector_with_no_repos_produces_repos_sample() -> None:
+    ci = _fake_ci("github", creds={"token": "ghp_test"})
+    hub = _hub(ci)
+    await hub.initialise([ci])
+
+    respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
+    respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[]))
+
+    samples = await run_scan(hub)
+    assert len(samples) >= 1
+    resources = {s.resource for s in samples}
+    assert "repos" in resources
+
+
+@respx.mock
+async def test_multiple_connectors_scanned_independently() -> None:
+    ci1 = _fake_ci("github", creds={"token": "ghp_one"})
+    ci2 = _fake_ci("github", creds={"token": "ghp_two"})
+    hub = _hub(ci1)
+    await hub.initialise([ci1, ci2])
+
+    respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
+    respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[{"full_name": "owner/repo1"}]))
+    respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(httpx.Response(200, json=[]))
+
+    samples = await run_scan(hub)
+    assert len(samples) >= 1
+    assert all(s.error is None for s in samples)
+
+
+@respx.mock
+async def test_all_health_checks_fail_returns_error_samples() -> None:
+    ci = _fake_ci("github", creds={"token": "bad_token"})
+    hub = _hub(ci)
+    await hub.initialise([ci])
+
+    respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(401, text="Unauthorized"))
+    respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(401, text="Unauthorized"))
+
+    samples = await run_scan(hub)
+    assert len(samples) > 0
+    assert any(s.error for s in samples)
