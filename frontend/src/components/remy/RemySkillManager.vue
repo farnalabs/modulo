@@ -53,7 +53,7 @@
         rows="4"
       />
       <div class="flex gap-2 justify-end">
-        <Button variant="ghost" size="sm" @click="cancelForm">Cancel</Button>
+        <Button variant="ghost" size="sm" @click="cancelForm">{{ $t('common.cancel') }}</Button>
         <Button size="sm" :disabled="!form.name.trim() || saving" @click="saveSkill">{{
           editingId ? "Update" : "Create"
         }}</Button>

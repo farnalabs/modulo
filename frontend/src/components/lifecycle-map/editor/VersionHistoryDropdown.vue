@@ -13,7 +13,7 @@
       v-if="open"
       class="absolute left-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card shadow-lg"
     >
-      <div class="border-b px-3 py-2 text-xs font-medium text-muted-foreground">Version History</div>
+      <div class="border-b px-3 py-2 text-xs font-medium text-muted-foreground">{{ $t('components.lifecycle-map.editor.VersionHistoryDropdown.version_history') }}</div>
       <div class="max-h-48 overflow-y-auto">
         <button
           v-for="v in sortedVersions"

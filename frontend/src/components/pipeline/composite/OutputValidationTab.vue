@@ -118,7 +118,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
 
       <div class="grid grid-cols-2 gap-3">
         <div class="space-y-1">
-          <span class="text-xs text-muted-foreground">Name</span>
+          <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.name') }}</span>
           <Input
             :model-value="evalDef.name"
             :placeholder="$t('components.pipeline.composite.OutputValidationTab.eval_name')"
@@ -129,13 +129,13 @@ const evalCount = computed(() => props.evalDefinitions.length);
           />
         </div>
         <div class="space-y-1">
-          <span class="text-xs text-muted-foreground">Type</span>
+          <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.type') }}</span>
           <Select :model-value="evalDef.type" @update:model-value="(val) => updateEval(evalDef.id, {type: val as EvalConfig['type']})">
             <SelectTrigger class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm" aria-label="Eval type">
               <SelectValue placeholder="Select type" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="regex">Regex</SelectItem>
+              <SelectItem value="regex">{{ $t('components.pipeline.composite.OutputValidationTab.regex') }}</SelectItem>
               <SelectItem value="json_schema">{{ $t('components.pipeline.composite.OutputValidationTab.json_schema') }}</SelectItem>
               <SelectItem value="llm_judge">{{ $t('components.pipeline.composite.OutputValidationTab.llm_judge') }}</SelectItem>
             </SelectContent>
@@ -150,16 +150,16 @@ const evalCount = computed(() => props.evalDefinitions.length);
             <SelectValue placeholder="Select behaviour" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="retry">Retry</SelectItem>
-            <SelectItem value="block">Block</SelectItem>
-            <SelectItem value="warn">Warn</SelectItem>
+            <SelectItem value="retry">{{ $t('components.pipeline.composite.OutputValidationTab.retry') }}</SelectItem>
+            <SelectItem value="block">{{ $t('components.pipeline.composite.OutputValidationTab.block') }}</SelectItem>
+            <SelectItem value="warn">{{ $t('components.pipeline.composite.OutputValidationTab.warn') }}</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       <template v-if="evalDef.type === 'regex'">
         <div class="space-y-1">
-          <span class="text-xs text-muted-foreground">Field</span>
+          <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.field') }}</span>
           <Input
             :model-value="String(evalDef.config.field ?? '')"
             :placeholder="$t('components.pipeline.composite.OutputValidationTab.output_field_name')"
@@ -170,7 +170,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
           />
         </div>
         <div class="space-y-1">
-          <label for="outputvalidationtab-field-4" class="text-xs text-muted-foreground">Pattern</label>
+          <label for="outputvalidationtab-field-4" class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.pattern') }}</label>
           <textarea id="outputvalidationtab-field-4"
             :value="String(evalDef.config.pattern ?? '')"
             class="bg-background border-input focus-visible:border-ring h-20 w-full rounded-lg border px-2.5 py-1.5 text-sm font-mono resize-none outline-none"
@@ -187,7 +187,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
 
       <template v-else-if="evalDef.type === 'json_schema'">
         <div class="space-y-1">
-          <span class="text-xs text-muted-foreground">Field (optional)</span>
+          <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.field_optional') }}</span>
           <Input
             :model-value="String(evalDef.config.field ?? '')"
             placeholder="output field name (leave blank for entire output)"
@@ -198,7 +198,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
           />
         </div>
         <div class="space-y-1">
-          <label for="outputvalidationtab-field-3" class="text-xs text-muted-foreground">Schema (JSON)</label>
+          <label for="outputvalidationtab-field-3" class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.schema_json') }}</label>
           <textarea id="outputvalidationtab-field-3"
             :value="JSON.stringify(evalDef.config.schema ?? {}, null, 2)"
             class="bg-background border-input focus-visible:border-ring h-28 w-full rounded-lg border px-2.5 py-1.5 text-sm font-mono resize-none outline-none"
@@ -210,7 +210,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
 
       <template v-else-if="evalDef.type === 'llm_judge'">
         <div class="space-y-1">
-          <label for="outputvalidationtab-field-2" class="text-xs text-muted-foreground">Rubric</label>
+          <label for="outputvalidationtab-field-2" class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.rubric') }}</label>
           <textarea id="outputvalidationtab-field-2"
             :value="String(evalDef.config.rubric ?? '')"
             class="bg-background border-input focus-visible:border-ring h-20 w-full rounded-lg border px-2.5 py-1.5 text-sm resize-none outline-none"

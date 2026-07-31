@@ -10,7 +10,7 @@
         >
           <LogoMark :size="24" transparent />
         </div>
-        <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
+        <h2 class="text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
           <Badge v-if="planStore.currentTier" variant="outline" class="text-[10px] px-1.5 py-0 leading-none opacity-70">
             {{ planStore.getTierLabel(planStore.currentTier) }}
           </Badge>
@@ -111,7 +111,7 @@
         >
           <LogoMark :size="24" transparent />
         </div>
-        <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
+        <h2 class="text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
         <Badge v-if="planStore.currentTier" variant="outline" class="text-[10px] px-1.5 py-0 leading-none opacity-70">
           {{ planStore.getTierLabel(planStore.currentTier) }}
         </Badge>

@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-4">
     <div>
-      <label for="nodecategoryeditor-field-5" class="mb-1 block text-sm font-medium">Name</label>
+      <label for="nodecategoryeditor-field-5" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.name') }}</label>
       <input id="nodecategoryeditor-field-5"
         v-model="form.name"
         type="text"
@@ -11,7 +11,7 @@
     </div>
 
     <div>
-      <label for="nodecategoryeditor-field-4" class="mb-1 block text-sm font-medium">Description</label>
+      <label for="nodecategoryeditor-field-4" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.description') }}</label>
       <textarea id="nodecategoryeditor-field-4"
         v-model="form.description"
         rows="3"
@@ -21,7 +21,7 @@
     </div>
 
     <div>
-      <label for="nodecategoryeditor-field-3" class="mb-1 block text-sm font-medium">Color</label>
+      <label for="nodecategoryeditor-field-3" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.color') }}</label>
       <div class="flex items-center gap-3">
         <input id="nodecategoryeditor-field-3"
           v-model="form.color"
@@ -39,25 +39,25 @@
     </div>
 
     <div>
-      <label for="nodecategoryeditor-field-2" class="mb-1 block text-sm font-medium">Icon</label>
+      <label for="nodecategoryeditor-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.icon') }}</label>
       <Select v-model="form.icon">
         <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Icon">
-          <SelectValue placeholder="None" />
+          <SelectValue :placeholder="$t('components.NodeCategoryEditor.none')" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="__all__">None</SelectItem>
-          <SelectItem value="bot">Bot</SelectItem>
-          <SelectItem value="database">Database</SelectItem>
-          <SelectItem value="globe">Globe</SelectItem>
-          <SelectItem value="mail">Mail</SelectItem>
+          <SelectItem value="__all__">{{ $t('components.NodeCategoryEditor.none') }}</SelectItem>
+          <SelectItem value="bot">{{ $t('components.NodeCategoryEditor.bot') }}</SelectItem>
+          <SelectItem value="database">{{ $t('components.NodeCategoryEditor.database') }}</SelectItem>
+          <SelectItem value="globe">{{ $t('components.NodeCategoryEditor.globe') }}</SelectItem>
+          <SelectItem value="mail">{{ $t('components.NodeCategoryEditor.mail') }}</SelectItem>
           <SelectItem value="message-circle">{{ $t('components.NodeCategoryEditor.message_circle') }}</SelectItem>
-          <SelectItem value="refresh-cw">Refresh</SelectItem>
-          <SelectItem value="search">Search</SelectItem>
-          <SelectItem value="settings">Settings</SelectItem>
-          <SelectItem value="sliders">Sliders</SelectItem>
-          <SelectItem value="terminal">Terminal</SelectItem>
-          <SelectItem value="upload">Upload</SelectItem>
-          <SelectItem value="zap">Zap</SelectItem>
+          <SelectItem value="refresh-cw">{{ $t('components.NodeCategoryEditor.refresh') }}</SelectItem>
+          <SelectItem value="search">{{ $t('common.search') }}</SelectItem>
+          <SelectItem value="settings">{{ $t('components.NodeCategoryEditor.settings') }}</SelectItem>
+          <SelectItem value="sliders">{{ $t('components.NodeCategoryEditor.sliders') }}</SelectItem>
+          <SelectItem value="terminal">{{ $t('components.NodeCategoryEditor.terminal') }}</SelectItem>
+          <SelectItem value="upload">{{ $t('components.NodeCategoryEditor.upload') }}</SelectItem>
+          <SelectItem value="zap">{{ $t('components.NodeCategoryEditor.zap') }}</SelectItem>
         </SelectContent>
       </Select>
     </div>
