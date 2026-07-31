@@ -151,7 +151,7 @@ async def check_pipeline_run_quota(session: AsyncSession, group: VariantGroup) -
 
     Returns True if a new run is allowed, False if quota is exceeded.
     """
-    active = await count_active_runs_for_pipeline(session, group.pipeline_id)
+    active = await count_active_runs_for_pipeline(session, group.pipeline_id, include_pending=True)
     return active < group.max_concurrent_runs
 
 
