@@ -1,6 +1,9 @@
 """Unit tests for cron expression validation and next-fire computation."""
 
 import datetime
+from zoneinfo import ZoneInfoNotFoundError
+
+import pytest
 
 from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
 
@@ -23,13 +26,17 @@ class TestValidateCronExpression:
 
     def test_invalid_expression_returns_error(self):
         err = validate_cron_expression("not-a-cron")
-        assert err is not None
-        assert "columns" in err or "invalid" in err.lower()
+        assert err == "Exactly 5, 6 or 7 columns has to be specified for iterator expression."
+
+    def test_empty_expression_returns_error(self):
+        err = validate_cron_expression("")
+        assert "columns" in err
 
     def test_invalid_range_field(self):
         # Hour field "25" is out of range 0-23
         err = validate_cron_expression("0 25 * * *")
         assert err is not None
+        assert "out of range" in err
 
     def test_valid_with_timezone(self):
         assert validate_cron_expression("0 9 * * *", "America/New_York") is None
@@ -37,7 +44,7 @@ class TestValidateCronExpression:
     def test_invalid_timezone_returns_error(self):
         err = validate_cron_expression("0 9 * * *", "Mars/Olympus")
         assert err is not None
-        assert "timezone" in err.lower()
+        assert err.startswith("Invalid timezone:")
 
 
 class TestComputeNextFire:
@@ -80,6 +87,20 @@ class TestComputeNextFire:
     def test_next_fire_without_after_defaults_to_now(self):
         result = compute_next_fire("* * * * *")
         assert result > datetime.datetime.now(datetime.UTC)
+
+    def test_naive_after_interpreted_as_utc(self):
+        result = compute_next_fire("0 9 * * *", after=datetime.datetime(2026, 1, 1, 8, 0, 0))
+        assert result == datetime.datetime(2026, 1, 1, 9, 0, tzinfo=datetime.UTC)
+
+    def test_invalid_expression_raises(self):
+        with pytest.raises(ValueError):
+            compute_next_fire("not-a-cron")
+
+    def test_invalid_timezone_raises(self):
+        with pytest.raises(ZoneInfoNotFoundError):
+            compute_next_fire(
+                "0 9 * * *", after=datetime.datetime(2026, 1, 1, 8, tzinfo=datetime.UTC), timezone="Mars/Olympus"
+            )
 
     def test_new_york_winter_and_summer_offsets(self):
         winter = compute_next_fire(
