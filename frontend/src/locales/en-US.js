@@ -1176,7 +1176,8 @@ export default {
       "error_forwarders": "Error Forwarders",
       "error_forwarders_are_not_available_on_your_current_plan": "Error forwarders are not available on your current plan.",
       "configure_external_error_tracking_and_alerting_integrations": "Configure external error tracking and alerting integrations",
-      "configuration_saved": "Configuration saved."
+      "configuration_saved": "Configuration saved.",
+      "not_configured": "Not configured"
     },
     "SettingsEmailView": {
       "email_settings": "Email Settings",

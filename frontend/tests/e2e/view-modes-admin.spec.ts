@@ -28,7 +28,7 @@ const sampleViews = {
 }
 
 test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
-  test('page loads and shows header + Create View button', async ({ page, env }) => {
+  test('page loads and shows header + Create View button', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
@@ -41,7 +41,7 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await expect(page.getByTestId('admin-views-add')).toContainText('Create View')
   })
 
-  test('shows loading state while fetching views', async ({ page, env }) => {
+  test('shows loading state while fetching views', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', async (route) => {
       await new Promise(r => setTimeout(r, 3000))
@@ -54,7 +54,7 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await expect(spinner).toBeVisible({ timeout: 5000 })
   })
 
-  test('shows error with retry button on API failure', async ({ page, env }) => {
+  test('shows error with retry button on API failure', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'Server error' }) })
@@ -66,7 +66,7 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await expect(page.getByTestId('admin-views-error')).toBeVisible({ timeout: 5000 })
   })
 
-  test('shows empty state when no views exist', async ({ page, env }) => {
+  test('shows empty state when no views exist', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
@@ -78,7 +78,7 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await expect(page.locator('text=Learn about saved views')).toBeVisible()
   })
 
-  test('create a new view with all fields', async ({ page, env }) => {
+  test('create a new view with all fields', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'Uses selectOption on non-native select - view type dropdown is not a <select> element')
     let createdPayload: unknown = null
     await loginAsAdmin(page, env)
@@ -117,7 +117,7 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     })
   })
 
-  test('shows validation error when name is empty', async ({ page, env }) => {
+  test('shows validation error when name is empty', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
@@ -133,7 +133,7 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     expect(validationMessage).toBeTruthy()
   })
 
-  test('cancel create form clears fields', async ({ page, env }) => {
+  test('cancel create form clears fields', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
@@ -151,7 +151,7 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await expect(page.getByTestId('admin-views-add')).toBeVisible()
   })
 
-  test('edit an existing view shows pre-populated fields', async ({ page, env }) => {
+  test('edit an existing view shows pre-populated fields', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'Uses selectOption on non-native select - view type dropdown is not a <select> element')
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', (route) => {
@@ -173,7 +173,7 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await expect(page.getByTestId('admin-views-sort-order-select')).toHaveValue('desc')
   })
 
-  test('delete a view with confirmation', async ({ page, env }) => {
+  test('delete a view with confirmation', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'Uses selectOption on non-native select - view type dropdown is not a <select> element')
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', async (route, request) => {
@@ -205,7 +205,7 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await expect(page.getByTestId('admin-views-delete-confirm')).not.toBeVisible({ timeout: 3000 })
   })
 
-  test('displays existing views in table', async ({ page, env }) => {
+  test('displays existing views in table', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })

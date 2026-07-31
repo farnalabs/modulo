@@ -33,7 +33,7 @@
               <span
                 v-if="!fwd.configured"
                 class="rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-600"
-              >Not configured</span>
+              >{{ $t('views.SettingsErrorForwardersView.not_configured') }}</span>
               <button
                 type="button"
                 class="relative inline-flex h-6 w-11 cursor-pointer items-center"

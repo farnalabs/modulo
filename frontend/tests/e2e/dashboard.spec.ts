@@ -7,7 +7,7 @@ test.describe('Dashboard', () => {
     await expect(page).toHaveURL(/\/login/)
   })
 
-  test('displays dashboard heading when authenticated', async ({ page, env }) => {
+  test('displays dashboard heading when authenticated', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.reload()
 
