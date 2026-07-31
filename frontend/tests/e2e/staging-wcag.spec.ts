@@ -5,7 +5,7 @@ const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 const knownViolations = new Set(['color-contrast'])
 
 test.describe('WCAG AA audit (local)', { tag: "@regression" }, () => {
-  test('login page has no WCAG AA violations', { tag: '@regression' }, async ({ page }) => {
+  test('login page has no WCAG AA violations', { tag: "@regression" }, async ({ page }) => {
     test.setTimeout(30000)
     await page.goto('/login')
 
@@ -28,7 +28,7 @@ test.describe('WCAG AA audit (local)', { tag: "@regression" }, () => {
   ]
 
   for (const pagePath of authedPages) {
-    test(`${pagePath} has no WCAG AA violations when authenticated`, async ({ page, env }) => {
+    test(`${pagePath} has no WCAG AA violations when authenticated`, { tag: "@regression" }, async ({ page, env }) => {
       test.setTimeout(30000)
       await loginAsAdmin(page, env)
 

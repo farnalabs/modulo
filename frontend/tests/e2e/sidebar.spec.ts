@@ -14,7 +14,7 @@ test.describe('Sidebar Navigation', () => {
     expect(headerCount).toBeGreaterThanOrEqual(2)
   })
 
-  test('sidebar link navigates to the correct page', { tag: '@regression' }, async ({ page, env }) => {
+  test('sidebar link navigates to the correct page', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
     await page.goto('/')
@@ -26,7 +26,7 @@ test.describe('Sidebar Navigation', () => {
     await expect(page).toHaveURL(/\/library/)
   })
 
-  test('all sidebar links have visible labels', { tag: '@regression' }, async ({ page, env }) => {
+  test('all sidebar links have visible labels', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
     await page.goto('/')

@@ -1,7 +1,7 @@
 ﻿import { test, expect, setupLocalMockApi, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Admin Create User', { tag: ['@regression'] }, () => {
-  test('opens create user dialog and submits user creation', { tag: '@regression' }, async ({ page, env }) => {
+  test('opens create user dialog and submits user creation', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
     await setupLocalMockApi(page)
     await loginAsAdmin(page, env)
@@ -25,7 +25,7 @@ test.describe('Admin Create User', { tag: ['@regression'] }, () => {
     await expect(page.getByRole('dialog')).not.toBeVisible()
   })
 
-  test('shows validation error for invalid email', { tag: '@regression' }, async ({ page, env }) => {
+  test('shows validation error for invalid email', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
     await setupLocalMockApi(page)
     await loginAsAdmin(page, env)
@@ -44,7 +44,7 @@ test.describe('Admin Create User', { tag: ['@regression'] }, () => {
     await expect(page.getByText('Please enter a valid email address')).toBeVisible()
   })
 
-  test('fills create user form via keyboard Enter', { tag: '@regression' }, async ({ page, env }) => {
+  test('fills create user form via keyboard Enter', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
     await setupLocalMockApi(page)
     await loginAsAdmin(page, env)

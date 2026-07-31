@@ -1,7 +1,7 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Settings HITL Review', { tag: "@regression" }, () => {
-  test('page loads with correct heading', { tag: '@regression' }, async ({ page, env }) => {
+  test('page loads with correct heading', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/hitl-review')
     await expect(page.locator('h1')).toBeVisible()
@@ -12,7 +12,7 @@ test.describe('Settings HITL Review', { tag: "@regression" }, () => {
 })
 
 test.describe('Settings Browser Monitoring', { tag: "@regression" }, () => {
-  test('page loads with correct heading', { tag: '@regression' }, async ({ page, env }) => {
+  test('page loads with correct heading', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/monitoring')
     await expect(page.locator('h1')).toBeVisible()
@@ -20,7 +20,7 @@ test.describe('Settings Browser Monitoring', { tag: "@regression" }, () => {
 })
 
 test.describe('Settings Rate Limits', { tag: "@regression" }, () => {
-  test('page loads with correct heading', { tag: '@regression' }, async ({ page, env }) => {
+  test('page loads with correct heading', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/rate-limits')
     await expect(page.locator('h1')).toBeVisible()
@@ -31,7 +31,7 @@ test.describe('Settings Rate Limits', { tag: "@regression" }, () => {
 })
 
 test.describe('Settings Remy Skills', { tag: "@regression" }, () => {
-  test('page loads with correct heading', { tag: '@regression' }, async ({ page, env }) => {
+  test('page loads with correct heading', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/remy')
     await expect(page.locator('h1')).toBeVisible()
@@ -42,7 +42,7 @@ test.describe('Settings Remy Skills', { tag: "@regression" }, () => {
 })
 
 test.describe('Settings Runtime Config', { tag: "@regression" }, () => {
-  test('page loads with correct heading', { tag: '@regression' }, async ({ page, env }) => {
+  test('page loads with correct heading', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/settings/runtime-config')
     await expect(page.locator('h1')).toBeVisible()

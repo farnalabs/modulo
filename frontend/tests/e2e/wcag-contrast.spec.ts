@@ -16,7 +16,7 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
   ]
 
   for (const { path, name } of pages) {
-    test(`${name} â€” light mode has no unexpected WCAG AA violations`, { tag: '@regression' }, async ({ page }) => {
+    test(`${name} â€” light mode has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page }) => {
       await page.goto(path)
       await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
@@ -33,7 +33,7 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
         document.documentElement.classList.add('light')
         document.documentElement.classList.remove('dark')
       })
-      await page.evaluate(() => new Promise(requestAnimationFrame))
+      await page.evaluate(() => new Promise(r => requestAnimationFrame(r)))
 
       const results = await new AxeBuilder({ page })
         .withTags(WCAG_TAGS)
@@ -51,7 +51,7 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
       expect(violations).toEqual([])
     })
 
-    test(`${name} â€” dark mode has no unexpected WCAG AA violations`, { tag: '@regression' }, async ({ page }) => {
+    test(`${name} â€” dark mode has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page }) => {
       await page.goto(path)
       await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
@@ -68,7 +68,7 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
         document.documentElement.classList.remove('light')
         document.documentElement.classList.remove('dark')
       })
-      await page.evaluate(() => new Promise(requestAnimationFrame))
+      await page.evaluate(() => new Promise(r => requestAnimationFrame(r)))
 
       const results = await new AxeBuilder({ page })
         .withTags(WCAG_TAGS)

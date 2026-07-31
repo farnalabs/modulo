@@ -1,7 +1,7 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Navigation Flow', { tag: "@regression" }, () => {
-  test('navigates from Dashboard to Pipelines', { tag: '@regression' }, async ({ page, env }) => {
+  test('navigates from Dashboard to Pipelines', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'Requires a pipeline in the database')
     await loginAsAdmin(page, env)
 
@@ -15,7 +15,7 @@ test.describe('Navigation Flow', { tag: "@regression" }, () => {
     await expect(page.locator('h1')).toBeVisible()
   })
 
-  test('current page indicator is shown on active sidebar link', { tag: '@regression' }, async ({ page, env }) => {
+  test('current page indicator is shown on active sidebar link', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
     await page.goto('/')
@@ -25,7 +25,7 @@ test.describe('Navigation Flow', { tag: "@regression" }, () => {
     await expect(dashboardLink).toHaveAttribute('aria-current', 'page')
   })
 
-  test('browser back navigation works between pages', { tag: '@regression' }, async ({ page, env }) => {
+  test('browser back navigation works between pages', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
     await page.goto('/')
