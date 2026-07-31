@@ -1,5 +1,6 @@
 """Unit tests for RedisSlidingWindowRateLimiter and RateLimiterRegistry."""
 
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -35,14 +36,36 @@ class TestRedisSlidingWindowRateLimiter:
         assert call_args is not None
         redis_key = call_args[0][0]
         assert redis_key == "rl:mykey"
+        pipe.zremrangebyscore.assert_called_once()
+        assert pipe.zremrangebyscore.call_args[0][0] == "rl:mykey"
 
     async def test_uses_custom_window(self, mock_redis):
         limiter = RedisSlidingWindowRateLimiter(mock_redis)
         await limiter.check("k", max_requests=5, window_s=120)
         pipe = mock_redis.pipeline.return_value
         pipe.zremrangebyscore.assert_called_once()
-        args = pipe.zremrangebyscore.call_args[0]
-        assert args[0] is not None
+        _, _, cutoff = pipe.zremrangebyscore.call_args[0]
+        now = time.time()
+        assert abs(cutoff - (now - 120)) < 2
+
+    async def test_expires_key_at_double_window(self, mock_redis):
+        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+        await limiter.check("k", max_requests=5, window_s=120)
+        pipe = mock_redis.pipeline.return_value
+        pipe.expire.assert_called_once()
+        assert pipe.expire.call_args[0][0] == "ratelimit:k"
+        assert pipe.expire.call_args[0][1] == 240
+
+    async def test_records_timestamp_member(self, mock_redis):
+        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+        await limiter.check("k", max_requests=5)
+        pipe = mock_redis.pipeline.return_value
+        pipe.zadd.assert_called_once()
+        _, member = pipe.zadd.call_args[0]
+        ((ts, score),) = member.items()
+        now = time.time()
+        assert abs(score - now) < 2
+        assert ts == str(score)
 
 
 class TestRateLimiterRegistry:
@@ -58,3 +81,7 @@ class TestRateLimiterRegistry:
         mock_redis.pipeline.return_value.execute = AsyncMock(return_value=redis_result)
         registry = RateLimiterRegistry(redis_client=mock_redis)
         assert await registry.check("k", max_requests=5) is expected
+
+    def test_requires_redis_client(self):
+        with pytest.raises(ValueError, match="requires a Redis client"):
+            RateLimiterRegistry(redis_client=None)
