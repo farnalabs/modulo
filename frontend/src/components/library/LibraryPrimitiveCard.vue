@@ -69,7 +69,6 @@
     <div class="flex items-center gap-2 mt-auto">
       <button
         v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
-        variant="default"
         class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
         @click="$emit('create-pipeline', prim)"
         data-testid="library-create-pipeline"

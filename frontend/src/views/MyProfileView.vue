@@ -15,7 +15,7 @@
       </div>
 
       <div v-if="profile.created_at" class="text-sm text-muted-foreground">
-        Member since {{ formatMemberSince(profile.created_at) }}
+        {{ $t('views.MyProfileView.member_since', { date: formatMemberSince(profile.created_at) }) }}
       </div>
     </div>
 
@@ -77,20 +77,14 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import type { components } from '../lib/api/client'
 import { formatDateShort } from '../lib/formatDate'
 
 const { t } = useI18n()
 
-interface Profile {
-  id: string
-  email: string
-  display_name: string
-  org_role: string
-  active: boolean
-  created_at: string
-}
+type Profile = components['schemas']['modulo__api__routes__auth__MeResponse']
 
-const EMPTY_PROFILE: Profile = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '' }
+const EMPTY_PROFILE: Profile = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '', is_system_admin: false }
 
 const profile = ref<Profile>({ ...EMPTY_PROFILE })
 const currentPassword = ref('')
@@ -120,8 +114,8 @@ async function loadProfile() {
       return
     }
     if (data) {
-      const { id, email, display_name, org_role, active, created_at } = data
-      profile.value = { id, email, display_name, org_role, active, created_at }
+      const { id, email, display_name, org_role, active, created_at, is_system_admin } = data
+      profile.value = { id, email, display_name, org_role, active, created_at, is_system_admin }
     }
   } catch (e) {
     console.warn('Failed to load profile', e)
