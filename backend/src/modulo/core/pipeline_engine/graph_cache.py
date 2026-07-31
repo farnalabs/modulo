@@ -280,7 +280,7 @@ def build_graph_from_json(
     for node_def in nodes:
         node_id: str = str(node_def["id"])
         role: str | None = node_def.get("role")
-        timeout: int = node_def.get("timeout_seconds")
+        timeout: int | None = node_def.get("timeout_seconds")
         if timeout is None:
             timeout = pipeline_node_timeout_seconds
         node_type: str = node_def.get("node_type", "agent")
