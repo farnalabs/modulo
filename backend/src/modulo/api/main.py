@@ -743,9 +743,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     get_runtime_config_store()
 
-    # Cron scheduling runs in-process via run_scheduler().  Celery beat
-    # has async event-loop conflicts with the async DB engine and is not
-    # used -- Celery workers handle pipeline execution only.
+    # RUNNING ALONGSIDE Celery beat during Phase 1 transition.
+    # TODO: Remove in Phase 2 (after beat is confirmed healthy).
     _scheduler_stop = asyncio.Event()
     _scheduler_task = asyncio.create_task(run_scheduler(_scheduler_stop))
     _scheduler_task.add_done_callback(
