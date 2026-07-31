@@ -1,5 +1,4 @@
-﻿
-# ADR 017 — Centralized Authorization: Shared Permission Registry for REST + MCP
+# ADR 018 — Centralized Authorization: Shared Permission Registry for REST + MCP
 
 **Date**: 2026-07-31
 **Status**: v9 — revised after 7 plan-review-iterate cycles. **Iterations 6 and 7 both returned zero Criticals** (4 of the last 5 iterations clean on criticals; iteration 5's 2 criticals confirmed fixed). Iteration 7 flagged that several remaining items are implementation seams real tests will surface, not design holes. v9 resolves the iteration-7 majors: CSRF exemption keeps audited parameterized prefixes (a pure exact-path switch would 403 webhook/login in prod); kill-switch mechanism corrected (`jsonb_set` cannot target a `JSON` column — dedicated boolean column instead); B collapses to a single PR (the per-resource split's security value didn't hold and its allowlist was the false-negative hazard AC1 exists to remove); consent UX deferred to minimal-correct (approve POST IS the consent — no consent page/deny affordance for zero users); alias-removal consumer inventory completed (Remy runtime + frontend + 6 more test files + PRD ~12 refs). **Declared converged: the design is stable; remaining work is implementation with the documented test strategy.**
