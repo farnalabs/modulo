@@ -144,6 +144,26 @@ See [`docs/security/secret-management.md`](./security/secret-management.md) for 
 
 ---
 
+## Health Checks
+
+Per-check timeout limits for `/healthz/ready` dependency probes. The global
+value (`MODULO_HEALTH_TIMEOUT_SECONDS`) applies to every check unless a
+per-check override is set to a positive value.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_HEALTH_TIMEOUT_SECONDS` | No | `5` | Global timeout for each readiness dependency check (seconds) |
+| `MODULO_HEALTH_DB_TIMEOUT_SECONDS` | No | `0` | Database check timeout; `0` = use global |
+| `MODULO_HEALTH_REDIS_TIMEOUT_SECONDS` | No | `0` | Redis check timeout; `0` = use global |
+| `MODULO_HEALTH_CHECKPOINTER_TIMEOUT_SECONDS` | No | `0` | Checkpointer schema check timeout; `0` = use global |
+| `MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS` | No | `0` | Alembic migration check timeout; `0` = use global |
+
+A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations)
+or `unavailable` (database) with a "timed out after Ns" detail message instead of
+blocking readiness indefinitely.
+
+---
+
 ## Migration CLI
 
 | Variable | Required | Default | Description |
