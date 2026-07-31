@@ -48,7 +48,7 @@
         </div>
         <div v-else-if="connectorsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{{ connectorsError }}</div>
         <div v-else-if="connectors.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          No connectors found. <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary underline">{{ $t('views.OnboardingWizard.create_one') }}</a> first, then come back.
+          {{ $t('views.OnboardingWizard.no_connectors_found') }} <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary underline">{{ $t('views.OnboardingWizard.create_one') }}</a> {{ $t('views.OnboardingWizard.first_then_come_back') }}
         </div>
         <div v-else class="space-y-2">
           <span class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.select_connector_instance') }}</span>
