@@ -125,13 +125,15 @@ describe('SidebarNav', () => {
     expect(headers.map((h) => h.text())).not.toContain('MONITOR')
   })
 
-  it('renders no groups when every group is filtered out', async () => {
+  it('keeps groups with unrestricted items visible when tier info is not loaded', async () => {
     const { wrapper, store } = mountSidebar()
     store.tierRanks = {}
     store.devMode = false
     await flushPromises()
-    // core keeps dashboard/runs unrestricted, so use an admin-only world
-    expect(wrapper.find('.sidebar-group-header').exists()).toBe(true)
+    // core's dashboard/runs are unrestricted, so BUILD still renders even though
+    // tier info has not loaded and dev mode is off
+    const labels = wrapper.findAll('.sidebar-group-header').map((h) => h.text())
+    expect(labels).toContain('BUILD')
   })
 
   it('persists group collapse state and honours it across mounts', async () => {
