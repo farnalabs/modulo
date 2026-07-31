@@ -10,10 +10,10 @@ bdd:
   - backend/tests/bdd/features/teams/stale_jwt_revocation.feature
 unit-tests:
   - backend/tests/unit/auth/test_jwt.py
-  - backend/tests/unit/api/test_jwt_security_bdd.py
+  - backend/tests/bdd/steps/test_jwt_security.py
   - backend/tests/unit/api/test_ws_token.py
   - backend/tests/unit/auth/test_settings.py
-  - backend/tests/unit/api/test_auth_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 depends-on: []
 status: partial
 ---

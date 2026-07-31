@@ -11,7 +11,7 @@ code:
   - frontend/src/components/OwnershipPicker.vue
   - frontend/src/views/LibraryPipelineWizard.vue
 unit-tests:
-  - backend/tests/unit/api/test_ownership_picker_bdd.py
+  - backend/tests/bdd/steps/test_ownership_picker.py
 depends-on: [feat-teams-team-ownership]
 status: partial
 ---

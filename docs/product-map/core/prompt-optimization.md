@@ -17,7 +17,7 @@ unit-tests:
   - backend/tests/unit/api/test_agent_prompt_versioning.py
   - backend/tests/unit/api/test_agent_prompts.py
   - backend/tests/unit/core/prompt_optimizer/test_prompt_optimizer.py
-  - backend/tests/unit/api/test_prompt_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 status: partial
 ---
 

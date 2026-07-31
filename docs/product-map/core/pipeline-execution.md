@@ -16,8 +16,7 @@ code:
   - backend/src/modulo/api/routes/stages.py
 unit-tests:
   - backend/tests/unit/core/test_pipeline_engine.py
-  - backend/tests/unit/api/test_pipeline_execution_programming_error.py
-  - backend/tests/unit/api/test_stage_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 depends-on: [feat-core-agent-model, feat-core-schema-system, feat-core-trigger-system]
 status: partial
 ---

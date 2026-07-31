@@ -15,7 +15,7 @@ code:
 depends-on: [feat-evals-feedback-records, feat-evals-feedback-routing]
 unit-tests:
   - backend/tests/unit/api/test_feedback_endpoint.py
-  - backend/tests/unit/api/test_feedback_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
   - backend/tests/integration/feedback_manager/test_feedback_flow.py
 status: partial

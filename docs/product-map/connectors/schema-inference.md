@@ -10,7 +10,7 @@ unit-tests:
   - backend/tests/unit/api/test_schema_infer_endpoint.py
   - backend/tests/unit/core/test_schema_migration.py
   - backend/tests/unit/core/test_schema_validation.py
-  - backend/tests/unit/api/test_schema_infer_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/api/test_schema_generate_endpoint.py
 code:
   - backend/src/modulo/core/connector_hub/__init__.py

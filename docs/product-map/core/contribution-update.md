@@ -14,7 +14,7 @@ code:
 depends-on: [feat-core-contribution-provenance]
 unit-tests:
   - backend/tests/unit/api/test_contributions.py
-  - backend/tests/unit/api/test_contributions_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 status: covered
 ---
 

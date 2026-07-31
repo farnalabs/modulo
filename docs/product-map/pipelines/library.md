@@ -21,7 +21,7 @@ unit-tests:
   - backend/tests/unit/library_service/test_library_service.py
   - backend/tests/unit/library_service/test_composite_library.py
   - backend/tests/unit/api/test_library_endpoint.py
-  - backend/tests/unit/api/test_library_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/mcp/test_library_list_resource.py
   - backend/tests/unit/mcp/test_library_detail_resource.py
   - backend/tests/unit/mcp/test_browse_library.py

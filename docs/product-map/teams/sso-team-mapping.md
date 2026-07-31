@@ -12,7 +12,7 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_admin_sso.py
   - backend/tests/unit/auth/test_sso.py
-  - backend/tests/unit/auth/test_sso_team_mapping_bdd.py
+  - backend/tests/bdd/steps/test_sso_team_mapping.py
 depends-on: [feat-teams-team-crud, feat-auth-sso-provider-ui]
 status: partial
 ---

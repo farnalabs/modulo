@@ -4,7 +4,7 @@ prd: 8.6
 delivery-tasks: []
 bdd: [backend/tests/bdd/features/library/tiering.feature]
 code:
-  - backend/src/modulo/db/migrations/versions/0062_add_integration_tier.py
+  - backend/src/modulo/db/migrations/versions/0005_v2_features_system.py
   - backend/src/modulo/db/models/connector_instance.py
   - backend/src/modulo/db/models/model_backend.py
   - backend/src/modulo/db/models/library_primitive.py
@@ -120,3 +120,7 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 - **Connector/ModelBackend tiering still lacks BDD coverage.** Only library primitives have BDD scenarios (`tiering.feature` — 2 scenarios covering create-with-tier and default-tier). Connector and ModelBackend tier creation/sorting lacks BDD coverage entirely.
 - **No dedicated migration rollback test** — `0062_add_integration_tier` has a `downgrade()` but no automated test exercises drop-and-recreate of the `tier` column/constraint.
 - **`ConnectorResponse.tier` is typed as `str` not `Literal`.** An invalid DB value would serialize to JSON correctly but a subsequent PATCH round-trip would fail Pydantic validation with 422. Consider using `Literal` on response models or adding a `@field_validator`.
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE ref: migration `0062_add_integration_tier.py` was renamed in the v2 squash → `0005_v2_features_system.py` (creates `tier_catalog` + tier gating).
