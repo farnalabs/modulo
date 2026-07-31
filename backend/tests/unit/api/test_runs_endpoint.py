@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.routes.runs import RunNotFoundError, _validate_run_input_basics
-from modulo.auth.dependencies import get_current_user, get_current_tenant_user_or_api_key
+from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 

@@ -79,12 +79,12 @@ async def test_api_key_invalid_raises_401() -> None:
             return_value=_FakeFactory(AsyncMock()),
         ),
         patch("modulo.auth.api_key.validate_api_key", side_effect=ApiKeyInvalidError("bad key")),
+        pytest.raises(InvalidToken),
     ):
-        with pytest.raises(InvalidToken):
-            await get_current_tenant_user_or_api_key(
-                credentials=_credentials(_KEY),
-                settings=settings,
-            )
+        await get_current_tenant_user_or_api_key(
+            credentials=_credentials(_KEY),
+            settings=settings,
+        )
 
 
 @pytest.mark.asyncio
@@ -97,12 +97,12 @@ async def test_api_key_admin_role_is_rejected() -> None:
             return_value=_FakeFactory(AsyncMock()),
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("admin")),
+        pytest.raises(InvalidToken),
     ):
-        with pytest.raises(InvalidToken):
-            await get_current_tenant_user_or_api_key(
-                credentials=_credentials(_KEY),
-                settings=settings,
-            )
+        await get_current_tenant_user_or_api_key(
+            credentials=_credentials(_KEY),
+            settings=settings,
+        )
 
 
 @pytest.mark.asyncio
