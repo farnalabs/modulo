@@ -203,13 +203,21 @@ def require_target_org_role(permission: str, min_role: str) -> DependsParameter:
     Reads variant: ``org.email.view``/``org.license.view`` at ``operator``.
     Mutations variant: ``org.email.manage`` at ``admin``.
 
+    ``min_role`` must equal the permission's registry-resolved role
+    (``PERMISSIONS`` is the single source of truth); a mismatch is a
+    configuration error and fails fast at factory-creation time.
+
     .. code-block:: python
 
        _: AuthenticatedPrincipal = Depends(require_target_org_role("org.email.view", "operator"))
     """
-    resolve_required(permission)
+    resolved = resolve_required(permission)
     if min_role not in ORG_ROLE_HIERARCHY:
         raise PermissionConfigurationError(f"min_role '{min_role}' is not a valid org role")
+    if min_role != resolved:
+        raise PermissionConfigurationError(
+            f"min_role '{min_role}' for '{permission}' does not match the registry-resolved role '{resolved}'",
+        )
 
     async def _check(
         request: Request,

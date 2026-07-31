@@ -226,6 +226,13 @@ class TestRequireTargetOrgRoleMutations:
         with pytest.raises(PermissionConfigurationError):
             require_target_org_role("org.email.manage", "superadmin")
 
+    @pytest.mark.asyncio
+    async def test_min_role_mismatch_with_registry_is_configuration_error(self) -> None:
+        from modulo.auth.permissions import PermissionConfigurationError
+
+        with pytest.raises(PermissionConfigurationError):
+            require_target_org_role("org.email.manage", "operator")
+
 
 def _request(org_id: uuid.UUID) -> MagicMock:
     request = MagicMock()
