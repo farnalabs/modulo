@@ -7,13 +7,12 @@ Usage:
 import asyncio
 import uuid
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-
 from modulo.core.library_service import _MODULO_PRIMITIVES
 from modulo.db.crud.library_primitive import create_library_primitive
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.settings import get_settings
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -34,7 +33,6 @@ async def seed() -> None:
                 )
             ).scalar_one_or_none()
             if existing is not None:
-                print(f"  SKIP  {template.name} — already exists")
                 continue
 
             await create_library_primitive(
@@ -61,11 +59,9 @@ async def seed() -> None:
                 visibility="org",
                 account_id=ACCOUNT_ID,
             )
-            print(f"  CREATED  {template.name}")
 
         await session.commit()
     await engine.dispose()
-    print(f"\nSeeded {len(templates)} pipeline template definitions.")
 
 
 if __name__ == "__main__":

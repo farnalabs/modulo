@@ -8,10 +8,9 @@ Requires DATABASE_URL env var or a running modulo instance with settings loaded.
 
 import asyncio
 
+from modulo.settings import get_settings
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-
-from modulo.settings import get_settings
 
 TIERS = [
     {
@@ -220,7 +219,6 @@ async def seed() -> None:
             )
         await session.commit()
     await engine.dispose()
-    print("Tier catalog seeded successfully.")
 
 
 if __name__ == "__main__":

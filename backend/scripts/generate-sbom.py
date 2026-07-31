@@ -10,7 +10,6 @@ Usage:
 
 import argparse
 import json
-import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -167,9 +166,8 @@ def main():
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(output + "\n", encoding="utf-8")
-        print(f"SBOM written to {output_path.resolve()}", file=sys.stderr)
     else:
-        print(output)
+        pass
 
 
 if __name__ == "__main__":

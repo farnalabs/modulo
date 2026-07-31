@@ -13,12 +13,11 @@ import sys
 import uuid
 from pathlib import Path
 
-from sqlalchemy import select
-
 from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.settings import Settings
+from sqlalchemy import select
 
 
 def build_fixture_map(
@@ -63,7 +62,6 @@ async def fetch_run_fixture_data(run_id: str) -> dict:
         run = result.scalar_one_or_none()
 
     if run is None:
-        print(f"Run {run_id} not found", file=sys.stderr)
         sys.exit(1)
 
     async with factory() as session:
@@ -104,7 +102,6 @@ def main() -> None:
     output_path = output_dir / f"{fixture['run_id']}.json"
     data = json.dumps(fixture, indent=2, default=str, ensure_ascii=False) + "\n"
     output_path.write_text(data, encoding="utf-8")
-    print(f"Fixture written to {output_path.resolve()}", file=sys.stderr)
 
 
 if __name__ == "__main__":

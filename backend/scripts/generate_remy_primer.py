@@ -18,11 +18,7 @@ import argparse
 import asyncio
 import logging
 import re
-import sys
 from pathlib import Path
-
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from modulo.core.manifest import get_manifest
 from modulo.db.models import (
@@ -34,6 +30,8 @@ from modulo.db.models import (
     Pipeline,
 )
 from modulo.settings import get_settings
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 _log = logging.getLogger(__name__)
 
@@ -454,9 +452,8 @@ async def main() -> None:
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(primer, encoding="utf-8")
-        print(f"Primer written to {out_path}", file=sys.stderr)
     else:
-        print(primer)
+        pass
 
 
 if __name__ == "__main__":
