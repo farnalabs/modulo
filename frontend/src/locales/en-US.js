@@ -32,6 +32,7 @@ export default {
       "pipeline_templates": "Pipeline Templates",
       "search_primitives": "Search modules...",
       "no_primitives_found": "No modules found",
+      "all_types": "All types",
       "preview_integrations_count": "{count} preview integration | {count} preview integrations",
       "preview_badge": "Preview",
       "native_library": "Native Library",
@@ -41,6 +42,7 @@ export default {
       "modulo_badge": "Modulo",
       "community_badge": "Community — not verified",
       "type_workflows": "Workflows",
+      "type_pipeline_templates": "Pipeline Templates",
       "type_agents": "Agents",
       "type_schemas": "Schemas",
       "type_integrations": "Integrations",
@@ -863,7 +865,8 @@ export default {
       "primitivename_pipeline_from_template": "Pipeline (from template)",
       "choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi": "Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.",
       "owner": "Owner",
-      "pipeline_created_from_library_template": "Pipeline created from library template"
+      "pipeline_created_from_library_template": "Pipeline created from library template",
+      "back_to_library": "Back to Library"
     },
     "SettingsMcpView": {
       "mcp_server_is_not_available_on_your_current_plan": "MCP server is not available on your current plan."
@@ -1396,7 +1399,9 @@ export default {
       "close_navigation": "Close navigation",
       "open_navigation": "Open navigation",
       "all_features": "All Features",
-      "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'"
+      "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'",
+      "remy_performing_actions": "Remy is performing actions on this page",
+      "remy_stop": "Stop"
     },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",
@@ -1649,7 +1654,37 @@ export default {
   },
   "nav": {
     "environment-profiles": "Environment Profiles",
-    "parameter-schemas": "Parameter Schemas"
+    "parameter-schemas": "Parameter Schemas",
+    "eval_proposals": "Proposals",
+    "variant_compare": "Variants",
+    "ab_test_models": "AB Test",
+    "browser_monitoring": "Browser Monitoring",
+    "error_dashboard": "Error Dashboard",
+    "notification_log": "Notification Log",
+    "api_changelog": "API Changelog",
+    "team_comparison": "Team Comparison",
+    "schema_editor": "Editor",
+    "schema_infer": "Infer",
+    "sso": "SSO",
+    "teams": "Teams",
+    "audit_log": "Audit Log",
+    "org_settings": "Org Settings",
+    "hitl_review": "HITL Review",
+    "remy_skills": "Remy Skills",
+    "environments": "Environments",
+    "run_retention": "Run Retention",
+    "saved_views": "Saved Views",
+    "node_categories": "Node Categories",
+    "email_settings": "Email Settings",
+    "plugins": "Plugins",
+    "error_forwarders": "Error Forwarders",
+    "housekeeping": "Housekeeping",
+    "mcp": "MCP",
+    "runtime_config": "Runtime Config",
+    "env_profiles": "Env Profiles",
+    "spend_limits": "Spend Limits",
+    "cost_controls": "Cost Controls",
+    "rate_limits": "Rate Limits"
   },
   "OnboardingBanner": {
     "set_up_modulo": "Set up Modulo",
