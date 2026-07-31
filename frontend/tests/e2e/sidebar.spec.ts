@@ -44,4 +44,3 @@ test.describe('Sidebar Navigation', () => {
     }
   })
 })
-

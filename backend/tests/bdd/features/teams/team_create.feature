@@ -42,4 +42,3 @@ Feature: Team Creation
     When I POST /api/teams with name "new-team" and description "Fresh team"
     Then the response status is 201
     And the team has 0 members
-

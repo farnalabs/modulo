@@ -349,4 +349,3 @@ jobs:
         run: |
           Write-Host "::error::Smoke tests against production failed."
           exit 1
-

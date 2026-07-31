@@ -295,6 +295,48 @@ class TestExportOrg:
         assert "not found" in result.output
 
 
+# ── Paginated collection tests ──────────────────────────────────────────────
+
+
+class TestCollectOrgDataPagination:
+    async def test_paginates_large_tables(self, org_id: uuid.UUID) -> None:
+        from modulo.cli.migrate import _PAGE_SIZE, _collect_org_data
+
+        async def fake_execute(_stmt: object) -> object:
+            calls.append(1)
+            page = (len(calls) - 1) % 3
+            if page == 0:
+                return FakeResult([MockModel(id=uuid.UUID(int=i)) for i in range(1, _PAGE_SIZE + 1)])
+            if page == 1:
+                return FakeResult([MockModel(id=uuid.UUID(int=i)) for i in range(_PAGE_SIZE + 1, _PAGE_SIZE * 2 + 1)])
+            return FakeResult([])
+
+        class FakeResult:
+            def __init__(self, rows: list[MockModel]) -> None:
+                self._rows = rows
+
+            def scalars(self) -> "FakeResult":
+                return self
+
+            def all(self) -> list[MockModel]:
+                return self._rows
+
+        calls: list[int] = []
+        session = MagicMock()
+        session.execute = fake_execute
+
+        with patch("modulo.cli.migrate.get_organisation", new_callable=AsyncMock) as mock_get_org:
+            mock_get_org.return_value = MockModel(id=org_id, name="Test Org")
+            bundle = await _collect_org_data(session, org_id)
+
+        table_count = 7  # one entry per table in _MODEL_MAP
+        assert len(calls) == table_count * 3  # two non-empty pages + one empty terminator per table
+        for table in ("accounts", "pipelines", "runs", "audit_events"):
+            assert len(bundle[table]) == _PAGE_SIZE * 2
+            ids = [int(row["id"].replace("-", ""), 16) for row in bundle[table]]
+            assert ids == sorted(ids)
+
+
 # ── Import command tests ─────────────────────────────────────────────────────
 
 
