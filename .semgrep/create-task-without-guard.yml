@@ -6,7 +6,7 @@ rules:
           async def $F(...):
               ...
       - pattern-not-inside: |
-          @$DECORATOR
+          @$DECORATOR(...)
           async def $F(...):
               ...
       - pattern-not-inside: |
