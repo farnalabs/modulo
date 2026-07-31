@@ -110,7 +110,7 @@
                       type="text"
                       data-testid="schema-editor-name"
                       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      placeholder="My Schema"
+                      :placeholder="$t('views.SchemaEditorView.name_placeholder')"
                     />
                   </div>
                   <div>
@@ -120,7 +120,7 @@
                       type="text"
                       data-testid="schema-editor-description"
                       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      placeholder="Optional description"
+                      :placeholder="$t('views.SchemaEditorView.description_placeholder')"
                     />
                   </div>
                   <div>
@@ -130,7 +130,7 @@
                       type="text"
                       data-testid="schema-editor-version"
                       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      placeholder="1.0.0"
+                      :placeholder="$t('views.SchemaEditorView.version_placeholder')"
                     />
                   </div>
                 </div>
@@ -192,14 +192,14 @@
                               type="text"
                               data-testid="schema-editor-field-name"
                               class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              placeholder="field_name"
+                              :placeholder="$t('views.SchemaEditorView.field_name_placeholder')"
                             />
                           </div>
                           <div>
                             <label for="schemaeditorview-field-type" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
                             <Select v-model="field.type">
-                              <SelectTrigger id="schemaeditorview-field-type" class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Field type" data-testid="schema-editor-field-type">
-                                <SelectValue placeholder="Select type" />
+                              <SelectTrigger id="schemaeditorview-field-type" class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('views.SchemaEditorView.field_type_aria')" data-testid="schema-editor-field-type">
+                                <SelectValue :placeholder="$t('views.SchemaEditorView.select_type')" />
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectItem value="string">string</SelectItem>
@@ -220,7 +220,7 @@
                               type="text"
                               data-testid="schema-editor-field-description"
                               class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              placeholder="Optional"
+                              :placeholder="$t('views.SchemaEditorView.optional')"
                             />
                           </div>
                           <div>
@@ -230,7 +230,7 @@
                               type="text"
                               data-testid="schema-editor-field-default"
                               class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              placeholder="Optional"
+                              :placeholder="$t('views.SchemaEditorView.optional')"
                             />
                           </div>
                         </div>
@@ -450,7 +450,7 @@ const jsonPreview = computed(() => {
 
   const schema: Record<string, unknown> = {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
-    title: schemaName.value || 'Untitled Schema',
+    title: schemaName.value || t('views.SchemaEditorView.untitled_schema'),
     type: 'object',
     properties,
   }
