@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: read
+      actions: write
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
@@ -330,6 +330,17 @@ jobs:
           done
 
           echo "failed_gh_merge=$(echo "$FAILED" | xargs)" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger main CI and deploy after merge
+        if: success() && steps.merge.outputs.merged_count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Merges landed on main - dispatching CI and deploy workflows..."
+          gh workflow run ci.yml --ref main
+          gh workflow run deploy.yml --ref main
+          echo "Dispatched 'CI: Fast Validation' and 'Deploy: Staging + Prod' on main."
 
       - name: Clean up remote merge-queue branch
         if: success() && steps.merge.outputs.merged_count != '0'
