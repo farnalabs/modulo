@@ -22,16 +22,15 @@ Connection budget (per prefork child):
 """
 
 import asyncio
-import contextlib
 import logging
 import threading
-import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Engine, create_engine, text
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.orm import Session
+
+from modulo.core.pipeline_execution import execute_run, stale_run_recovery_sweep
 
 try:
     import kombu
@@ -224,7 +223,15 @@ class ExecuteRunTask(Task):  # type: ignore[misc]
         if _worker_loop is None:
             _worker_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(_worker_loop)
-        _worker_loop.run_until_complete(_do_execute(run_id, org_id, self))
+        _worker_loop.run_until_complete(
+            execute_run(
+                sync_engine=_get_sync_engine(),
+                async_engine=_get_async_engine(),
+                run_id=run_id,
+                org_id=org_id,
+                legacy_claim=True,
+            )
+        )
 
     def on_failure(self, exc, task_id, args, kwargs, einfo) -> None:  # type: ignore[no-untyped-def]
         run_id = args[0] if args else None
@@ -251,204 +258,21 @@ class ExecuteRunTask(Task):  # type: ignore[misc]
             _log.exception("on_failure handler failed for run %s", run_id)
 
 
-async def _do_execute(run_id: str, org_id: str, _task_instance: Task) -> None:
-    """Execute a single pipeline run from claim through completion."""
-    aeng = _get_async_engine()
-    rid = uuid.UUID(run_id)
-    oid = uuid.UUID(org_id)
-
-    claimed = _claim_run(str(rid), str(oid))
-    if not claimed:
-        _log.warning("Run %s not claimed â€” already handled or in wrong state", run_id)
-        return
-
-    cur, executor = await _load_and_setup(aeng, rid, oid)
-    if cur is None:
-        return
-
-    heartbeat_task: asyncio.Task[Any] | None = None
-    try:
-        heartbeat_task = asyncio.create_task(
-            _heartbeat_loop(str(rid), str(oid)),
-            name=f"heartbeat-{run_id}",
-        )
-        await executor.execute(run_id=rid, org_id=oid, input_payload=cur.input_payload or {})
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception("Pipeline execution failed for run %s", run_id)
-    finally:
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat_task
-
-    await _mark_complete(aeng, str(rid), str(oid))
-
-
-def _claim_run(run_id: str, org_id: str) -> bool:
-    """Claim a pending or stale-running run via atomic SQL update.
-
-    Returns True if the row was claimed, False if already handled.
-    """
-    try:
-        with _get_sync_engine().connect() as c, c.begin():
-            result = c.execute(
-                text(
-                    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
-                    "WHERE id=:rid AND organisation_id=:oid "
-                    "AND (status = 'pending' "
-                    "     OR (status = 'running' AND heartbeat_at < now() - interval '3 minutes')) "
-                    "AND claim_count < 5 "
-                    "RETURNING id"
-                ),
-                {"rid": run_id, "oid": org_id},
-            )
-            return result.fetchone() is not None
-    except Exception:
-        _log.exception("Claim failed for run %s", run_id)
-        return False
-
-
-async def _load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID) -> tuple[Any, Any]:
-    """Load the Run and create PipelineExecutor with checkpointer."""
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
-    from modulo.db.crud.run import get_run
-
-    factory = async_sessionmaker(aeng, expire_on_commit=False)
-    async with factory() as session, session.begin():
-        await _set_rls_org(session, oid)
-        cur = await get_run(session, rid)
-        if cur is None:
-            _log.warning("Run %s not found during load", rid)
-            return None, None
-
-    settings = _get_settings()
-    conn_string = str(settings.database_url).replace("+asyncpg", "").replace("+psycopg", "")
-    executor = PipelineExecutor(aeng, checkpointer_conn_string=conn_string)
-    return cur, executor
-
-
-async def _heartbeat_loop(run_id: str, org_id: str) -> None:
-    """Periodic heartbeat every 30s to keep the run alive."""
-    aeng = _get_async_engine()
-    while True:
-        try:
-            await asyncio.sleep(30)
-            async with aeng.connect() as c:
-                await c.execute(
-                    text("SELECT set_config('app.organisation_id', :val, true)"),
-                    {"val": org_id},
-                )
-                await c.execute(
-                    text("UPDATE runs SET heartbeat_at=now() WHERE id=:rid"),
-                    {"rid": run_id},
-                )
-                await c.commit()
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            _log.warning("Heartbeat failed for run %s", run_id)
-
-
-async def _mark_complete(aeng: AsyncEngine, run_id: str, org_id: str) -> None:
-    """Mark the run as completed if it's still running (don't overwrite failure/cancellation)."""
-    factory = async_sessionmaker(aeng, expire_on_commit=False)
-    async with factory() as session, session.begin():
-        await _set_rls_org(session, uuid.UUID(org_id))
-        from modulo.db.crud.run import get_run
-
-        cur = await get_run(session, uuid.UUID(run_id))
-        if cur is not None and cur.status == "running":
-            cur.status = "completed"
-            cur.completed_at = datetime.now(UTC)
-
-
-async def _set_rls_org(session: Any, org_id: uuid.UUID) -> None:
-    dialect = session.get_bind().dialect.name
-    if dialect == "postgresql":
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :val, true)"),
-            {"val": str(org_id)},
-        )
-    else:
-        session.info["organisation_id"] = org_id
-
-
 class StaleRunRecoveryTask(Task):  # type: ignore[misc]
     """Beat periodic task that recovers stale runs every 5 minutes.
 
     Handles two scenarios:
       1. Never-dispatched pending runs (created in error, no worker ever picked them up)
       2. Stale running runs (worker crashed without Celery detecting the loss)
+
+    Delegates to the shared sweep in modulo.core.pipeline_execution.
     """
 
     name = "modulo.pipeline.stale_run_recovery"
     ignore_result = True
 
     def run(self) -> dict[str, Any]:
-        return asyncio.run(_stale_run_recovery_sweep())
-
-
-async def _stale_run_recovery_sweep() -> dict[str, Any]:
-    """Sweep stale pending and running pipeline runs.
-
-    Uses the shared async engine (not a dedicated engine) -- the sweep is a
-    periodic beat task that runs every 5 minutes and does not compete with
-    execution for pool slots.
-
-    - Pending runs older than 5 minutes with no ``dispatched_at`` are marked
-      ``failed`` with ``never_dispatched``.
-    - Running runs with a heartbeat older than 10 minutes and 5+ claims are
-      marked ``failed`` with ``worker_lost``.
-    """
-    _, async_engine = _get_engines()
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    try:
-        async with factory() as session, session.begin():
-            never_result = await session.execute(
-                text("""
-                    UPDATE runs
-                    SET status = 'failed',
-                        error_code = 'never_dispatched',
-                        completed_at = now()
-                    WHERE status = 'pending'
-                      AND created_at < now() - interval '5 minutes'
-                      AND dispatched_at IS NULL
-                """)
-            )
-            never_count = never_result.rowcount  # type: ignore[attr-defined]
-
-            lost_result = await session.execute(
-                text("""
-                    UPDATE runs
-                    SET status = 'failed',
-                        error_code = 'worker_lost',
-                        completed_at = now()
-                    WHERE status = 'running'
-                      AND heartbeat_at < now() - interval '10 minutes'
-                      AND claim_count >= 5
-                """)
-            )
-            lost_count = lost_result.rowcount  # type: ignore[attr-defined]
-
-        if never_count or lost_count:
-            _log.info(
-                "Stale run recovery: %d never-dispatched, %d worker-lost runs swept",
-                never_count,
-                lost_count,
-            )
-        return {
-            "never_dispatched_swept": never_count,
-            "worker_lost_swept": lost_count,
-        }
-    except Exception:
-        _log.exception("Stale run recovery sweep failed")
-        return {
-            "never_dispatched_swept": 0,
-            "worker_lost_swept": 0,
-            "error": "sweep_failed",
-        }
+        return asyncio.run(stale_run_recovery_sweep(_get_async_engine()))
 
 
 class SchedulerDBError(Exception):
