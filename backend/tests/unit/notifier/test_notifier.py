@@ -1,5 +1,7 @@
 """Unit tests for Notifier dispatch, HMAC signing, retry, and dead-letter logic."""
 
+import hashlib
+import hmac
 import json
 import uuid
 from typing import Any
@@ -107,9 +109,65 @@ async def test_get_subscribed_endpoints_skips_unsubscribed() -> None:
     assert len(found) == 0
 
 
-async def test_get_subscribed_endpoints_skips_auto_disabled() -> None:
-    found = await _get_endpoints_for_event([])
-    assert len(found) == 0
+async def test_get_subscribed_endpoints_filters_auto_disabled_in_query() -> None:
+    """The generated query excludes auto-disabled endpoints (SQL-level filter)."""
+    result = MagicMock()
+    result.scalars.return_value.__iter__ = lambda self: iter([_fake_endpoint()])
+
+    session = AsyncMock()
+    _configure_rls_session(session)
+    executed: list[Any] = []
+
+    async def _capture(stmt: Any) -> MagicMock:
+        executed.append(stmt)
+        return result
+
+    session.execute = AsyncMock(side_effect=_capture)
+
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    n = Notifier(MagicMock(), _KEY)
+    with patch.object(n, "_session_factory", factory):
+        found = await n._get_subscribed_endpoints(_ORG, "hitl_awaiting")
+
+    assert len(found) == 1
+    assert executed, "expected an executed query"
+    assert "auto_disabled" in str(executed[0])
+
+
+# ---------------------------------------------------------------------------
+# _filter_subscribed
+# ---------------------------------------------------------------------------
+
+
+def _make_filter_endpoint(events: Any) -> NotificationEndpoint:
+    ep = _fake_endpoint()
+    ep.events = events
+    return ep
+
+
+def test_filter_subscribed_accepts_list() -> None:
+    ep = _make_filter_endpoint(["hitl_awaiting", "run_failed"])
+    n = Notifier(MagicMock(), _KEY)
+    assert n._filter_subscribed([ep], "run_failed") == [ep]
+    assert n._filter_subscribed([ep], "hitl_overdue") == []
+
+
+def test_filter_subscribed_parses_json_string_events() -> None:
+    ep = _make_filter_endpoint('["hitl_awaiting","run_failed"]')
+    n = Notifier(MagicMock(), _KEY)
+    assert n._filter_subscribed([ep], "run_failed") == [ep]
+
+
+def test_filter_subscribed_skips_unparseable_events() -> None:
+    ep = _make_filter_endpoint("not-json")
+    n = Notifier(MagicMock(), _KEY)
+    assert n._filter_subscribed([ep], "run_failed") == []
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +184,26 @@ async def test_sign_payload_returns_hmac(notifier: Notifier) -> None:
     assert len(sig) > len(expected)
 
 
+async def test_sign_payload_matches_expected_hmac(notifier: Notifier) -> None:
+    ep = _fake_endpoint(secret="test-secret")
+    body = b'{"hello":"world"}'
+
+    sig = await notifier._sign_payload(body, ep)
+    expected_digest = hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
+    assert sig == f"sha256={expected_digest}"
+
+
 async def test_sign_payload_empty_when_no_secret(notifier: Notifier) -> None:
     ep = _fake_endpoint(secret=None)
+
+    sig = await notifier._sign_payload(b"data", ep)
+    assert sig == ""
+
+
+async def test_sign_payload_empty_when_secret_corrupt(notifier: Notifier) -> None:
+    """A ciphertext that cannot be decrypted must produce no signature."""
+    ep = _fake_endpoint(secret="test-secret")
+    ep.secret_ciphertext = b"not-valid-fernet-ciphertext"
 
     sig = await notifier._sign_payload(b"data", ep)
     assert sig == ""
@@ -242,7 +318,67 @@ async def test_dispatch_retains_payload_when_requested(notifier: Notifier) -> No
             respx.post(ep.url).mock(Response(200))
             await _do_dispatch(notifier, ep, retain_payload=True)
 
-    assert record_kwargs.get("payload_ciphertext") is not None
+    ciphertext = record_kwargs.get("payload_ciphertext")
+    assert ciphertext is not None
+    body = json.dumps(
+        {
+            "event": "hitl_awaiting",
+            "payload": {"run_id": str(_RUN)},
+        },
+        default=str,
+        separators=(",", ":"),
+    ).encode()
+    assert Fernet(_KEY.encode()).decrypt(ciphertext) == body
+
+
+async def test_dispatch_does_not_retain_payload_unless_requested(notifier: Notifier) -> None:
+    ep = _fake_endpoint()
+    record_kwargs: dict[str, Any] = {}
+
+    async def _record(
+        endpoint: Any,
+        event_type: str,
+        run_id: Any,
+        status: str,
+        attempt_count: int,
+        response_code: Any,
+        last_error: Any,
+        payload_ciphertext: Any,
+    ) -> None:
+        record_kwargs.update(payload_ciphertext=payload_ciphertext)
+
+    with (
+        patch.object(notifier, "_record_delivery", _record),
+        patch.object(notifier, "_increment_dead_letter", AsyncMock()),
+        patch.object(notifier, "_reset_dead_letter", AsyncMock()),
+    ):
+        async with respx.mock:
+            respx.post(ep.url).mock(Response(200))
+            await _do_dispatch(notifier, ep, retain_payload=False)
+
+    assert record_kwargs.get("payload_ciphertext") is None
+
+
+async def test_dispatch_429_honors_retry_after_before_dead_letter(notifier: Notifier) -> None:
+    """A 429 with Retry-After should use that delay instead of the default backoff."""
+    ep = _fake_endpoint()
+    sleeps: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    with (
+        patch.object(notifier, "_record_delivery", AsyncMock()),
+        patch.object(notifier, "_increment_dead_letter", AsyncMock()),
+        patch("modulo.core.notifier.asyncio.sleep", _fake_sleep),
+    ):
+        async with respx.mock:
+            respx.post(ep.url).mock(Response(429, headers={"Retry-After": "3"}))
+            result = await _do_dispatch(notifier, ep)
+
+    assert result.status == "dead_lettered"
+    assert sleeps, "expected at least one retry delay"
+    assert sleeps[0] == 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -433,3 +569,28 @@ async def test_get_subscribed_endpoints(
         found = await notifier._get_subscribed_endpoints(_ORG, "hitl_awaiting", team_id=team_id)
     assert len(found) == expected_count
     assert found[0].team_id == expected_team
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_init_raises_on_invalid_fernet_key() -> None:
+    with pytest.raises(ValueError, match="Invalid Fernet key"):
+        Notifier(MagicMock(), "not-a-valid-fernet-key-1234")
+
+
+async def test_close_noop_when_client_never_created() -> None:
+    notifier_instance = Notifier(MagicMock(), _KEY)
+    await notifier_instance.close()
+
+
+async def test_close_acloses_http_client() -> None:
+    notifier_instance = Notifier(MagicMock(), _KEY)
+    client = AsyncMock()
+    client.is_closed = False
+    notifier_instance._http_client = client
+    await notifier_instance.close()
+    client.aclose.assert_awaited_once()
+    assert notifier_instance._http_client is None
