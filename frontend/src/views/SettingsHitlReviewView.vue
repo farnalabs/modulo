@@ -205,10 +205,10 @@
                   <div v-if="gateStatus(gate) === 'rejected'" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
                     Gate was rejected. The pipeline was routed to the reject target.
                   </div>
-                  <div v-if="gateStatus(gate) === 'claimed' && currentClaimToken[expandKey(gate)]">
+                  <div v-if="gateStatus(gate) === 'claimed' && claimTokens[expandKey(gate)]">
                     <div class="rounded-lg bg-muted p-3 text-xs">
                       <p class="font-medium text-muted-foreground mb-1">Claim Token</p>
-                      <code class="break-all">{{ currentClaimToken[expandKey(gate)] }}</code>
+                      <code class="break-all">{{ claimTokens[expandKey(gate)] }}</code>
                     </div>
                   </div>
                 </div>
@@ -301,8 +301,6 @@ const refreshInterval = ref(30000)
 const refreshCountdown = ref(30)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
-
-const currentClaimToken = computed(() => claimTokens.value)
 
 function expandKey(gate: GateItem): string {
   return `${gate.run_id}:${gate.gate_id}`

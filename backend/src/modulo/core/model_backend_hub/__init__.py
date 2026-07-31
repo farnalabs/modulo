@@ -76,7 +76,7 @@ class ModelBackendHub:
     async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+    async def __aexit__(self, exc_type: object, exc_val: object, _exc_tb: object) -> None:
         if exc_type is not None:
             logger.exception("ModelBackendHub exiting due to error: %s", exc_val)
         self._backends.clear()

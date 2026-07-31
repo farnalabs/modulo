@@ -50,7 +50,6 @@ class TriggerEventListResponse(BaseModel):
 
 @router.get("", response_model=TriggerEventListResponse)
 @handle_db_errors("admin.triggers.list_trigger_events")
-@router.get("", response_model=TriggerEventListResponse)
 async def list_trigger_events(
     trigger_type: str | None = Query(None),
     validation_result: str | None = Query(None),

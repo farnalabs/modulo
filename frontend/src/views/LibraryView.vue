@@ -45,7 +45,7 @@
                   class="rounded border-input"
                   @change="toggleType(opt.value)"
                 />
-                {{ opt.label }}
+                {{ $t(opt.labelKey) }}
               </label>
             </div>
           </div>
@@ -346,6 +346,7 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
+import { useI18n } from 'vue-i18n'
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -377,6 +378,7 @@ interface ListResponse {
 
 const router = useRouter()
 const route = useRoute()
+const { t } = useI18n()
 
 const search = ref('')
 const selectedTypes = ref<string[]>([])
@@ -387,18 +389,22 @@ const pageSize = ref(12)
 const total = ref(0)
 
 const typeOptions = [
-  { value: 'pipeline_template', label: 'Pipeline Templates' },
-  { value: 'workflow', label: 'Workflows' },
-  { value: 'agent', label: 'Agents' },
-  { value: 'schema', label: 'Schemas' },
-  { value: 'integration', label: 'Integrations' },
-  { value: 'composite', label: 'Composites' },
+  { value: 'pipeline_template', labelKey: 'views.LibraryView.type_pipeline_templates' },
+  { value: 'workflow', labelKey: 'views.LibraryView.type_workflows' },
+  { value: 'agent', labelKey: 'views.LibraryView.type_agents' },
+  { value: 'schema', labelKey: 'views.LibraryView.type_schemas' },
+  { value: 'integration', labelKey: 'views.LibraryView.type_integrations' },
+  { value: 'composite', labelKey: 'views.LibraryView.type_composites' },
 ]
 
-const typeLabelMap = Object.fromEntries(typeOptions.map(o => [o.value, o.label]))
-
 function typeLabel(type: string): string {
-  return typeLabelMap[type] ?? type
+  const key = typeLabelKey(type)
+  const label = t(key)
+  return label !== key ? label : type
+}
+
+function typeLabelKey(type: string): string {
+  return typeOptions.find(o => o.value === type)?.labelKey ?? type
 }
 
 function toggleType(value: string) {
