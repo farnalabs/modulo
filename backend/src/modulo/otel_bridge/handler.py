@@ -171,7 +171,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
     def on_chain_start(
         self,
         serialized: dict[str, Any],
-        _inputs: dict[str, Any],
+        inputs: dict[str, Any],
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
@@ -338,7 +338,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
     def on_tool_start(
         self,
         serialized: dict[str, Any],
-        _input_str: str,
+        input_str: str,
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
