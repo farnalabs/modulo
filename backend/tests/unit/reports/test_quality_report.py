@@ -308,7 +308,8 @@ class TestFormatSlackMessage:
 # deliver_quality_report
 # ---------------------------------------------------------------------------
 
-# Patch _REPORT_MAX_RETRIES down to 1 to avoid retry delays in tests
+# Patch _REPORT_MAX_RETRIES down to 1 (or 2) and no-op asyncio.sleep so
+# tests never actually wait on the backoff/retry delays.
 _SCHEDULER_PATH = "modulo.core.reports.scheduler"
 
 
@@ -319,6 +320,7 @@ class TestDeliverQualityReport:
 
         with (
             patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch(f"{_SCHEDULER_PATH}.asyncio.sleep", new=AsyncMock()),
             patch.object(httpx, "AsyncClient") as mock_client_cls,
         ):
             mock_client = AsyncMock()
@@ -338,6 +340,7 @@ class TestDeliverQualityReport:
 
         with (
             patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch(f"{_SCHEDULER_PATH}.asyncio.sleep", new=AsyncMock()),
             patch.object(httpx, "AsyncClient") as mock_client_cls,
         ):
             mock_client = AsyncMock()
@@ -356,6 +359,7 @@ class TestDeliverQualityReport:
 
         with (
             patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch(f"{_SCHEDULER_PATH}.asyncio.sleep", new=AsyncMock()),
             patch.object(httpx, "AsyncClient") as mock_client_cls,
         ):
             mock_client = AsyncMock()
@@ -367,6 +371,31 @@ class TestDeliverQualityReport:
         assert len(results) == 1
         assert len(results[0]["error"]) == 200
 
+    async def test_retries_transient_5xx_then_succeeds(self) -> None:
+        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        recipient_config = {"webhook_urls": [url]}
+
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 2),
+            patch(f"{_SCHEDULER_PATH}.asyncio.sleep", new=AsyncMock()),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(
+                side_effect=[
+                    _mock_resp(is_success=False, status_code=503, text="retry me"),
+                    _mock_resp(),
+                ]
+            )
+
+            results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
+
+        assert mock_client.post.await_count == 2
+        assert len(results) == 1
+        assert results[0]["status"] == "delivered"
+        assert results[0]["status_code"] == 200
+
     async def test_single_url_failure_does_not_block_others(self) -> None:
         url1 = "https://hooks.slack.com/services/T1/B1/xxx"
         url2 = "https://hooks.slack.com/services/T1/B2/yyy"
@@ -374,6 +403,7 @@ class TestDeliverQualityReport:
 
         with (
             patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch(f"{_SCHEDULER_PATH}.asyncio.sleep", new=AsyncMock()),
             patch.object(httpx, "AsyncClient") as mock_client_cls,
         ):
             mock_client = AsyncMock()
@@ -398,6 +428,7 @@ class TestDeliverQualityReport:
 
         with (
             patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch(f"{_SCHEDULER_PATH}.asyncio.sleep", new=AsyncMock()),
             patch.object(httpx, "AsyncClient") as mock_client_cls,
         ):
             mock_client = AsyncMock()

@@ -31,6 +31,15 @@ class _PreservePublishers:
         _publishers.update(saved)
 
 
+class _PreserveRegistry:
+    @pytest.fixture(autouse=True)
+    def _preserve_registry(self):
+        saved = copy.deepcopy(_BUILTIN_REGISTRY)
+        yield
+        _BUILTIN_REGISTRY.clear()
+        _BUILTIN_REGISTRY.update(saved)
+
+
 class TestPublisherTrust(_PreservePublishers):
     def test_builtin_modulo_publisher_is_verified(self):
         entry = _BUILTIN_REGISTRY.get("modulo/prd-input-schema")
@@ -63,7 +72,7 @@ class TestPublisherTrust(_PreservePublishers):
         assert any(p.author == "modulo" for p in publishers)
 
 
-class TestSearchRanking:
+class TestSearchRanking(_PreserveRegistry):
     def test_popularity_score_higher_with_more_downloads(self):
         now = datetime.now(UTC)
         low = compute_popularity_score(10, None, 0, now)
@@ -84,14 +93,26 @@ class TestSearchRanking:
         assert recent_score > old_score
 
     def test_ranked_list_sorts_by_popularity(self):
+        first = _BUILTIN_REGISTRY["modulo/prd-input-schema"]
+        second = _BUILTIN_REGISTRY["modulo/prd-to-requirements"]
+        first.download_count = 5000
+        second.download_count = 10
+
         results = list_registry_primitives_ranked(sort_by="popularity")
         scores = [r["popularity_score"] for r in results]
         assert scores == sorted(scores, reverse=True)
+        assert results[0]["entry"].slug == first.slug
 
     def test_ranked_list_sorts_by_recent(self):
+        first = _BUILTIN_REGISTRY["modulo/prd-input-schema"]
+        second = _BUILTIN_REGISTRY["modulo/prd-to-requirements"]
+        first.published_at = datetime(2025, 6, 1, tzinfo=UTC)
+        second.published_at = datetime(2020, 1, 1, tzinfo=UTC)
+
         results = list_registry_primitives_ranked(sort_by="recent")
         dates = [r["entry"].published_at for r in results]
         assert dates == sorted(dates, reverse=True)
+        assert results[0]["entry"].slug == first.slug
 
     def test_ranked_list_includes_publisher_status(self):
         results = list_registry_primitives_ranked()

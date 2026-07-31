@@ -1,6 +1,9 @@
 """Unit tests for the registry protocol v2 crypto module."""
 
+import base64
 import copy
+import hashlib
+import json
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -75,8 +78,6 @@ class TestCryptoV2:
         fp = kp["fingerprint"]
 
         # Re-derive fingerprint from public key hex
-        import hashlib
-
         expected_fp = hashlib.sha256(bytes.fromhex(kp["public_key"])).hexdigest()[:16]
         assert fp == expected_fp
 
@@ -201,9 +202,8 @@ class TestPEMCryptoV2:
 
         priv_pem, pub_pem = generate_keypair()
         data = b"test"
-        sign(priv_pem, data)
-        import base64
-
+        sig = sign(priv_pem, data)
+        assert sig
         mangled = base64.b64encode(b"\x00" * 64).decode()
         assert verify(pub_pem, data, mangled) is False
 
@@ -220,8 +220,6 @@ class TestPEMCryptoV2:
         assert verify(pub_pem, b"data", "\x00\x01\x02\xff") is False
 
     def test_sign_and_verify_json_payload(self):
-        import json
-
         from modulo.registry.crypto import generate_keypair, sign, verify
 
         priv_pem, pub_pem = generate_keypair()
@@ -277,8 +275,6 @@ class TestTrustAnchor:
         assert verify_trust_anchor(pub_pem, ta_sig, ta_pub) is True
 
     def test_verify_trust_anchor_rejects_tampered_sig(self):
-        import base64
-
         from modulo.registry.crypto import (
             generate_keypair,
             verify_trust_anchor,

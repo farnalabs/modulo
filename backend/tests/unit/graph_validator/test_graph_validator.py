@@ -20,10 +20,10 @@ def _snapshot(
     model_backend_pins: list[dict[str, Any]] | None = None,
 ) -> MagicMock:
     snap = MagicMock()
-    snap.graph_json = graph_json or {"nodes": [], "edges": []}
-    snap.schema_pins_json = schema_pins or []
-    snap.connector_bindings_json = connector_bindings or []
-    snap.model_backend_pins_json = model_backend_pins or []
+    snap.graph_json = graph_json if graph_json is not None else {"nodes": [], "edges": []}
+    snap.schema_pins_json = schema_pins if schema_pins is not None else []
+    snap.connector_bindings_json = connector_bindings if connector_bindings is not None else []
+    snap.model_backend_pins_json = model_backend_pins if model_backend_pins is not None else []
     return snap
 
 

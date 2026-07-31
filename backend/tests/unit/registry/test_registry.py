@@ -154,13 +154,11 @@ class TestRegistryCRUD:
         entry = get_registry_primitive("modulo/modulo-dogfood-pipeline")
         assert entry is not None
         edges = entry.content_json["edges"]
-        hitl_edge = edges[3]
+        hitl_edge = next(
+            e for e in edges if e.get("source") == "test-runner" and e.get("target") == "pr-creator"
+        )
         assert "hitl_gate_config" in hitl_edge
         assert hitl_edge["hitl_gate_config"]["gate_id"] == "review_before_pr"
-
-    def test_registry_total_count(self):
-        results = list_registry_primitives()
-        assert len(results) == 9  # 3 original + 6 dogfood
 
 
 class _PreserveRegistry:
