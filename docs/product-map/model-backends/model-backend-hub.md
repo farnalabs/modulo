@@ -2,7 +2,8 @@
 id: feat-model-backends-hub
 prd: 8.1
 delivery-tasks: []
-bdd: []
+bdd:
+  - backend/tests/bdd/features/model_backends/hub.feature
 unit-tests:
   - backend/tests/unit/model_backend_hub/test_hub.py
   - backend/tests/unit/core/model_backend_hub/test_failover.py
@@ -93,8 +94,8 @@ management described in `feat-model-backends-management`.
 - [ ] No retry with backoff on health check failure — single attempt, no retry
 - [ ] No mid-run monitoring — `mark_unhealthy()` exists but no automatic periodic re-check
 - [x] Warning/error logging exists throughout Hub (invalid fallback, backend init failure, fallback skip, audit logger failure) — 11+ `logger.warning()`, `logger.error()`, `logger.exception()` calls
-- [ ] Failover events not surfaced via `audit_logger` callback — `get_with_rotation()` has an `audit_logger` parameter but it's only called on the chosen backend, not on fallback rotation decisions
-- [ ] Hub not yet wired into run execution pipeline — `node_runner.py` `_node()` is a stub
+- [x] Failover events surfaced via `audit_logger` callback — `get()` and `get_with_rotation()` emit a `model_failover` audit event (primary_id + fallback_id) whenever a fallback is used, including the scan-all fallback path; a failing audit logger is isolated (logged, resolution proceeds)
+- [x] Hub wired into run execution pipeline — `executor.py` `_init_model_backend_hub()` loads active backends, initialises the hub, and sets it on a ContextVar (`set_model_backend_hub`); `node_runner.py` `_node()` resolves the backend via `hub.get(backend_id)` and invokes it for agent nodes with a `model_backend_id`
 
 ### Edge Cases
 
@@ -115,18 +116,17 @@ management described in `feat-model-backends-management`.
 
 - [ ] **No org-scoped caching**: Hub holds backends only for the lifetime of a run (cleared in `__aexit__`). No cross-run cache with TTL. Every run pays the decrypt + `_build_backend` cost.
 - [ ] **No Hub API endpoint**: no `/api/v1/model-backend-hub/...` route. Backends are resolved internally; no REST interface for Hub operations.
-- [ ] **No BDD tests**: no `.feature` files exist for the Hub specifically. The management-side BDD files (`backend_crud.feature`, etc.) cover the CRUD API but not Hub logic.
-- [ ] **Hub not wired into run execution**: `node_runner.py` `_node()` is still a stub that records artifacts without calling any LLM. The Hub is used for schema inference (`routes/schemas.py`) but not for pipeline runs.
 - [ ] **No typed error codes for health check failures**: graph validator returns `MODEL_BACKEND_UNHEALTHY` with a free-text `last_health_check_error` string instead of typed codes (`credential_expired`, `endpoint_unreachable`, `quota_exceeded`, `model_not_found`).
 - [ ] **No health check result staleness bound**: health checks run each time; no 5-minute cache window.
 - [ ] **No retry with backoff**: health check runs once per call. No retry logic for transient failures.
 - [ ] **No mid-run monitoring**: no periodic health re-check during a run. `mark_unhealthy()` exists but is caller-driven; no automatic detection of unreachability.
-- [ ] **Failover events not surfaced via `audit_logger` callback**: Hub has extensive `logger.warning()`, `logger.error()`, and `logger.exception()` calls (11+ sites), but `get_with_rotation()` only calls the `audit_logger` callback on the chosen backend, not on fallback rotation decisions.
 - [ ] **No pricing config integration**: pinned `model_id` cost tracking not implemented.
 - [ ] **`get_with_rotation()` fallback-scan returns unrelated backends**: when no fallbacks are configured and primary is unhealthy, any registered backend (different provider, different model) may be returned.
+- [ ] **Legacy BDD feature files**: `configure.feature`, `rotation.feature`, and `health_check.feature` under `tests/bdd/features/model_backends/` still route through the legacy `test_alpha_model_backends.py` step file, which contains placeholder `pass` steps and stale patch paths — not part of the active suite.
 
 ## QA History
 
+- 2026-07-31 (improve-architecture): Cross-cutting QA. Verified 2 stale product-map claims against code and resolved them. **RESOLVED — Hub wired into run execution**: `executor.py._init_model_backend_hub()` (added 2026-07-09) loads active backends for the org, initialises `ModelBackendHub`, and sets it on the ContextVar; `node_runner.py._node()` resolves the backend via `hub.get(backend_id)` and invokes it (verified in `test_pipeline_composition.py`). **RESOLVED — failover audit events**: `get()`/`get_with_rotation()` emit `model_failover` audit events on fallback (added 2026-07-07, tested in `test_failover.py`). **Fixed code gap** — `get_with_rotation()` scan-all path did not emit `model_failover` when no configured fallback was healthy and the hub scanned all registered backends; refactored the audit call into `_emit_failover_event()` used by all three rotation paths. Added 3 unit tests (scan-all audit event, `get()`/`get_with_rotation()` audit-logger-failure isolation) and BDD coverage (`model_backends/hub.feature`, 7 scenarios exercising hub directly — registration, fallback, scan-all, audit events, one-decrypt-per-run, not-found/unavailable errors). Populated `bdd:` frontmatter. 43/43 hub unit tests + 7/7 hub BDD scenarios pass. Status: partial.
 - 2026-07-06 (qa-iterate prodmap model-backends): Code verification pass. Corrected exception base classes (`BackendNotFoundError(KeyError)`→`BackendNotFoundError(Exception)`, `BackendUnavailableError(RuntimeError)`→`BackendUnavailableError(Exception)`). Corrected `_build_backend` error message to `ValueError("Unknown model backend provider: {provider!r}")`. Corrected UUID fallback handling — caught via `try/except ValueError`, logged as warning, not uncaught. Corrected logging claim — Hub has 11+ `logger.warning/error/exception` calls; real gap is failover events not surfaced via `audit_logger` callback.
 - 2026-07-05 (qa-iterate prodmap model-backends): Fixed duplicate code path (`base.py` listed twice in `code:` frontmatter). Corrected Bedrock credential validation claim from `[ ]` (uncaught `KeyError`) to `[x]` (handled `ValueError` in `_build_backend()`). Removed stale Known Gap "Bedrock credentials not validated".
 - 2026-07-04 (improve-architecture index 173): Cross-cutting QA pass 2. Verified all unchecked behaviours against code: marked 13 behaviours [ ]→[x] (agent model_backend_id ref, run-start resolution, ConnectorHub parallel, model_id pinning, entity independence, operator-update-on-new-runs, pre-run health check, named failure, run blocking, non-existent ID validation, all-backends-pass, Hub registration pattern, one-decrypt balance). Added Error Handling (15 items), Resilience & Integration Robustness (10 items), and Edge Cases (10 items) sections. Updated Known Gaps: removed stale "no pre-run health check", "no model_backend_pins_json" (both implemented); added 7 new gaps (typed error codes, staleness bound, retry, mid-run monitoring, Hub logging, Bedrock credential validation, fallback-scan unrelated backends). Created website doc stub. **Note 2026-07-06**: The "Hub logging" gap actually overstates the issue — Hub has 11+ logger calls (warning/error/exception); the real gap is that `get_with_rotation()` doesn't surface failover events via `audit_logger` callback.
