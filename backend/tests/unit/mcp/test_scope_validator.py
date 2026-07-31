@@ -47,7 +47,7 @@ class TestCheckToolScope:
         ],
     )
     def test_authorized_role_passes(self, role: str, tool: str) -> None:
-        check_tool_scope(role, tool)
+        assert check_tool_scope(role, tool) is None
 
     @pytest.mark.parametrize(
         ("role", "tool"),
@@ -80,8 +80,8 @@ class TestCheckToolScope:
 
     @pytest.mark.parametrize("role", ["viewer", "runner", "operator", "admin"])
     def test_tools_without_scope_req_always_pass(self, role: str) -> None:
-        check_tool_scope(role, "list_pipelines")
-        check_tool_scope(role, "get_run_status")
+        assert check_tool_scope(role, "list_pipelines") is None
+        assert check_tool_scope(role, "get_run_status") is None
 
     def test_none_role_raises(self) -> None:
         with pytest.raises(MCPAuthorizationError) as excinfo:
@@ -156,21 +156,21 @@ class TestReviewHitlActionScopes:
     """Action-level scoping for the ``review_hitl`` tool."""
 
     def test_claim_requires_runner(self) -> None:
-        check_tool_scope("runner", "review_hitl", action="claim")
+        assert check_tool_scope("runner", "review_hitl", action="claim") is None
 
     def test_claim_rejects_viewer(self) -> None:
         with pytest.raises(MCPAuthorizationError):
             check_tool_scope("viewer", "review_hitl", action="claim")
 
     def test_approve_requires_operator(self) -> None:
-        check_tool_scope("operator", "review_hitl", action="approve")
+        assert check_tool_scope("operator", "review_hitl", action="approve") is None
 
     def test_approve_rejects_runner(self) -> None:
         with pytest.raises(MCPAuthorizationError):
             check_tool_scope("runner", "review_hitl", action="approve")
 
     def test_reject_requires_operator(self) -> None:
-        check_tool_scope("operator", "review_hitl", action="reject")
+        assert check_tool_scope("operator", "review_hitl", action="reject") is None
 
     def test_reject_rejects_runner(self) -> None:
         with pytest.raises(MCPAuthorizationError):
@@ -181,8 +181,8 @@ class TestReviewHitlActionScopes:
             check_tool_scope("runner", "review_hitl")
 
     def test_deliver_manual_requires_operator(self) -> None:
-        check_tool_scope("operator", "review_hitl", action="deliver_manual")
-        check_tool_scope("admin", "review_hitl", action="deliver_manual")
+        assert check_tool_scope("operator", "review_hitl", action="deliver_manual") is None
+        assert check_tool_scope("admin", "review_hitl", action="deliver_manual") is None
 
     def test_deliver_manual_rejects_runner(self) -> None:
         with pytest.raises(MCPAuthorizationError):
@@ -230,7 +230,7 @@ class TestNewlyGuardedTools:
         ],
     )
     def test_authorized_role_passes(self, role: str, tool: str) -> None:
-        check_tool_scope(role, tool)
+        assert check_tool_scope(role, tool) is None
 
     def test_viewer_denied_list_trigger_events(self) -> None:
         with pytest.raises(MCPAuthorizationError):
@@ -301,7 +301,7 @@ class TestConstants:
 
     def test_read_only_tools_pinned_at_viewer(self) -> None:
         for tool in ("list_pipelines", "get_run_status", "search_library", "get_pipeline_graph"):
-            check_tool_scope("viewer", tool)
+            assert check_tool_scope("viewer", tool) is None
         with pytest.raises(MCPAuthorizationError):
             check_tool_scope(None, "list_pipelines")
 

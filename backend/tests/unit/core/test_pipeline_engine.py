@@ -78,6 +78,9 @@ class TestRunawayGuard:
             guard.check_duration()
             guard.record_step()
             guard.record_tokens(9999)
+        # no limits configured — counters accumulate freely without raising
+        assert guard._step_count == 1000
+        assert guard._token_count == 1000 * 9999
 
     def test_max_steps_triggers(self) -> None:
         guard = RunawayGuard(max_steps=3)
@@ -94,6 +97,8 @@ class TestRunawayGuard:
         guard.record_step()
         guard.record_step()
         guard.record_step()
+        # the limit is exclusive — exactly max_steps steps must not raise
+        assert guard._step_count == 3
 
     def test_token_budget_triggers(self) -> None:
         guard = RunawayGuard(token_budget=100)
@@ -108,6 +113,8 @@ class TestRunawayGuard:
         guard = RunawayGuard(token_budget=100)
         guard.record_tokens(50)
         guard.record_tokens(50)
+        # the limit is exclusive — exactly reaching the budget must not raise
+        assert guard._token_count == 100
 
     def test_max_duration_triggers(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_time = datetime(2025, 1, 1, 0, 0, 0, tzinfo=UTC)
