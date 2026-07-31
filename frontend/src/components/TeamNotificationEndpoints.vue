@@ -159,7 +159,7 @@
         >
           <h4 class="text-sm font-medium">{{ $t('components.TeamNotificationEndpoints.edit_webhook') }}</h4>
           <div>
-            <label for="teamnotificationendpoints-field-6" class="mb-1 block text-xs font-medium">URL</label>
+            <label for="teamnotificationendpoints-field-6" class="mb-1 block text-xs font-medium">{{ $t('components.TeamNotificationEndpoints.url') }}</label>
             <input id="teamnotificationendpoints-field-6"
               v-model="editForm.url"
               type="url"
@@ -172,7 +172,7 @@
             <label for="teamnotificationendpoints-field-5" class="mb-1 block text-xs font-medium"
               >{{ $t('components.TeamNotificationEndpoints.secret') }}
               <span class="text-muted-foreground"
-                >(leave blank to keep existing)</span
+                >{{ $t('components.TeamNotificationEndpoints.leave_blank_to_keep_existing') }}</span
               ></label
             >
             <input id="teamnotificationendpoints-field-5"
@@ -238,7 +238,7 @@
       >
         <h4 class="text-sm font-medium">{{ $t('components.TeamNotificationEndpoints.new_webhook') }}</h4>
         <div>
-          <label for="teamnotificationendpoints-field-3" class="mb-1 block text-xs font-medium">URL</label>
+          <label for="teamnotificationendpoints-field-3" class="mb-1 block text-xs font-medium">{{ $t('components.TeamNotificationEndpoints.url') }}</label>
           <input id="teamnotificationendpoints-field-3"
             v-model="addForm.url"
             type="url"
@@ -249,7 +249,7 @@
         </div>
         <div>
           <label for="teamnotificationendpoints-field-2" class="mb-1 block text-xs font-medium"
-            >{{ $t('components.TeamNotificationEndpoints.secret') }} <span class="text-muted-foreground">(optional)</span></label
+            >{{ $t('components.TeamNotificationEndpoints.secret') }} <span class="text-muted-foreground">{{ $t('components.TeamNotificationEndpoints.optional') }}</span></label
           >
           <input id="teamnotificationendpoints-field-2"
             v-model="addForm.secret"

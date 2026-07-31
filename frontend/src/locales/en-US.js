@@ -1414,7 +1414,9 @@ export default {
           "per_pr": "Per PR",
           "hourly": "Hourly",
           "custom": "Custom",
-          "trigger_link_optional": "Trigger Link (optional)"
+          "trigger_link_optional": "Trigger Link (optional)",
+          "select_trigger_type": "Select trigger type",
+          "not_specified": "Not specified"
         },
         "StageConfigPanel": {
           "name": "Name",
@@ -1428,7 +1430,9 @@ export default {
           "graduate_stage": "Graduate Stage",
           "simple_sequential": "Simple Sequential",
           "hierarchical_agent": "Hierarchical Agent",
-          "parallel_processing": "Parallel Processing"
+          "parallel_processing": "Parallel Processing",
+          "graduating_stage_prefix": "You are graduating",
+          "graduating_stage_suffix": "to a Modulo-managed pipeline."
         },
         "LifecycleMapEditor": {
           "stage_config": "Stage Config",
@@ -1523,7 +1527,9 @@ export default {
           "boolean": "Boolean",
           "select": "Select",
           "required": "Required",
-          "multiline": "Multiline"
+          "multiline": "Multiline",
+          "formtype_number_07_default_value": "0.7",
+          "default_value_placeholder": "default value"
         },
         "CompositeLibraryPicker": {
           "composite_library": "Composite Library",
@@ -1544,7 +1550,8 @@ export default {
         "FieldMappingPair": {
           "passthrough": "Passthrough",
           "source_field": "Source field",
-          "target_field": "Target field"
+          "target_field": "Target field",
+          "schemas_identical_no_mapping": "Schemas are identical — no mapping needed"
         }
       }
     },
@@ -1558,7 +1565,8 @@ export default {
       "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'",
       "remy_performing_actions": "Remy is performing actions on this page",
       "remy_stop": "Stop",
-      "modulo": "Modulo"
+      "modulo": "Modulo",
+      "search_pages": "Search pages"
     },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",
@@ -1618,7 +1626,8 @@ export default {
         "click_to_rename": "Click to rename session",
         "session_label": "Session",
         "remy": "Remy",
-        "resume": "Resume"
+        "resume": "Resume",
+        "stops_after_each_navigation": "Stops after each navigation"
       },
       "RemyChat": {
         "ask_remy": "Ask Remy...",
@@ -1789,7 +1798,10 @@ export default {
       "new_webhook": "New Webhook",
       "secret": "Secret",
       "events": "Events",
-      "description": "Description"
+      "description": "Description",
+      "url": "URL",
+      "optional": "(optional)",
+      "leave_blank_to_keep_existing": "(leave blank to keep existing)"
     },
     "NotificationBell": {
       "notifications": "Notifications"

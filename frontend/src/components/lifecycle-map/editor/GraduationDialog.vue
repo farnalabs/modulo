@@ -4,7 +4,7 @@
       <DialogHeader>
         <DialogTitle>{{ $t('components.lifecycle-map.editor.GraduationDialog.graduate_stage') }}</DialogTitle>
         <DialogDescription>
-          You are graduating <strong>{{ stageName }}</strong> to a Modulo-managed pipeline.
+          {{ $t('components.lifecycle-map.editor.GraduationDialog.graduating_stage_prefix') }} <strong>{{ stageName }}</strong> {{ $t('components.lifecycle-map.editor.GraduationDialog.graduating_stage_suffix') }}
         </DialogDescription>
       </DialogHeader>
 

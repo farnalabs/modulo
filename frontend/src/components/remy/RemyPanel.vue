@@ -196,7 +196,7 @@
       </button>
     </div>
     <div v-if="currentSpeed === 'review' && store.activeSession" class="flex items-center justify-between px-3 py-1.5 text-xs border-b bg-muted/30">
-      <span>⏸ Stops after each navigation</span>
+      <span>⏸ {{ $t('components.remy.RemyPanel.stops_after_each_navigation') }}</span>
       <button class="text-xs font-medium underline hover:no-underline" @click="resumeUiCommands">{{ $t('components.remy.RemyPanel.resume') }}</button>
     </div>
     <div class="remy-body">

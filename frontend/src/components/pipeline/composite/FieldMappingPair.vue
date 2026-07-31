@@ -86,7 +86,7 @@ function removeMapping(sourceKey: string) {
         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
       </svg>
       <span class="text-xs font-medium text-emerald-400">{{ $t('components.pipeline.composite.FieldMappingPair.passthrough') }}</span>
-      <span class="text-xs text-muted-foreground">Schemas are identical — no mapping needed</span>
+      <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.schemas_identical_no_mapping') }}</span>
     </div>
 
     <div v-if="!isPassthrough" class="space-y-2">
