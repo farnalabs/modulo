@@ -540,7 +540,7 @@
                   <SelectItem value="reject">{{ $t('views.PipelineEditorView.reject') }}</SelectItem>
                   <SelectItem value="conditional">{{ $t('views.PipelineEditorView.conditional') }}</SelectItem>
                   <SelectItem value="loop">{{ $t('views.PipelineEditorView.loop') }}</SelectItem>
-                  <SelectItem value="llm">LLM Routing</SelectItem>
+                  <SelectItem value="llm">{{ $t('views.PipelineEditorView.llm_routing') }}</SelectItem>
                 </SelectContent>
               </Select>
             </dd>

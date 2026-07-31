@@ -480,7 +480,7 @@
           </div>
           <div>
             <label for="adminremyview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.no_go_page_patterns') }}</label>
-            <p class="mb-2 text-xs text-muted-foreground">URL patterns (comma-separated) that Remy must never navigate to. Supports wildcards.</p>
+            <p class="mb-2 text-xs text-muted-foreground">{{ $t('views.AdminRemyView.url_patterns_comma_separated_that_remy_must_never_navigate_to_supports_wildcards') }}</p>
             <textarea id="adminremyview-field-4"
               v-model="safetyConfig.nogoPagePatterns"
               rows="2"
@@ -491,7 +491,7 @@
           </div>
           <div>
             <label for="adminremyview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.no_go_selector_patterns') }}</label>
-            <p class="mb-2 text-xs text-muted-foreground">CSS selector patterns (comma-separated) for elements Remy must never interact with.</p>
+            <p class="mb-2 text-xs text-muted-foreground">{{ $t('views.AdminRemyView.css_selector_patterns_comma_separated_for_elements_remy_must_never_interact_with') }}</p>
             <textarea id="adminremyview-field-3"
               v-model="safetyConfig.nogoSelectorPatterns"
               rows="2"

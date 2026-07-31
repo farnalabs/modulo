@@ -50,7 +50,7 @@
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="local_docker">{{ $t('views.EnvironmentProfileForm.local_docker') }}</SelectItem>
-            <SelectItem value="e2b">E2B (Sandboxed Cloud)</SelectItem>
+            <SelectItem value="e2b">{{ $t('views.EnvironmentProfileForm.e2b_sandboxed_cloud') }}</SelectItem>
           </SelectContent>
         </Select>
         <p v-if="submitted && !form.provider_type" class="mt-1 text-xs text-destructive">{{ $t('views.EnvironmentProfileForm.provider_type_is_required') }}</p>

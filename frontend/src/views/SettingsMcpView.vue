@@ -142,7 +142,7 @@
         </CardHeader>
         <CardContent class="space-y-4">
           <p class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.configure_oauth_client_applications_for_mcp_token_based_auth') }}</p>
-          <Button variant="outline" size="sm" disabled>Register OAuth Client (coming in v0.4)</Button>
+          <Button variant="outline" size="sm" disabled>{{ $t('views.SettingsMcpView.register_oauth_client_coming_in_v04') }}</Button>
         </CardContent>
       </Card>
     </template>

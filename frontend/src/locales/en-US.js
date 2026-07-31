@@ -158,6 +158,8 @@ export default {
       "auto_execute_confidence_threshold": "Auto-execute confidence threshold",
       "no_go_page_patterns": "No-go page patterns",
       "no_go_selector_patterns": "No-go selector patterns",
+      "url_patterns_comma_separated_that_remy_must_never_navigate_to_supports_wildcards": "URL patterns (comma-separated) that Remy must never navigate to. Supports wildcards.",
+      "css_selector_patterns_comma_separated_for_elements_remy_must_never_interact_with": "CSS selector patterns (comma-separated) for elements Remy must never interact with.",
       "allowed_css_selectors": "Allowed CSS Selectors",
       "when_set_remy_can_only_interact_with_elements_matching_these_css_selectors_or_data_testid_prefixes_leave_empty_to_allow_all": "When set, Remy can ONLY interact with elements matching these CSS selectors or data-testid prefixes. Leave empty to allow all.",
       "allowed_page_url_patterns": "Allowed Page URL Patterns",
@@ -344,6 +346,7 @@ export default {
       "description": "Description",
       "provider_type": "Provider Type",
       "local_docker": "Local Docker",
+      "e2b_sandboxed_cloud": "E2B (Sandboxed Cloud)",
       "provider_type_is_required": "Provider type is required",
       "image_reference": "Image Reference",
       "capabilities": "Capabilities",
@@ -723,6 +726,7 @@ export default {
       "reject": "Reject",
       "conditional": "Conditional",
       "loop": "Loop",
+      "llm_routing": "LLM Routing",
       "condition_expression": "Condition Expression",
       "max_iterations": "Max Iterations",
       "routing_label": "Routing Label",
@@ -1189,7 +1193,8 @@ export default {
       "done": "Done",
       "mcp_server_status": "MCP Server Status",
       "api_keys": "API Keys",
-      "mcp_oauth_client_applications_registered_for_token_based_auth": "MCP OAuth client applications registered for token-based auth"
+      "mcp_oauth_client_applications_registered_for_token_based_auth": "MCP OAuth client applications registered for token-based auth",
+      "register_oauth_client_coming_in_v04": "Register OAuth Client (coming in v0.4)"
     },
     "UserRemySkillsView": {
       "my_remy_skills": "My Remy Skills",
