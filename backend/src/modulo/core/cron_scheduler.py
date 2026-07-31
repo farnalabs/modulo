@@ -15,7 +15,7 @@ firing a task that:
   5. Updates ``last_fired_at`` and ``next_fire_at``
 
 The scheduler runs inside the ``celery beat`` process and does **not** hold
-an open DB session between ticks â€” it opens a new connection per tick.
+an open DB session between ticks — it opens a new connection per tick.
 """
 
 import datetime
@@ -116,7 +116,7 @@ def compute_next_fire(
 
 
 # ---------------------------------------------------------------------------
-# Celery task â€” fire one cron trigger
+# Celery task — fire one cron trigger
 # ---------------------------------------------------------------------------
 
 _celery_app_global: Any = None
@@ -132,7 +132,7 @@ def get_celery_app() -> Any:
 
 
 class CronFireTask(Task):  # type: ignore[misc]
-    """Task that fires a single cron trigger â€” creates a Run and logs a TriggerEvent.
+    """Task that fires a single cron trigger — creates a Run and logs a TriggerEvent.
 
     Runs inside a Celery worker process.
     """
@@ -150,7 +150,7 @@ class CronFireTask(Task):  # type: ignore[misc]
         cron_expression: str,
         snapshot_id: str = "",
     ) -> dict[str, Any]:
-        """Fire a cron trigger â€” creates a run and dispatches it to Celery."""
+        """Fire a cron trigger — creates a run and dispatches it to Celery."""
         import asyncio
 
         _snap = uuid.UUID(snapshot_id) if snapshot_id else None
@@ -195,7 +195,7 @@ async def fire_cron_trigger(
     cron_expression: str,
     factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> dict[str, Any]:
-    """Core fire logic â€” runs inside asyncio.run() inside the Celery task."""
+    """Core fire logic — runs inside asyncio.run() inside the Celery task."""
     if factory is None:
         engine = _get_engine()
         factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -204,7 +204,7 @@ async def fire_cron_trigger(
         await _set_rls_org(session, org_id)
 
         # Re-read trigger with pg_try_advisory_xact_lock to serialise concurrent fires
-        # (auto-released on transaction end â€” no manual unlock needed)
+        # (auto-released on transaction end — no manual unlock needed)
         key1, key2 = _uuid_to_lock_keys(trigger_id)
         lock_result = await session.execute(
             text("SELECT pg_try_advisory_xact_lock(:key1, :key2)"),
@@ -261,7 +261,7 @@ async def fire_cron_trigger(
                     "daily_spend_limit": str(spend_limit),
                     "today_cost": str(today_cost),
                 }
-        # Resolve snapshot_id â€” auto-create from live graph if not provided
+        # Resolve snapshot_id — auto-create from live graph if not provided
         if snapshot_id is None:
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
@@ -318,7 +318,7 @@ async def fire_cron_trigger(
         )
 
         _log.info(
-            "Cron trigger %s fired â†' run %s (next fire: %s)",
+            "Cron trigger %s fired → run %s (next fire: %s)",
             trigger_id,
             run.id,
             next_fire.isoformat(),
@@ -510,13 +510,13 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
                             snapshot_id = uuid.UUID(snapshot_id_str)
                         except (ValueError, TypeError):
                             _log.warning(
-                                "Cron trigger %s has invalid snapshot_id in config â€” will auto-create on fire", row.id
+                                "Cron trigger %s has invalid snapshot_id in config — will auto-create on fire", row.id
                             )
                             snapshot_id = None
                     else:
                         snapshot_id = latest_snapshots.get(row.pipeline_id)
                         if snapshot_id is None:
-                            _log.info("Cron trigger %s has no snapshots â€” will auto-create on fire", row.id)
+                            _log.info("Cron trigger %s has no snapshots — will auto-create on fire", row.id)
 
                     triggers.append(
                         {
@@ -546,7 +546,7 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
     """Set RLS organisation context inside the current transaction.
 
     Uses ``set_config`` on Postgres (native RLS) and falls back to
-    ``session.info`` for SQLite/MariaDB backends â€” matching the pattern
+    ``session.info`` for SQLite/MariaDB backends — matching the pattern
     in ``polling.py:_set_rls_org``.
     """
     dialect = session.get_bind().dialect.name

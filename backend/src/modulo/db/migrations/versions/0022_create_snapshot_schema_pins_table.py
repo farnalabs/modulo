@@ -17,11 +17,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_unique_constraint(
-        "uq_schema_versions_schema_version",
-        "schema_versions",
-        ["schema_id", "version"],
-    )
     op.create_table(
         "snapshot_schema_pins",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -62,4 +57,3 @@ def downgrade() -> None:
     op.drop_index("idx_ssp_schema", table_name="snapshot_schema_pins")
     op.drop_index("idx_ssp_snapshot", table_name="snapshot_schema_pins")
     op.drop_table("snapshot_schema_pins")
-    op.drop_constraint("uq_schema_versions_schema_version", "schema_versions", type_="unique")
