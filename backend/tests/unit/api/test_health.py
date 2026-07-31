@@ -1,13 +1,22 @@
 """Tests for readiness endpoint — aggregation logic, degraded/unavailable status, and check structure."""
 
+import asyncio
 from collections.abc import Generator
+from typing import Self
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.main import app
-from modulo.api.routes.health import CheckResult
+from modulo.api.routes.health import (
+    CheckResult,
+    _check_checkpointer,
+    _check_database,
+    _check_migrations,
+    _check_redis,
+    _per_check_timeout,
+)
 from modulo.settings import Settings, get_settings
 
 
@@ -136,3 +145,123 @@ class TestHttpTimeout:
         body = resp.json()
         assert body["status"] == "unavailable"
         assert "timeout" in body["checks"]["database"]["detail"].lower()
+
+
+class _HangingEngine:
+    """Fake SQLAlchemy engine whose connect() never returns."""
+
+    def connect(self) -> Self:
+        return self
+
+    async def __aenter__(self) -> Self:
+        await asyncio.sleep(60)
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class TestPerCheckTimeouts:
+    """Configurable per-check timeout limits (feat-infra-health)."""
+
+    def test_settings_defaults_apply(self) -> None:
+        settings = _make_settings()
+        assert settings.modulo_health_timeout_seconds == 5.0
+        for field in (
+            "modulo_health_db_timeout_seconds",
+            "modulo_health_redis_timeout_seconds",
+            "modulo_health_checkpointer_timeout_seconds",
+            "modulo_health_migrations_timeout_seconds",
+        ):
+            assert getattr(settings, field) == 0.0
+
+    def test_per_check_timeout_falls_back_to_global(self) -> None:
+        settings = _make_settings().model_copy(update={"modulo_health_timeout_seconds": 2.5})
+        assert _per_check_timeout(settings, "modulo_health_db_timeout_seconds") == 2.5
+        assert _per_check_timeout(settings, "modulo_health_redis_timeout_seconds") == 2.5
+
+    def test_per_check_timeout_override_wins(self) -> None:
+        settings = _make_settings().model_copy(
+            update={
+                "modulo_health_timeout_seconds": 2.5,
+                "modulo_health_redis_timeout_seconds": 0.5,
+            }
+        )
+        assert _per_check_timeout(settings, "modulo_health_db_timeout_seconds") == 2.5
+        assert _per_check_timeout(settings, "modulo_health_redis_timeout_seconds") == 0.5
+
+    async def test_database_check_times_out(self) -> None:
+        settings = _make_settings().model_copy(update={"modulo_health_timeout_seconds": 0.2})
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+        ):
+            result = await _check_database()
+        assert result.status == "unavailable"
+        assert "timed out after 0.2s" in result.detail.lower()
+        assert result.latency_ms is not None
+        assert result.latency_ms < 60_000
+
+    async def test_redis_check_times_out(self) -> None:
+        settings = _make_settings().model_copy(update={"modulo_health_redis_timeout_seconds": 0.2})
+
+        async def _hang() -> None:
+            await asyncio.sleep(60)
+
+        redis_client = AsyncMock()
+        redis_client.ping.side_effect = _hang
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=redis_client),
+        ):
+            result = await _check_redis()
+        assert result.status == "degraded"
+        assert "timed out after 0.2s" in result.detail.lower()
+        assert result.latency_ms is not None
+        assert result.latency_ms < 60_000
+
+    async def test_checkpointer_check_times_out(self) -> None:
+        settings = _make_settings().model_copy(update={"modulo_health_checkpointer_timeout_seconds": 0.2})
+
+        async def _hang(*args: object, **kwargs: object) -> None:
+            await asyncio.sleep(60)
+
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.pg_connection_string", return_value="postgresql://test"),
+            patch("modulo.api.routes.health.asyncpg.connect", side_effect=_hang),
+        ):
+            result = await _check_checkpointer()
+        assert result.status == "degraded"
+        assert "timed out after 0.2s" in result.detail.lower()
+        assert result.latency_ms is not None
+        assert result.latency_ms < 60_000
+
+    async def test_migrations_check_times_out(self) -> None:
+        settings = _make_settings().model_copy(update={"modulo_health_migrations_timeout_seconds": 0.2})
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+        ):
+            result = await _check_migrations()
+        assert result.status == "degraded"
+        assert "timed out after 0.2s" in result.detail.lower()
+        assert result.latency_ms is not None
+        assert result.latency_ms < 60_000
+
+    async def test_database_check_ok_reports_latency(self) -> None:
+        settings = _make_settings().model_copy(update={"modulo_health_timeout_seconds": 1.0})
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.get_or_create_engine") as engine_factory,
+        ):
+            engine = AsyncMock()
+            conn = AsyncMock()
+            conn.__aenter__ = AsyncMock(return_value=conn)
+            conn.__aexit__ = AsyncMock(return_value=None)
+            engine.connect = lambda: conn
+            engine_factory.return_value = engine
+            result = await _check_database()
+        assert result.status == "ok"
+        assert result.latency_ms is not None
+        assert result.latency_ms < 60_000
