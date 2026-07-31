@@ -739,19 +739,19 @@ function onTableFolderDrop(folderId: string, event: DragEvent) {
 
 function onCardDrop(targetPipeline: PipelineItem, event: DragEvent) {
   const pipelineId = event.dataTransfer?.getData('text/plain')
-  if (pipelineId && pipelineId !== targetPipeline.id && targetPipeline.folder_id !== undefined) {
-    onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? '' })
+  if (pipelineId && pipelineId !== targetPipeline.id) {
+    onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? null })
   }
 }
 
 function onTablePipelineDrop(targetPipeline: PipelineItem, event: DragEvent) {
   const pipelineId = event.dataTransfer?.getData('text/plain')
-  if (pipelineId && pipelineId !== targetPipeline.id && targetPipeline.folder_id !== undefined) {
-    onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? '' })
+  if (pipelineId && pipelineId !== targetPipeline.id) {
+    onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? null })
   }
 }
 
-async function onMovePipeline(ev: { pipelineId: string; folderId: string }) {
+async function onMovePipeline(ev: { pipelineId: string; folderId: string | null }) {
   const pipeline = allPipelines.value.find(p => p.id === ev.pipelineId)
   if (!pipeline) return
   moveTarget.value = pipeline
@@ -935,10 +935,6 @@ async function handleMoveToFolder() {
       folder_id: folderId,
     })
     showMoveToFolder.value = false
-    const moved = pipelinesResp.value?.items.find(p => p.id === targetId)
-    if (moved) {
-      moved.folder_id = folderId as string | null | undefined
-    }
     moveTarget.value = null
     await loadPipelines()
     await loadFolders()
