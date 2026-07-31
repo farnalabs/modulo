@@ -1,21 +1,14 @@
 """WatsonXBackend — wraps ChatWatsonx as a Modulo ModelBackendBase."""
 
-import asyncio
-import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage
 from langchain_ibm import ChatWatsonx
 
 from modulo.model_backends.base import (
-    HEALTH_CHECK_TIMEOUT,
-    HEALTH_DETAIL_MAX_LENGTH,
-    HealthResult,
     ModelBackendBase,
 )
-
-logger = logging.getLogger(__name__)
 
 WATSONX_BASE_URL = "https://us-south.ml.cloud.ibm.com"
 
@@ -48,22 +41,6 @@ class WatsonXBackend(ModelBackendBase):
 
     def __repr__(self) -> str:
         return f"WatsonXBackend(model_id={self._backend_id!r})"
-
-    async def health_check(self) -> HealthResult:
-        try:
-            await asyncio.wait_for(
-                self._model.ainvoke([HumanMessage(content="ping")], max_tokens=1),
-                timeout=HEALTH_CHECK_TIMEOUT,
-            )
-            return HealthResult(ok=True)
-        except TimeoutError:
-            logger.warning("Health check timed out for WatsonXBackend")
-            return HealthResult(ok=False, detail="Health check timed out")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("Health check failed for WatsonXBackend: %s", exc)
-            return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
