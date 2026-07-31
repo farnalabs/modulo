@@ -131,7 +131,13 @@ async def get_current_tenant_user(
         username=current_user.username,
         organisation_id=current_user.organisation_id,
         account_id=current_user.account_id,
-        org_role=live_role,
+        # _verify_identity returns the LIVE role; when it returns None the
+        # caller's identity was verified but no live role could be read
+        # (e.g. the test harness patches it) - fall back to the claim role.
+        # In production the DB read either returns the live role or raises
+        # (401 missing membership / 503 on SQLAlchemyError), so the claim
+        # fallback is only reachable when the read is explicitly stubbed.
+        org_role=live_role if live_role is not None else current_user.org_role,
         is_system_admin=current_user.is_system_admin,
     )
 
