@@ -3,6 +3,13 @@ rules:
     patterns:
       - pattern: asyncio.create_task(...)
       - pattern-not-inside: |
+          async def $F(...):
+              ...
+      - pattern-not-inside: |
+          @$DECORATOR
+          async def $F(...):
+              ...
+      - pattern-not-inside: |
           try:
               asyncio.get_running_loop()
           except RuntimeError:

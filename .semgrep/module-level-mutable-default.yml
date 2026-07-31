@@ -10,7 +10,15 @@
               class $CLASS:
                   ...
                   $ATTR = {}
-    message: "Class-level mutable list/dict default is shared across all instances — use `None` + init or `field(default_factory=list)` instead"
+      - pattern-not: |
+          class $CLASS:
+              ...
+              $ATTR: ClassVar[...] = []
+      - pattern-not: |
+          class $CLASS:
+              ...
+              $ATTR: ClassVar[...] = {}
+    message: "Class-level mutable list/dict default is shared across all instances - use `None` + init or `field(default_factory=list)` instead. Annotate with ClassVar[...] if the shared state is intentional."
     languages: [python]
     severity: WARNING
     paths:
