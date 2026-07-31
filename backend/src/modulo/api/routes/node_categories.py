@@ -84,12 +84,14 @@ async def list_node_categories_endpoint(
                 session, org_id=principal.organisation_id, page=page, page_size=page_size
             )
     except ProgrammingError:
+        logger.exception("node_categories.list_node_categories_endpoint")
         logger.warning("node_categories.list.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        logger.exception("node_categories.list_node_categories_endpoint")
         logger.warning("node_categories.list.integrity_error")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -139,12 +141,14 @@ async def create_node_category_endpoint(
                 sort_order=req.sort_order,
             )
     except ProgrammingError:
+        logger.exception("node_categories.create_node_category_endpoint")
         logger.warning("node_categories.create.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        logger.exception("node_categories.create_node_category_endpoint")
         logger.warning("node_categories.create.integrity_error — duplicate name")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -180,12 +184,14 @@ async def get_node_category_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             category = await get_node_category(session, category_id, org_id=principal.organisation_id)
     except ProgrammingError:
+        logger.exception("node_categories.get_node_category_endpoint")
         logger.warning("node_categories.get.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        logger.exception("node_categories.get_node_category_endpoint")
         logger.warning("node_categories.get.integrity_error")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -225,12 +231,14 @@ async def update_node_category_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             category = await update_node_category(session, category_id, updates, org_id=principal.organisation_id)
     except ProgrammingError:
+        logger.exception("node_categories.update_node_category_endpoint")
         logger.warning("node_categories.update.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        logger.exception("node_categories.update_node_category_endpoint")
         logger.warning("node_categories.update.integrity_error — duplicate name")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -268,12 +276,14 @@ async def delete_node_category_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await soft_delete_node_category(session, category_id, org_id=principal.organisation_id)
     except ProgrammingError:
+        logger.exception("node_categories.delete_node_category_endpoint")
         logger.warning("node_categories.delete.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except IntegrityError:
+        logger.exception("node_categories.delete_node_category_endpoint")
         logger.warning("node_categories.delete.integrity_error")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -310,6 +320,7 @@ async def restore_node_category_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             category = await restore_node_category(session, category_id, org_id=principal.organisation_id)
     except ProgrammingError:
+        logger.exception("node_categories.restore_node_category_endpoint")
         logger.warning("node_categories.restore.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

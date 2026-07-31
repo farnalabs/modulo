@@ -54,6 +54,7 @@ async def admin_list_config(
     except asyncio.CancelledError:
         raise
     except ProgrammingError:
+        logger.exception("admin_system_config.admin_list_config")
         raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
     except SQLAlchemyError:
         logger.exception("routes.admin_system_config")
@@ -96,11 +97,13 @@ async def admin_set_config(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
+        logger.exception("admin_system_config.admin_set_config")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource already exists or constraint violation.",
         ) from None
     except ProgrammingError:
+        logger.exception("admin_system_config.admin_set_config")
         raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
     except SQLAlchemyError:
         logger.exception("routes.admin_system_config")
@@ -138,6 +141,7 @@ async def admin_delete_config(
     except asyncio.CancelledError:
         raise
     except ProgrammingError:
+        logger.exception("admin_system_config.admin_delete_config")
         raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
     except SQLAlchemyError:
         logger.exception("routes.admin_system_config")

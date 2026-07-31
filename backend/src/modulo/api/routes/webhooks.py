@@ -73,6 +73,7 @@ async def receive_webhook(
         if not isinstance(raw_payload, dict):
             raise TypeError("not a JSON object")
     except Exception as exc:
+        _log.exception("webhooks.receive_webhook")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Request body must be a JSON object",
@@ -147,11 +148,13 @@ async def receive_webhook(
             detail=str(exc),
         ) from exc
     except ProgrammingError:
+        _log.exception("webhooks.receive_webhook")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("webhooks.receive_webhook")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -239,11 +242,13 @@ async def replay_webhook(
             detail=f"Concurrent run limit of {exc.limit} reached",
         ) from exc
     except ProgrammingError:
+        _log.exception("webhooks.replay_webhook")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("webhooks.replay_webhook")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -292,11 +297,13 @@ async def cleanup_expired(
             await set_rls_org(session, org_id)
             result["payloads_deleted"] = await _trigger_engine.cleanup_expired_payloads(session)
     except ProgrammingError:
+        _log.exception("webhooks.cleanup_expired")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("webhooks.cleanup_expired")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",

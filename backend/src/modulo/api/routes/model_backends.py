@@ -146,16 +146,19 @@ async def list_model_backends_endpoint(
                 session, org_id=principal.organisation_id, page=page, page_size=page_size
             )
     except IntegrityError:
+        logger.exception("model_backends.list_model_backends_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("model_backends.list_model_backends_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("model_backends.list_model_backends_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing model backends.",
@@ -217,6 +220,7 @@ def _validate_provider(provider: str) -> None:
         if registry.has_model_backend(provider):
             return
     except Exception as exc:
+        logger.exception("model_backends._validate_provider")
         logger.warning("Plugin registry check failed for provider %r: %s", provider, exc)
     raise HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -280,16 +284,19 @@ async def create_model_backend_endpoint(
                 tier=req.tier,
             )
     except IntegrityError:
+        logger.exception("model_backends.create_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("model_backends.create_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("model_backends.create_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating model backend.",
@@ -325,16 +332,19 @@ async def get_model_backend_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mb = await get_model_backend(session, backend_id)
     except IntegrityError:
+        logger.exception("model_backends.get_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("model_backends.get_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("model_backends.get_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching model backend.",
@@ -373,16 +383,19 @@ async def update_model_backend_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mb = await update_model_backend(session, backend_id, updates)
     except IntegrityError:
+        logger.exception("model_backends.update_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("model_backends.update_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("model_backends.update_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating model backend.",
@@ -421,16 +434,19 @@ async def delete_model_backend_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_model_backend(session, backend_id)
     except IntegrityError:
+        logger.exception("model_backends.delete_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("model_backends.delete_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("model_backends.delete_model_backend_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting model backend.",

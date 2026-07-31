@@ -55,6 +55,7 @@ async def _check_database() -> CheckResult:
             detail="database reachable",
         )
     except Exception as exc:
+        _log.exception("health._check_database")
         latency_ms = (time.monotonic() - start) * 1000
         return CheckResult(
             status="unavailable",
@@ -77,6 +78,7 @@ async def _check_redis() -> CheckResult:
             detail="redis reachable",
         )
     except Exception as exc:
+        _log.exception("health._check_redis")
         latency_ms = (time.monotonic() - start) * 1000
         return CheckResult(
             status="degraded",
@@ -97,6 +99,7 @@ async def _check_checkpointer() -> CheckResult:
         try:
             await conn.fetchrow("SELECT 1 FROM checkpoint_migrations LIMIT 1")
         except Exception as exc:
+            _log.exception("health._check_checkpointer")
             return CheckResult(
                 status="degraded",
                 detail=f"checkpoint_migrations table not accessible: {exc}",
@@ -106,6 +109,7 @@ async def _check_checkpointer() -> CheckResult:
                 await conn.close()
         return CheckResult(status="ok", detail="checkpointer schema accessible")
     except Exception as exc:
+        _log.exception("health._check_checkpointer")
         return CheckResult(status="degraded", detail=str(exc) or "checkpointer check failed")
 
 
@@ -131,6 +135,7 @@ async def _check_migrations() -> CheckResult:
             detail=f"pending migrations: {', '.join(sorted(missing))}",
         )
     except Exception as exc:
+        _log.exception("health._check_migrations")
         return CheckResult(status="degraded", detail=f"migration check failed: {exc}")
 
 
