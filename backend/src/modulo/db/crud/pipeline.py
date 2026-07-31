@@ -39,6 +39,7 @@ async def create_pipeline(
     run_context_defaults: dict[str, Any] | None = None,
     default_autonomy_level: str = "manual_approval",
     max_duration_seconds: int | None = None,
+    stale_run_timeout_minutes: int = 30,
     folder_id: uuid.UUID | None = None,
 ) -> Pipeline:
     if folder_id is not None:
@@ -65,6 +66,7 @@ async def create_pipeline(
         run_context_defaults=run_context_defaults or {},
         default_autonomy_level=default_autonomy_level,
         max_duration_seconds=max_duration_seconds,
+        stale_run_timeout_minutes=stale_run_timeout_minutes,
         folder_id=folder_id,
     )
     session.add(pipeline)
@@ -290,6 +292,7 @@ async def clone_pipeline(
         run_context_defaults=copy.deepcopy(source.run_context_defaults),
         graph_nodes_json=copy.deepcopy(source.graph_nodes_json),
         default_autonomy_level=source.default_autonomy_level,
+        stale_run_timeout_minutes=source.stale_run_timeout_minutes,
     )
     session.add(cloned)
     await session.flush()

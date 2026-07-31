@@ -5,7 +5,7 @@ Describe "Pre-commit command portability" {
     }
 
     It "runs import-linter through the backend project environment" {
-        $config | Should -Match '(?m)^\s*entry:\s*uv --directory backend run lint-imports\s*$'
+        $config | Should -Match '(?m)^\s*entry:\s*uv --directory backend run --no-sync lint-imports\s*$'
     }
 
     It "does not wrap uv hooks in Bash" {

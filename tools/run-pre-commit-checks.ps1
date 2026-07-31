@@ -29,14 +29,19 @@ if ($harnessExitCode -eq 0) {
 }
 
 # The shared harness uses a line-oriented Python check that cannot distinguish
-# nested calls such as super().__init__() from module-level calls. Revalidate
-# module-call-only failures with the repository's AST architecture test. Other
-# harness failures retain the original non-zero result.
+# nested calls such as super().__init__() from module-level calls, nor SQLAlchemy
+# model columns (body: Mapped[...]) from FastAPI route handler parameters. When
+# every failure is one of these known false-positive classes, revalidate with the
+# repository's AST architecture test. Other harness failures retain the original
+# non-zero result.
 $failures = @($output | Where-Object { "$_" -match '^\s*FAIL ' })
-$moduleCallFailures = @(
-    $failures | Where-Object { "$_" -match 'Module-level function call' }
+$knownFalsePositives = @(
+    $failures | Where-Object {
+        "$_" -match 'Module-level function call' -or
+        ("$_" -match "FastAPI route handler uses 'body' as parameter name" -and "$_" -match 'body: Mapped\[')
+    }
 )
-if ($failures.Count -gt 0 -and $failures.Count -eq $moduleCallFailures.Count) {
+if ($failures.Count -gt 0 -and $failures.Count -eq $knownFalsePositives.Count) {
     Write-Host "  Revalidating Python module-level calls with the AST architecture check..."
     & uv --directory (Join-Path $repoRoot "backend") run --no-sync pytest tests/architecture/test_module_side_effects.py -q
     exit $LASTEXITCODE
