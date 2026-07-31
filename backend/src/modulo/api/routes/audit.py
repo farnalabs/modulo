@@ -88,6 +88,7 @@ async def list_audit_events_endpoint(
                 to_date=to_date,
             )
     except ProgrammingError:
+        _log.exception("audit.list_audit_events_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -126,6 +127,7 @@ async def batch_detail_endpoint(
                 req.event_ids,
             )
     except ProgrammingError:
+        _log.exception("audit.batch_detail_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -160,6 +162,7 @@ async def verify_chain_endpoint(
             await set_rls_org(session, principal.organisation_id)
             result = await verify_chain(session, principal.organisation_id)
     except ProgrammingError:
+        _log.exception("audit.verify_chain_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -219,6 +222,7 @@ async def export_chain_endpoint(
                 to_date=to_date,
             )
     except ProgrammingError:
+        _log.exception("audit.export_chain_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",

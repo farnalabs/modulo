@@ -1,4 +1,4 @@
-﻿name: "CI: Fast Validation"
+name: "CI: Fast Validation"
 on:
   push:
     branches: [main]
@@ -67,6 +67,25 @@ jobs:
         with:
           name: coverage-report
           path: backend/coverage.xml
+
+  root-test:
+    name: Test (Root)
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Run root-level test suite
+        shell: bash
+        run: PYTHONPATH="$PWD" uv run --no-sync pytest ../test_*.py
+        env:
+          DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
 
   frontend:
     name: Frontend and WCAG
@@ -154,7 +173,7 @@ jobs:
   notify-pr-failure:
     name: Trigger Branch Fixer
     if: github.event_name == 'pull_request' && (failure() || cancelled())
-    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
+    needs: [backend-lint, backend-test, root-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -231,7 +250,7 @@ jobs:
   notify-pr-review:
     name: Trigger PR Reviewer
     if: github.event_name == 'pull_request' && success()
-    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
+    needs: [backend-lint, backend-test, root-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     steps:
       - name: Send webhook to Modulo PR Review Agent
@@ -257,17 +276,34 @@ jobs:
           )
           BODY=$(echo "${PAYLOAD}")
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
-          curl -s -X POST "${MODULO_WEBHOOK_URL}" \
-            -H "Content-Type: application/json" \
-            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-            -d "${BODY}"
+
+          # Retry with exponential backoff on 429/5xx (max 5 attempts, ~5 min total)
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "PR Reviewer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              break
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE (attempt $i/5) � retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              break
+            fi
+          done
           echo "PR Reviewer notified"
 
   modulo-smoke-test:
     name: Run Modulo Smoke Test
     if: github.event_name == 'push' && success()
-    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
+    needs: [backend-lint, backend-test, root-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     steps:
       - name: Trigger Sandbox E2E Test and verify completion

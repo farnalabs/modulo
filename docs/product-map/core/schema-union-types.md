@@ -179,4 +179,4 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 - No BDD coverage for union/array validation (oneOf/anyOf)
 - No concurrency tests for schema version creation race conditions
 - No backward compatibility integration tests for deprecated schema versions
-- Schema version lifecycle (deprecation → hard delete) not tested 
+- Schema version lifecycle (deprecation → hard delete) not tested

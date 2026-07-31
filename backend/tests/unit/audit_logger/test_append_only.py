@@ -11,12 +11,35 @@ Here we verify registration, non-blocking inserts, and guard logic.
 """
 
 import uuid
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.audit_logger.append_only import register_append_only_guard
+from modulo.core.audit_logger.append_only import (
+    AppendOnlyViolationError,
+    register_append_only_guard,
+)
 from modulo.db.models.audit_event import AuditEvent
+from modulo.db.models.error_event import ErrorEvent
+
+_ListenerMap = dict[tuple[type, str], Callable[..., None]]
+
+
+def _capture_listeners() -> _ListenerMap:
+    """Register the guard while intercepting ``event.listen`` so the exact
+    listener closures can be fired directly (no DB required)."""
+    captured: _ListenerMap = {}
+
+    def _capture(target: type, identifier: str, listener: Callable[..., None]) -> None:
+        captured[(target, identifier)] = listener
+
+    with (
+        patch("modulo.core.audit_logger.append_only._guard_registered", False),
+        patch("modulo.core.audit_logger.append_only.event.listen", side_effect=_capture),
+    ):
+        register_append_only_guard()
+    return captured
 
 
 class TestAppendOnlyGuardRegistration:
@@ -28,11 +51,15 @@ class TestAppendOnlyGuardRegistration:
         register_append_only_guard()
 
     def test_listeners_are_registered(self):
-        """Verify event listeners are registered on AuditEvent."""
-        register_append_only_guard()
-        # SQLAlchemy's event.contains checks if a listener is registered
-        # We check for our guard by verifying registration doesn't fail
-        assert True  # register_idempotent already proves no crash
+        """Update and delete listeners must be wired on both append-only models."""
+        captured = _capture_listeners()
+        expected = {
+            (AuditEvent, "before_update"),
+            (AuditEvent, "before_delete"),
+            (ErrorEvent, "before_update"),
+            (ErrorEvent, "before_delete"),
+        }
+        assert set(captured) == expected
 
 
 class TestAppendOnlyGuardDoesNotBlockInsert:
@@ -65,34 +92,81 @@ class TestAppendOnlyGuardDoesNotBlockInsert:
 
 
 class TestAppendOnlyGuardListenerLogic:
-    """Tests the guard's listener logic directly."""
+    """Tests the guard's listener logic directly by firing the registered
+    listeners (no database required)."""
 
-    def test_listener_error_message_format(self):
-        """Verify the error message contains expected text."""
-        register_append_only_guard()
+    def test_update_listener_rejects_audit_event(self):
+        """The before_update listener must raise AppendOnlyViolationError."""
+        listeners = _capture_listeners()
+        blocker = listeners[(AuditEvent, "before_update")]
 
-        event = AuditEvent(organisation_id=uuid.uuid4(), event_type="test")
+        event = AuditEvent(
+            organisation_id=uuid.uuid4(),
+            event_type="test.event",
+            payload_json={"key": "value"},
+        )
         event.id = uuid.uuid4()
 
-        # The actual listener raises RuntimeError with "append-only" in message
-        expected_msg = f"AuditEvent {event.id} cannot be updated: audit_events are append-only"
-        with pytest.raises(RuntimeError) as exc_info:
-            raise RuntimeError(expected_msg)
+        with pytest.raises(AppendOnlyViolationError) as exc_info:
+            blocker(None, None, event)
 
-        assert "append-only" in str(exc_info.value).lower()
+        assert str(event.id) in str(exc_info.value)
+        assert "cannot be updated" in str(exc_info.value)
+        assert "append-only" in str(exc_info.value)
 
-    def test_delete_listener_error_message_format(self):
-        """Verify the delete listener error message."""
-        register_append_only_guard()
+    def test_delete_listener_rejects_error_event(self):
+        """The before_delete listener must raise AppendOnlyViolationError."""
+        listeners = _capture_listeners()
+        blocker = listeners[(ErrorEvent, "before_delete")]
 
-        event = AuditEvent(organisation_id=uuid.uuid4(), event_type="test")
+        event = ErrorEvent(
+            organisation_id=uuid.uuid4(),
+            fingerprint="fp-1",
+            level="error",
+            message="boom",
+            source="backend",
+        )
         event.id = uuid.uuid4()
 
-        expected_msg = f"AuditEvent {event.id} cannot be deleted: audit_events are append-only"
-        with pytest.raises(RuntimeError) as exc_info:
-            raise RuntimeError(expected_msg)
+        with pytest.raises(AppendOnlyViolationError) as exc_info:
+            blocker(None, None, event)
 
-        assert "append-only" in str(exc_info.value).lower()
+        assert str(event.id) in str(exc_info.value)
+        assert "cannot be deleted" in str(exc_info.value)
+        assert "append-only" in str(exc_info.value)
+
+    def test_update_listener_rejects_error_event(self):
+        """ErrorEvent must also be protected against UPDATEs."""
+        listeners = _capture_listeners()
+        blocker = listeners[(ErrorEvent, "before_update")]
+
+        event = ErrorEvent(
+            organisation_id=uuid.uuid4(),
+            fingerprint="fp-2",
+            level="warning",
+            message="warn",
+            source="frontend",
+        )
+        event.id = uuid.uuid4()
+
+        with pytest.raises(AppendOnlyViolationError) as exc_info:
+            blocker(None, None, event)
+
+        assert str(event.id) in str(exc_info.value)
+        assert "cannot be updated" in str(exc_info.value)
+
+    def test_listener_uses_target_id_in_message(self):
+        """The error message must identify the specific record being mutated."""
+        listeners = _capture_listeners()
+        blocker = listeners[(AuditEvent, "before_update")]
+
+        event = AuditEvent(organisation_id=uuid.uuid4(), event_type="test.event")
+        event.id = uuid.uuid4()
+
+        with pytest.raises(AppendOnlyViolationError) as exc_info:
+            blocker(None, None, event)
+
+        assert str(event.id) in str(exc_info.value)
 
 
 class TestAppendOnlyGuardWithMockSession:

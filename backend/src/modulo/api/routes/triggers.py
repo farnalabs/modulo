@@ -70,11 +70,13 @@ async def list_triggers(
             q = q.order_by(Trigger.created_at.desc()).offset(offset).limit(page_size)
             rows = (await session.execute(q)).scalars().all()
     except ProgrammingError:
+        _log.exception("triggers.list_triggers")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.list_triggers")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -195,11 +197,13 @@ async def update_cron_config(
 
             await session.flush()
     except ProgrammingError:
+        _log.exception("triggers.update_cron_config")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.update_cron_config")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -262,11 +266,13 @@ async def preview_cron_schedule(
                 )
                 times.append(next_fire.isoformat())
     except ProgrammingError:
+        _log.exception("triggers.preview_cron_schedule")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.preview_cron_schedule")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -371,11 +377,13 @@ async def update_polling_config(
 
             await session.flush()
     except ProgrammingError:
+        _log.exception("triggers.update_polling_config")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.update_polling_config")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -438,11 +446,13 @@ async def test_polling_condition(
                     detail="Only polling triggers can be tested",
                 )
     except ProgrammingError:
+        _log.exception("triggers.test_polling_condition")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.test_polling_condition")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -517,11 +527,13 @@ async def create_trigger(
             session.add(trigger)
             await session.flush()
     except ProgrammingError:
+        _log.exception("triggers.create_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.create_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -609,11 +621,13 @@ async def update_trigger(
 
             await session.flush()
     except ProgrammingError:
+        _log.exception("triggers.update_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.update_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -658,11 +672,13 @@ async def delete_trigger(
             if deleted is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
     except ProgrammingError:
+        _log.exception("triggers.delete_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.delete_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -694,11 +710,13 @@ async def restore_trigger(
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
     except ProgrammingError:
+        _log.exception("triggers.restore_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.restore_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -751,11 +769,13 @@ async def toggle_trigger(
             trigger.active = not trigger.active
             await session.flush()
     except ProgrammingError:
+        _log.exception("triggers.toggle_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.toggle_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -844,11 +864,13 @@ async def test_trigger(
 
             await session.flush()
     except ProgrammingError:
+        _log.exception("triggers.test_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.test_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -920,11 +942,13 @@ async def list_trigger_events(
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()
     except ProgrammingError:
+        _log.exception("triggers.list_trigger_events")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.list_trigger_events")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -995,11 +1019,13 @@ async def list_pipeline_triggers(
             q = q.order_by(Trigger.created_at.desc())
             rows = (await session.execute(q)).scalars().all()
     except ProgrammingError:
+        _log.exception("triggers.list_pipeline_triggers")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("triggers.list_pipeline_triggers")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",

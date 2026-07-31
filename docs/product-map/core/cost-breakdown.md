@@ -10,7 +10,7 @@ unit-tests:
   - backend/tests/unit/core/cost_controller/test_cost_controller.py
   - backend/tests/unit/api/test_costs.py
   - backend/tests/unit/api/test_cost_controls_bdd.py
-  - backend/tests/unit/api/test_costs_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/integration/crud/test_cost_attribution.py
 bdd:
   - backend/tests/bdd/features/costs/cost_controls.feature

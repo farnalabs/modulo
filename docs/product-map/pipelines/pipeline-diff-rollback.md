@@ -14,7 +14,7 @@ unit-tests:
   - backend/tests/unit/pipelines/test_snapshot_versioning.py
   - backend/tests/unit/pipelines/test_snapshot_backward_compat.py
   - backend/tests/unit/pipelines/test_snapshot_crud.py
-  - backend/tests/unit/pipelines/test_snapshot_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 depends-on: [feat-pipelines-pipeline-versioning]
 status: partial
 ---

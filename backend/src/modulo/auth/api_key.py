@@ -21,7 +21,7 @@ import hmac
 import logging
 import secrets
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -86,6 +86,8 @@ async def create_api_key(
     expires_at: datetime | None = None,
 ) -> tuple[OrgApiKey, str]:
     """Create an API key. Returns (OrgApiKey, full_key). full_key is shown once."""
+    if expires_at is None:
+        expires_at = datetime.now(UTC) + timedelta(days=365)
     full_key, prefix, hashed = generate_api_key()
     key = OrgApiKey(
         organisation_id=org_id,
@@ -239,4 +241,26 @@ async def update_api_key(
     if expires_at is not None:
         key.expires_at = expires_at
     await session.flush()
+    return key
+
+
+async def reset_api_key_expiry(
+    session: AsyncSession,
+    key_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> OrgApiKey | None:
+    """Reset an API key's expiry to 365 days from now. Returns None if not found."""
+    stmt = select(OrgApiKey).where(
+        OrgApiKey.id == key_id,
+        OrgApiKey.organisation_id == org_id,
+        OrgApiKey.revoked_at.is_(None),
+    )
+    result = await session.execute(stmt)
+    key = result.scalar_one_or_none()
+    if key is None:
+        _log.info("api_key.reset_expiry_not_found", extra={"key_id": str(key_id), "org_id": str(org_id)})
+        return None
+    key.expires_at = datetime.now(UTC) + timedelta(days=365)
+    await session.flush()
+    _log.info("api_key.expiry_reset", extra={"key_id": str(key.id)})
     return key

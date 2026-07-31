@@ -208,6 +208,7 @@ async def me(
             await set_rls_user_context(session, current_user.account_id, current_user.org_role or "admin")
             memberships = await list_team_memberships_for_account(session, current_user.account_id)
     except ProgrammingError:
+        logger.exception("viewmodel.me")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -341,6 +342,7 @@ async def viewmodel_current(
 
             plan_ctx = await resolve_plan_context(settings, session, org=org)
     except ProgrammingError:
+        logger.exception("viewmodel.viewmodel_current")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -413,6 +415,7 @@ async def viewmodel_list_views(
             await set_rls_user_context(session, current_user.account_id, current_user.org_role or "admin")
             result = await list_views(session, page=page, page_size=page_size)
     except ProgrammingError:
+        logger.exception("viewmodel.viewmodel_list_views")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",

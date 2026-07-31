@@ -75,6 +75,32 @@ class TestShutdownManager:
         await manager.shutdown()
         assert manager.is_shutting_down
 
+    async def test_register_same_name_twice(self) -> None:
+        calls: list[str] = []
+
+        async def cleanup_a() -> None:
+            calls.append("a")
+
+        async def cleanup_b() -> None:
+            calls.append("b")
+
+        m = ShutdownManager(timeout=5.0)
+        m.register("resource", cleanup_a)
+        m.register("resource", cleanup_b)
+        await m.shutdown()
+        assert calls == ["b", "a"]
+
+    async def test_request_finished_without_started(self, manager: ShutdownManager) -> None:
+        manager.request_finished()
+        assert manager._active_requests == -1
+
+    async def test_multiple_rapid_request_cycles(self, manager: ShutdownManager) -> None:
+        for _ in range(10):
+            manager.request_started()
+            manager.request_finished()
+        assert manager._active_requests == 0
+        await manager.shutdown()
+
 
 class TestShutdownMiddleware:
     async def test_tracks_requests(self) -> None:

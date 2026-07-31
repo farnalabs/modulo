@@ -71,6 +71,7 @@ async def run_websocket(
     except WsTokenExpiredError:
         payload = None
     except Exception as exc:
+        _log.exception("run_ws.run_websocket")
         _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
         payload = None
     finally:
@@ -105,10 +106,12 @@ async def run_websocket(
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
     except ProgrammingError:
+        _log.exception("run_ws.run_websocket")
         await ws.send_json({"error": "migration_required", "detail": "Run database migrations to enable this feature."})
         await ws.close(code=1011)
         return
     except SQLAlchemyError:
+        _log.exception("run_ws.run_websocket")
         await ws.send_json({"error": "db_unavailable", "detail": "Database temporarily unavailable."})
         await ws.close(code=1011)
         return

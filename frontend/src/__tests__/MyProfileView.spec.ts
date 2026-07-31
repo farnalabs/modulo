@@ -2,21 +2,28 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
-const mockPut = vi.fn().mockResolvedValue(undefined)
-const mockGet = vi.fn().mockResolvedValue({
-  id: '1',
-  email: 'user@example.com',
-  display_name: 'Test User',
-  org_role: 'admin',
-  active: true,
-  created_at: '2025-01-01T00:00:00Z',
+const { mockPut, mockGet } = vi.hoisted(() => {
+  const mockPut = vi.fn().mockResolvedValue({ data: {}, error: undefined })
+  const mockGet = vi.fn().mockResolvedValue({
+    data: {
+      id: '1',
+      email: 'user@example.com',
+      display_name: 'Test User',
+      org_role: 'admin',
+      active: true,
+      created_at: '2025-01-01T00:00:00Z',
+      is_system_admin: false,
+    },
+    error: undefined,
+  })
+  return { mockPut, mockGet }
 })
 
-vi.mock('../composables/useApi', () => ({
-  useApi: vi.fn(() => ({
-    get: mockGet,
-    put: mockPut,
-  })),
+vi.mock('../lib/api/client', () => ({
+  api: {
+    GET: mockGet,
+    PUT: mockPut,
+  },
 }))
 
 import MyProfileView from '../views/MyProfileView.vue'
@@ -85,14 +92,16 @@ describe('MyProfileView', () => {
     await nextTick()
 
     expect(mockPut).toHaveBeenCalledWith('/api/v1/me/password', {
-      current_password: 'old-password',
-      new_password: 'new-strong-password-42',
+      body: {
+        current_password: 'old-password',
+        new_password: 'new-strong-password-42',
+      },
     })
     expect(wrapper.text()).toContain('Password changed successfully')
   })
 
   it('shows API error message on failure', async () => {
-    mockPut.mockRejectedValueOnce(new Error('Current password is incorrect'))
+    mockPut.mockResolvedValueOnce({ data: undefined, error: 'Current password is incorrect' })
 
     const wrapper = mount(MyProfileView)
     await nextTick()

@@ -1,10 +1,10 @@
-"""TriggerEngine — webhook validation, deduplication, flood protection, and run creation.
+"""TriggerEngine - webhook validation, deduplication, flood protection, and run creation.
 
 Webhook processing pipeline:
   1. Load trigger config from DB (with FOR UPDATE lock)
   2. X-Modulo-Timestamp replay window check (±300s)
   3. HMAC-SHA256 validation over timestamp.body (if hmac_secret configured)
-  4. Deduplication (WebhookDedupHash — payload hash, 5-min TTL)
+  4. Deduplication (WebhookDedupHash - payload hash, 5-min TTL)
   5. Flood protection (concurrent run count vs. trigger.max_concurrent_runs)
   6. Payload mapping (dot-notation path → input_payload key)
   7. Create Run + TriggerEvent in one transaction
@@ -101,7 +101,7 @@ class TriggerBusyError(RuntimeError):
     """Raised when a concurrent dispatch for the same trigger is already in progress."""
 
     def __init__(self, trigger_id: uuid.UUID) -> None:
-        super().__init__(f"Trigger {trigger_id} is busy — another dispatch is in progress")
+        super().__init__(f"Trigger {trigger_id} is busy - another dispatch is in progress")
         self.trigger_id = trigger_id
 
 
@@ -135,12 +135,12 @@ def _is_unique_violation(exc: IntegrityError) -> bool:
     if orig is None:
         return False
 
-    # PostgreSQL — asyncpg raises with pgcode attribute
+    # PostgreSQL - asyncpg raises with pgcode attribute
     pgcode = getattr(orig, "pgcode", None)
     if pgcode is not None:
         return str(pgcode) == "23505"
 
-    # SQLite — aiosqlite wraps the message as a string
+    # SQLite - aiosqlite wraps the message as a string
     msg = str(orig)
     if "UNIQUE constraint failed" in msg:
         return True
@@ -213,7 +213,7 @@ def _apply_payload_mapping(raw_payload: dict[str, Any], mapping: dict[str, str])
 
 
 class TriggerEngine:
-    """Stateless service — pass a session per call."""
+    """Stateless service - pass a session per call."""
 
     async def handle_webhook(
         self,
@@ -272,7 +272,7 @@ class TriggerEngine:
                 )
                 raise HmacValidationError()
 
-            # Event type filtering — skip if payload doesn't contain any accepted event
+            # Event type filtering - skip if payload doesn't contain any accepted event
             accepted_events: list[str] | None = cfg.get("accepted_events")
             if accepted_events:
                 has_accepted_event = any(isinstance(raw_payload.get(event), dict) for event in accepted_events)
@@ -308,11 +308,13 @@ class TriggerEngine:
                 )
                 raise DuplicateWebhookError(payload_hash)
 
-            # Flood / concurrency protection
+            # Flood / concurrency protection � accept and queue instead of rejecting.
+            # The run is created as pending and the executor queues it via
+            # _check_capacity / _retry_pending, so webhooks never get 429s.
             active_count = await self._count_active_runs(session, trigger.id)
             if active_count >= trigger.max_concurrent_runs:
                 _log.warning(
-                    "Webhook concurrency limit reached for trigger %s (%d active >= %d limit)",
+                    "Webhook concurrency limit reached for trigger %s (%d active >= %d limit) � queuing anyway",
                     trigger_id,
                     active_count,
                     trigger.max_concurrent_runs,
@@ -322,9 +324,8 @@ class TriggerEngine:
                     trigger=trigger,
                     org_id=org_id,
                     payload_hash=payload_hash,
-                    result="concurrency_limit_reached",
+                    result="concurrency_limit_reached_queued",
                 )
-                raise ConcurrentRunLimitError(trigger_id, trigger.max_concurrent_runs)
 
             # Payload mapping
             mapping: dict[str, str] = cfg.get("payload_mapping", {})
@@ -467,10 +468,10 @@ class TriggerEngine:
             # Run the rest of the pipeline (skip HMAC + timestamp validation)
             payload_hash = _sha256_hex(raw_body)
 
-            # No dedup check for replays — this is an intentional re-fire.
+            # No dedup check for replays - this is an intentional re-fire.
             # The original event already went through dedup validation.
 
-            # Event type filtering — skip if payload doesn't contain any accepted event
+            # Event type filtering - skip if payload doesn't contain any accepted event
             cfg = trigger.config_json or {}
             accepted_events: list[str] | None = cfg.get("accepted_events")
             if accepted_events:
@@ -600,7 +601,7 @@ class TriggerEngine:
 
         Computes ``next_fire_at`` from ``poll_interval_seconds`` and persists it
         on the trigger row. The ``DatabasePollingScheduler`` will pick it up on
-        the next beat tick — there is no in-memory scheduler to update directly.
+        the next beat tick - there is no in-memory scheduler to update directly.
         """
         config = trigger.config_json or {}
         raw_interval = config.get("poll_interval_seconds")
@@ -775,7 +776,7 @@ class TriggerEngine:
         trigger_id: uuid.UUID,
         org_id: uuid.UUID,
     ) -> Trigger:
-        """Load trigger row (no FOR UPDATE — caller holds advisory lock if needed)."""
+        """Load trigger row (no FOR UPDATE - caller holds advisory lock if needed)."""
         result = await session.execute(
             select(Trigger).where(
                 Trigger.id == trigger_id,

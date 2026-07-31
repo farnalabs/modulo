@@ -73,8 +73,10 @@ async def list_tiers_endpoint(
     except HTTPException:
         raise
     except ProgrammingError:
+        logger.exception("admin_tiers.list_tiers_endpoint")
         raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
     except SQLAlchemyError:
+        logger.exception("admin_tiers.list_tiers_endpoint")
         raise HTTPException(status_code=503, detail="Database error occurred.") from None
     except Exception:
         logger.exception("Unexpected error in list_tiers_endpoint")
