@@ -1,7 +1,6 @@
 """Unit tests for webhook dedup cleanup job."""
 
 import asyncio
-import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -73,10 +72,7 @@ class TestCleanupOldWebhookEvents:
         await cleanup_old_webhook_events(session, retention_days=retention_days)
 
         stmt = session.execute.call_args_list[0][0][0]
-        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
-        match = re.search(r"created_at < ['\"]([^'\"]+)['\"]", compiled)
-        assert match is not None, compiled
-        cutoff = datetime.fromisoformat(match.group(1))
+        cutoff = next(v for v in stmt.compile().params.values() if isinstance(v, datetime))
         expected = datetime.now(UTC) - timedelta(days=retention_days)
         assert abs((cutoff - expected).total_seconds()) < 5
 
@@ -86,10 +82,7 @@ class TestCleanupOldWebhookEvents:
         await cleanup_old_webhook_events(session)
 
         stmt = session.execute.call_args_list[0][0][0]
-        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
-        match = re.search(r"created_at < ['\"]([^'\"]+)['\"]", compiled)
-        assert match is not None, compiled
-        cutoff = datetime.fromisoformat(match.group(1))
+        cutoff = next(v for v in stmt.compile().params.values() if isinstance(v, datetime))
         expected = datetime.now(UTC) - timedelta(days=DEFAULT_RETENTION_DAYS)
         assert abs((cutoff - expected).total_seconds()) < 5
 
@@ -109,10 +102,8 @@ class TestCleanupOldWebhookEvents:
         await cleanup_old_webhook_events(session)
 
         stmt = session.execute.call_args_list[0][0][0]
-        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
-        match = re.search(r"LIMIT\s+(\d+)", compiled, re.IGNORECASE)
-        assert match is not None, compiled
-        assert int(match.group(1)) == BATCH_SIZE
+        limit = next(v for v in stmt.compile().params.values() if isinstance(v, int))
+        assert limit == BATCH_SIZE
 
     async def test_delete_targets_returned_ids(self) -> None:
         ids = [uuid.uuid4(), uuid.uuid4()]
@@ -121,10 +112,9 @@ class TestCleanupOldWebhookEvents:
         await cleanup_old_webhook_events(session)
 
         delete_stmt = session.execute.call_args_list[1][0][0]
-        compiled = str(delete_stmt.compile(compile_kwargs={"literal_binds": True}))
-        assert "DELETE FROM trigger_events" in compiled
-        for id_ in ids:
-            assert id_.hex in compiled
+        assert delete_stmt.table.name == "trigger_events"
+        target_ids = next(v for v in delete_stmt.compile().params.values() if isinstance(v, list))
+        assert set(target_ids) == set(ids)
 
     async def test_commits_transaction(self) -> None:
         session = _make_session([uuid.uuid4()])
