@@ -16,10 +16,12 @@ from typing import Any
 import jmespath
 import jmespath.exceptions
 from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import InterfaceError, OperationalError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorResult
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+from modulo.core.pipeline_executor_task import SchedulerDBError
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -222,7 +224,7 @@ async def fire_polling_trigger(
         trigger = result.scalar_one_or_none()
         if trigger is None or not trigger.active:
             return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-        if trigger.next_fire_at is not None and trigger.next_fire_at > datetime.datetime.now(datetime.timezone.utc):
+        if trigger.next_fire_at is not None and trigger.next_fire_at > datetime.datetime.now(datetime.UTC):
             return {"status": "skipped", "reason": "already_fired_this_cycle"}
 
         # Concurrency check
@@ -531,7 +533,10 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
 
     def _sync_with_db(self) -> None:
         """Query the database and update the in-memory schedule."""
-        rows = asyncio.run(self._fetch_due_triggers())
+        try:
+            rows = self._fetch_due_triggers()
+        except SchedulerDBError:
+            return
 
         current_ids = set(self._schedule.keys())
         db_ids: set[str] = set()
@@ -560,14 +565,20 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
         for sid in stale:
             self._schedule.pop(sid, None)
 
-    async def _fetch_due_triggers(self) -> list[dict[str, Any]]:
-        """Async query for polling triggers due to fire."""
+    def _fetch_due_triggers(self) -> list[dict[str, Any]]:
+        """Sync query for polling triggers due to fire — runs inside Celery beat."""
         try:
-            factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
+            import uuid
+            from datetime import UTC, datetime, timedelta
 
-            async with factory() as session, session.begin():
-                now = datetime.datetime.now(datetime.UTC)
-                result = await session.execute(
+            from modulo.core.pipeline_executor_task import SchedulerDBError, get_beat_sync_session
+            from modulo.db.models.trigger import Trigger
+            from modulo.db.models.trigger_event import TriggerEvent
+
+            session = get_beat_sync_session()
+            try:
+                now = datetime.now(UTC)
+                result = session.execute(
                     select(
                         Trigger.id,
                         Trigger.organisation_id,
@@ -576,7 +587,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                         Trigger.next_fire_at,
                     ).where(
                         Trigger.trigger_type == "polling",
-                        Trigger.active == True,  # noqa: E712
+                        Trigger.active,
                         Trigger.next_fire_at <= now,
                     )
                 )
@@ -601,12 +612,10 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                             error_detail="Polling trigger missing connector_instance_id in config_json",
                         )
                         session.add(event)
-                        # Advance next_fire_at to prevent perpetual re-fetch on every tick
                         interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-                        next_fire = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=interval)
-                        await session.execute(
-                            update(Trigger).where(Trigger.id == row.id).values(next_fire_at=next_fire)
-                        )
+                        next_fire = datetime.now(UTC) + timedelta(seconds=interval)
+                        session.execute(update(Trigger).where(Trigger.id == row.id).values(next_fire_at=next_fire))
+                        session.commit()
                         continue
 
                     triggers.append(
@@ -621,11 +630,15 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                         }
                     )
                 return triggers
-        except asyncio.CancelledError:
-            raise
-        except Exception:
+            finally:
+                session.close()
+        except (
+            OperationalError,
+            InterfaceError,
+            TimeoutError,
+        ):
             _log.exception("Failed to fetch polling triggers from database")
-            return []
+            raise SchedulerDBError("Polling scheduler DB query failed") from None
 
 
 # ---------------------------------------------------------------------------

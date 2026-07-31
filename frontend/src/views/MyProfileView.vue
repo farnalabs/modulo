@@ -75,7 +75,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
-import { useApi } from '../composables/useApi'
+import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import { formatDateShort } from '../lib/formatDate'
 
 const { t } = useI18n()
@@ -89,9 +90,9 @@ interface Profile {
   created_at: string
 }
 
-const { get, put } = useApi()
+const EMPTY_PROFILE: Profile = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '' }
 
-const profile = ref<Profile>({ id: '', email: '', display_name: '', org_role: '', active: true, created_at: '' })
+const profile = ref<Profile>({ ...EMPTY_PROFILE })
 const currentPassword = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')
@@ -113,9 +114,18 @@ function formatMemberSince(dateStr: string): string {
 
 async function loadProfile() {
   try {
-    profile.value = await get<Profile>('/api/v1/me')
-  } catch {
-    profile.value = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '' }
+    const { data, error } = await api.GET('/api/v1/me')
+    if (error) {
+      profile.value = { ...EMPTY_PROFILE }
+      return
+    }
+    if (data) {
+      const { id, email, display_name, org_role, active, created_at } = data
+      profile.value = { id, email, display_name, org_role, active, created_at }
+    }
+  } catch (e) {
+    console.warn('Failed to load profile', e)
+    profile.value = { ...EMPTY_PROFILE }
   }
 }
 
@@ -132,16 +142,22 @@ async function changePassword() {
   }
   passSaving.value = true
   try {
-    await put('/api/v1/me/password', {
-      current_password: currentPassword.value,
-      new_password: newPassword.value,
+    const { data, error } = await api.PUT('/api/v1/me/password', {
+      body: {
+        current_password: currentPassword.value,
+        new_password: newPassword.value,
+      },
     })
-    passSuccess.value = t('views.MyProfileView.password_changed_successfully')
-    currentPassword.value = ''
-    newPassword.value = ''
-    confirmPassword.value = ''
-  } catch (e: any) {
-    passError.value = e instanceof Error ? e.message : t('views.MyProfileView.failed_to_change_password')
+    if (error) {
+      passError.value = formatApiError(error)
+    } else if (data) {
+      passSuccess.value = t('views.MyProfileView.password_changed_successfully')
+      currentPassword.value = ''
+      newPassword.value = ''
+      confirmPassword.value = ''
+    }
+  } catch (e) {
+    passError.value = formatApiError(e)
   } finally {
     passSaving.value = false
   }

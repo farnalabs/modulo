@@ -154,16 +154,19 @@ async def create_eval_definition(
     except HTTPException:
         raise
     except IntegrityError:
+        _log.exception("evals.create_eval_definition")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Eval definition references a resource that does not exist.",
         ) from None
     except ProgrammingError:
+        _log.exception("evals.create_eval_definition")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("evals.create_eval_definition")
         _log.warning("evals.create_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -219,16 +222,19 @@ async def list_eval_definitions(
     except HTTPException:
         raise
     except IntegrityError:
+        _log.exception("evals.list_eval_definitions")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("evals.list_eval_definitions")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("evals.list_eval_definitions")
         _log.warning("evals.list_eval_definitions_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -296,16 +302,19 @@ async def eval_coverage(
     except HTTPException:
         raise
     except IntegrityError:
+        _log.exception("evals.eval_coverage")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("evals.eval_coverage")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("evals.eval_coverage")
         _log.warning("evals.eval_coverage_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -377,16 +386,19 @@ async def get_eval_definition(
     except HTTPException:
         raise
     except IntegrityError:
+        _log.exception("evals.get_eval_definition")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("evals.get_eval_definition")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("evals.get_eval_definition")
         _log.warning("evals.get_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -436,16 +448,19 @@ async def update_eval_definition(
     except HTTPException:
         raise
     except IntegrityError:
+        _log.exception("evals.update_eval_definition")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Update would violate a constraint. Check that the referenced pipeline or suite exists.",
         ) from None
     except ProgrammingError:
+        _log.exception("evals.update_eval_definition")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("evals.update_eval_definition")
         _log.warning("evals.update_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -489,16 +504,19 @@ async def delete_eval_definition(
     except HTTPException:
         raise
     except IntegrityError:
+        _log.exception("evals.delete_eval_definition")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("evals.delete_eval_definition")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("evals.delete_eval_definition")
         _log.warning("evals.delete_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -565,16 +583,19 @@ async def list_run_evals(
     except HTTPException:
         raise
     except IntegrityError:
+        _log.exception("evals.list_run_evals")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("evals.list_run_evals")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("evals.list_run_evals")
         _log.warning("evals.list_run_evals_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -674,16 +695,19 @@ async def compare_evals(
     except HTTPException:
         raise
     except IntegrityError:
+        _log.exception("evals.compare_evals")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("evals.compare_evals")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("evals.compare_evals")
         _log.warning("evals.compare_evals_first_block_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -713,16 +737,19 @@ async def compare_evals(
         except HTTPException:
             raise
         except IntegrityError:
+            _log.exception("evals.compare_evals")
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A resource with this value already exists",
             ) from None
         except ProgrammingError:
+            _log.exception("evals.compare_evals")
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
             ) from None
         except SQLAlchemyError:
+            _log.exception("evals.compare_evals")
             _log.warning("evals.compare_evals_second_block_db_error", extra={"org_id": str(principal.organisation_id)})
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -838,16 +865,19 @@ async def create_eval_from_run(
     except HTTPException:
         raise
     except IntegrityError:
+        _log.exception("evals.create_eval_from_run")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("evals.create_eval_from_run")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("evals.create_eval_from_run")
         _log.warning(
             "evals.create_eval_from_run_first_block_db_error", extra={"org_id": str(principal.organisation_id)}
         )
@@ -901,16 +931,19 @@ async def create_eval_from_run(
     except HTTPException:
         raise
     except IntegrityError:
+        _log.exception("evals.create_eval_from_run")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Eval definition references a resource that does not exist.",
         ) from None
     except ProgrammingError:
+        _log.exception("evals.create_eval_from_run")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("evals.create_eval_from_run")
         _log.warning(
             "evals.create_eval_from_run_second_block_db_error", extra={"org_id": str(principal.organisation_id)}
         )

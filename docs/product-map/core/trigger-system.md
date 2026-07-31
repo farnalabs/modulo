@@ -19,14 +19,13 @@ unit-tests:
   - backend/tests/unit/trigger_engine/test_polling.py
   - backend/tests/unit/trigger_engine/test_polling_connector_drift.py
   - backend/tests/unit/api/test_triggers_endpoint.py
-  - backend/tests/unit/api/test_cron_triggers_bdd.py
+  - backend/tests/bdd/steps/test_cron_triggers.py
   - backend/tests/unit/api/test_admin_triggers.py
   - backend/tests/unit/api/test_webhooks_endpoint.py
   - backend/tests/unit/api/test_webhook_replay.py
-  - backend/tests/unit/api/test_trigger_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/mcp/test_get_trigger_events.py
   - backend/tests/unit/cleanup_jobs/test_webhook_dedup_cleanup.py
-  - backend/tests/unit/api/test_trigger_exception_guard.py
 status: partial
 ---
 
@@ -205,12 +204,13 @@ concurrency management via `max_concurrent_runs`.
 - Polling trigger has no `retain_payload` equivalent (webhook has it for replay)
 - `max_concurrent_runs` uses pipeline-level active-run counting; PRD 8.5 suggests trigger-level counting
 - Daily spend limit applies to cron triggers only — polling has no spend limit check
-- (Resolved) No unit tests for `admin_triggers.py` ProgrammingError → 501 path — covered in test_trigger_programming_error.py
-- (Resolved) No unit tests for `webhooks.py` ProgrammingError → 501 path — covered in test_trigger_programming_error.py
-- (Resolved) No unit tests for generic Exception→500 on trigger routes — covered in test_trigger_exception_guard.py
+- (Resolved) No unit tests for `admin_triggers.py` ProgrammingError → 501 path — covered in test_admin_triggers.py
+- (Resolved) No unit tests for generic Exception→500 on trigger routes — covered in test_admin_triggers.py
+- No unit tests for `webhooks.py` ProgrammingError → 501 path — deleted in the 530-test reduction (previously test_trigger_programming_error.py)
 
 ## QA History
 
 - 2026-07-05: Cross-cutting QA (index 169): Added `SQLAlchemyError` catch → 503 to all 16 trigger route handlers (triggers.py: 12, admin_triggers.py: 1 route with 2 try/except blocks, webhooks.py: 3). Fixed silent cursor-parsing error swallowing in admin_triggers.py (now logs warning). Added test_trigger_sqlalchemy_error.py with 18 tests covering SQLAlchemyError→503 for all trigger route handlers. Updated product map: marked all 50+ previously unchecked behaviours as [x] (verified against code implementation), added Error Handling checkbox for SQLAlchemyError→503, added Resilience & Integration Robustness section (8 checkboxes: 4 [x] + 4 [ ]). All existing unit tests continue to pass. Status: partial.
 - 2026-07-09: Cross-cutting QA (index 287): Fixed CRITICAL — added `except Exception → 500` with `except HTTPException: raise` guard and `_log.exception` to 14 trigger route handlers (12 in triggers.py, 1 in admin_triggers.py with 2 try/except blocks, 2 in webhooks.py). `cleanup_expired` already had the guard. Moved lazy `hashlib`/`json` imports to module level in test_trigger endpoint. Created test_trigger_exception_guard.py with 15 tests covering Exception→500 on all routes (12 triggers.py + admin_triggers.py + 2 webhooks.py). Removed 3 resolved Known Gaps. Updated product map Error Handling section. All tests pass. Merged to main. Status: partial.
 - 2026-07-12: Round 3 QA (improve-architecture batch 3): Fixed MINOR — added `exc_info=True` to `_log.warning()` in cursor decode except blocks in triggers.py and admin_triggers.py (both caught (ValueError, AttributeError) for malformed cursor but didn't log the exception traceback). B904 audit: all except blocks across triggers.py, admin_triggers.py, and webhooks.py already use `from None`/`from exc` correctly. CancelledError guard: not applicable (Python 3.12+). No stale frontmatter or resolved known gaps in active gaps section.
+- 2026-07-31: improve-architecture: Fixed MINOR — removed duplicated `@router.get` decorator on `admin_triggers.py.list_trigger_events` that double-registered the route (inner registration served the raw handler, making `handle_db_errors` dead code). Same cross-cutting fix applied to `admin_monitor_config.py` GET/PUT (see feat-observability-monitoring-config). Cleaned up stale frontmatter refs to test files deleted in the test-reduction commits (#102/#109): re-pointed cron BDD to `tests/bdd/steps/test_cron_triggers.py`, removed dead refs to `test_trigger_programming_error.py`/`test_trigger_exception_guard.py`, and restored error-path coverage (501/503/500) for `list_trigger_events` in test_admin_triggers.py (3 new tests).

@@ -68,6 +68,25 @@ _CATEGORY_LABELS: dict[str, str] = {
     "empty_lifecycle_maps": "Empty Lifecycle Maps",
 }
 
+_CATEGORY_TO_ENTITY: dict[str, str] = {
+    "orphan_secrets": "secret",
+    "unbound_connectors": "connector",
+    "untriggered_pipelines": "pipeline",
+    "stale_pipelines": "pipeline",
+    "unused_model_backends": "model_backend",
+    "inactive_triggers": "trigger",
+    "orphan_snapshots": "pipeline_snapshot",
+    "expired_webhook_dedups": "webhook_dedup",
+    "duplicate_triggers": "trigger",
+    "unused_environment_profiles": "environment_profile",
+    "stale_api_keys": "org_api_key",
+    "unused_sso_providers": "sso_provider",
+    "empty_teams": "team",
+    "unused_parameter_schemas": "parameter_schema",
+    "unused_schemas": "schema",
+    "empty_lifecycle_maps": "lifecycle_map",
+}
+
 _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     "orphan_secrets": "Secrets whose key is not referenced by any connector config or agent connector_type_refs",
     "unbound_connectors": "Connector instances not bound to any pipeline snapshot",
@@ -89,11 +108,12 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
 
 
 class Candidate:
-    def __init__(self, id: str, name: str, detail: str, created_at: str | None = None) -> None:
+    def __init__(self, id: str, name: str, detail: str, created_at: str | None = None, entity_type: str = "") -> None:
         self.id = id
         self.name = name
         self.detail = detail
         self.created_at = created_at
+        self.entity_type = entity_type
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -101,6 +121,7 @@ class Candidate:
             "name": self.name,
             "detail": self.detail,
             "created_at": self.created_at,
+            "entity_type": self.entity_type,
         }
 
 
@@ -674,6 +695,9 @@ async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryRes
     for category, scanner in _SCANNERS:
         try:
             candidates = await scanner(session, org_id)
+            entity_type = _CATEGORY_TO_ENTITY[category]
+            for c in candidates:
+                c.entity_type = entity_type
             results.append(CategoryResult(category=category, candidates=candidates))
         except Exception:
             _log.exception("Housekeeping scanner '%s' failed", category)

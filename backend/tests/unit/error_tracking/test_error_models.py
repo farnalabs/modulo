@@ -399,21 +399,41 @@ class TestAppendOnly:
         )
         assert event.fingerprint == "abc"
 
-    def test_update_error_message_format(self) -> None:
-        event = ErrorEvent(organisation_id=_ORG_ID, fingerprint="abc", level="error", message="test", source="backend")
-        event.id = uuid.uuid4()
-        expected_msg = f"ErrorEvent {event.id} cannot be updated: error_events are append-only"
-        with pytest.raises(RuntimeError) as exc_info:
-            raise RuntimeError(expected_msg)
-        assert "append-only" in str(exc_info.value).lower()
+    def test_update_listener_blocks(self) -> None:
+        """The registered before_update guard actually raises AppendOnlyViolationError."""
+        from modulo.core.audit_logger.append_only import AppendOnlyViolationError, _make_blocker
 
-    def test_delete_error_message_format(self) -> None:
-        event = ErrorEvent(organisation_id=_ORG_ID, fingerprint="abc", level="error", message="test", source="backend")
+        blocker = _make_blocker(ErrorEvent, "error_events", "update")
+        event = ErrorEvent(
+            organisation_id=_ORG_ID,
+            fingerprint="abc",
+            level="error",
+            message="test",
+            source="backend",
+        )
         event.id = uuid.uuid4()
-        expected_msg = f"ErrorEvent {event.id} cannot be deleted: error_events are append-only"
-        with pytest.raises(RuntimeError) as exc_info:
-            raise RuntimeError(expected_msg)
+        with pytest.raises(AppendOnlyViolationError) as exc_info:
+            blocker(None, None, event)
         assert "append-only" in str(exc_info.value).lower()
+        assert str(event.id) in str(exc_info.value)
+
+    def test_delete_listener_blocks(self) -> None:
+        """The registered before_delete guard actually raises AppendOnlyViolationError."""
+        from modulo.core.audit_logger.append_only import AppendOnlyViolationError, _make_blocker
+
+        blocker = _make_blocker(ErrorEvent, "error_events", "delete")
+        event = ErrorEvent(
+            organisation_id=_ORG_ID,
+            fingerprint="abc",
+            level="error",
+            message="test",
+            source="backend",
+        )
+        event.id = uuid.uuid4()
+        with pytest.raises(AppendOnlyViolationError) as exc_info:
+            blocker(None, None, event)
+        assert "append-only" in str(exc_info.value).lower()
+        assert str(event.id) in str(exc_info.value)
 
 
 class TestOrgScoping:

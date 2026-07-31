@@ -14,10 +14,8 @@ pytestmark = pytest.mark.asyncio(loop_scope="module")
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test_multi_backend.db")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "a" * 32)
-os.environ.setdefault("MODULO_DB", "sqlite")
 
 import modulo.db.models  # noqa: F401
 from modulo.db.models import Account

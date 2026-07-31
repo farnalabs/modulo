@@ -18,13 +18,9 @@ code:
   - backend/src/modulo/core/eval_engine/__init__.py
 unit-tests:
   - backend/tests/unit/api/test_evals_endpoint.py
-  - backend/tests/unit/api/test_evals_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/api/test_evals_compare.py
-  - backend/tests/unit/api/test_evals_compare_programming_error.py
-  - backend/tests/unit/api/test_evals_admin_programming_error.py
   - backend/tests/unit/api/test_evals_dashboard.py
-  - backend/tests/unit/api/test_evals_okr_progress_programming_error.py
-  - backend/tests/unit/api/test_evals_exception_guard.py
   - backend/tests/unit/core/test_eval_engine.py
   - backend/tests/unit/core/test_eval_suite.py
   - backend/tests/unit/core/test_eval_regressions.py

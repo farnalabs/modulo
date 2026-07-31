@@ -31,6 +31,7 @@ from typing import Any
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session
 
 try:
     import kombu
@@ -106,7 +107,7 @@ def _get_engines() -> tuple[Engine, AsyncEngine]:
             pool_pre_ping=True,
             pool_recycle=1800,
             pool_timeout=5,
-            connect_args={"connect_timeout": s.modulo_celery_db_pool_connect_timeout},
+            connect_args={"timeout": s.modulo_celery_db_pool_connect_timeout, "ssl": False},
         )
         _log.info(
             "Engines created: sync(pool=%d, overflow=%d, timeout=%ds) async(pool=%d, overflow=%d, timeout=%ds)",
@@ -250,7 +251,7 @@ class ExecuteRunTask(Task):  # type: ignore[misc]
             _log.exception("on_failure handler failed for run %s", run_id)
 
 
-async def _do_execute(run_id: str, org_id: str, task_instance: Task) -> None:
+async def _do_execute(run_id: str, org_id: str, _task_instance: Task) -> None:
     """Execute a single pipeline run from claim through completion."""
     aeng = _get_async_engine()
     rid = uuid.UUID(run_id)
@@ -258,7 +259,7 @@ async def _do_execute(run_id: str, org_id: str, task_instance: Task) -> None:
 
     claimed = _claim_run(str(rid), str(oid))
     if not claimed:
-        _log.warning("Run %s not claimed — already handled or in wrong state", run_id)
+        _log.warning("Run %s not claimed â€” already handled or in wrong state", run_id)
         return
 
     cur, executor = await _load_and_setup(aeng, rid, oid)
@@ -323,7 +324,7 @@ async def _load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID) -> 
             return None, None
 
     settings = _get_settings()
-    conn_string = str(settings.database_url).replace("+asyncpg", "+psycopg")
+    conn_string = str(settings.database_url).replace("+asyncpg", "").replace("+psycopg", "")
     executor = PipelineExecutor(aeng, checkpointer_conn_string=conn_string)
     return cur, executor
 
@@ -450,6 +451,58 @@ async def _stale_run_recovery_sweep() -> dict[str, Any]:
         }
 
 
+class SchedulerDBError(Exception):
+    """Raised when a scheduler DB query fails transiently."""
+
+    pass
+
+
+def _make_sync_url(database_url: str) -> str:
+    """Convert async DB URL to sync by replacing async driver with sync equivalent."""
+    return (
+        database_url.replace("+asyncpg", "+psycopg").replace("+aiomysql", "+mysqldb").replace("+aiosqlite", "+pysqlite")
+    )
+
+
+_sync_beat_engine = None
+_sync_beat_lock = threading.Lock()
+
+
+def get_beat_sync_session() -> Session:
+    """Return a sync SQLAlchemy session for the Celery beat scheduler.
+
+    Uses a dedicated engine separate from the worker's sync pool to avoid
+    contention between beat polling and task execution.
+    """
+    global _sync_beat_engine
+    if _sync_beat_engine is None:
+        with _sync_beat_lock:
+            if _sync_beat_engine is None:
+                from modulo.settings import get_settings
+
+                s = get_settings()
+                sync_url = _make_sync_url(str(s.database_url))
+                _sync_beat_engine = create_engine(
+                    sync_url,
+                    pool_size=s.modulo_celery_db_pool_sync_size,
+                    max_overflow=s.modulo_celery_db_pool_sync_overflow,
+                    pool_pre_ping=True,
+                    pool_recycle=300,
+                    pool_use_lifo=False,  # FIFO
+                    pool_timeout=s.modulo_celery_db_pool_sync_timeout,
+                )
+    from sqlalchemy.orm import sessionmaker
+
+    return sessionmaker(bind=_sync_beat_engine)()
+
+
+def dispose_beat_sync_engine() -> None:
+    global _sync_beat_engine
+    if _sync_beat_engine is not None:
+        _sync_beat_engine.dispose()
+        _sync_beat_engine = None
+
+
 try:
     from modulo.celery_app import get_celery_app as _get_celery_app
 
@@ -457,4 +510,4 @@ try:
     _celery_app.register_task(ExecuteRunTask())
     _celery_app.register_task(StaleRunRecoveryTask())
 except Exception:
-    _log.warning("Could not register Celery tasks — Celery may not be configured")
+    _log.warning("Could not register Celery tasks â€” Celery may not be configured")

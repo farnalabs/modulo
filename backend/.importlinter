@@ -11,16 +11,17 @@ forbidden_modules =
     langgraph
 ignore_imports =
     modulo.api.main -> modulo.core.pipeline_engine.modulo_saver
-    modulo.api.routes.hitl -> modulo.core.pipeline_engine.executor
-    modulo.api.mcp_server -> modulo.core.pipeline_executor_task
-    modulo.api.routes.runs -> modulo.core.pipeline_engine.executor
-    modulo.api.routes.webhooks -> modulo.core.pipeline_executor_task
     modulo.api.main -> modulo.core.scheduler
-    modulo.api.mcp_server -> modulo.core.cron_scheduler
+    modulo.api.routes.runs -> modulo.core.pipeline_engine.executor
+    modulo.api.routes.runs -> modulo.core.trigger_engine
+    modulo.api.routes.hitl -> modulo.core.pipeline_engine.executor
+    modulo.api.routes.webhooks -> modulo.core.pipeline_executor_task
+    modulo.api.routes.webhooks -> modulo.core.trigger_engine
     modulo.api.routes.triggers -> modulo.core.cron_scheduler
     modulo.api.routes.triggers -> modulo.core.trigger_engine
-    modulo.api.routes.runs -> modulo.core.trigger_engine
-    modulo.api.routes.webhooks -> modulo.core.trigger_engine
+    modulo.api.mcp_server -> modulo.core.cron_scheduler
+    modulo.api.mcp_server -> modulo.core.pipeline_executor_task
+    modulo.api.routes.pipelines -> modulo.core.reports.quality_report
 
 [importlinter:contract:connectors-do-not-import-api]
 name = Connectors layer is independent of API
@@ -30,8 +31,6 @@ source_modules =
 forbidden_modules =
     modulo.api
     modulo.auth
-ignore_imports =
-    modulo.connectors.shell -> modulo.api.dependencies
 
 [importlinter:contract:core-does-not-import-modulo-cloud]
 name = Core is zero-coupled to modulo-cloud

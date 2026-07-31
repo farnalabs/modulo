@@ -11,7 +11,7 @@ unit-tests:
   - backend/tests/unit/api/test_schema_infer_endpoint.py
   - backend/tests/unit/core/test_schema_migration.py
   - backend/tests/unit/core/test_schema_validation.py
-  - backend/tests/unit/api/test_schema_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 code:
   - backend/src/modulo/core/schema_registry/inference.py
   - backend/src/modulo/core/schema_registry/generation.py

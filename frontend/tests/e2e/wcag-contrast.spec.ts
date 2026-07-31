@@ -44,14 +44,24 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
   ]
 
   for (const { path, name } of pages) {
-    test(`${name} â€” light mode has no unexpected WCAG AA violations`, async ({ page }) => {
+    test(`${name} â€” light mode has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page }) => {
       await page.goto(path)
+      await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
+
+      // Guard: storageState may redirect /login to / (dashboard)
+      if (path === '/login' && !page.url().includes('/login')) {
+        console.log(`  Skipping ${path} — redirected by valid session`)
+        return
+      }
+
+      // Wait for the Vue app to mount before running axe
+      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
 
       await page.evaluate(() => {
         document.documentElement.classList.add('light')
         document.documentElement.classList.remove('dark')
       })
-      await page.waitForTimeout(100)
+      await page.evaluate(() => new Promise(r => requestAnimationFrame(r)))
 
       const results = await runAxeAudit(page)
 
@@ -67,14 +77,24 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
       expect(violations).toEqual([])
     })
 
-    test(`${name} â€” dark mode has no unexpected WCAG AA violations`, async ({ page }) => {
+    test(`${name} â€” dark mode has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page }) => {
       await page.goto(path)
+      await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
+
+      // Guard: storageState may redirect /login to / (dashboard)
+      if (path === '/login' && !page.url().includes('/login')) {
+        console.log(`  Skipping ${path} — redirected by valid session`)
+        return
+      }
+
+      // Wait for the Vue app to mount before running axe
+      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
 
       await page.evaluate(() => {
         document.documentElement.classList.remove('light')
         document.documentElement.classList.remove('dark')
       })
-      await page.waitForTimeout(100)
+      await page.evaluate(() => new Promise(r => requestAnimationFrame(r)))
 
       const results = await runAxeAudit(page)
 

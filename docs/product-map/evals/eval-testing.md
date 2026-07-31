@@ -22,10 +22,7 @@ unit-tests:
   - backend/tests/unit/core/test_eval_suite.py
   - backend/tests/unit/core/test_eval_regressions.py
   - backend/tests/unit/core/test_eval_engine.py
-  - backend/tests/unit/api/test_evals_programming_error.py
-  - backend/tests/unit/api/test_evals_compare_programming_error.py
-  - backend/tests/unit/api/test_evals_okr_progress_programming_error.py
-  - backend/tests/unit/api/test_evals_admin_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/bdd/steps/test_eval.py
   - backend/tests/bdd/steps/test_eval_block_steps.py
 depends-on: [feat-evals-eval-engine, feat-evals-eval-gates]

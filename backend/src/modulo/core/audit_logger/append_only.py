@@ -33,7 +33,7 @@ def _make_blocker(model_class: type, table_name: str, mutation: str) -> Callable
 
     def _block(
         mapper: object,
-        connection: object,
+        _: object,
         target: object,
     ) -> None:
         eid = getattr(target, "id", "?")
