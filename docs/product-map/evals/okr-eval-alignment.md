@@ -10,7 +10,7 @@ code:
 unit-tests:
   - backend/tests/unit/core/test_okr_progress.py
   - backend/tests/unit/core/test_eval_suite.py
-  - backend/tests/unit/api/test_evals_okr_progress_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 depends-on: [feat-evals-eval-definitions, feat-evals-eval-engine, feat-evals-eval-packaging]
 status: partial
 ---

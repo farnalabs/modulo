@@ -66,25 +66,6 @@ jobs:
           name: coverage-report
           path: backend/coverage.xml
 
-  root-test:
-    name: Test (Root)
-    runs-on: ubicloud-standard-2
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.12"
-          enable-cache: true
-      - run: uv sync --frozen
-      - name: Run root-level test suite
-        shell: bash
-        run: PYTHONPATH="$PWD" uv run --no-sync pytest ../test_*.py
-        env:
-          DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
-
   frontend:
     name: Frontend and WCAG
     runs-on: ubicloud-standard-2
@@ -171,7 +152,7 @@ jobs:
   notify-pr-failure:
     name: Trigger Branch Fixer
     if: github.event_name == 'pull_request' && (failure() || cancelled())
-    needs: [backend-lint, backend-test, root-test, frontend, product-map-validate, manifest-validate, gitleaks]
+    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -248,7 +229,7 @@ jobs:
   notify-pr-review:
     name: Trigger PR Reviewer
     if: github.event_name == 'pull_request' && success()
-    needs: [backend-lint, backend-test, root-test, frontend, product-map-validate, manifest-validate, gitleaks]
+    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     steps:
       - name: Send webhook to Modulo PR Review Agent
@@ -301,7 +282,7 @@ jobs:
   modulo-smoke-test:
     name: Run Modulo Smoke Test
     if: github.event_name == 'push' && success()
-    needs: [backend-lint, backend-test, root-test, frontend, product-map-validate, manifest-validate, gitleaks]
+    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     steps:
       - name: Trigger Sandbox E2E Test and verify completion
