@@ -146,6 +146,54 @@ async def test_approve_team_id_none_in_audit_payload():
 
 
 # ---------------------------------------------------------------------------
+# Tests: reject audit payload includes optional reason
+# ---------------------------------------------------------------------------
+
+
+async def test_reject_logs_reason_in_audit_payload():
+    """reject() with a reason includes it in the hitl.output_rejected audit payload."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="rejected")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
+
+    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        mgr = HITLManager()
+        await mgr.reject(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="tok",
+            actor_id=_USER,
+            reason="output is off topic",
+        )
+
+    mock_audit.assert_awaited_once()
+    call_kwargs = mock_audit.await_args.kwargs
+    assert call_kwargs["event_type"] == "hitl.output_rejected"
+    assert call_kwargs["actor_user_id"] == _USER
+    payload = call_kwargs["payload_json"]
+    assert payload["decision"] == "rejected"
+    assert payload["reason"] == "output is off topic"
+
+
+async def test_reject_without_reason_omits_key():
+    """reject() without a reason does not include a reason key in the payload."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="rejected")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
+
+    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        mgr = HITLManager()
+        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
+
+    payload = mock_audit.await_args.kwargs["payload_json"]
+    assert "reason" not in payload
+
+
+# ---------------------------------------------------------------------------
 # Tests: delivered_at is set on approval
 # ---------------------------------------------------------------------------
 
