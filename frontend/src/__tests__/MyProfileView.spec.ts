@@ -119,4 +119,48 @@ describe('MyProfileView', () => {
 
     expect(wrapper.text()).toContain('Current password is incorrect')
   })
+
+  it('surfaces network failures and resets the saving state', async () => {
+    mockPut.mockRejectedValueOnce(new Error('Network Error'))
+
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+
+    const currentInput = wrapper.find('[data-testid="my-profile-current-password"]')
+    const newInput = wrapper.find('[data-testid="my-profile-new-password"]')
+    const confirmInput = wrapper.find('[data-testid="my-profile-confirm-password"]')
+
+    await currentInput.setValue('old-password')
+    await newInput.setValue('new-strong-password-42')
+    await confirmInput.setValue('new-strong-password-42')
+
+    await wrapper.find('[data-testid="my-profile-update-password"]').trigger('submit')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Network Error')
+    expect(wrapper.text()).not.toContain('Password changed successfully')
+    const button = wrapper.find('[data-testid="my-profile-update-password"]')
+    expect(button.attributes('disabled')).toBeUndefined()
+  })
+
+  it('does not show success when the request resolves without data or error', async () => {
+    mockPut.mockResolvedValueOnce({ data: undefined, error: undefined })
+
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+
+    const currentInput = wrapper.find('[data-testid="my-profile-current-password"]')
+    const newInput = wrapper.find('[data-testid="my-profile-new-password"]')
+    const confirmInput = wrapper.find('[data-testid="my-profile-confirm-password"]')
+
+    await currentInput.setValue('old-password')
+    await newInput.setValue('new-strong-password-42')
+    await confirmInput.setValue('new-strong-password-42')
+
+    await wrapper.find('[data-testid="my-profile-update-password"]').trigger('submit')
+    await nextTick()
+
+    expect(mockPut).toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('Password changed successfully')
+  })
 })
