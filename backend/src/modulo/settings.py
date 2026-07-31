@@ -275,5 +275,5 @@ class Settings(BaseSettings):
 
 
 @lru_cache
-def get_settings(fresh: bool = False) -> Settings:
+def get_settings(_fresh: bool = False) -> Settings:
     return Settings()

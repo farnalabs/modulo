@@ -25,7 +25,7 @@ def _iter_py_files(root: Path):
 
 
 RAWSQL_CALLS = re.compile(
-    r'text\(\s*[fF][uU]\s*"'
+    r'text\(\s*[fF]"'
     r'[^"]*\{[^}]+}[^"]*"',
 )
 

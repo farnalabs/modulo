@@ -74,7 +74,6 @@ def _merge(entry: Any | None) -> dict[str, Any]:
 
 @router.get("", response_model=MonitorConfigResponse)
 @handle_db_errors("admin.monitor_config.get_monitor_config")
-@router.get("", response_model=MonitorConfigResponse)
 async def get_monitor_config(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -107,7 +106,6 @@ async def get_monitor_config(
 
 @router.put("", response_model=MonitorConfigResponse)
 @handle_db_errors("admin.monitor_config.set_monitor_config")
-@router.put("", response_model=MonitorConfigResponse)
 async def set_monitor_config(
     req: MonitorConfigUpdate,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),

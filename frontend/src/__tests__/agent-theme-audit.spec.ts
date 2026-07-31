@@ -1,8 +1,7 @@
-// @ts-nocheck
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick } from 'vue'
+import { nextTick, type Component } from 'vue'
 
 vi.mock('vue-router', () => ({
   useRouter: vi.fn(() => ({ push: vi.fn(), isReady: vi.fn(() => Promise.resolve()) })),
@@ -70,7 +69,7 @@ import SettingsTriggerEventLogView from '../views/SettingsTriggerEventLogView.vu
 import TeamComparisonView from '../views/TeamComparisonView.vue'
 import VariantCompareView from '../views/VariantCompareView.vue'
 
-const viewModules: Record<string, ReturnType<typeof mount>> = {
+const viewModules: Record<string, Component> = {
   ABTestModelsView,
   AdminAuditView,
   AdminFeatureFlagsView,

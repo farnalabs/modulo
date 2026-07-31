@@ -33,7 +33,7 @@
               <span
                 v-if="!fwd.configured"
                 class="rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-600"
-              >Not configured</span>
+              >{{ $t('views.SettingsErrorForwardersView.not_configured') }}</span>
               <button
                 type="button"
                 class="relative inline-flex h-6 w-11 cursor-pointer items-center"
@@ -256,7 +256,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import { api } from '../lib/api/client'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -299,9 +299,9 @@ const planStore = usePlanStore()
 
 const { loading, error: loadError, data: forwarders, load: loadForwarders } = useDataFetch<ForwarderItem[]>(
   async () => {
-    const res = await (api as any).GET('/api/v1/errors/forwarders')
-    if (res.error) return { error: res.error }
-    const items = res.data.forwarders as ForwarderItem[]
+    const { data, error: err } = await api.GET('/api/v1/errors/forwarders')
+    if (err) return { error: err }
+    const items = (data?.forwarders ?? []) as ForwarderItem[]
     for (const fwd of items) {
       if (fwd.configured) {
         expanded.value[fwd.forwarder_type] = true
@@ -351,7 +351,7 @@ async function saveConfig(fwd: ForwarderItem) {
   formSuccess.value[ftype] = null
   try {
     const configJson = buildConfigJson(ftype)
-    const { error: err } = await (api as any).PUT('/api/v1/errors/forwarders/{forwarder_type}', {
+    const { error: err } = await api.PUT('/api/v1/errors/forwarders/{forwarder_type}', {
       params: { path: { forwarder_type: ftype } },
       body: {
         enabled: fwd.enabled,
@@ -359,9 +359,7 @@ async function saveConfig(fwd: ForwarderItem) {
       },
     })
     if (err) {
-      formErrors.value[ftype] = err && typeof err === 'object' && 'detail' in err
-        ? `Save failed: ${(err as ProblemDetail).detail}`
-        : `Save failed: ${formatApiError(err)}`
+      formErrors.value[ftype] = `Save failed: ${formatApiError(err)}`
     } else {
       formSuccess.value[ftype] = 'Configuration saved.'
       if (errorFwdTimeouts.value[ftype]) clearTimeout(errorFwdTimeouts.value[ftype])
@@ -380,7 +378,7 @@ async function testConnection(fwd: ForwarderItem) {
   testResults.value[ftype] = null
   try {
     const configJson = buildConfigJson(ftype)
-    const { data, error: err } = await (api as any).POST('/api/v1/errors/forwarders/{forwarder_type}/test', {
+    const { data, error: err } = await api.POST('/api/v1/errors/forwarders/{forwarder_type}/test', {
       params: { path: { forwarder_type: ftype } },
       body: { config_json: configJson },
     })

@@ -26,7 +26,7 @@ class TestDefaultPublicKey:
         assert len(_LICENSE_PUBLIC_KEY_HEX) == 64
 
     def test_key_is_valid_hex(self) -> None:
-        bytes.fromhex(_LICENSE_PUBLIC_KEY_HEX)
+        assert len(bytes.fromhex(_LICENSE_PUBLIC_KEY_HEX)) == 32
 
     def test_key_contains_only_lowercase_hex(self) -> None:
         assert re.fullmatch(r"[0-9a-f]{64}", _LICENSE_PUBLIC_KEY_HEX)

@@ -1,35 +1,49 @@
-"""Architecture test: fly.toml Python version matches pyproject.toml.
+"""Architecture test: deployment Python image satisfies pyproject.toml's requires-python.
 
-Hardcoded 'python3.12' in fly.toml's SSH commands becomes stale when
-the project upgrades Python. Both files must agree.
+The backend Docker images pin an explicit ``FROM python:X.Y`` base. When the
+project upgrades Python, the images and ``requires-python`` must agree.
 """
 
 import re
 from pathlib import Path
 
+import pytest
+
 PRODUCT = Path(__file__).resolve().parent.parent.parent.parent  # Product/
-FLY_TOML = PRODUCT / "fly.toml"
 PYPROJECT_TOML = PRODUCT / "backend" / "pyproject.toml"
+DOCKERFILES = (PRODUCT / "backend" / "Dockerfile", PRODUCT / "backend" / "Dockerfile.fly")
+
+REQUIRES_PYTHON = re.compile(r'requires-python\s*=\s*">=(3)\.(\d+)(?:,<3\.(\d+))?"')
+PYTHON_IMAGE = re.compile(r"^FROM\s+python:3\.(\d+)(?:-.*)?$", re.MULTILINE)
 
 
-def test_fly_toml_python_version_matches_pyproject():
-    if not FLY_TOML.exists():
-        return
+def test_dockerfile_python_version_satisfies_pyproject():
     if not PYPROJECT_TOML.exists():
-        return
+        pytest.skip("backend/pyproject.toml not found")
 
-    fly_content = FLY_TOML.read_text(encoding="utf-8")
-    pyproject_content = PYPROJECT_TOML.read_text(encoding="utf-8")
+    requires = REQUIRES_PYTHON.search(PYPROJECT_TOML.read_text(encoding="utf-8"))
+    assert requires, "Could not parse requires-python in backend/pyproject.toml"
+    min_minor = int(requires.group(2))
+    max_minor = int(requires.group(3)) if requires.group(3) else None
 
-    fly_versions = set(re.findall(r"python3\.(\d+)", fly_content))
-    pyproject_match = re.search(r'requires-python\s*=\s*">=3\.(\d+)"', pyproject_content)
+    pinned = []
+    for dockerfile in DOCKERFILES:
+        if not dockerfile.exists():
+            continue
+        content = dockerfile.read_text(encoding="utf-8")
+        for minor in PYTHON_IMAGE.findall(content):
+            pinned.append((dockerfile.relative_to(PRODUCT), int(minor)))
 
-    assert pyproject_match, "Could not find requires-python in pyproject.toml"
-    py_major = pyproject_match.group(1)
+    if not pinned:
+        pytest.skip("No python base image found in backend Dockerfiles")
 
-    mismatches = [v for v in fly_versions if v != py_major]
+    mismatches = [
+        (rel, minor) for rel, minor in pinned if minor < min_minor or (max_minor is not None and minor >= max_minor)
+    ]
     assert not mismatches, (
-        f"fly.toml references Python 3.{', '.join(mismatches)} "
-        f"but pyproject.toml requires Python >=3.{py_major}. "
-        "Update the hardcoded version strings in fly.toml."
+        "Deployment image uses a Python version outside backend/pyproject.toml's "
+        f"requires-python range (>=3.{min_minor}"
+        + (f",<3.{max_minor}" if max_minor is not None else "")
+        + "): "
+        + ", ".join(f"{rel} (python:3.{minor})" for rel, minor in mismatches)
     )
