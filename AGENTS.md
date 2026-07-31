@@ -1020,6 +1020,9 @@ git add -A
 git commit -m "..."     # triggers ruff, semgrep, bandit via pre-commit hooks
 ```
 
+NEVER use `git commit --no-verify` or `git commit -n`. Pre-commit hooks are mandatory.
+If a hook fails, fix the issue -- do not bypass it.
+
 If you cannot use pre-commit (build-time constraints), run tools directly:
 ```bash
 pip install ruff 2>&1 | tail -3
