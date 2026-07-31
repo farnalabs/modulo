@@ -1,7 +1,7 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('i18n Keys & SvgIcon Regression', () => {
-  test('sidebar shows "Environment Profiles" not raw key', { tag: '@regression' }, async ({ page, env }) => {
+  test('sidebar shows "Environment Profiles" not raw key', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/environment-profiles')
 
@@ -17,7 +17,7 @@ test.describe('i18n Keys & SvgIcon Regression', () => {
     await expect(rawKeyLink).toHaveCount(0)
   })
 
-  test('no SvgIcon warnings for Mail or File icons', { tag: '@regression' }, async ({ page, env }) => {
+  test('no SvgIcon warnings for Mail or File icons', { tag: "@regression" }, async ({ page, env }) => {
     const warnings: string[] = []
     page.on('console', (msg) => {
       if (msg.type() === 'warn' && msg.text().includes('SvgIcon: unknown icon')) {
