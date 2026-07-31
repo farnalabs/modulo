@@ -2,8 +2,6 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from modulo.core.feature_flags import (
     CommunityTier,
     DbPlanContext,
@@ -35,7 +33,6 @@ class TestCommunityTier:
         ctx = CommunityTier()
         assert ctx.feature_enabled("saved_views") is True
 
-    @pytest.mark.skip(reason="SSO now enabled for Community tier — test outdated")
     def test_team_feature_disabled(self) -> None:
         ctx = CommunityTier()
         assert ctx.feature_enabled("sso") is False

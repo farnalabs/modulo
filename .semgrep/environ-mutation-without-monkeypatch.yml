@@ -14,4 +14,4 @@
     languages: [python]
     severity: ERROR
     paths:
-      include: ["**/backend/tests/**"]
+      include: ["tests/**", "**/backend/tests/**"]
