@@ -175,6 +175,8 @@ class ErrorTrackingLogHandler(logging.Handler):
             level = "error"
             if record.levelno >= logging.CRITICAL:
                 level = "critical"
+            elif record.levelno >= logging.ERROR:
+                level = "error"
             elif record.levelno >= logging.WARNING:
                 level = "warning"
 
