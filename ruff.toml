@@ -44,4 +44,3 @@ ignore = [
 "backend/src/modulo/core/trigger_engine/polling.py" = ["UP017"]
 "pipeline-scripts/**" = ["S", "T201", "RET"]
 "conftest.py" = ["I001"]
-

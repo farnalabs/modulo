@@ -26,7 +26,7 @@ Tier 1: Orchestration Layer
   - Cost tracking, eval, observability
   - Owned by: Modulo
 
-Tier 2: Agent Runtime Layer  
+Tier 2: Agent Runtime Layer
   - The actual LLM + tool-calling loop
   - Reads files, writes code, runs shell commands
   - Iterates based on feedback

@@ -55,4 +55,3 @@ Feature: Team Deletion Blocked When Resources Exist
     And the team has no resources
     When I delete the team "engineering"
     Then the response status is 403
-

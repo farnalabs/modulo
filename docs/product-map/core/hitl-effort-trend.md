@@ -124,4 +124,4 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 - No HITL effort export (CSV, chart image)
 - No automated alert on HITL volume spikes or rejection rate thresholds
 - `dashboard_summary` caching has no error-path test coverage
-- No cache timeout / TTL tests for `_get_cached_dashboard` / `_set_cached_dashboard` 
+- No cache timeout / TTL tests for `_get_cached_dashboard` / `_set_cached_dashboard`

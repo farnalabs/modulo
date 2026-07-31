@@ -166,4 +166,4 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - No BDD scenarios for `resource_team_ownership_changed` audit event
 - No BDD scenarios for the `visibility=team + owner_team_id=NULL` invalid state DB constraint
 - No BDD scenarios for team deletion blocked by owned resources at the API level
-- No integration tests for ownership change with concurrent active runs 
+- No integration tests for ownership change with concurrent active runs
