@@ -95,7 +95,7 @@
         <div>
           <label for="settingstriggersview-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.pipeline') }}</label>
           <Select v-model="form.pipeline_id">
-            <SelectTrigger id="settingstriggersview-pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" :aria-label="$t('views.SettingsTriggersView.pipeline')" data-testid="settings-triggers-form-pipeline">
+            <SelectTrigger id="settingstriggersview-pipeline" class="input-base" :aria-label="$t('views.SettingsTriggersView.pipeline')" data-testid="settings-triggers-form-pipeline">
               <SelectValue :placeholder="$t('views.SettingsTriggersView.select_pipeline')" />
             </SelectTrigger>
             <SelectContent>
@@ -107,7 +107,7 @@
         <div v-if="!editingId">
           <label for="settingstriggersview-trigger-type" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.trigger_type_label') }}</label>
           <Select v-model="form.trigger_type">
-            <SelectTrigger id="settingstriggersview-trigger-type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" :aria-label="$t('views.SettingsTriggersView.trigger_type_label')" data-testid="settings-triggers-form-type">
+            <SelectTrigger id="settingstriggersview-trigger-type" class="input-base" :aria-label="$t('views.SettingsTriggersView.trigger_type_label')" data-testid="settings-triggers-form-type">
               <SelectValue :placeholder="$t('views.SettingsTriggersView.select_type')" />
             </SelectTrigger>
             <SelectContent>
@@ -129,7 +129,7 @@
             <input id="settingstriggersview-field-13"
               v-model="form.webhook_url"
               type="url"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              class="input-base"
               :placeholder="$t('views.SettingsTriggersView.url_placeholder')"
               data-testid="settings-triggers-form-webhook-url"
             />
@@ -137,7 +137,7 @@
           <div>
             <label for="settingstriggersview-http-method" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.http_method') }}</label>
             <Select v-model="form.webhook_method">
-              <SelectTrigger id="settingstriggersview-http-method" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" :aria-label="$t('views.SettingsTriggersView.http_method')" data-testid="settings-triggers-form-webhook-method">
+              <SelectTrigger id="settingstriggersview-http-method" class="input-base" :aria-label="$t('views.SettingsTriggersView.http_method')" data-testid="settings-triggers-form-webhook-method">
                 <SelectValue :placeholder="$t('views.SettingsTriggersView.select_method')" />
               </SelectTrigger>
               <SelectContent>
@@ -152,7 +152,7 @@
             <textarea id="settingstriggersview-field-11"
               v-model="form.webhook_headers"
               rows="3"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+              class="input-base font-mono"
               :placeholder="$t('views.SettingsTriggersView.headers_placeholder')"
               data-testid="settings-triggers-form-webhook-headers"
             />
@@ -166,7 +166,7 @@
             <input id="settingstriggersview-field-10"
               v-model="form.cron_expression"
               type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+              class="input-base font-mono"
               :placeholder="$t('views.SettingsTriggersView.cron_expression_placeholder')"
               data-testid="settings-triggers-form-cron-expr"
             />
@@ -176,7 +176,7 @@
             <input id="settingstriggersview-field-9"
               v-model="form.cron_timezone"
               type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              class="input-base"
               :placeholder="$t('views.SettingsTriggersView.timezone_placeholder')"
               data-testid="settings-triggers-form-cron-tz"
             />
@@ -186,7 +186,7 @@
             <textarea id="settingstriggersview-field-8"
               v-model="form.input_template"
               rows="3"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+              class="input-base font-mono"
               :placeholder="$t('views.SettingsTriggersView.input_template_placeholder')"
               data-testid="settings-triggers-form-cron-input"
             />
@@ -200,7 +200,7 @@
             <input id="settingstriggersview-field-7"
               v-model="form.connector_instance_id"
               type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+              class="input-base font-mono"
               :placeholder="$t('views.SettingsTriggersView.connector_instance_id_placeholder')"
               data-testid="settings-triggers-form-polling-connector"
             />
@@ -210,7 +210,7 @@
             <textarea id="settingstriggersview-field-6"
               v-model="form.poll_query"
               rows="3"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+              class="input-base font-mono"
               :placeholder="$t('views.SettingsTriggersView.query_placeholder')"
               data-testid="settings-triggers-form-polling-query"
             />
@@ -221,7 +221,7 @@
               v-model="form.poll_interval"
               type="number"
               min="10"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              class="input-base"
               :placeholder="$t('views.SettingsTriggersView.poll_interval_placeholder')"
               data-testid="settings-triggers-form-polling-interval"
             />
@@ -231,7 +231,7 @@
             <input id="settingstriggersview-field-4"
               v-model="form.condition_expression"
               type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+              class="input-base font-mono"
               :placeholder="$t('views.SettingsTriggersView.condition_expression_placeholder')"
               data-testid="settings-triggers-form-polling-condition"
             />
@@ -243,7 +243,7 @@
           <div>
             <label for="settingstriggersview-source-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.source_pipeline') }}</label>
             <Select v-model="form.signal_source_pipeline">
-              <SelectTrigger id="settingstriggersview-source-pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" :aria-label="$t('views.SettingsTriggersView.source_pipeline')" data-testid="settings-triggers-form-signal-pipeline">
+              <SelectTrigger id="settingstriggersview-source-pipeline" class="input-base" :aria-label="$t('views.SettingsTriggersView.source_pipeline')" data-testid="settings-triggers-form-signal-pipeline">
                 <SelectValue :placeholder="$t('views.SettingsTriggersView.select_source_pipeline')" />
               </SelectTrigger>
               <SelectContent>
@@ -256,7 +256,7 @@
             <input id="settingstriggersview-field-2"
               v-model="form.signal_source_node"
               type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+              class="input-base font-mono"
               :placeholder="$t('views.SettingsTriggersView.source_node_id_placeholder')"
               data-testid="settings-triggers-form-signal-node"
             />
