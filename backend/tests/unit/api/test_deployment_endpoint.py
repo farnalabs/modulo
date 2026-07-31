@@ -65,7 +65,9 @@ class TestDeploymentInfo:
         from datetime import datetime
 
         parsed = datetime.fromisoformat(body["started_at"])
-        assert parsed is not None
+        # started_at is UTC and tz-aware — it must round-trip to the same instant
+        assert parsed.tzinfo is not None
+        assert parsed.isoformat() == body["started_at"]
 
     def test_environment_defaults_to_development(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")

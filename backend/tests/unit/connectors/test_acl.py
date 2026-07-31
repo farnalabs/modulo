@@ -7,12 +7,15 @@ from modulo.connectors.base import ConnectorACL, ConnectorPermissionError
 
 def test_acl_org_visibility():
     acl = ConnectorACL(visibility="org")
-    acl.check("read")  # should pass — empty allowed_ops means no restriction
+    # empty allowed_ops means no restriction — must not raise
+    assert acl.check("read") is None
+    assert acl.check("write") is None
 
 
 def test_acl_team_visibility():
     acl = ConnectorACL(visibility="team", allowed_operations=["read"])
-    acl.check("read", request_visibility="team")  # should pass
+    # team-scoped access on a team connector must not raise
+    assert acl.check("read", request_visibility="team") is None
 
 
 def test_acl_blocks_unlisted_operation():
@@ -24,9 +27,15 @@ def test_acl_blocks_unlisted_operation():
 def test_acl_allows_any_when_none_ops():
     # None means no restriction on operations
     acl = ConnectorACL(visibility="org", allowed_operations=None)
-    acl.check("read")
-    acl.check("write")
-    acl.check("git_push")
+    assert acl.allowed_operations is None
+    assert acl.check("read") is None
+    assert acl.check("write") is None
+    assert acl.check("git_push") is None
+
+
+def test_acl_allowlist_is_normalised_to_frozenset():
+    acl = ConnectorACL(visibility="org", allowed_operations=["read", "read", "write"])
+    assert acl.allowed_operations == frozenset({"read", "write"})
 
 
 def test_acl_blocks_wrong_visibility():
