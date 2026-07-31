@@ -41,6 +41,8 @@ jobs:
           fi
           uv run --no-sync semgrep --config=../.semgrep/ --baseline-commit "$baseline" --error .
       - run: uv run --no-sync pip-audit
+      - name: Import-linter architecture contracts
+        run: uv run --no-sync lint-imports
 
   backend-test:
     name: Test (Backend)
