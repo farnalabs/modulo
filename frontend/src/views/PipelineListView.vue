@@ -121,6 +121,8 @@
             data-testid="pipeline-list-card"
             draggable="true"
             @dragstart="onPipelineDragStart(p, $event)"
+            @dragover.prevent
+            @drop="onCardDrop(p, $event)"
           >
             <div class="flex items-start justify-between gap-2 mb-3">
               <h3 class="text-base font-medium text-foreground truncate">{{ p.name }}</h3>
@@ -248,6 +250,8 @@
                   :data-testid="`pipeline-tree-row-${(row.data as PipelineItem).id}`"
                   draggable="true"
                   @dragstart="onPipelineDragStart(row.data as PipelineItem, $event)"
+                  @dragover.prevent
+                  @drop="onTablePipelineDrop(row.data as PipelineItem, $event)"
                 >
                   <td class="px-4 py-3" :style="{ paddingLeft: `${12 + (row.depth || 0) * 16}px` }">
                     <span class="font-medium text-foreground">{{ (row.data as PipelineItem).name }}</span>
@@ -733,7 +737,21 @@ function onTableFolderDrop(folderId: string, event: DragEvent) {
   }
 }
 
-async function onMovePipeline(ev: { pipelineId: string; folderId: string }) {
+function onCardDrop(targetPipeline: PipelineItem, event: DragEvent) {
+  const pipelineId = event.dataTransfer?.getData('text/plain')
+  if (pipelineId && pipelineId !== targetPipeline.id) {
+    onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? null })
+  }
+}
+
+function onTablePipelineDrop(targetPipeline: PipelineItem, event: DragEvent) {
+  const pipelineId = event.dataTransfer?.getData('text/plain')
+  if (pipelineId && pipelineId !== targetPipeline.id) {
+    onMovePipeline({ pipelineId, folderId: targetPipeline.folder_id ?? null })
+  }
+}
+
+async function onMovePipeline(ev: { pipelineId: string; folderId: string | null }) {
   const pipeline = allPipelines.value.find(p => p.id === ev.pipelineId)
   if (!pipeline) return
   moveTarget.value = pipeline
@@ -910,9 +928,10 @@ async function handleMoveToFolder() {
   if (!moveTarget.value) return
   moving.value = true
   moveError.value = null
+  const targetId = moveTarget.value.id
   try {
     const folderId = moveToFolderId.value ?? null
-    await patchUntyped(`/api/v1/pipelines/${moveTarget.value.id}/folder`, {
+    await patchUntyped(`/api/v1/pipelines/${targetId}/folder`, {
       folder_id: folderId,
     })
     showMoveToFolder.value = false
