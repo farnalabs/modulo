@@ -33,7 +33,7 @@
 
       <template v-else-if="filteredProfiles.length === 0">
         <div v-if="search" class="card p-8 text-center">
-          <p class="text-lg font-medium">No profiles match "{{ search }}"</p>
+          <p class="text-lg font-medium">{{ $t('views.EnvironmentProfileList.no_profiles_match', { search }) }}</p>
           <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.EnvironmentProfileList.try_a_different_search_term') }}</p>
         </div>
         <div v-else class="card p-8 text-center">
@@ -77,7 +77,7 @@
                 class="h-1.5 w-1.5 rounded-full"
                 :class="profile.status === 'active' ? 'bg-success' : 'bg-muted-foreground'"
               />
-              <span class="capitalize">{{ profile.status === 'active' ? 'Active' : 'Deleted' }}</span>
+              <span class="capitalize">{{ profile.status === 'active' ? $t('common.active') : $t('common.deleted') }}</span>
             </span>
           </div>
 
