@@ -16,9 +16,7 @@ def upgrade() -> None:
     op.execute(
         "UPDATE workspace_leases SET lease_expires_at = NOW() + INTERVAL '30 minutes' WHERE lease_expires_at IS NULL"
     )
-    op.execute(
-        "ALTER TABLE workspace_leases ALTER COLUMN lease_expires_at SET DEFAULT NOW() + INTERVAL '30 minutes'"
-    )
+    op.execute("ALTER TABLE workspace_leases ALTER COLUMN lease_expires_at SET DEFAULT NOW() + INTERVAL '30 minutes'")
     op.execute("ALTER TABLE workspace_leases ALTER COLUMN lease_expires_at SET NOT NULL")
 
     # OrgApiKey.expires_at

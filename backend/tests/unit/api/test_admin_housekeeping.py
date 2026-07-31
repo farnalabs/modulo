@@ -237,9 +237,7 @@ class TestPerformCleanup:
         assert resp.status_code == 200
         body = resp.json()
         assert body["deleted_count"] == 0
-        assert body["errors"] == [
-            {"entity_type": "does_not_exist", "error": "Unknown entity type: does_not_exist"}
-        ]
+        assert body["errors"] == [{"entity_type": "does_not_exist", "error": "Unknown entity type: does_not_exist"}]
         session.execute.assert_not_awaited()
 
     def test_integrity_error_does_not_block_other_types(self, client: TestClient) -> None:
