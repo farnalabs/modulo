@@ -302,6 +302,7 @@ async def list_library_primitives_endpoint(
                     cursor=cursor,
                 )
         except ProgrammingError:
+            _log.exception("library.list_library_primitives_endpoint")
             _log.warning(
                 "list_library_primitives_endpoint: ProgrammingError — missing DB table or migration",
                 exc_info=True,
@@ -374,11 +375,13 @@ async def get_library_primitive_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             primitive = await get_primitive(session, principal.organisation_id, primitive_id)
     except IntegrityError:
+        _log.exception("library.get_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.get_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -445,6 +448,7 @@ async def create_library_primitive_endpoint(
                 tier=req.tier,
             )
     except IntegrityError:
+        _log.exception("library.create_library_primitive_endpoint")
         _log.warning(
             "create_library_primitive_endpoint: IntegrityError — slug collision on %s/%s",
             req.primitive_type,
@@ -456,6 +460,7 @@ async def create_library_primitive_endpoint(
             detail=f"Primitive with type '{req.primitive_type}' and slug '{req.slug}' already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.create_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -484,11 +489,13 @@ async def update_library_primitive_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             prim = await update_library_primitive(session, primitive_id, updates)
     except IntegrityError:
+        _log.exception("library.update_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.update_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -520,11 +527,13 @@ async def delete_library_primitive_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             prim = await soft_delete_library_primitive(session, primitive_id)
     except IntegrityError:
+        _log.exception("library.delete_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.delete_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -556,6 +565,7 @@ async def restore_library_primitive_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             prim = await restore_library_primitive(session, primitive_id)
     except ProgrammingError:
+        _log.exception("library.restore_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -608,11 +618,13 @@ async def copy_to_adapt_endpoint(
             detail=f"Primitive {primitive_id} not found",
         ) from None
     except IntegrityError:
+        _log.exception("library.copy_to_adapt_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.copy_to_adapt_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -654,11 +666,13 @@ async def export_pipeline_endpoint(
             else:
                 bundle_bytes = await export_pipeline_bundle(session, pipeline_id)
     except IntegrityError:
+        _log.exception("library.export_pipeline_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.export_pipeline_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -801,6 +815,7 @@ async def _analyse_bundle(
             teams_result = await session.execute(select(Team).where(Team.organisation_id == principal.organisation_id))
             teams = list(teams_result.scalars())
     except IntegrityError:
+        _log.exception("library._analyse_bundle")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -929,6 +944,7 @@ async def confirm_import_endpoint(
                 connector_instance_overrides=req.connector_overrides,
             )
     except IntegrityError:
+        _log.exception("library.confirm_import_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -978,11 +994,13 @@ async def list_ratings_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_ratings_for_primitive(session, primitive_id, page=page, page_size=page_size)
     except IntegrityError:
+        _log.exception("library.list_ratings_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.list_ratings_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1012,11 +1030,13 @@ async def get_rating_aggregate_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             avg, count = await get_rating_aggregate(session, primitive_id)
     except IntegrityError:
+        _log.exception("library.get_rating_aggregate_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.get_rating_aggregate_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1067,11 +1087,13 @@ async def submit_rating_endpoint(
     except CopyToAdaptError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
     except IntegrityError as e:
+        _log.exception("library.submit_rating_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from e
     except ProgrammingError:
+        _log.exception("library.submit_rating_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1110,11 +1132,13 @@ async def submit_abuse_report_endpoint(
                 reason=req.reason,
             )
     except IntegrityError:
+        _log.exception("library.submit_abuse_report_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.submit_abuse_report_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1218,11 +1242,13 @@ async def create_pipeline_from_template_endpoint(
     try:
         primitive = await get_primitive(session, principal.organisation_id, primitive_id)
     except IntegrityError:
+        _log.exception("library.create_pipeline_from_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.create_pipeline_from_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1272,11 +1298,13 @@ async def create_pipeline_from_template_endpoint(
                 )
             await session.flush()
     except IntegrityError:
+        _log.exception("library.create_pipeline_from_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.create_pipeline_from_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1342,11 +1370,13 @@ async def community_contribute_endpoint(
             source_url=req.source_url,
         )
     except IntegrityError:
+        _log.exception("library.community_contribute_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.community_contribute_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1381,11 +1411,13 @@ async def list_community_contributions_endpoint(
                 page_size=page_size,
             )
         except IntegrityError:
+            _log.exception("library.list_community_contributions_endpoint")
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A resource with this value already exists",
             ) from None
         except ProgrammingError:
+            _log.exception("library.list_community_contributions_endpoint")
             _log.warning(
                 "list_community_contributions_endpoint: ProgrammingError — missing DB table or migration",
                 exc_info=True,
@@ -1443,11 +1475,13 @@ async def admin_publish_contribution_endpoint(
             detail=str(e),
         ) from None
     except IntegrityError:
+        _log.exception("library.admin_publish_contribution_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("library.admin_publish_contribution_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",

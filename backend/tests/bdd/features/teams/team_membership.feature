@@ -55,4 +55,3 @@ Feature: Team Membership Management
     When I request my profile
     Then the response lists my team memberships
     And each membership includes team id, team name, and role
-

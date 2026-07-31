@@ -87,11 +87,13 @@ async def list_trigger_events(
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()
     except ProgrammingError:
+        _log.exception("admin_triggers.list_trigger_events")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("admin_triggers.list_trigger_events")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -142,11 +144,13 @@ async def list_trigger_events(
             )
             total = count_result.scalar() or 0
     except ProgrammingError:
+        _log.exception("admin_triggers.list_trigger_events")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("admin_triggers.list_trigger_events")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",

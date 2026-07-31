@@ -123,16 +123,19 @@ async def create_group(
                 degraded_evals=req.degraded_evals,
             )
     except IntegrityError:
+        _log.exception("variants.create_group")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource conflict. The referenced pipeline may not exist.",
         ) from None
     except ProgrammingError:
+        _log.exception("variants.create_group")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("variants.create_group")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
@@ -163,16 +166,19 @@ async def list_groups(
             await set_rls_org(session, principal.organisation_id)
             items, _total = await list_variant_groups(session, pipeline_id=pipeline_id, page=page, page_size=page_size)
     except IntegrityError:
+        _log.exception("variants.list_groups")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("variants.list_groups")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("variants.list_groups")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
@@ -200,16 +206,19 @@ async def get_group(
             await set_rls_org(session, principal.organisation_id)
             group = await get_variant_group(session, group_id)
     except IntegrityError:
+        _log.exception("variants.get_group")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("variants.get_group")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("variants.get_group")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
@@ -249,16 +258,19 @@ async def update_group(
                 degraded_evals=req.degraded_evals,
             )
     except IntegrityError:
+        _log.exception("variants.update_group")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource conflict. The referenced pipeline may not exist.",
         ) from None
     except ProgrammingError:
+        _log.exception("variants.update_group")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("variants.update_group")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
@@ -288,16 +300,19 @@ async def delete_group(
             await set_rls_org(session, principal.organisation_id)
             deleted = await soft_delete_variant_group(session, group_id)
     except IntegrityError:
+        _log.exception("variants.delete_group")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot delete variant group — it is referenced by existing runs.",
         ) from None
     except ProgrammingError:
+        _log.exception("variants.delete_group")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("variants.delete_group")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
@@ -327,16 +342,19 @@ async def restore_group(
             await set_rls_org(session, principal.organisation_id)
             group = await restore_variant_group(session, group_id)
     except IntegrityError:
+        _log.exception("variants.restore_group")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource conflict.",
         ) from None
     except ProgrammingError:
+        _log.exception("variants.restore_group")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("variants.restore_group")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
@@ -392,16 +410,19 @@ async def run_variant(
                 account_id=principal.account_id,
             )
     except IntegrityError:
+        _log.exception("variants.run_variant")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource conflict. The referenced pipeline or snapshot may not exist.",
         ) from None
     except ProgrammingError:
+        _log.exception("variants.run_variant")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("variants.run_variant")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
@@ -446,16 +467,19 @@ async def coverage_gaps(
                 )
             gaps = await get_coverage_gaps(session, group)
     except IntegrityError:
+        _log.exception("variants.coverage_gaps")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("variants.coverage_gaps")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("variants.coverage_gaps")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
@@ -489,16 +513,19 @@ async def prompt_diffs(
                 )
             diffs = await get_prompt_diffs(session, group)
     except IntegrityError:
+        _log.exception("variants.prompt_diffs")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("variants.prompt_diffs")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("variants.prompt_diffs")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",

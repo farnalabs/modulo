@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     modulo_celery_db_pool_connect_timeout: int = Field(
         default=10, alias="MODULO_CELERY_DB_POOL_CONNECT_TIMEOUT", ge=1, le=30
     )
+    modulo_celery_db_pool_sync_timeout: int = Field(default=10, alias="MODULO_CELERY_DB_POOL_SYNC_TIMEOUT", ge=1, le=30)
 
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)
