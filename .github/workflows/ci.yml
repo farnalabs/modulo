@@ -170,7 +170,10 @@ jobs:
 
   notify-pr-failure:
     name: Trigger Branch Fixer
-    if: github.event_name == 'pull_request' && (failure() || cancelled())
+    # Run the job on every PR event so the check concludes with success
+    # (instead of being skipped) when CI is green; the meaningful work is
+    # gated per-step below so the branch fixer is only triggered on failure.
+    if: always() && github.event_name == 'pull_request'
     needs: [backend-lint, backend-test, root-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     permissions:
@@ -179,6 +182,7 @@ jobs:
     steps:
       - name: Check retry limit
         id: retry-check
+        if: failure() || cancelled()
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -300,11 +304,13 @@ jobs:
 
   modulo-smoke-test:
     name: Run Modulo Smoke Test
-    if: github.event_name == 'push' && success()
+    # Run the job on every event so the check concludes with success (instead
+    # of being skipped) on PR events; the smoke test itself only fires on push.
     needs: [backend-lint, backend-test, root-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     steps:
       - name: Trigger Sandbox E2E Test and verify completion
+        if: github.event_name == 'push'
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_SMOKE_TEST_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_SMOKE_TEST_HMAC_SECRET }}
