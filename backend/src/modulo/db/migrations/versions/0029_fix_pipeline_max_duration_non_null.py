@@ -3,7 +3,7 @@
 from alembic import op
 
 revision = "0029_fix_pipeline_max_duration_non_null"
-down_revision = "0028_add_claimed_by_to_runs"
+down_revision = "0029_fix_expiry_fields_non_null"
 
 
 def upgrade() -> None:
