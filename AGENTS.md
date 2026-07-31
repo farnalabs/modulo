@@ -1018,11 +1018,10 @@ uv python install 3.12 2>&1 | tail -3
 pre-commit install
 git add -A
 git commit -m "..."     # triggers ruff, semgrep, bandit via pre-commit hooks
+```
 
 NEVER use `git commit --no-verify` or `git commit -n`. Pre-commit hooks are mandatory.
 If a hook fails, fix the issue -- do not bypass it.
-
-```
 
 If you cannot use pre-commit (build-time constraints), run tools directly:
 ```bash
