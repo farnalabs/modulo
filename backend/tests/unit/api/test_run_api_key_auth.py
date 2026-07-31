@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
 from modulo.auth.dependencies import InvalidToken, get_current_tenant_user_or_api_key
@@ -16,12 +17,19 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _KEY = "mk_12345678_" + "x" * 32
 
 
-def _make_session() -> AsyncMock:
+def _make_session(key_record: object | None = None) -> AsyncMock:
+    if key_record is None:
+        key_record = _fake_key()
     session = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock()
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=key_record)
+    session.execute = AsyncMock(return_value=result)
     return session
 
 
@@ -112,6 +120,29 @@ async def test_api_key_admin_role_is_rejected() -> None:
             credentials=_credentials(_KEY),
             settings=settings,
         )
+
+
+@pytest.mark.asyncio
+async def test_api_key_db_error_returns_503() -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    settings = get_settings()
+    session = _make_session()
+    session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
+    with (
+        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch(
+            "modulo.api.dependencies.get_or_create_session_factory",
+            return_value=_FakeFactory(session),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await get_current_tenant_user_or_api_key(
+            credentials=_credentials(_KEY),
+            settings=settings,
+        )
+
+    assert exc_info.value.status_code == 503
 
 
 @pytest.mark.asyncio

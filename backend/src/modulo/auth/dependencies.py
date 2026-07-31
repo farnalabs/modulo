@@ -134,7 +134,10 @@ async def get_current_tenant_user_or_api_key(
     dependency is only wired into run trigger/read routes — write endpoints
     keep requiring a user JWT so API keys cannot modify pipelines.
 
-    For JWT credentials the behaviour is identical to
+    API keys are resolved with an RLS-disabled prefix lookup (the key's org is
+    unknown until the record is read) and re-validated inside the key's org
+    context — mirroring the MCP middleware, since ``org_api_keys`` has RLS
+    enabled. For JWT credentials the behaviour is identical to
     :func:`get_current_tenant_user`.
     """
     if credentials is None:
@@ -142,19 +145,55 @@ async def get_current_tenant_user_or_api_key(
 
     token = credentials.credentials
     if token.startswith("mk_"):
+        from sqlalchemy import select, text
+        from sqlalchemy.exc import SQLAlchemyError
+
         from modulo.api.dependencies import (
             get_or_create_engine,
             get_or_create_session_factory,
         )
-        from modulo.auth.api_key import ApiKeyInvalidError, validate_api_key
+        from modulo.auth.api_key import (
+            _MK_PREFIX,
+            _PREFIX_LEN,
+            ApiKeyInvalidError,
+            validate_api_key,
+        )
+        from modulo.db.models.api_key import OrgApiKey
+        from modulo.db.rls import _ensure_active_transaction, set_rls_org
 
         engine = get_or_create_engine(settings)
         factory = get_or_create_session_factory(engine)
         try:
+            # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and the
+            # key's org is unknown until the record is read — a plain lookup in
+            # an empty org context would be filtered out by RLS and reject every
+            # valid key. Resolve the record with RLS disabled, then re-validate
+            # inside the key's org context before trusting it.
+            prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
             async with factory() as session, session.begin():
-                key = await validate_api_key(session, token)
+                dialect = await _ensure_active_transaction(session)
+                if dialect == "postgresql":
+                    await session.execute(text("SET LOCAL row_security TO OFF"))
+                result = await session.execute(
+                    select(OrgApiKey).where(
+                        OrgApiKey.lookup_prefix == prefix,
+                        OrgApiKey.revoked_at.is_(None),
+                    )
+                )
+                key_record = result.scalar_one_or_none()
+            if key_record is None:
+                raise ApiKeyInvalidError()
+            async with factory() as session, session.begin():
+                await set_rls_org(session, key_record.organisation_id)
+                key = await validate_api_key(session, token, org_id=key_record.organisation_id)
         except ApiKeyInvalidError:
             raise InvalidToken() from None
+        except SQLAlchemyError:
+            _log.warning("auth.api_key_verify_failed", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database temporarily unavailable.",
+            ) from None
         if key.role not in ("runner", "operator"):
             raise InvalidToken()
         return TenantPrincipal(
@@ -174,18 +213,7 @@ async def get_current_tenant_user_or_api_key(
         )
         raise InvalidToken() from exc
 
-    if principal.organisation_id is None or principal.org_role is None:
-        raise OrganisationMembershipRequired()
-
-    await _verify_identity(principal)
-
-    return TenantPrincipal(
-        username=principal.username,
-        organisation_id=principal.organisation_id,
-        account_id=principal.account_id,
-        org_role=principal.org_role,
-        is_system_admin=principal.is_system_admin,
-    )
+    return await get_current_tenant_user(principal)
 
 
 async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
