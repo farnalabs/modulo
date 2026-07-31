@@ -247,7 +247,7 @@ def _make_session(*, role: str | None) -> AsyncMock:
     """Return a session whose live-role lookup resolves to ``role``.
 
     ``session.begin`` must be a plain ``MagicMock`` returning a context-manager
-    mock â€” ``async with session.begin():`` does not work when ``begin`` itself
+    mock — ``async with session.begin():`` does not work when ``begin`` itself
     is an async mock (calling it yields an unawaited coroutine).
     """
     session = AsyncMock()

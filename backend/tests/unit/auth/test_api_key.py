@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,9 +11,14 @@ import pytest
 from modulo.auth.api_key import (
     ApiKeyInvalidError,
     _hash_key,
+    _validate_team_key_role,
+    create_api_key,
     generate_api_key,
+    revoke_api_key,
+    update_api_key,
     validate_api_key,
 )
+from modulo.db.models.api_key import OrgApiKey
 
 # ---------------------------------------------------------------------------
 # generate_api_key
@@ -112,8 +118,6 @@ async def test_validate_api_key_hash_mismatch_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_validate_api_key_expired_raises() -> None:
-    from datetime import UTC, datetime, timedelta
-
     full_key, _, _ = generate_api_key()
     key_row = _make_key_row(full_key)
     key_row.expires_at = datetime.now(UTC) - timedelta(days=1)
@@ -137,11 +141,7 @@ async def test_validate_api_key_expired_raises() -> None:
         ("admin", None, False),
     ],
 )
-def test_validate_team_key_role(role: str, team_id, should_raise: bool) -> None:
-    from unittest.mock import MagicMock
-
-    from modulo.auth.api_key import ApiKeyInvalidError, _validate_team_key_role
-
+def test_validate_team_key_role(role: str, team_id: uuid.UUID | None, should_raise: bool) -> None:
     key = MagicMock()
     key.team_id = team_id
     key.role = role
@@ -160,10 +160,6 @@ def test_validate_team_key_role(role: str, team_id, should_raise: bool) -> None:
 
 @pytest.mark.asyncio
 async def test_create_api_key_accepts_expires_at() -> None:
-    from datetime import UTC, datetime, timedelta
-
-    from modulo.auth.api_key import create_api_key
-
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
@@ -185,8 +181,6 @@ async def test_create_api_key_accepts_expires_at() -> None:
 
 @pytest.mark.asyncio
 async def test_create_api_key_with_team_id() -> None:
-    from modulo.auth.api_key import create_api_key
-
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
@@ -209,8 +203,6 @@ async def test_create_api_key_with_team_id() -> None:
 
 @pytest.mark.asyncio
 async def test_create_api_key_with_team_id_rejects_admin() -> None:
-    from modulo.auth.api_key import ApiKeyInvalidError, create_api_key
-
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
@@ -236,11 +228,6 @@ async def test_create_api_key_with_team_id_rejects_admin() -> None:
 
 @pytest.mark.asyncio
 async def test_update_api_key_updates_name_and_role() -> None:
-    from unittest.mock import AsyncMock, MagicMock
-
-    from modulo.auth.api_key import update_api_key
-    from modulo.db.models.api_key import OrgApiKey
-
     org_id = uuid.uuid4()
     key_id = uuid.uuid4()
     key = MagicMock(spec=OrgApiKey)
@@ -263,8 +250,6 @@ async def test_update_api_key_updates_name_and_role() -> None:
 
 @pytest.mark.asyncio
 async def test_update_api_key_not_found_returns_none() -> None:
-    from modulo.auth.api_key import update_api_key
-
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
 
@@ -277,11 +262,6 @@ async def test_update_api_key_not_found_returns_none() -> None:
 
 @pytest.mark.asyncio
 async def test_update_api_key_updates_team_id() -> None:
-    from unittest.mock import AsyncMock, MagicMock
-
-    from modulo.auth.api_key import update_api_key
-    from modulo.db.models.api_key import OrgApiKey
-
     org_id = uuid.uuid4()
     key_id = uuid.uuid4()
     team_id = uuid.uuid4()
@@ -305,11 +285,6 @@ async def test_update_api_key_updates_team_id() -> None:
 
 @pytest.mark.asyncio
 async def test_update_api_key_with_team_id_rejects_admin() -> None:
-    from unittest.mock import AsyncMock, MagicMock
-
-    from modulo.auth.api_key import ApiKeyInvalidError, update_api_key
-    from modulo.db.models.api_key import OrgApiKey
-
     org_id = uuid.uuid4()
     key_id = uuid.uuid4()
     team_id = uuid.uuid4()
@@ -332,12 +307,6 @@ async def test_update_api_key_with_team_id_rejects_admin() -> None:
 
 @pytest.mark.asyncio
 async def test_update_api_key_updates_expires_at() -> None:
-    from datetime import UTC, datetime, timedelta
-    from unittest.mock import AsyncMock, MagicMock
-
-    from modulo.auth.api_key import update_api_key
-    from modulo.db.models.api_key import OrgApiKey
-
     org_id = uuid.uuid4()
     key_id = uuid.uuid4()
     future = datetime.now(UTC) + timedelta(days=60)
@@ -375,12 +344,6 @@ async def test_update_api_key_updates_expires_at() -> None:
 
 @pytest.mark.asyncio
 async def test_revoke_api_key_success() -> None:
-    from datetime import datetime
-    from unittest.mock import AsyncMock, MagicMock
-
-    from modulo.auth.api_key import revoke_api_key
-    from modulo.db.models.api_key import OrgApiKey
-
     org_id = uuid.uuid4()
     key_id = uuid.uuid4()
     key = MagicMock(spec=OrgApiKey)
@@ -402,10 +365,6 @@ async def test_revoke_api_key_success() -> None:
 
 @pytest.mark.asyncio
 async def test_revoke_api_key_not_found_returns_false() -> None:
-    from unittest.mock import AsyncMock, MagicMock
-
-    from modulo.auth.api_key import revoke_api_key
-
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
 
@@ -418,12 +377,25 @@ async def test_revoke_api_key_not_found_returns_false() -> None:
 
 @pytest.mark.asyncio
 async def test_revoke_api_key_already_revoked_returns_false() -> None:
-    from datetime import UTC, datetime
-    from unittest.mock import AsyncMock, MagicMock
+    """Already-revoked keys are filtered out by the ``revoked_at IS NULL``
+    WHERE clause, so the query returns no row and the function returns False."""
+    org_id = uuid.uuid4()
+    key_id = uuid.uuid4()
 
-    from modulo.auth.api_key import revoke_api_key
-    from modulo.db.models.api_key import OrgApiKey
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
 
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    ok = await revoke_api_key(session, key_id, org_id)
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_key_is_idempotent_when_query_returns_revoked_key() -> None:
+    """If the query unexpectedly returns an already-revoked key, revoking
+    again refreshes ``revoked_at`` and still reports success."""
     org_id = uuid.uuid4()
     key_id = uuid.uuid4()
     key = MagicMock(spec=OrgApiKey)
@@ -435,26 +407,15 @@ async def test_revoke_api_key_already_revoked_returns_false() -> None:
 
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
 
     ok = await revoke_api_key(session, key_id, org_id)
     assert ok is True
-    # The WHERE clause filters out already-revoked keys, so the query
-    # returns None and the function returns False. But if the query
-    # somehow returns the key (e.g., the WHERE clause is wrong), the
-    # code sets revoked_at again. Test both paths explicitly.
-
-    # Path 1: query returns None (already revoked, filtered by WHERE)
-    result.scalar_one_or_none.return_value = None
-    ok = await revoke_api_key(session, key_id, org_id)
-    assert ok is False
+    assert key.revoked_at is not None
 
 
 @pytest.mark.asyncio
 async def test_revoke_api_key_wrong_org_returns_false() -> None:
-    from unittest.mock import AsyncMock, MagicMock
-
-    from modulo.auth.api_key import revoke_api_key
-
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
 
