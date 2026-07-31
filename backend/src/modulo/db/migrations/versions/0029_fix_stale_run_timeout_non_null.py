@@ -3,7 +3,7 @@
 from alembic import op
 
 revision = "0029_fix_stale_run_timeout_non_null"
-down_revision = "0026_add_agent_commands"
+down_revision = "0028_add_claimed_by_to_runs"
 
 
 def upgrade() -> None:

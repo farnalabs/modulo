@@ -190,6 +190,47 @@ def test_create_pipeline_default_autonomy_default_value(client: TestClient) -> N
     assert create.await_args.kwargs["default_autonomy_level"] == "manual_approval"
 
 
+def test_create_pipeline_passes_stale_run_timeout_minutes(client: TestClient) -> None:
+    pipeline = _make_pipeline()
+    pipeline.stale_run_timeout_minutes = 45
+
+    with (
+        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={"name": "Pipeline", "stale_run_timeout_minutes": 45},
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["stale_run_timeout_minutes"] == 45
+    assert create.await_args.kwargs["stale_run_timeout_minutes"] == 45
+
+
+def test_create_pipeline_defaults_stale_run_timeout_minutes(client: TestClient) -> None:
+    pipeline = _make_pipeline()
+    pipeline.stale_run_timeout_minutes = 30
+
+    with (
+        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/pipelines", json={"name": "Pipeline"})
+
+    assert resp.status_code == 201
+    assert resp.json()["stale_run_timeout_minutes"] == 30
+    assert create.await_args.kwargs["stale_run_timeout_minutes"] == 30
+
+
+def test_create_pipeline_rejects_null_stale_run_timeout(client: TestClient) -> None:
+    resp = client.post("/api/v1/pipelines", json={"name": "Pipeline", "stale_run_timeout_minutes": None})
+
+    assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/pipelines/{id}
 # ---------------------------------------------------------------------------
@@ -628,6 +669,34 @@ def test_update_pipeline_not_found_returns_404(client: TestClient) -> None:
         resp = client.patch(f"/api/v1/pipelines/{uuid.uuid4()}", json={"name": "x"})
 
     assert resp.status_code == 404
+
+
+def test_update_pipeline_rejects_null_stale_run_timeout(client: TestClient) -> None:
+    resp = client.patch(
+        f"/api/v1/pipelines/{_PIPELINE_ID}",
+        json={"stale_run_timeout_minutes": None},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_update_pipeline_accepts_stale_run_timeout(client: TestClient) -> None:
+    pipeline = _make_pipeline()
+    pipeline.stale_run_timeout_minutes = 45
+
+    with (
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline) as update,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"stale_run_timeout_minutes": 45},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["stale_run_timeout_minutes"] == 45
+    assert update.await_args.args[2]["stale_run_timeout_minutes"] == 45
 
 
 # ---------------------------------------------------------------------------

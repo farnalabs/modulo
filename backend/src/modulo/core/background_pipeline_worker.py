@@ -130,7 +130,8 @@ class BackgroundPipelineWorker:
     async def cleanup_stale_runs(self) -> int:
         """Kill runs stuck in pending/running for longer than their pipeline's configured timeout.
 
-        Uses per-pipeline ``stale_run_timeout_minutes`` if set, otherwise defaults to 30 minutes.
+        Uses each pipeline's ``stale_run_timeout_minutes`` (defaults to 30 at the DB level
+        since migration 0029_fix_stale_run_timeout_non_null, so the column is never null).
         Called automatically at the start of each consumer loop iteration.
 
         Iterates over all orgs (``organisations`` has no RLS) so the cleanup
@@ -146,6 +147,10 @@ class BackgroundPipelineWorker:
             pool_timeout=10,
             connect_args={"ssl": False, "statement_cache_size": 0},
         )
+        # Assumes the schema is migrated (stale_run_timeout_minutes is NOT NULL). Against
+        # an unmigrated schema the NULL value makes `NULL * INTERVAL '1 minute'` yield NULL
+        # and the stale-run cleanup silently no-ops. Entrypoint runs migrations before the
+        # worker starts, so this is safe in production.
         killed = 0
         try:
             factory = async_sessionmaker(engine, expire_on_commit=False)

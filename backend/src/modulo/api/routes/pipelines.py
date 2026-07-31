@@ -602,6 +602,7 @@ async def create_pipeline_endpoint(
                 run_context_defaults=req.run_context_defaults,
                 default_autonomy_level=req.default_autonomy_level,
                 max_duration_seconds=req.max_duration_seconds,
+                stale_run_timeout_minutes=req.stale_run_timeout_minutes,
                 folder_id=req.folder_id,
             )
     except ProgrammingError:
