@@ -273,12 +273,11 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
     ADR 017 live-role re-read: after the existence checks, the account's live
     org role is read from ``org_memberships`` (deactivated rows excluded).
 
-    Failure modes:
-    - missing/deactivated membership → raise 401 (removed users lose access immediately)
-    - SQLAlchemyError during the read → degrade-to-claim: return the JWT claim
-      role (log ``permission.live_role_read_failed``); a transient DB blip must
-      not 401 everyone
-    - any other exception → propagate (500)
+        Failure modes:
+    - missing/deactivated membership  raise 401 (removed users lose access immediately)
+    - SQLAlchemyError during the read  raise 503 (fail-closed; a DB blip must
+      not restore a removed user's stale role - ADR 017 review decision)
+    - any other exception  propagate (500)
     """
     try:
         from sqlalchemy import text as _text

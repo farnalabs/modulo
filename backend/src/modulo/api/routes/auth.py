@@ -417,7 +417,10 @@ async def ws_token(
                     )
             except SQLAlchemyError:
                 _log.warning("permission.live_role_read_failed", exc_info=True)
-                live_org_role = current_user.org_role
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Role verification temporarily unavailable. Please try again.",
+                ) from None
             else:
                 if live_org_role is None:
                     # ADR 017: missing/deactivated membership → deny. A removed
@@ -516,7 +519,10 @@ async def me(
                 )
         except SQLAlchemyError:
             _log.warning("permission.live_role_read_failed", exc_info=True)
-            live_org_role = current_user.org_role
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Role verification temporarily unavailable. Please try again.",
+            ) from None
         else:
             if live_org_role is None:
                 # ADR 017: missing/deactivated membership → deny. A removed
