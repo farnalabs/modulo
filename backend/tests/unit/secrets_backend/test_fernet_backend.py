@@ -1,11 +1,13 @@
 """Unit tests for FernetSecretsBackend."""
 
+import asyncio
 import binascii
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from cryptography.fernet import Fernet
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 from modulo.db.models.secret import Secret
@@ -242,6 +244,115 @@ class TestSetSession:
         session.execute = AsyncMock()
         backend.set_session(session)
         assert backend._session is session, "Expected session to be set on backend"
+
+
+class TestSetSecretTOCTOU:
+    @staticmethod
+    def _session_with_flush(flush: AsyncMock) -> MagicMock:
+        session = MagicMock()
+        session.add = MagicMock()
+
+        async def mock_execute(stmt, *args, **kwargs):
+            result = MagicMock()
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = MagicMock()
+            return result
+
+        session.execute = AsyncMock(side_effect=mock_execute)
+        session.flush = flush
+        return session
+
+    async def test_integrity_error_retries_then_succeeds(self):
+        """A concurrent insert racing this one is retried exactly once."""
+        session = self._session_with_flush(
+            AsyncMock(side_effect=[IntegrityError("stmt", {}, Exception("duplicate key")), None])
+        )
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
+
+        await backend.set_secret("new-key", _SECRET_VALUE)
+
+        assert session.flush.call_count == 2, "Expected one retry after IntegrityError"
+
+    async def test_integrity_error_exhausted_raises(self):
+        session = self._session_with_flush(
+            AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("duplicate key")))
+        )
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
+
+        with pytest.raises(IntegrityError):
+            await backend.set_secret("new-key", _SECRET_VALUE)
+
+        assert session.flush.call_count == 2, "Expected both attempts to fail before re-raise"
+
+
+class TestOrgIdResolution:
+    async def test_falls_back_to_session_info_on_non_postgres(self):
+        """current_setting() is unavailable on non-Postgres backends; session.info is used."""
+        session = MagicMock()
+        session.info = {"organisation_id": str(_ORG_ID)}
+        session.execute = AsyncMock()
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+
+        async def mock_execute(stmt, *args, **kwargs):
+            if "current_setting" in str(stmt):
+                raise OperationalError("stmt", {}, Exception("function does not exist"))
+            result = MagicMock()
+            result.scalar_one_or_none.return_value = None
+            return result
+
+        session.execute = AsyncMock(side_effect=mock_execute)
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
+
+        await backend.set_secret("new-key", _SECRET_VALUE)
+
+        session.flush.assert_called_once()
+
+    async def test_invalid_org_id_format_raises(self):
+        session = MagicMock()
+
+        async def mock_execute(stmt, *args, **kwargs):
+            result = MagicMock()
+            result.scalar.return_value = "not-a-uuid"
+            return result
+
+        session.execute = AsyncMock(side_effect=mock_execute)
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
+
+        with pytest.raises(RuntimeError, match="invalid organisation_id"):
+            await backend.set_secret("new-key", _SECRET_VALUE)
+
+    async def test_no_session_during_org_id_read_raises(self):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=MagicMock())
+        backend._session = None
+        backend._org_id = None
+
+        with pytest.raises(RuntimeError, match="no DB session"):
+            await backend._read_org_id_from_session()
+
+
+class TestDeleteSecretErrors:
+    async def test_error_raises(self):
+        session = MagicMock()
+        session.execute = AsyncMock()
+        _set_org_id(session)
+        session.flush = AsyncMock(side_effect=RuntimeError("db down"))
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
+
+        with pytest.raises(RuntimeError, match="db down"):
+            await backend.delete_secret("some-key")
+
+    async def test_cancelled_error_propagates(self):
+        session = MagicMock()
+        session.execute = AsyncMock()
+        _set_org_id(session)
+        session.flush = AsyncMock(side_effect=asyncio.CancelledError())
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
+
+        with pytest.raises(asyncio.CancelledError):
+            await backend.delete_secret("some-key")
 
 
 class TestGetSecretOrgScoping:
