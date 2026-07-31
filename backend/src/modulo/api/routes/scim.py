@@ -237,7 +237,6 @@ async def list_users(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.list_users")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -316,7 +315,6 @@ async def create_user(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.create_user")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -360,7 +358,6 @@ async def get_user(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.get_user")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -419,7 +416,6 @@ async def replace_user(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.replace_user")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -497,7 +493,6 @@ async def patch_user(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.patch_user")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -541,7 +536,6 @@ async def delete_user(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.delete_user")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -610,7 +604,6 @@ async def list_groups(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.list_groups")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -703,7 +696,6 @@ async def create_group(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.create_group")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -768,7 +760,6 @@ async def get_group(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.get_group")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -836,7 +827,6 @@ async def replace_group(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.replace_group")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -974,7 +964,6 @@ async def patch_group(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.patch_group")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -1022,7 +1011,6 @@ async def delete_group(
         ) from None
     except SQLAlchemyError:
         _log.exception("scim.delete_group")
-        _log.error("SCIM endpoint failed: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",

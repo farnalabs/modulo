@@ -451,7 +451,7 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
     try:
         root = ElementTree.fromstring(metadata_xml)
     except Exception as exc:
-        _log.exception("admin_sso._test_saml_connection")
+        _log.warning("admin_sso._test_saml_connection", exc_info=True)
         return SsoProviderTestResult(
             success=False,
             message=f"Failed to parse metadata XML: {exc}",
