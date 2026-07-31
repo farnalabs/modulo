@@ -46,4 +46,3 @@ Feature: View as Team — Non-Admin Rejection
     And my role is changed to "operator"
     When I GET /api/viewmodel/current with view_as_team "engineering"
     Then the response status is 403
-

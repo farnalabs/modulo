@@ -99,4 +99,4 @@ Detects significant pass-rate drops for eval definitions by comparing a recent w
 - [ ] No per-pipeline scoping — query is org-wide only
 - [ ] No configurable recent window ratio (hardcoded at max(days // 4, 1))
 - [ ] No historical trend persistence — each call recomputes from raw eval_results
-- [ ] Eval alerts include improving and stable trends — declining-only filter could reduce noise for frontend display 
+- [ ] Eval alerts include improving and stable trends — declining-only filter could reduce noise for frontend display

@@ -134,4 +134,3 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - **Fixed MAJOR** — simplified `_parse_retry_after` (removed redundant `or response.headers.get("retry-after")` — httpx headers are case-insensitive, single lookup suffices).
 - **Fixed MAJOR** — changed all 5 falsy-check validations (`if not issue_key:`, `if not body:`, `if not transition_id:`) to `key not in filters/data` pattern, matching the established project convention and eliminating falsy-value ambiguity.
 - **Added** 9 new resilience tests in `test_jira_resilience.py`: `_compute_delay` jitter verification, exponential backoff, capping, Retry-After parsing and capping, retry 502/503/504 → success, 429 exhaustion, required field validation edge cases (missing issue_key, missing body).
-
