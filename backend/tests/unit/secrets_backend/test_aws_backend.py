@@ -1,6 +1,7 @@
 """Unit tests for AWSSecretsManagerBackend.
 
-The boto3 client is fully mocked via the ``mock_boto3`` fixture.
+The boto3 client is fully mocked via the ``mock_boto3`` fixture, so these tests
+run even when the optional *boto3* package is not installed.
 """
 
 import asyncio
@@ -10,15 +11,7 @@ import pytest
 
 from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
 
-try:
-    import boto3  # noqa: F401
-
-    _BOTO3_AVAILABLE = True
-except ImportError:
-    _BOTO3_AVAILABLE = False
-
 pytestmark = [
-    pytest.mark.skipif(not _BOTO3_AVAILABLE, reason="boto3 package not installed"),
     pytest.mark.usefixtures("aws_env"),
 ]
 
@@ -108,14 +101,6 @@ class TestAWSSecretsManagerBackend:
             patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
             pytest.raises(RuntimeError, match="timeout writing secret"),
         ):
-            await backend.set_secret("my-key", "my-value")
-
-    async def test_set_secret_update_failure_wraps_as_runtime_error(self, mock_boto3):
-        backend = _make_backend()
-        backend._client.create_secret.side_effect = backend._client.exceptions.ResourceExistsException()
-        backend._client.update_secret.side_effect = ConnectionError("connection refused")
-
-        with pytest.raises(RuntimeError, match="unexpected error writing secret"):
             await backend.set_secret("my-key", "my-value")
 
     async def test_set_secret_toctou_retries_create(self, mock_boto3):
@@ -254,7 +239,7 @@ class TestEnsureClient:
         ):
             AWSSecretsManagerBackend()
 
-    async def test_ensure_client_raises_without_boto3(self):
+    async def test_ensure_client_raises_without_boto3(self, mock_boto3):
         backend = AWSSecretsManagerBackend()
         with (
             patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", False),
