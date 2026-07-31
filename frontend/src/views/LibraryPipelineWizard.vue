@@ -66,7 +66,7 @@
               <Background :gap="20" :size="1" />
               <template #node-agent="nodeProps">
                 <div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-3 shadow-sm">
-                  <div class="text-xs font-medium text-indigo-400">AGENT</div>
+                  <div class="text-xs font-medium text-indigo-400">{{ $t('views.LibraryPipelineWizard.agent') }}</div>
                   <div class="text-sm font-semibold text-foreground">{{ nodeProps.data.label }}</div>
                 </div>
               </template>

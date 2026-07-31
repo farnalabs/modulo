@@ -909,6 +909,7 @@ export default {
     },
     "LibraryPipelineWizard": {
       "create_pipeline": "Create Pipeline",
+      "agent": "Agent",
       "pipeline_configuration": "Pipeline Configuration",
       "version": "Version:",
       "author": "Author:",
