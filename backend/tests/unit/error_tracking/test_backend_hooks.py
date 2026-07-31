@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import os
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -98,45 +98,54 @@ class TestCatchAllMiddleware:
 
 
 class TestErrorTrackingLogHandler:
-    def test_skips_below_error(self) -> None:
+    def _make_record(self, level: int, msg: str) -> logging.LogRecord:
+        return logging.LogRecord(
+            name="test", level=level, pathname="", lineno=0, msg=msg, args=(), exc_info=None
+        )
+
+    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit", new_callable=AsyncMock)
+    def test_skips_below_error(self, mock_async: AsyncMock) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler
 
         handler = ErrorTrackingLogHandler()
-        record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0, msg="info msg", args=(), exc_info=None
-        )
-        handler.emit(record)
-        assert True  # emit returns None for below-error; no crash
+        handler.emit(self._make_record(logging.INFO, "info msg"))
+        mock_async.assert_not_awaited()
+        mock_async.assert_not_called()
 
-    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit")
-    def test_captures_error_level(self, mock_async: Any) -> None:
+    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit", new_callable=AsyncMock)
+    async def test_captures_error_level(self, mock_async: AsyncMock) -> None:
+        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+
+        handler = ErrorTrackingLogHandler()
+        token = org_id_var.set(str(_ORG_ID))
+        try:
+            ErrorTrackingLogHandler._last_write_time.clear()
+            handler.emit(self._make_record(logging.ERROR, "error msg"))
+            await asyncio.sleep(0)
+            mock_async.assert_awaited_once()
+        finally:
+            org_id_var.reset(token)
+
+    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit", new_callable=AsyncMock)
+    async def test_captures_critical_level(self, mock_async: AsyncMock) -> None:
+        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+
+        handler = ErrorTrackingLogHandler()
+        token = org_id_var.set(str(_ORG_ID))
+        try:
+            ErrorTrackingLogHandler._last_write_time.clear()
+            handler.emit(self._make_record(logging.CRITICAL, "critical msg"))
+            await asyncio.sleep(0)
+            mock_async.assert_awaited_once()
+        finally:
+            org_id_var.reset(token)
+
+    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit", new_callable=AsyncMock)
+    def test_skips_warning_level(self, mock_async: AsyncMock) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler
 
         handler = ErrorTrackingLogHandler()
-        record = logging.LogRecord(
-            name="test", level=logging.ERROR, pathname="", lineno=0, msg="error msg", args=(), exc_info=None
-        )
-        handler.emit(record)
-
-    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit")
-    def test_captures_critical_level(self, mock_async: Any) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler
-
-        handler = ErrorTrackingLogHandler()
-        record = logging.LogRecord(
-            name="test", level=logging.CRITICAL, pathname="", lineno=0, msg="critical msg", args=(), exc_info=None
-        )
-        handler.emit(record)
-
-    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit")
-    def test_skips_warning_level(self, mock_async: Any) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler
-
-        handler = ErrorTrackingLogHandler()
-        record = logging.LogRecord(
-            name="test", level=logging.WARNING, pathname="", lineno=0, msg="warn msg", args=(), exc_info=None
-        )
-        handler.emit(record)
+        handler.emit(self._make_record(logging.WARNING, "warn msg"))
         mock_async.assert_not_awaited()
         mock_async.assert_not_called()
 
@@ -265,22 +274,3 @@ class TestCeleryFailureHandler:
         assert "sensitive_arg1" in event_data["context_json"]["args_summary"]
         assert event_data["context_json"]["kwargs_keys"] == ["org_id", "token", "url"]
         assert "s shh" not in str(event_data["context_json"]["kwargs_keys"])
-
-
-# =========================================================================
-# Environment/version enrichment
-# =========================================================================
-
-
-class TestEnrichment:
-    @patch("modulo.api.middleware.catch_all.get_version", return_value="1.2.3")
-    @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
-    def test_version_in_response(self, mock_ingest: Any, mock_version: Any) -> None:
-        app = _make_app()
-        client = TestClient(app)
-        resp = client.get("/crash")
-        assert resp.status_code == 500
-
-    def test_environment_falls_back_to_development(self) -> None:
-        env_val = os.environ.get("MODULO_ENV", "development")
-        assert env_val == "development"
