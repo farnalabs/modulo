@@ -32,7 +32,7 @@
       v-if="store.sessionsLoading"
       class="flex items-center justify-center py-8"
     >
-      <span class="text-sm text-muted-foreground">Loading...</span>
+      <span class="text-sm text-muted-foreground">{{ $t('components.remy.RemySessionDrawer.loading') }}</span>
     </div>
 
     <div

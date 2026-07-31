@@ -100,7 +100,7 @@ function onBooleanChange(event: Event) {
       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
       @change="onSelectChange"
     >
-      <option value="">Select...</option>
+      <option value="">{{ $t('components.pipeline.composite.ParameterPortForm.select') }}</option>
       <option v-for="opt in port.options" :key="opt.value" :value="opt.value">
         {{ opt.label }}
       </option>

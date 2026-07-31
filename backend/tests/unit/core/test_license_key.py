@@ -18,6 +18,17 @@ from modulo.core.registry.crypto import generate_keypair, sign_primitive
 _ORIGINAL_KEY = _LICENSE_PUBLIC_KEY_HEX
 
 
+def _build_signed_key(payload: dict, private_key_hex: str) -> str:
+    """Encode a payload + signature into the <payload>.<signature> license key format."""
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
+    sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sign_primitive(payload, private_key_hex))).decode().rstrip("=")
+    return f"{payload_b64}.{sig_b64}"
+
+
 @pytest.fixture(autouse=True)
 def _reset_key() -> Generator[None, None, None]:
     yield
@@ -29,7 +40,9 @@ class TestDefaultPublicKey:
         assert len(_LICENSE_PUBLIC_KEY_HEX) == 64
 
     def test_key_is_valid_hex(self) -> None:
-        bytes.fromhex(_LICENSE_PUBLIC_KEY_HEX)
+        raw = bytes.fromhex(_LICENSE_PUBLIC_KEY_HEX)
+        assert raw.hex() == _LICENSE_PUBLIC_KEY_HEX
+        assert len(raw) == 32  # Ed25519 public key
 
     def test_key_contains_only_lowercase_hex(self) -> None:
         assert re.fullmatch(r"[0-9a-f]{64}", _LICENSE_PUBLIC_KEY_HEX)
@@ -52,7 +65,7 @@ class TestValidatePublicKeyHex:
             with pytest.raises(ValueError, match=error_match):
                 _validate_public_key_hex(key)
         else:
-            _validate_public_key_hex(key)
+            assert _validate_public_key_hex(key) is None
 
 
 class TestSetPublicKeyValidates:
@@ -64,22 +77,19 @@ class TestSetPublicKeyValidates:
         kp = generate_keypair()
         set_public_key(kp["public_key"])
 
+        # a license signed by the newly-configured keypair must now verify
+        payload = {"tier": "team", "org_id": "test"}
+        result = parse_and_verify(_build_signed_key(payload, kp["private_key"]))
+        assert result.valid is True
+        assert result.license_data is not None
+        assert result.license_data.tier == "team"
+        assert result.license_data.org_id == "test"
+
 
 class TestSignThenVerifyWithDefaultKey:
     def test_default_key_rejects_unknown_signature(self) -> None:
         kp = generate_keypair()
         payload = {"tier": "community", "org_id": "test"}
-        sig_hex = sign_primitive(payload, kp["private_key"])
-        sig_bytes = bytes.fromhex(sig_hex)
-
-        payload_b64 = (
-            base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-            .decode()
-            .rstrip("=")
-        )
-        sig_b64 = base64.urlsafe_b64encode(sig_bytes).decode().rstrip("=")
-        key = f"{payload_b64}.{sig_b64}"
-
-        result = parse_and_verify(key)
+        result = parse_and_verify(_build_signed_key(payload, kp["private_key"]))
         assert result.valid is False
         assert "Signature" in (result.error or "")

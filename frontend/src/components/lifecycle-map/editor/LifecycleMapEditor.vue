@@ -82,7 +82,7 @@
         class="w-80 overflow-y-auto border-l bg-card p-4"
       >
         <div class="mb-4 flex items-center justify-between">
-          <h3 class="text-sm font-semibold">Stage Config</h3>
+          <h3 class="text-sm font-semibold">{{ $t('components.lifecycle-map.editor.LifecycleMapEditor.stage_config') }}</h3>
           <button
             class="text-muted-foreground hover:text-foreground"
             @click="selectedNode = null"
@@ -110,7 +110,7 @@
         class="w-80 overflow-y-auto border-l bg-card p-4"
       >
         <div class="mb-4 flex items-center justify-between">
-          <h3 class="text-sm font-semibold">Edge Config</h3>
+          <h3 class="text-sm font-semibold">{{ $t('components.lifecycle-map.editor.LifecycleMapEditor.edge_config') }}</h3>
           <button
             class="text-muted-foreground hover:text-foreground"
             @click="selectedEdge = null"
