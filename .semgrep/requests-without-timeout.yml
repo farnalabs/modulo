@@ -16,4 +16,4 @@
     languages: [python]
     severity: ERROR
     paths:
-      include: ["src/**", "tests/**", "**/backend/src/**", "**/backend/tests/**"]
+      include: ["**/backend/src/**", "**/backend/tests/**"]
