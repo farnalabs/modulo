@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -152,8 +153,6 @@ def test_login_unknown_user(client: TestClient) -> None:
 
 
 def test_me_returns_username(client: TestClient) -> None:
-    from datetime import UTC, datetime
-
     mock_user = _make_mock_user()
     mock_user.created_at = datetime.now(UTC)
     mock_family = MagicMock()
