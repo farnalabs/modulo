@@ -2,10 +2,10 @@
   <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
     <PageTabs :tabs="[
-      { label: 'Evals', to: '/evals/editor' },
-      { label: 'Proposals', to: '/evals/proposals' },
-      { label: 'Variants', to: '/variants/compare' },
-      { label: 'AB Test', to: '/variants/ab-test' },
+      { label: $t('views.EvalEditorView.tab_evals'), to: '/evals/editor' },
+      { label: $t('views.EvalEditorView.tab_proposals'), to: '/evals/proposals' },
+      { label: $t('views.EvalEditorView.tab_variants'), to: '/variants/compare' },
+      { label: $t('views.EvalEditorView.tab_ab_test'), to: '/variants/ab-test' },
     ]" />
 
     <div class="page-narrow">

@@ -282,7 +282,8 @@ export default {
       "update_password": "Update Password",
       "passwords_do_not_match": "Passwords do not match",
       "manage_your_account_settings_and_password": "Manage your account settings and password.",
-      "password_must_be_at_least_8_characters": "Password must be at least 8 characters"
+      "password_must_be_at_least_8_characters": "Password must be at least 8 characters",
+      "member_since": "Member since {date}"
     },
     "AdminModelBackendsView": {
       "preview_model_backends_count": "{count} preview model backend | {count} preview model backends",
@@ -427,7 +428,48 @@ export default {
       "no_claim_token_claim_the_gate_first": "No claim token. Claim the gate first.",
       "rejected_by_reviewer": "Rejected by reviewer",
       "gate_approved_pipeline_resuming": "Gate approved. Pipeline resuming.",
-      "gate_rejected_pipeline_routed_to_reject_target": "Gate rejected. Pipeline routed to reject target."
+      "gate_rejected_pipeline_routed_to_reject_target": "Gate rejected. Pipeline routed to reject target.",
+      "title": "HITL Review",
+      "subtitle": "Review and respond to pending human-in-the-loop gates",
+      "search_placeholder": "Search pipeline or node name...",
+      "status_label": "Status",
+      "status_pending": "Pending",
+      "status_claimed": "Claimed",
+      "status_approved": "Approved",
+      "status_rejected": "Rejected",
+      "pipeline_label": "Pipeline",
+      "all_pipelines": "All Pipelines",
+      "date_label": "date",
+      "auto_refresh": "Auto-refresh: {seconds}s",
+      "empty_title": "No pending HITL gates",
+      "empty_description": "All gates have been resolved or no pipelines have hit a human-in-the-loop gate yet.",
+      "assigned_to": "Assigned: {user}",
+      "unassigned": "Unassigned",
+      "claim_metadata": "Claim Metadata",
+      "run_id": "Run ID",
+      "node_label": "Node",
+      "created_label": "Created",
+      "claimed_label": "Claimed",
+      "expires_label": "Expires",
+      "decided_label": "Decided",
+      "decision_label": "Decision",
+      "assignees_label": "Assignees",
+      "team_label": "Team",
+      "actions_label": "Actions",
+      "claim_gate": "Claim Gate",
+      "claiming": "Claiming...",
+      "review_notes": "Review notes...",
+      "approve": "Approve",
+      "approving": "Approving...",
+      "reject": "Reject",
+      "rejecting": "Rejecting...",
+      "approved_banner": "Gate was approved. The pipeline has resumed.",
+      "rejected_banner": "Gate was rejected. The pipeline was routed to the reject target.",
+      "claim_token_label": "Claim Token",
+      "claim_failed": "Claim failed:",
+      "approve_failed": "Approve failed:",
+      "reject_failed": "Reject failed:",
+      "claimed_by_you": "You"
     },
     "AdminSystemConfigView": {
       "deploymentwide_system_configuration_system_admin_only": "Deployment-wide system configuration (system admin only)",
@@ -692,7 +734,11 @@ export default {
       "llm_judge": "LLM Judge",
       "regex": "Regex",
       "json_schema": "JSON Schema",
-      "custom_function": "Custom Function"
+      "custom_function": "Custom Function",
+      "tab_evals": "Evals",
+      "tab_proposals": "Proposals",
+      "tab_variants": "Variants",
+      "tab_ab_test": "AB Test"
     },
     "RunDetailView": {
       "copy_run_id": "Copy run ID",
@@ -1280,7 +1326,9 @@ export default {
       "deprecate_confirm_title": "Deprecate \"{name}\"?",
       "deprecate_confirm_description": "This schema will be marked as deprecated. Agents using it will still function, but it will no longer appear as active.",
       "deprecate": "Deprecate",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "schemas": "Schemas",
+      "empty_hint": "Schemas are created through inference or direct creation."
     },
     "SettingsTriggersView": {
       "failed_to_load_triggers": "Failed to load triggers:",
