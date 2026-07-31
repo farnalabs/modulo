@@ -41,20 +41,14 @@ Three API calls cast the typed `api` client to `any` to bypass path/parameter ty
 
 Empty catches hide failures and make debugging impossible. At minimum `console.warn()`.
 
-### 7. No-op computed — SettingsHitlReviewView.vue:339
-```ts
-const currentClaimToken = computed(() => claimTokens)
-```
-`claimTokens` is already a `ref<Record<string, string>>`, so `computed(() => claimTokens)` produces a `ComputedRef<Ref<Record<string, string>>>` — wrapping a ref in an unnecessary computed that adds no value.
+### 7. ~~No-op computed — SettingsHitlReviewView.vue:339~~ **FIXED**
+The wrapping computed was removed; `currentClaimToken` is now `computed(() => claimTokens.value)`.
 
-### 8. Duplicated field-loading logic — SchemaEditorView.vue:539-549 / 724-734
-`loadLatestVersion` (lines 539–549) and `restoreVersion` (lines 724–734) contain identical field extraction logic from `definition_json.properties`. Should be extracted to a function like `parseDefinitionToFields(def)`.
+### 8. ~~Duplicated field-loading logic — SchemaEditorView.vue:539-549 / 724-734~~ **FIXED**
+The identical field extraction logic from `definition_json.properties` was extracted into a shared `parseDefinitionToFields(def)` helper used by both `loadLatestVersion` and `restoreVersion`.
 
-### 9. Wrong i18n key reference — LibraryView.vue:28
-```vue
-<option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
-```
-Uses a translation key from a completely different view (`AdminNotificationDeliveryLogView`). Either needs its own key or a shared common key.
+### 9. ~~Wrong i18n key reference — LibraryView.vue:28~~ **FIXED**
+`LibraryView` now references its own `views.LibraryView.all_types` key instead of borrowing `AdminNotificationDeliveryLogView`'s.
 
 ### 10. Pagination total incorrect for native section — LibraryView.vue:388
 ```ts
@@ -77,8 +71,8 @@ Uses `&larr;` for the back arrow instead of an SVG icon or the `<BackLink>` comp
 ### 14. `$router` vs `router` inconsistency — LibraryView.vue
 The template uses `$router` (line 8 injected by Vue Router), but script uses `router` from `useRouter()` (line 338). Different naming for the same thing across template and script.
 
-### 15. Legacy `useApi` composable — MyProfileView.vue:78
-Uses the legacy `get`/`put` from `useApi()` (throws on error) instead of the typed `api` client (`api.GET`/`api.PUT`). Inconsistent with newer views.
+### 15. ~~Legacy `useApi` composable — MyProfileView.vue:78~~ **FIXED**
+Migrated to the typed `api` client (`api.GET('/api/v1/me')`, `api.PUT('/api/v1/me/password')`); the unit spec was updated to mock the client module.
 
 ### 16. Fire-and-forget async in setInterval — SettingsHitlReviewView.vue:551-555
 ```ts

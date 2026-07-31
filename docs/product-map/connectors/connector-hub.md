@@ -29,7 +29,7 @@ unit-tests:
   - backend/tests/unit/connector_hub/test_connector_hub.py
   - backend/tests/unit/connector_hub/test_traced_connector.py
   - backend/tests/unit/api/test_connectors_endpoint.py
-  - backend/tests/unit/api/test_connectors_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/connector_hub/test_advisory_lock.py
 code:
   - backend/src/modulo/core/connector_hub/

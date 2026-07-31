@@ -18,7 +18,7 @@ code:
   - frontend/src/views/TeamComparisonView.vue
 unit-tests:
   - backend/tests/unit/api/test_dashboard.py
-  - backend/tests/unit/api/test_dashboard_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - frontend/src/__tests__/DashboardView.spec.ts
 depends-on:
   - feat-teams-dashboard

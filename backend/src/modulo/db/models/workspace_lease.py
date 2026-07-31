@@ -37,7 +37,7 @@ class WorkspaceLease(OrgScoped):
     repository_url: Mapped[str | None] = mapped_column(String(1000))
     repository_ref: Mapped[str | None] = mapped_column(String(255))
     lease_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resource_usage_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     output_artifact_refs_json: Mapped[list[str] | None] = mapped_column(JSON)
     error_message: Mapped[str | None] = mapped_column(Text)

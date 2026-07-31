@@ -64,7 +64,7 @@ def test_stale_pr_bottleneck() -> None:
     assert "bottleneck" in bottlenecks[0].finding.lower()
 
 
-def test_planning_stage_from_jira_issues():
+def test_planning_stage_from_jira_issues() -> None:
     samples = [
         _sample(
             "issues",

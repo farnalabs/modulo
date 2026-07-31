@@ -15,7 +15,7 @@ unit-tests:
   - backend/tests/integration/crud/test_schema.py
   - backend/tests/unit/library/test_schema_seeds.py
   - backend/tests/bdd/steps/test_schemas.py
-  - backend/tests/unit/api/test_schema_exception_guard.py
+  - backend/tests/unit/api/test_error_handling.py
 depends-on: [feat-core-schema-system]
 status: partial
 ---

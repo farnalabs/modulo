@@ -7,8 +7,7 @@ code: [backend/src/modulo/core/feedback_manager/, backend/src/modulo/api/routes/
 unit-tests:
   - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
   - backend/tests/unit/api/test_feedback_endpoint.py
-  - backend/tests/unit/api/test_feedback_programming_error.py
-  - backend/tests/unit/api/test_feedback_sqlalchemy_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/integration/feedback_manager/test_feedback_flow.py
 depends-on: [feat-evals-eval-definitions, feat-evals-feedback-routing]
 status: partial

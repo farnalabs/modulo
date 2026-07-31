@@ -12,7 +12,7 @@ code:
 unit-tests:
   - backend/tests/unit/auth/test_sso.py
   - backend/tests/unit/api/test_admin_sso.py
-  - backend/tests/unit/auth/test_sso_saml_bdd.py
+  - backend/tests/bdd/steps/test_sso_saml.py
   - backend/tests/unit/auth/test_saml_parse_datetime.py
 depends-on: [feat-auth-jwt-auth, feat-teams-team-isolation]
 status: partial

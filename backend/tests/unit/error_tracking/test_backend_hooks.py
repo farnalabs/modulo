@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -98,47 +99,53 @@ class TestCatchAllMiddleware:
 
 
 class TestErrorTrackingLogHandler:
-    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit")
-    def test_skips_below_error(self, mock_async: Any) -> None:
+    def _make_record(self, level: int, msg: str) -> logging.LogRecord:
+        return logging.LogRecord(name="test", level=level, pathname="", lineno=0, msg=msg, args=(), exc_info=None)
+
+    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit", new_callable=AsyncMock)
+    def test_skips_below_error(self, mock_async: AsyncMock) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler
 
         handler = ErrorTrackingLogHandler()
-        record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0, msg="info msg", args=(), exc_info=None
-        )
-        handler.emit(record)
+        handler.emit(self._make_record(logging.INFO, "info msg"))
+        mock_async.assert_not_awaited()
         mock_async.assert_not_called()
         assert handler._pending_tasks == 0
 
-    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit")
-    def test_captures_error_level(self, mock_async: Any) -> None:
+    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit", new_callable=AsyncMock)
+    async def test_captures_error_level(self, mock_async: AsyncMock) -> None:
+        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+
+        handler = ErrorTrackingLogHandler()
+        token = org_id_var.set(str(_ORG_ID))
+        try:
+            ErrorTrackingLogHandler._last_write_time.clear()
+            handler.emit(self._make_record(logging.ERROR, "error msg"))
+            await asyncio.sleep(0)
+            mock_async.assert_awaited_once()
+        finally:
+            org_id_var.reset(token)
+
+    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit", new_callable=AsyncMock)
+    async def test_captures_critical_level(self, mock_async: AsyncMock) -> None:
+        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+
+        handler = ErrorTrackingLogHandler()
+        token = org_id_var.set(str(_ORG_ID))
+        try:
+            ErrorTrackingLogHandler._last_write_time.clear()
+            handler.emit(self._make_record(logging.CRITICAL, "critical msg"))
+            await asyncio.sleep(0)
+            mock_async.assert_awaited_once()
+        finally:
+            org_id_var.reset(token)
+
+    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit", new_callable=AsyncMock)
+    def test_skips_warning_level(self, mock_async: AsyncMock) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler
 
         handler = ErrorTrackingLogHandler()
-        record = logging.LogRecord(
-            name="test", level=logging.ERROR, pathname="", lineno=0, msg="error msg", args=(), exc_info=None
-        )
-        handler.emit(record)
-
-    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit")
-    def test_captures_critical_level(self, mock_async: Any) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler
-
-        handler = ErrorTrackingLogHandler()
-        record = logging.LogRecord(
-            name="test", level=logging.CRITICAL, pathname="", lineno=0, msg="critical msg", args=(), exc_info=None
-        )
-        handler.emit(record)
-
-    @patch("modulo.core.logging_config.ErrorTrackingLogHandler._async_emit")
-    def test_skips_warning_level(self, mock_async: Any) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler
-
-        handler = ErrorTrackingLogHandler()
-        record = logging.LogRecord(
-            name="test", level=logging.WARNING, pathname="", lineno=0, msg="warn msg", args=(), exc_info=None
-        )
-        handler.emit(record)
+        handler.emit(self._make_record(logging.WARNING, "warn msg"))
         mock_async.assert_not_awaited()
         mock_async.assert_not_called()
 

@@ -1,6 +1,7 @@
 """Unit tests for ClaimExpiryJob."""
 
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
@@ -42,14 +43,8 @@ def _stale_rows_2() -> list[object]:
     ]
 
 
-async def test_expire_once_resets_stale_claims() -> None:
-    engine = MagicMock()
-    job = ClaimExpiryJob(engine)
-
-    org_session = _org_list_session()
-    org_factory = _mock_session_factory(org_session)
-
-    # Per-org transaction session
+def _tx_session(stale_rows: list[object]) -> AsyncMock:
+    """Per-org transaction session whose execute calls return the given stale rows."""
     tx_session = AsyncMock(name="tx_session")
     tx_session.add = MagicMock()
     tx_session.flush = AsyncMock()
@@ -63,15 +58,20 @@ async def test_expire_once_resets_stale_claims() -> None:
     begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
     tx_session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
-    stale_rows = _stale_rows_2()
-    stale_result = MagicMock()
-    stale_result.all.return_value = stale_rows
+    execute_results: list[MagicMock] = []
+    if stale_rows:
+        stale_result = MagicMock()
+        stale_result.all.return_value = stale_rows
+        execute_results = [
+            stale_result,  # SELECT stale claims
+            MagicMock(),  # UPDATE claims
+            MagicMock(),  # UPDATE runs
+        ]
+    else:
+        empty_result = MagicMock()
+        empty_result.all.return_value = []
+        execute_results = [empty_result]
 
-    execute_results: list[MagicMock] = [
-        stale_result,  # SELECT stale claims
-        MagicMock(),  # UPDATE claims
-        MagicMock(),  # UPDATE runs
-    ]
     execute_call_count = 0
 
     async def _execute(stmt: object) -> MagicMock:
@@ -81,8 +81,29 @@ async def test_expire_once_resets_stale_claims() -> None:
         return execute_results[idx]
 
     tx_session.execute = _execute
+    return tx_session
 
-    # First factory call returns org session, second returns tx session
+
+async def _run_expire_once(
+    *,
+    stale_rows: list[object],
+    notifier: Any = None,
+    dispatch_side_effect: Any = None,
+) -> tuple[list[dict[str, Any]], AsyncMock]:
+    """Run one ClaimExpiryJob._expire_once() pass against fully mocked sessions.
+
+    Returns ``(expired_claims, mock_audit)`` so tests can assert on both the
+    returned rows and the audit events logged.
+    """
+    engine = MagicMock()
+    job = ClaimExpiryJob(engine, notifier=notifier)
+    if notifier is not None and dispatch_side_effect is not None:
+        notifier.dispatch_event = AsyncMock(side_effect=dispatch_side_effect)
+
+    org_session = _org_list_session()
+    org_factory = _mock_session_factory(org_session)
+    tx_session = _tx_session(stale_rows)
+
     factory_call_count = 0
 
     def _factory_side_effect() -> AsyncMock:
@@ -100,6 +121,12 @@ async def test_expire_once_resets_stale_claims() -> None:
         patch("modulo.core.hitl_manager.expiry_job.set_rls_org", new=AsyncMock()),
     ):
         expired = await job._expire_once()
+
+    return expired, mock_audit
+
+
+async def test_expire_once_resets_stale_claims() -> None:
+    expired, mock_audit = await _run_expire_once(stale_rows=_stale_rows_2())
 
     assert len(expired) == 2
     assert expired[0]["run_id"] == _RUN_1
@@ -121,44 +148,7 @@ async def test_expire_once_resets_stale_claims() -> None:
 
 
 async def test_expire_once_empty_when_none_stale() -> None:
-    engine = MagicMock()
-    job = ClaimExpiryJob(engine)
-
-    org_session = _org_list_session()
-    org_factory = _mock_session_factory(org_session)
-
-    tx_session = AsyncMock(name="tx_session")
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    tx_session.begin = MagicMock(return_value=begin_cm)
-    begin_nested_cm = AsyncMock()
-    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    tx_session.begin_nested = MagicMock(return_value=begin_nested_cm)
-
-    # First execute returns no stale claims
-    empty_result = MagicMock()
-    empty_result.all.return_value = []
-    tx_session.execute = AsyncMock(return_value=empty_result)
-
-    factory_call_count = 0
-
-    def _factory_side_effect() -> AsyncMock:
-        nonlocal factory_call_count
-        if factory_call_count == 0:
-            factory_call_count += 1
-            return org_factory()
-        return _mock_session_factory(tx_session)()
-
-    factory = MagicMock(side_effect=_factory_side_effect)
-
-    with (
-        patch.object(job, "_session_factory", factory),
-        patch("modulo.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()) as mock_audit,
-        patch("modulo.core.hitl_manager.expiry_job.set_rls_org", new=AsyncMock()),
-    ):
-        expired = await job._expire_once()
+    expired, mock_audit = await _run_expire_once(stale_rows=[])
 
     assert expired == []
     mock_audit.assert_not_called()
@@ -166,61 +156,8 @@ async def test_expire_once_empty_when_none_stale() -> None:
 
 async def test_expire_once_dispatches_notifications() -> None:
     """When a notifier is provided, claim_expired events are dispatched."""
-    engine = MagicMock()
     notifier = AsyncMock()
-    job = ClaimExpiryJob(engine, notifier=notifier)
-
-    org_session = _org_list_session()
-    org_factory = _mock_session_factory(org_session)
-
-    tx_session = AsyncMock(name="tx_session")
-    tx_session.add = MagicMock()
-    tx_session.flush = AsyncMock()
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    tx_session.begin = MagicMock(return_value=begin_cm)
-    begin_nested_cm = AsyncMock()
-    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    tx_session.begin_nested = MagicMock(return_value=begin_nested_cm)
-
-    stale_rows = _stale_rows_2()
-    stale_result = MagicMock()
-    stale_result.all.return_value = stale_rows
-
-    execute_results: list[MagicMock] = [
-        stale_result,  # SELECT stale claims
-        MagicMock(),  # UPDATE claims
-        MagicMock(),  # UPDATE runs
-    ]
-    execute_call_count = 0
-
-    async def _execute(stmt: object) -> MagicMock:
-        nonlocal execute_call_count
-        idx = execute_call_count
-        execute_call_count += 1
-        return execute_results[idx]
-
-    tx_session.execute = _execute
-
-    factory_call_count = 0
-
-    def _factory_side_effect() -> AsyncMock:
-        nonlocal factory_call_count
-        if factory_call_count == 0:
-            factory_call_count += 1
-            return org_factory()
-        return _mock_session_factory(tx_session)()
-
-    factory = MagicMock(side_effect=_factory_side_effect)
-
-    with (
-        patch.object(job, "_session_factory", factory),
-        patch("modulo.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()),
-        patch("modulo.core.hitl_manager.expiry_job.set_rls_org", new=AsyncMock()),
-    ):
-        expired = await job._expire_once()
+    expired, _ = await _run_expire_once(stale_rows=_stale_rows_2(), notifier=notifier)
 
     assert len(expired) == 2
     assert notifier.dispatch_event.call_count == 2
@@ -238,122 +175,19 @@ async def test_expire_once_dispatches_notifications() -> None:
 
 async def test_expire_once_no_notifier_skips_dispatch() -> None:
     """When notifier is None, no dispatch happens."""
-    engine = MagicMock()
-    job = ClaimExpiryJob(engine)  # no notifier
-
-    org_session = _org_list_session()
-    org_factory = _mock_session_factory(org_session)
-
-    tx_session = AsyncMock(name="tx_session")
-    tx_session.add = MagicMock()
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    tx_session.begin = MagicMock(return_value=begin_cm)
-    begin_nested_cm = AsyncMock()
-    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    tx_session.begin_nested = MagicMock(return_value=begin_nested_cm)
-
-    stale_rows = _stale_rows_2()
-    stale_result = MagicMock()
-    stale_result.all.return_value = stale_rows
-
-    execute_results: list[MagicMock] = [
-        stale_result,
-        MagicMock(),
-        MagicMock(),
-    ]
-    execute_call_count = 0
-
-    async def _execute(stmt: object) -> MagicMock:
-        nonlocal execute_call_count
-        idx = execute_call_count
-        execute_call_count += 1
-        return execute_results[idx]
-
-    tx_session.execute = _execute
-
-    factory_call_count = 0
-
-    def _factory_side_effect() -> AsyncMock:
-        nonlocal factory_call_count
-        if factory_call_count == 0:
-            factory_call_count += 1
-            return org_factory()
-        return _mock_session_factory(tx_session)()
-
-    factory = MagicMock(side_effect=_factory_side_effect)
-
-    with (
-        patch.object(job, "_session_factory", factory),
-        patch("modulo.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()),
-        patch("modulo.core.hitl_manager.expiry_job.set_rls_org", new=AsyncMock()),
-    ):
-        expired = await job._expire_once()
+    expired, _ = await _run_expire_once(stale_rows=_stale_rows_2())
 
     assert len(expired) == 2
 
 
 async def test_expire_once_handles_notifier_failure() -> None:
     """Notifier failure should not crash the expiry loop."""
-    engine = MagicMock()
     notifier = MagicMock()
-    notifier.dispatch_event = AsyncMock(side_effect=RuntimeError("network error"))
-    job = ClaimExpiryJob(engine, notifier=notifier)
-
-    org_session = _org_list_session()
-    org_factory = _mock_session_factory(org_session)
-
-    tx_session = AsyncMock(name="tx_session")
-    tx_session.add = MagicMock()
-    tx_session.flush = AsyncMock()
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    tx_session.begin = MagicMock(return_value=begin_cm)
-    begin_nested_cm = AsyncMock()
-    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    tx_session.begin_nested = MagicMock(return_value=begin_nested_cm)
-
-    stale_rows = _stale_rows_2()
-    stale_result = MagicMock()
-    stale_result.all.return_value = stale_rows
-
-    execute_results: list[MagicMock] = [
-        stale_result,
-        MagicMock(),
-        MagicMock(),
-    ]
-    execute_call_count = 0
-
-    async def _execute(stmt: object) -> MagicMock:
-        nonlocal execute_call_count
-        idx = execute_call_count
-        execute_call_count += 1
-        return execute_results[idx]
-
-    tx_session.execute = _execute
-
-    factory_call_count = 0
-
-    def _factory_side_effect() -> AsyncMock:
-        nonlocal factory_call_count
-        if factory_call_count == 0:
-            factory_call_count += 1
-            return org_factory()
-        return _mock_session_factory(tx_session)()
-
-    factory = MagicMock(side_effect=_factory_side_effect)
-
-    with (
-        patch.object(job, "_session_factory", factory),
-        patch("modulo.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()),
-        patch("modulo.core.hitl_manager.expiry_job.set_rls_org", new=AsyncMock()),
-    ):
-        # Should not raise despite notifier failure
-        expired = await job._expire_once()
+    expired, _ = await _run_expire_once(
+        stale_rows=_stale_rows_2(),
+        notifier=notifier,
+        dispatch_side_effect=RuntimeError("network error"),
+    )
 
     assert len(expired) == 2
 

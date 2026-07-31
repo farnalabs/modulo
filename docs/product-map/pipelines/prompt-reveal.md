@@ -6,7 +6,7 @@ bdd:
   - backend/tests/bdd/features/ui/run_detail.feature
 unit-tests:
   - backend/tests/unit/api/test_prompt_reveal.py
-  - backend/tests/unit/api/test_prompt_reveal_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 code:
   - backend/src/modulo/api/routes/runs.py
   - backend/src/modulo/db/models/agent.py

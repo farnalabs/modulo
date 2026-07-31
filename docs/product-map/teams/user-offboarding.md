@@ -11,7 +11,7 @@ code:
   - backend/src/modulo/db/crud/token_family.py
   - backend/src/modulo/db/crud/team_membership.py
 unit-tests:
-  - backend/tests/unit/api/test_user_offboarding_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 depends-on: [feat-auth-jwt-auth, feat-teams-team-crud]
 status: partial
 ---

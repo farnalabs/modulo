@@ -7,7 +7,7 @@ unit-tests: [backend/tests/unit/hitl_manager/test_hitl_manager.py]
 code:
   - backend/src/modulo/core/hitl_manager/__init__.py
   - backend/src/modulo/db/models/hitl_claim.py
-  - backend/src/modulo/db/migrations/versions/0027_hitl_claim_team.py
+  - backend/src/modulo/db/migrations/versions/0003_v2_pipeline_runtime.py
   - backend/src/modulo/api/routes/pipelines.py
   - backend/src/modulo/api/routes/hitl.py
   - backend/src/modulo/api/mcp_server.py
@@ -86,3 +86,7 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 - Team membership role enforcement: `claim()` checks TeamMembership existence only — any role (including `viewer`) can claim a team-scoped gate; no role filter applied
 - BDD scenarios for team HITL gates are implemented as mock-based step definitions, not full integration tests with real DB
 - Notifier layer is not yet wired to use `team_id` from `hitl_awaiting` payload for team-specific dispatch
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE ref: migration `0027_hitl_claim_team.py` renamed in v2 squash → `0003_v2_pipeline_runtime.py` (creates `hitl_claims` with `required_team_id`).

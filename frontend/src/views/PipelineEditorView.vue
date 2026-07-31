@@ -213,6 +213,8 @@
           :node-types="nodeTypes"
           :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: '#888' } }"
           :fit-view-on-init="false"
+          :source-position="Position.Right"
+          :target-position="Position.Left"
           @node-click="onNodeClick"
           @edge-click="onEdgeClick"
           @pane-click="onPaneClick"
@@ -917,7 +919,7 @@
 <script setup lang="ts">
 import { ref, computed, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { VueFlow, useVueFlow } from '@vue-flow/core'
+import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'

@@ -10,7 +10,7 @@ code:
 unit-tests:
   - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
   - backend/tests/unit/api/test_feedback_endpoint.py
-  - backend/tests/unit/api/test_feedback_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/integration/feedback_manager/test_feedback_flow.py
 depends-on: [feat-core-run-context, feat-evals-eval-engine]
 status: partial
@@ -131,7 +131,7 @@ Discovered from 1 completed delivery task.
 ### Error Handling
 
 - [x] All 9 API routes catch `ProgrammingError` and return structured 501 Not Implemented
-- [x] `ProgrammingError` test module (`test_feedback_programming_error.py`) covers all 9 routes
+- [x] `ProgrammingError` test module (`test_error_handling.py`) covers all 9 routes
 - [x] FeedbackManager methods raise typed exceptions: `FeedbackRecordNotFoundError`, `InvalidTransitionError`, `ConcurrentModificationError`, `ValidationError`
 - [x] Concurrent modification detected via atomic `UPDATE ... WHERE status = expected_status ... RETURNING` (optimistic locking)
 - [x] `_rls` decorator wraps every FeedbackManager method — RLS failure is caught, logged, and re-raised, not silently swallowed
