@@ -26,7 +26,7 @@
               data-testid="library-type-filter-button"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-              {{ $t('views.AdminNotificationDeliveryLogView.all_types') }}
+              {{ $t('views.LibraryView.all_types') }}
               <span v-if="selectedTypes.length > 0" class="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">{{ selectedTypes.length }}</span>
             </button>
             <div
@@ -45,7 +45,7 @@
                   class="rounded border-input"
                   @change="toggleType(opt.value)"
                 />
-                {{ opt.label }}
+                {{ $t(opt.labelKey) }}
               </label>
             </div>
           </div>
@@ -346,6 +346,7 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
+import { useI18n } from 'vue-i18n'
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -377,6 +378,7 @@ interface ListResponse {
 
 const router = useRouter()
 const route = useRoute()
+const { t } = useI18n()
 
 const search = ref('')
 const selectedTypes = ref<string[]>([])
@@ -387,18 +389,22 @@ const pageSize = ref(12)
 const total = ref(0)
 
 const typeOptions = [
-  { value: 'pipeline_template', label: 'Pipeline Templates' },
-  { value: 'workflow', label: 'Workflows' },
-  { value: 'agent', label: 'Agents' },
-  { value: 'schema', label: 'Schemas' },
-  { value: 'integration', label: 'Integrations' },
-  { value: 'composite', label: 'Composites' },
+  { value: 'pipeline_template', labelKey: 'views.LibraryView.type_pipeline_templates' },
+  { value: 'workflow', labelKey: 'views.LibraryView.type_workflows' },
+  { value: 'agent', labelKey: 'views.LibraryView.type_agents' },
+  { value: 'schema', labelKey: 'views.LibraryView.type_schemas' },
+  { value: 'integration', labelKey: 'views.LibraryView.type_integrations' },
+  { value: 'composite', labelKey: 'views.LibraryView.type_composites' },
 ]
 
-const typeLabelMap = Object.fromEntries(typeOptions.map(o => [o.value, o.label]))
-
 function typeLabel(type: string): string {
-  return typeLabelMap[type] ?? type
+  const key = typeLabelKey(type)
+  const label = t(key)
+  return label !== key ? label : type
+}
+
+function typeLabelKey(type: string): string {
+  return typeOptions.find(o => o.value === type)?.labelKey ?? type
 }
 
 function toggleType(value: string) {

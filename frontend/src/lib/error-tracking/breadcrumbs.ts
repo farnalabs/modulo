@@ -10,7 +10,11 @@ export class BreadcrumbCollector {
 
   constructor(maxSize = 50) {
     this.maxSize = maxSize
-    _collectorInstance = this
+    BreadcrumbCollector._setInstance(this)
+  }
+
+  private static _setInstance(instance: BreadcrumbCollector): void {
+    _collectorInstance = instance
   }
 
   startAutoCapture(): void {
@@ -67,20 +71,18 @@ export class BreadcrumbCollector {
   private autoCaptureApiCalls(): void {
     if (typeof window.fetch !== 'function') return
     this.origFetch = window.fetch.bind(window)
-    const self = this
-    window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string'
         ? input
         : input instanceof URL
           ? input.href
           : input.url
       const method = (init?.method ?? 'GET').toUpperCase()
-      const fetchFn = self.origFetch!
-      return fetchFn(input, init).then((response) => {
-        self.captureApiCall(method, url, response.status)
+      return this.origFetch!(input, init).then((response) => {
+        this.captureApiCall(method, url, response.status)
         return response
       }).catch((err: unknown) => {
-        self.captureApiCall(method, url, 0)
+        this.captureApiCall(method, url, 0)
         throw err
       })
     }

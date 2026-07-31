@@ -52,4 +52,3 @@ Feature: Admin Override of Team Restrictions
     And I am authenticated as a viewer in org "acme"
     When I request GET /api/pipelines/secret-pipeline
     Then the response status is 404
-

@@ -17,4 +17,4 @@ fi
 python3 /home/user/opencode-review.py
 EXIT_CODE=True
 
-exit 
+exit

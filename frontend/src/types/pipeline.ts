@@ -40,5 +40,3 @@ export interface CompositeDefinition {
   created_at: string
   updated_at: string
 }
-
-

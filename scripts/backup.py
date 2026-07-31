@@ -236,7 +236,7 @@ async def main() -> None:
         await run_pg_dump(db_url, args.pg_dump, dump_path)
 
         secret_files = collect_secrets(tmpdir)
-        all_files = [dump_path] + secret_files
+        all_files = [dump_path, *secret_files]
 
         cs_path = write_checksums(tmpdir, all_files)
         all_files.append(cs_path)
