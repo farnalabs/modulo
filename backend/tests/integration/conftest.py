@@ -232,17 +232,25 @@ async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
     return account_id
 
 
-@pytest_asyncio.fixture
-async def rls_session(db_engine: AsyncEngine, test_org: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
-    """AsyncSession with RLS set to test_org; all ORM changes are rolled back."""
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    async with factory() as session:
-        await session.execute(text("SELECT 1"))
-        from modulo.db.rls import set_rls_org
+@pytest_asyncio.fixture(loop_scope="function")
+async def rls_session(migrated_db_url: str, test_org: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
+    """AsyncSession with RLS set to test_org; all ORM changes are rolled back.
 
-        await set_rls_org(session, test_org)
-        yield session
-        await session.rollback()
+    Creates a dedicated engine + session on the current event loop so that
+    connection operations never cross event loop boundaries.
+    """
+    engine = create_async_engine(migrated_db_url, echo=False)
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            await session.execute(text("SELECT 1"))
+            from modulo.db.rls import set_rls_org
+
+            await set_rls_org(session, test_org)
+            yield session
+            await session.rollback()
+    finally:
+        await engine.dispose()
 
 
 @pytest_asyncio.fixture(scope="session")
