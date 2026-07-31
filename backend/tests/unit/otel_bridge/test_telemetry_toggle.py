@@ -5,40 +5,14 @@ exporters are registered, enabling data residency compliance.
 """
 
 import os
-from collections.abc import Generator
 from unittest.mock import patch
 
 import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.util._once import Once
 
-from modulo.otel_bridge.export import setup_otel, shutdown_otel
-
-
-def _reset_global_provider() -> None:
-    """Replace the global TracerProvider.
-
-    OTel allows set_tracer_provider() to be called only once per process, so
-    the internal Once guard must be reset before swapping the provider. The
-    provider is assigned directly (not via set_tracer_provider) so the fresh
-    guard stays unconsumed, letting each test's setup_otel() call take effect.
-    """
-    trace._TRACER_PROVIDER_SET_ONCE = Once()  # type: ignore[attr-defined]
-    trace._TRACER_PROVIDER = TracerProvider()  # type: ignore[attr-defined]
-
-
-def _span_processors(provider: TracerProvider) -> tuple:
-    return provider._active_span_processor._span_processors  # type: ignore[attr-defined]
-
-
-@pytest.fixture(autouse=True)
-def reset_otel() -> Generator[None, None, None]:
-    """Reset global OTel state between tests to avoid cross-test pollution."""
-    _reset_global_provider()
-    yield
-    shutdown_otel()
-    _reset_global_provider()
+from modulo.otel_bridge.export import setup_otel
+from tests.unit.otel_bridge.conftest import span_processors
 
 
 class TestTelemetryDefaults:
@@ -49,7 +23,7 @@ class TestTelemetryDefaults:
         setup_otel(telemetry_enabled=False)
         provider = trace.get_tracer_provider()
         assert isinstance(provider, TracerProvider)
-        assert _span_processors(provider) == ()
+        assert span_processors(provider) == ()
 
     def test_disabled_stdout_exporter_not_used(self):
         """When disabled, the ConsoleSpanExporter must not be instantiated."""
@@ -77,12 +51,13 @@ class TestTelemetryDefaults:
 class TestTelemetryEnabled:
     """Tests that telemetry is properly configured when enabled."""
 
-    def test_enabled_registers_stdout_exporter(self):
+    def test_enabled_registers_stdout_exporter(self, monkeypatch: pytest.MonkeyPatch):
         """telemetry_enabled=True should register a stdout span processor."""
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
         setup_otel(telemetry_enabled=True)
         provider = trace.get_tracer_provider()
         assert isinstance(provider, TracerProvider)
-        assert len(_span_processors(provider)) == 1
+        assert len(span_processors(provider)) == 1
 
     def test_enabled_instantiates_console_exporter(self):
         """When enabled, the ConsoleSpanExporter should be constructed."""
@@ -119,7 +94,7 @@ class TestTelemetryEnabled:
         with patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}):
             setup_otel(telemetry_enabled=True)
         provider = trace.get_tracer_provider()
-        assert len(_span_processors(provider)) == 2
+        assert len(span_processors(provider)) == 2
 
 
 class TestSettingsIntegration:

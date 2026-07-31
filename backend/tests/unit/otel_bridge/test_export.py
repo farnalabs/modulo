@@ -4,39 +4,14 @@ Uses OTel's InMemorySpanExporter to verify the global TracerProvider is
 configured correctly without needing real OTLP or stdout I/O.
 """
 
-from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.util._once import Once
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
 from modulo.otel_bridge.export import _sanitise_url, setup_otel, shutdown_otel
-
-
-def _reset_global_provider() -> None:
-    """Replace the global TracerProvider.
-
-    OTel allows set_tracer_provider() to be called only once per process, so
-    the internal Once guard must be reset before swapping the provider. The
-    provider is assigned directly (not via set_tracer_provider) so the fresh
-    guard stays unconsumed, letting each test's setup_otel() call take effect.
-    """
-    trace._TRACER_PROVIDER_SET_ONCE = Once()  # type: ignore[attr-defined]
-    trace._TRACER_PROVIDER = TracerProvider()  # type: ignore[attr-defined]
-
-
-@pytest.fixture(autouse=True)
-def _reset_otel() -> Generator[None, None, None]:
-    """Reset the global tracer provider before each test to prevent background
-    BatchSpanProcessor threads from writing to closed stdout during teardown
-    and to keep the provider isolated between tests.
-    """
-    _reset_global_provider()
-    yield
-    _reset_global_provider()
 
 
 def test_setup_otel_sets_global_provider() -> None:
@@ -87,7 +62,8 @@ def test_setup_otel_disabled_registers_no_span_processors() -> None:
     assert provider._active_span_processor._span_processors == ()
 
 
-def test_setup_otel_enabled_registers_stdout_processor() -> None:
+def test_setup_otel_enabled_registers_stdout_processor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     setup_otel(service_name="enabled", telemetry_enabled=True)
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
@@ -110,9 +86,12 @@ def test_setup_otel_handles_bad_otlp_endpoint(monkeypatch: pytest.MonkeyPatch) -
     setup_otel(service_name="bad-otlp", telemetry_enabled=True)
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
-    # OTLP exporter construction is lazy (no network), but a raised exception
-    # during configuration must not prevent the stdout exporter from staying active.
-    assert len(provider._active_span_processor._span_processors) >= 1
+    # OTLP exporter construction is lazy (no network), so the OTLP path still
+    # registers its BatchSpanProcessor alongside the stdout processor.
+    processors = provider._active_span_processor._span_processors
+    assert len(processors) == 2
+    assert isinstance(processors[0], SimpleSpanProcessor)
+    assert isinstance(processors[1], BatchSpanProcessor)
 
 
 def test_setup_otel_otlp_constructor_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
