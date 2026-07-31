@@ -6,7 +6,7 @@ All functions enforce org scoping via organisation_id filter.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError
@@ -24,6 +24,7 @@ LEVEL_RANK: dict[str, int] = {
 
 DASHBOARD_LIMIT_MAX = 50
 NOTIFICATIONS_LIMIT_MAX = 200
+_DEFAULT_EXPIRY_DAYS = 90
 
 
 def _visible_to_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
@@ -49,6 +50,8 @@ async def create_notification(
     target_user_id: uuid.UUID | None = None,
     expires_at: datetime | None = None,
 ) -> Notification:
+    if expires_at is None:
+        expires_at = datetime.now(UTC) + timedelta(days=_DEFAULT_EXPIRY_DAYS)
     notification = Notification(
         organisation_id=org_id,
         scope=scope,
