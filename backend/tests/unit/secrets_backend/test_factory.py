@@ -35,7 +35,6 @@ def test_vault_backend_created_by_name():
         assert isinstance(backend, VaultSecretsBackend)
 
 
-@pytest.mark.skip(reason="Flaky: unawaited coroutine warning in worktree env")
 def test_aws_backend_created_by_name():
     from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
 
@@ -68,11 +67,10 @@ def test_env_var_used_when_no_backend_name():
 
 
 @pytest.mark.parametrize(
-    "backend_name,expected_cls,env_vars,module_patch,lib_patch",
+    "backend_name,env_vars,module_patch,lib_patch",
     [
         pytest.param(
             "vault",
-            None,
             {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"},
             "modulo.core.secrets_backend.vault",
             "modulo.core.secrets_backend.vault._hvac",
@@ -80,7 +78,6 @@ def test_env_var_used_when_no_backend_name():
         ),
         pytest.param(
             "aws",
-            None,
             {"AWS_REGION": "us-east-1", "AWS_ACCESS_KEY_ID": "x", "AWS_SECRET_ACCESS_KEY": "y"},
             "modulo.core.secrets_backend.aws",
             "modulo.core.secrets_backend.aws._boto3",
@@ -88,7 +85,7 @@ def test_env_var_used_when_no_backend_name():
         ),
     ],
 )
-def test_fernet_key_optional_for_external_backend(backend_name, expected_cls, env_vars, module_patch, lib_patch):
+def test_fernet_key_optional_for_external_backend(backend_name, env_vars, module_patch, lib_patch):
     if backend_name == "vault":
         from modulo.core.secrets_backend.vault import VaultSecretsBackend as expected_cls  # noqa: N813
     else:
