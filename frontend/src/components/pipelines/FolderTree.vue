@@ -105,13 +105,13 @@
 
           <!-- Parent folder selector -->
           <div>
-            <label for="folder-tree-parent" class="mb-1 block text-sm font-medium">Parent folder</label>
+            <label for="folder-tree-parent" class="mb-1 block text-sm font-medium">{{ $t('components.pipelines.FolderTree.parent_folder') }}</label>
             <Select v-model="newFolderParentId">
               <SelectTrigger id="folder-tree-parent">
-                <SelectValue placeholder="No parent (root level)" />
+                <SelectValue :placeholder="$t('components.pipelines.FolderTree.no_parent_root_level')" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem :value="'null'">No parent (root level)</SelectItem>
+                <SelectItem :value="'null'">{{ $t('components.pipelines.FolderTree.no_parent_root_level') }}</SelectItem>
                 <SelectItem v-for="f in allFolders" :key="f.id" :value="f.id">{{ f.name }}</SelectItem>
               </SelectContent>
             </Select>
@@ -122,8 +122,8 @@
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" @click="showCreateDialog = false">Cancel</Button>
-          <Button :disabled="!newFolderName.trim() || creating" :loading="creating" @click="handleCreate">Save</Button>
+          <Button variant="outline" @click="showCreateDialog = false">{{ $t('common.cancel') }}</Button>
+          <Button :disabled="!newFolderName.trim() || creating" :loading="creating" @click="handleCreate">{{ $t('common.save') }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -144,8 +144,8 @@
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" @click="showRenameDialog = false">Cancel</Button>
-          <Button :disabled="!renameFolderName.trim() || renaming" :loading="renaming" @click="handleRename">Save</Button>
+          <Button variant="outline" @click="showRenameDialog = false">{{ $t('common.cancel') }}</Button>
+          <Button :disabled="!renameFolderName.trim() || renaming" :loading="renaming" @click="handleRename">{{ $t('common.save') }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -161,8 +161,8 @@
           {{ deleteError }}
         </div>
         <DialogFooter>
-          <Button variant="outline" @click="showDeleteConfirm = false">Cancel</Button>
-          <Button variant="destructive" :disabled="deleting" :loading="deleting" @click="handleDelete">Delete</Button>
+          <Button variant="outline" @click="showDeleteConfirm = false">{{ $t('common.cancel') }}</Button>
+          <Button variant="destructive" :disabled="deleting" :loading="deleting" @click="handleDelete">{{ $t('common.delete') }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

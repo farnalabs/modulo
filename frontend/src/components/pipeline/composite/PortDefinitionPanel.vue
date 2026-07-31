@@ -274,7 +274,7 @@ async function detectPlaceholders() {
         </div>
         <div>
           <label for="portdefinitionpanel-field-4" class="mb-1 block text-xs font-medium text-muted-foreground"
-            >Description</label
+            >{{ $t('components.pipeline.composite.PortDefinitionPanel.description') }}</label
           >
           <textarea id="portdefinitionpanel-field-4"
             v-model="form.description"
@@ -285,17 +285,17 @@ async function detectPlaceholders() {
         </div>
         <div>
           <label for="portdefinitionpanel-field-3" class="mb-1 block text-xs font-medium text-muted-foreground"
-            >Type</label
+            >{{ $t('components.pipeline.composite.PortDefinitionPanel.type') }}</label
           >
           <Select v-model="form.type">
             <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Port type">
               <SelectValue placeholder="Select type" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="string">String</SelectItem>
-              <SelectItem value="number">Number</SelectItem>
-              <SelectItem value="boolean">Boolean</SelectItem>
-              <SelectItem value="select">Select</SelectItem>
+              <SelectItem value="string">{{ $t('components.pipeline.composite.PortDefinitionPanel.string') }}</SelectItem>
+              <SelectItem value="number">{{ $t('components.pipeline.composite.PortDefinitionPanel.number') }}</SelectItem>
+              <SelectItem value="boolean">{{ $t('components.pipeline.composite.PortDefinitionPanel.boolean') }}</SelectItem>
+              <SelectItem value="select">{{ $t('components.pipeline.composite.PortDefinitionPanel.select') }}</SelectItem>
               <SelectItem value="model_backend_ref">{{ $t('components.pipeline.composite.PortDefinitionPanel.model_backend_ref') }}</SelectItem>
               <SelectItem value="schema_ref">{{ $t('components.pipeline.composite.PortDefinitionPanel.schema_ref') }}</SelectItem>
             </SelectContent>
@@ -307,7 +307,7 @@ async function detectPlaceholders() {
             type="checkbox"
             class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
           />
-          <label for="portdefinitionpanel-field-2" class="text-xs text-muted-foreground">Required</label>
+          <label for="portdefinitionpanel-field-2" class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.PortDefinitionPanel.required') }}</label>
         </div>
         <div v-if="form.type === 'string'" class="flex items-center gap-2">
           <input id="portdefinitionpanel-field-2"
@@ -315,7 +315,7 @@ async function detectPlaceholders() {
             type="checkbox"
             class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
           />
-          <span class="text-xs text-muted-foreground">Multiline</span>
+          <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.PortDefinitionPanel.multiline') }}</span>
         </div>
         <div v-if="form.type !== 'boolean'">
           <label for="portdefinitionpanel-field-1" class="mb-1 block text-xs font-medium text-muted-foreground"
@@ -324,7 +324,7 @@ async function detectPlaceholders() {
           <input id="portdefinitionpanel-field-1"
             v-model="form.default"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            :placeholder="$t('components.pipeline.composite.PortDefinitionPanel.formtype_number_07_default_value')"
+            :placeholder="form.type === 'number' ? $t('components.pipeline.composite.PortDefinitionPanel.formtype_number_07_default_value') : $t('components.pipeline.composite.PortDefinitionPanel.default_value_placeholder')"
             :type="form.type === 'number' ? 'number' : 'text'"
           />
         </div>

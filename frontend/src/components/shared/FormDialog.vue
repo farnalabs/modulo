@@ -7,7 +7,7 @@
       </DialogHeader>
       <slot />
       <DialogFooter class="gap-2 sm:justify-end">
-        <Button variant="outline" @click="modelValue = false">Cancel</Button>
+        <Button variant="outline" @click="modelValue = false">{{ $t('common.cancel') }}</Button>
         <Button :disabled="confirmDisabled || loading" :loading="loading" @click="emit('confirm')">
           {{ confirmText || 'Confirm' }}
         </Button>

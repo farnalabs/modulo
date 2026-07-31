@@ -1,12 +1,12 @@
 <template>
   <div class="space-y-4">
     <div>
-      <span class="mb-1 block text-sm font-medium">Name</span>
+      <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.name') }}</span>
       <Input v-model="form.name" placeholder="Stage name" />
     </div>
 
     <div>
-      <label for="stageconfigpanel-field-2" class="mb-1 block text-sm font-medium">Description</label>
+      <label for="stageconfigpanel-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.description') }}</label>
       <textarea id="stageconfigpanel-field-2"
         v-model="form.description"
         rows="3"
@@ -16,7 +16,7 @@
     </div>
 
     <div>
-      <span class="mb-1 block text-sm font-medium">Type</span>
+      <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.type') }}</span>
       <div class="grid grid-cols-2 gap-2">
         <button
           v-for="opt in stageTypeOptions"
@@ -36,7 +36,7 @@
     </div>
 
     <div v-if="form.stage_type === 'modulo'">
-      <span class="mb-1 block text-sm font-medium">Pipeline</span>
+      <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.pipeline') }}</span>
       <Select v-model="form.pipeline_id">
         <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Pipeline">
           <SelectValue placeholder="Select a pipeline..." />
@@ -48,12 +48,12 @@
     </div>
 
     <div v-if="form.stage_type === 'external'">
-      <span class="mb-1 block text-sm font-medium">External URL</span>
+      <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.external_url') }}</span>
       <Input v-model="form.external_url" placeholder="https://..." />
     </div>
 
     <div>
-      <span class="mb-1 block text-sm font-medium">Owner</span>
+      <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.owner') }}</span>
       <Input v-model="form.owner" placeholder="Team or person name" />
     </div>
 

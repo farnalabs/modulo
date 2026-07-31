@@ -158,7 +158,7 @@
       <div v-if="uiDrivingEnabled && store.pendingPermission" class="remy-permission-card">
         <div class="remy-permission-header">
           <ShieldAlertIcon class="h-4 w-4" />
-          <span>Remy wants to perform actions on your behalf</span>
+          <span>{{ $t('components.remy.RemyChat.permission_request') }}</span>
         </div>
         <div class="remy-permission-tools">
           <div

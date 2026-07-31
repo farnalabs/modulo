@@ -85,8 +85,8 @@ function removeMapping(sourceKey: string) {
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-emerald-400">
         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
       </svg>
-      <span class="text-xs font-medium text-emerald-400">Passthrough</span>
-      <span class="text-xs text-muted-foreground">Schemas are identical — no mapping needed</span>
+      <span class="text-xs font-medium text-emerald-400">{{ $t('components.pipeline.composite.FieldMappingPair.passthrough') }}</span>
+      <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.schemas_identical_no_mapping') }}</span>
     </div>
 
     <div v-if="!isPassthrough" class="space-y-2">
@@ -142,7 +142,7 @@ function removeMapping(sourceKey: string) {
         <div v-else class="mt-2 space-y-2 rounded-md border border-border/50 bg-muted/20 p-3">
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label for="fieldmappingpair-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">Source field</label>
+              <label for="fieldmappingpair-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.source_field') }}</label>
               <Select v-model="selectedSource">
                 <SelectTrigger class="w-full rounded-md border border-border bg-background px-2 py-1 text-xs" aria-label="Source field">
                   <SelectValue placeholder="Select source" />
@@ -155,7 +155,7 @@ function removeMapping(sourceKey: string) {
               </Select>
             </div>
             <div>
-              <label for="fieldmappingpair-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">Target field</label>
+              <label for="fieldmappingpair-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.target_field') }}</label>
               <Select v-model="selectedTarget">
                 <SelectTrigger class="w-full rounded-md border border-border bg-background px-2 py-1 text-xs" aria-label="Target field">
                   <SelectValue placeholder="Select target" />

@@ -1523,6 +1523,74 @@ export default {
       "saved_views": "Saved Views",
       "select_a_saved_view": "Select a saved view..."
     },
+    "lifecycle-map": {
+      "editor": {
+        "EdgeConfigPanel": {
+          "trigger_type": "Trigger Type",
+          "description": "Description",
+          "condition_expression_jmespath": "Condition Expression (JMESPath)",
+          "estimated_frequency": "Estimated Frequency",
+          "daily": "Daily",
+          "per_pr": "Per PR",
+          "hourly": "Hourly",
+          "custom": "Custom",
+          "trigger_link_optional": "Trigger Link (optional)",
+          "select_trigger_type": "Select trigger type",
+          "not_specified": "Not specified"
+        },
+        "StageConfigPanel": {
+          "name": "Name",
+          "description": "Description",
+          "type": "Type",
+          "pipeline": "Pipeline",
+          "external_url": "External URL",
+          "owner": "Owner"
+        },
+        "GraduationDialog": {
+          "graduate_stage": "Graduate Stage",
+          "simple_sequential": "Simple Sequential",
+          "hierarchical_agent": "Hierarchical Agent",
+          "parallel_processing": "Parallel Processing",
+          "graduating_stage_prefix": "You are graduating",
+          "graduating_stage_suffix": "to a Modulo-managed pipeline."
+        },
+        "LifecycleMapEditor": {
+          "stage_config": "Stage Config",
+          "edge_config": "Edge Config"
+        },
+        "VersionHistoryDropdown": {
+          "version_history": "Version History"
+        },
+        "StagePalette": {
+          "stage_types": "Stage Types"
+        }
+      }
+    },
+    "pipelines": {
+      "FolderTree": {
+        "parent_folder": "Parent folder",
+        "no_parent_root_level": "No parent (root level)"
+      }
+    },
+    "environment-profiles": {
+      "EnvironmentProfilePicker": {
+        "environment_profile": "Environment Profile",
+        "provider": "Provider:",
+        "image": "Image:",
+        "capabilities": "Capabilities:",
+        "loading_profiles": "Loading profiles...",
+        "settings": "Settings"
+      }
+    },
+    "onboarding": {
+      "OnboardingBanner": {
+        "set_up_modulo": "Set up Modulo",
+        "recommended_actions": "Recommended actions"
+      },
+      "SpotlightOverlay": {
+        "dismiss_hint": "Click anywhere to dismiss this guide"
+      }
+    },
     "pipeline": {
       "composite": {
         "OutputValidationTab": {
@@ -1532,17 +1600,33 @@ export default {
           "json_schema": "JSON Schema",
           "eval_name": "eval name",
           "output_validation": "Output Validation",
-          "output_field_name": "output field name"
+          "output_field_name": "output field name",
+          "name": "Name",
+          "type": "Type",
+          "regex": "Regex",
+          "retry": "Retry",
+          "block": "Block",
+          "warn": "Warn",
+          "field": "Field",
+          "pattern": "Pattern",
+          "field_optional": "Field (optional)",
+          "schema_json": "Schema (JSON)",
+          "rubric": "Rubric"
         },
         "ParameterPortForm": {
-          "portdefault_as_string": "Default value"
+          "portdefault_as_string": "Default value",
+          "select": "Select..."
         },
         "PublishCompositeFlow": {
           "a_reusable_composite_that_performs_code_review_across_multip": "A reusable composite that performs code review across multiple agents",
           "name_description": "Name & Description",
           "version": "Version *",
           "review_ports": "Review Ports",
-          "code_review_assistant": "Code Review Assistant"
+          "code_review_assistant": "Code Review Assistant",
+          "name_label": "Name",
+          "description": "Description",
+          "ports": "Ports",
+          "version_label": "Version"
         },
         "PortDefinitionPanel": {
           "parameter_ports": "Parameter Ports",
@@ -1555,7 +1639,17 @@ export default {
           "model_temperature": "Model Temperature",
           "default_value": "Default Value",
           "schema_ref": "Schema Ref",
-          "move_up": "Move up"
+          "move_up": "Move up",
+          "description": "Description",
+          "type": "Type",
+          "string": "String",
+          "number": "Number",
+          "boolean": "Boolean",
+          "select": "Select",
+          "required": "Required",
+          "multiline": "Multiline",
+          "formtype_number_07_default_value": "0.7",
+          "default_value_placeholder": "default value"
         },
         "CompositeLibraryPicker": {
           "composite_library": "Composite Library",
@@ -1565,6 +1659,19 @@ export default {
         "CompositeConfigPanel": {
           "schema_mapping_coming_soon": "Schema mapping coming soon",
           "no_composite_selected": "No composite selected."
+        },
+        "SchemaMappingPanel": {
+          "schema_mapping": "Schema Mapping",
+          "no_preceding_node_schema": "No preceding node schema",
+          "no_composite_input_schema": "No composite input schema",
+          "no_composite_output_schema": "No composite output schema",
+          "no_downstream_schema": "No downstream schema"
+        },
+        "FieldMappingPair": {
+          "passthrough": "Passthrough",
+          "source_field": "Source field",
+          "target_field": "Target field",
+          "schemas_identical_no_mapping": "Schemas are identical — no mapping needed"
         }
       }
     },
@@ -1577,7 +1684,9 @@ export default {
       "all_features": "All Features",
       "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'",
       "remy_performing_actions": "Remy is performing actions on this page",
-      "remy_stop": "Stop"
+      "remy_stop": "Stop",
+      "modulo": "Modulo",
+      "search_pages": "Search pages"
     },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",
@@ -1622,22 +1731,30 @@ export default {
         "update_the_skill_configuration": "Update the skill configuration.",
         "trigger1_trigger2": "trigger1, trigger2",
         "skill_instructions_heading": "# Skill instructions",
-        "skill_instructions_body": "Write markdown here..."
+        "skill_instructions_body": "Write markdown here...",
+        "name": "Name",
+        "description": "Description",
+        "triggers": "Triggers"
       },
       "RemySessionDrawer": {
         "no_sessions_yet": "No sessions yet",
         "start_a_new_chat": "Start a new chat",
-        "new_session": "New session"
+        "new_session": "New session",
+        "loading": "Loading..."
       },
       "RemyPanel": {
         "click_to_rename": "Click to rename session",
-        "session_label": "Session"
+        "session_label": "Session",
+        "remy": "Remy",
+        "resume": "Resume",
+        "stops_after_each_navigation": "Stops after each navigation"
       },
       "RemyChat": {
         "ask_remy": "Ask Remy...",
         "no_slash_commands": "No matching commands",
         "delete_confirm": "Delete this session?",
-        "intro_text": "Hi! I'm Remy, your Modulo AI assistant. I can help you build pipelines, run evaluations, manage your workspace, and answer questions about your data. What would you like help with?"
+        "intro_text": "Hi! I'm Remy, your Modulo AI assistant. I can help you build pipelines, run evaluations, manage your workspace, and answer questions about your data. What would you like help with?",
+        "permission_request": "Remy wants to perform actions on your behalf"
       },
       "RemySkillManager": {
         "triggers_commaseparated": "Triggers (comma-separated)",
@@ -1777,11 +1894,34 @@ export default {
       "an_unexpected_error_occurred": "An unexpected error occurred",
       "optional_description_of_this_category": "Optional description of this category",
       "eg_llm_call_connector_read": "e.g. llm-call, connector-read",
-      "sort_order": "Sort Order"
+      "sort_order": "Sort Order",
+      "name": "Name",
+      "description": "Description",
+      "color": "Color",
+      "icon": "Icon",
+      "none": "None",
+      "bot": "Bot",
+      "database": "Database",
+      "globe": "Globe",
+      "mail": "Mail",
+      "refresh": "Refresh",
+      "settings": "Settings",
+      "sliders": "Sliders",
+      "terminal": "Terminal",
+      "upload": "Upload",
+      "zap": "Zap"
     },
     "TeamNotificationEndpoints": {
       "failed_to_load_endpoints": "Failed to load endpoints:",
-      "delete_failed": "Delete failed:"
+      "delete_failed": "Delete failed:",
+      "edit_webhook": "Edit Webhook",
+      "new_webhook": "New Webhook",
+      "secret": "Secret",
+      "events": "Events",
+      "description": "Description",
+      "url": "URL",
+      "optional": "(optional)",
+      "leave_blank_to_keep_existing": "(leave blank to keep existing)"
     },
     "NotificationBell": {
       "notifications": "Notifications"
@@ -1795,7 +1935,13 @@ export default {
       "view_plans": "View Plans"
     },
     "DashboardNotificationsPanel": {
-      "failed_to_dismiss_notification": "Failed to dismiss notification"
+      "failed_to_dismiss_notification": "Failed to dismiss notification",
+      "notifications": "Notifications"
+    },
+    "SidebarLink": {
+      "preview": "Preview",
+      "dev_preview": "Dev Preview",
+      "in_dev": "In Dev"
     }
   },
   "common": {
