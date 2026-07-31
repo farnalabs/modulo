@@ -20,6 +20,8 @@ import warnings
 from pathlib import Path
 from typing import Any, Protocol
 
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -108,19 +110,20 @@ class ShellConnector(ConnectorBase):
     async def _resolve_profile_from_hub(self) -> Any | None:
         if self._environment_profile_id is None:
             return None
-        try:
-            from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
-            from modulo.db.crud.environment_profile import get_environment_profile
-            from modulo.settings import get_settings
+        from modulo.db.crud.environment_profile import get_environment_profile
+        from modulo.settings import get_settings
 
-            _settings = get_settings()
-            _engine = get_or_create_engine(_settings)
-            _factory = get_or_create_session_factory(_engine)
-            async with _factory() as session:
+        settings = get_settings()
+        engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with factory() as session:
                 return await get_environment_profile(session, self._environment_profile_id)
         except Exception:
             _log.exception("Failed to resolve environment profile from hub")
             return None
+        finally:
+            await engine.dispose()
 
     def _check_command_allowed(self, command: list[str]) -> None:
         if not self._allowed_commands:
