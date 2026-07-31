@@ -528,16 +528,19 @@ async def admin_create_team(
                 payload_json={"team_id": str(team.id), "name": team.name},
             )
     except IntegrityError:
+        logger.exception("admin.admin_create_team")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_create_team")
         logger.warning(
             "admin_create_team audit event ProgrammingError — team was created",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
         )
     except SQLAlchemyError:
+        logger.exception("admin.admin_create_team")
         logger.warning(
             "admin_create_team audit event SQLAlchemyError — team was created",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
@@ -1046,16 +1049,19 @@ async def admin_deactivate_user(
 
             org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     except IntegrityError:
+        logger.exception("admin.admin_deactivate_user")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_deactivate_user")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin.admin_deactivate_user")
         logger.warning(
             "admin_deactivate_user SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "user_id": str(user_id)},
@@ -1125,16 +1131,19 @@ async def admin_reactivate_user(
 
             org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     except IntegrityError:
+        logger.exception("admin.admin_reactivate_user")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_reactivate_user")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin.admin_reactivate_user")
         logger.warning(
             "admin_reactivate_user SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "user_id": str(user_id)},
@@ -1339,11 +1348,13 @@ async def admin_update_team(
 
             team = await crud_update_team(session, team_id, updates)
     except IntegrityError:
+        logger.exception("admin.admin_update_team")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_update_team")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1388,16 +1399,19 @@ async def admin_update_team(
                 payload_json={"team_id": str(team_id), "updates": updates},
             )
     except IntegrityError:
+        logger.exception("admin.admin_update_team")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_update_team")
         logger.warning(
             "admin_update_team audit event ProgrammingError — team was updated",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
     except SQLAlchemyError:
+        logger.exception("admin.admin_update_team")
         logger.warning(
             "admin_update_team audit event SQLAlchemyError — team was updated",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
@@ -1456,11 +1470,13 @@ async def admin_delete_team(
 
             deleted = await delete_team(session, team_id)
     except IntegrityError:
+        logger.exception("admin.admin_delete_team")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_delete_team")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -1505,11 +1521,13 @@ async def admin_delete_team(
                 payload_json={"team_id": str(team_id)},
             )
     except IntegrityError:
+        logger.exception("admin.admin_delete_team")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_delete_team")
         logger.warning("Failed to record team_deleted audit event for team %s", team_id)
 
 
@@ -1679,16 +1697,19 @@ async def request_org_deletion(
                 },
             )
     except IntegrityError:
+        logger.exception("admin.request_org_deletion")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.request_org_deletion")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin.request_org_deletion")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while requesting org deletion.",
@@ -1747,16 +1768,19 @@ async def confirm_org_deletion(
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError:
+        logger.exception("admin.confirm_org_deletion")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.confirm_org_deletion")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin.confirm_org_deletion")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while confirming org deletion.",
@@ -1796,16 +1820,19 @@ async def cancel_org_deletion(
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError:
+        logger.exception("admin.cancel_org_deletion")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.cancel_org_deletion")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin.cancel_org_deletion")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while cancelling org deletion.",
@@ -1833,16 +1860,19 @@ async def export_org_data(
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except IntegrityError:
+        logger.exception("admin.export_org_data")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.export_org_data")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin.export_org_data")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while exporting org data.",
@@ -1903,16 +1933,19 @@ async def delete_org_immediate(
                 immediate=True,
             )
     except IntegrityError:
+        logger.exception("admin.delete_org_immediate")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.delete_org_immediate")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("admin.delete_org_immediate")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting org.",
@@ -2143,11 +2176,13 @@ async def eval_dashboard(
                 for row in recent_rows
             ]
     except IntegrityError:
+        logger.exception("admin.eval_dashboard")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.eval_dashboard")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -2212,11 +2247,13 @@ async def eval_regressions(
                 threshold=threshold,
             )
     except IntegrityError:
+        logger.exception("admin.eval_regressions")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.eval_regressions")
         logger.warning("Eval regressions unavailable — DB may need migration")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -2316,11 +2353,13 @@ async def okr_progress(
             detail=str(exc),
         ) from exc
     except IntegrityError:
+        logger.exception("admin.okr_progress")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.okr_progress")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -2426,11 +2465,13 @@ async def admin_list_publishers(
                 search=search,
             )
     except IntegrityError:
+        logger.exception("admin.admin_list_publishers")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_list_publishers")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -2504,11 +2545,13 @@ async def admin_create_publisher(
                     detail=str(exc),
                 ) from exc
     except IntegrityError:
+        logger.exception("admin.admin_create_publisher")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_create_publisher")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -2585,11 +2628,13 @@ async def admin_update_publisher(
                     detail=str(exc),
                 ) from exc
     except IntegrityError:
+        logger.exception("admin.admin_update_publisher")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_update_publisher")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -2632,11 +2677,13 @@ async def admin_delete_publisher(
             await set_rls_org(session, current_user.organisation_id)
             deleted = await crud_delete_publisher(session, publisher_id, org_id=current_user.organisation_id)
     except IntegrityError:
+        logger.exception("admin.admin_delete_publisher")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_delete_publisher")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -2676,6 +2723,7 @@ async def admin_retention_purge_runs(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
+        logger.exception("admin.admin_retention_purge_runs")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -2738,11 +2786,13 @@ async def admin_manual_purge(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
+        logger.exception("admin.admin_manual_purge")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("admin.admin_manual_purge")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -2802,6 +2852,7 @@ async def admin_purge_stale_runs(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
+        logger.exception("admin.admin_purge_stale_runs")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -2874,6 +2925,7 @@ async def admin_get_retention(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
+        logger.exception("admin.admin_get_retention")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
@@ -2930,6 +2982,7 @@ async def admin_update_retention(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
+        logger.exception("admin.admin_update_retention")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",

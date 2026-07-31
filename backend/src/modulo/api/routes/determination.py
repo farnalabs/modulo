@@ -165,16 +165,19 @@ async def run_determination(
     except HTTPException:
         raise
     except IntegrityError:
+        logger.exception("determination.run_determination")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except SQLAlchemyError:
+        logger.exception("determination.run_determination")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database service unavailable. Please try again later.",
         ) from None
     except ProgrammingError:
+        logger.exception("determination.run_determination")
         raise HTTPException(
             status_code=501, detail="Feature is not available. Run database migrations to enable it."
         ) from None
@@ -267,16 +270,19 @@ async def create_determination_draft(
     except HTTPException:
         raise
     except IntegrityError:
+        logger.exception("determination.create_determination_draft")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except SQLAlchemyError:
+        logger.exception("determination.create_determination_draft")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database service unavailable. Please try again later.",
         ) from None
     except ProgrammingError:
+        logger.exception("determination.create_determination_draft")
         raise HTTPException(
             status_code=501, detail="Feature is not available. Run database migrations to enable it."
         ) from None

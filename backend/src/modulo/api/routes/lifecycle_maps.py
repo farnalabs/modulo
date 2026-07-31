@@ -103,11 +103,13 @@ async def list_lifecycle_maps_endpoint(
                 include_archived=include_archived,
             )
     except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.list_lifecycle_maps_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.list_lifecycle_maps_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -151,11 +153,13 @@ async def create_lifecycle_map_endpoint(
                 content_json=req.content_json,
             )
     except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.create_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.create_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -184,11 +188,13 @@ async def get_lifecycle_map_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
     except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.get_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.get_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -226,11 +232,13 @@ async def update_lifecycle_map_endpoint(
                 updates["version"] = current.version + 1
             lifecycle_map = await update_lifecycle_map(session, lifecycle_map_id, updates)
     except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.update_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.update_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -259,11 +267,13 @@ async def delete_lifecycle_map_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_lifecycle_map(session, lifecycle_map_id)
     except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.delete_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.delete_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -293,11 +303,13 @@ async def restore_lifecycle_map_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             lifecycle_map = await restore_lifecycle_map(session, lifecycle_map_id)
     except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.restore_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.restore_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
