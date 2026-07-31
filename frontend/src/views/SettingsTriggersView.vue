@@ -19,7 +19,7 @@
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadAll" />
 
     <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
-      <p class="text-lg font-medium">No triggers configured</p>
+      <p class="text-lg font-medium">{{ $t('views.SettingsTriggersView.no_triggers_configured') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Create a trigger to automatically start pipeline runs on a schedule, webhook, or other event.
       </p>
@@ -30,12 +30,12 @@
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
             <tr>
-              <th class="px-4 py-3">Pipeline</th>
-              <th class="px-4 py-3">Type</th>
-              <th class="px-4 py-3">Status</th>
-              <th class="px-4 py-3">Last Fired</th>
-              <th class="px-4 py-3">Next Fire</th>
-              <th class="px-4 py-3 text-right">Actions</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.pipeline') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.type') }}</th>
+              <th class="px-4 py-3 capitalize">{{ $t('views.SettingsTriggersView.status') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.last_fired') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.next_fire') }}</th>
+              <th class="px-4 py-3 text-right">{{ $t('views.SettingsTriggersView.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -93,7 +93,7 @@
     >
       <form @submit.prevent="saveTrigger" class="space-y-4">
         <div>
-          <label for="settingstriggersview-pipeline" class="mb-1 block text-sm font-medium">Pipeline</label>
+          <label for="settingstriggersview-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.pipeline') }}</label>
           <Select v-model="form.pipeline_id">
             <SelectTrigger id="settingstriggersview-pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Pipeline" data-testid="settings-triggers-form-pipeline">
               <SelectValue placeholder="Select pipeline" />
@@ -105,16 +105,16 @@
         </div>
 
         <div v-if="!editingId">
-          <label for="settingstriggersview-trigger-type" class="mb-1 block text-sm font-medium">Trigger Type</label>
+          <label for="settingstriggersview-trigger-type" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.trigger_type') }}</label>
           <Select v-model="form.trigger_type">
             <SelectTrigger id="settingstriggersview-trigger-type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Trigger type" data-testid="settings-triggers-form-type">
               <SelectValue placeholder="Select type" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="webhook">Webhook</SelectItem>
-              <SelectItem value="cron">Cron</SelectItem>
-              <SelectItem value="polling">Polling</SelectItem>
-              <SelectItem value="agent_signal">Agent Signal</SelectItem>
+              <SelectItem value="webhook">{{ $t('views.SettingsTriggersView.webhook') }}</SelectItem>
+              <SelectItem value="cron">{{ $t('views.SettingsTriggersView.cron') }}</SelectItem>
+              <SelectItem value="polling">{{ $t('views.SettingsTriggersView.polling') }}</SelectItem>
+              <SelectItem value="agent_signal">{{ $t('views.SettingsTriggersView.agent_signal') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -148,7 +148,7 @@
             </Select>
           </div>
           <div>
-            <label for="settingstriggersview-field-11" class="mb-1 block text-sm font-medium">Headers (JSON)</label>
+            <label for="settingstriggersview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.headers_json') }}</label>
             <textarea id="settingstriggersview-field-11"
               v-model="form.webhook_headers"
               rows="3"
@@ -162,7 +162,7 @@
         <!-- Cron config -->
         <template v-if="form.trigger_type === 'cron'">
           <div>
-            <label for="settingstriggersview-field-10" class="mb-1 block text-sm font-medium">Cron Expression</label>
+            <label for="settingstriggersview-field-10" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.cron_expression') }}</label>
             <input id="settingstriggersview-field-10"
               v-model="form.cron_expression"
               type="text"
@@ -172,7 +172,7 @@
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-9" class="mb-1 block text-sm font-medium">Timezone</label>
+            <label for="settingstriggersview-field-9" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.timezone') }}</label>
             <input id="settingstriggersview-field-9"
               v-model="form.cron_timezone"
               type="text"
@@ -182,7 +182,7 @@
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-8" class="mb-1 block text-sm font-medium">Input Template (JSON)</label>
+            <label for="settingstriggersview-field-8" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.input_template_json') }}</label>
             <textarea id="settingstriggersview-field-8"
               v-model="form.input_template"
               rows="3"
@@ -196,7 +196,7 @@
         <!-- Polling config -->
         <template v-if="form.trigger_type === 'polling'">
           <div>
-            <label for="settingstriggersview-field-7" class="mb-1 block text-sm font-medium">Connector Instance ID</label>
+            <label for="settingstriggersview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.connector_instance_id') }}</label>
             <input id="settingstriggersview-field-7"
               v-model="form.connector_instance_id"
               type="text"
@@ -206,7 +206,7 @@
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-6" class="mb-1 block text-sm font-medium">Query</label>
+            <label for="settingstriggersview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.query') }}</label>
             <textarea id="settingstriggersview-field-6"
               v-model="form.poll_query"
               rows="3"
@@ -216,7 +216,7 @@
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-5" class="mb-1 block text-sm font-medium">Poll Interval (seconds)</label>
+            <label for="settingstriggersview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.poll_interval_seconds') }}</label>
             <input id="settingstriggersview-field-5"
               v-model="form.poll_interval"
               type="number"
@@ -227,7 +227,7 @@
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-4" class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
+            <label for="settingstriggersview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.condition_expression_jmespath') }}</label>
             <input id="settingstriggersview-field-4"
               v-model="form.condition_expression"
               type="text"
@@ -241,7 +241,7 @@
         <!-- Agent Signal config -->
         <template v-if="form.trigger_type === 'agent_signal'">
           <div>
-            <label for="settingstriggersview-source-pipeline" class="mb-1 block text-sm font-medium">Source Pipeline</label>
+            <label for="settingstriggersview-source-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.source_pipeline') }}</label>
             <Select v-model="form.signal_source_pipeline">
               <SelectTrigger id="settingstriggersview-source-pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Source pipeline" data-testid="settings-triggers-form-signal-pipeline">
                 <SelectValue placeholder="Select source pipeline" />
@@ -252,7 +252,7 @@
             </Select>
           </div>
           <div>
-            <label for="settingstriggersview-field-2" class="mb-1 block text-sm font-medium">Source Node ID</label>
+            <label for="settingstriggersview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.source_node_id') }}</label>
             <input id="settingstriggersview-field-2"
               v-model="form.signal_source_node"
               type="text"

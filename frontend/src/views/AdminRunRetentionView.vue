@@ -11,13 +11,13 @@
       <template v-else>
         <Card>
           <CardHeader>
-            <CardTitle>Current Retention Period</CardTitle>
-            <CardDescription>Runs older than this many days are automatically cleaned up</CardDescription>
+            <CardTitle>{{ $t('views.AdminRunRetentionView.current_retention_period') }}</CardTitle>
+            <CardDescription>{{ $t('views.AdminRunRetentionView.runs_older_than_this_many_days_are_automatically_cleaned_up') }}</CardDescription>
           </CardHeader>
           <CardContent>
             <div class="flex items-end gap-3">
               <div class="flex-1">
-                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">Retention period (days)</span>
+                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminRunRetentionView.retention_period_days') }}</span>
                 <Input aria-label="Form control"
                   :model-value="retentionDays ?? undefined"
                   @update:model-value="(v: any) => retentionDays = v === '' ? null : Number(v)"
@@ -32,19 +32,19 @@
               </Button>
             </div>
             <p v-if="retentionSaveError" class="mt-2 text-xs text-destructive">{{ retentionSaveError }}</p>
-            <p v-if="retentionSaveSuccess" class="mt-2 text-xs text-success">Retention period updated.</p>
+            <p v-if="retentionSaveSuccess" class="mt-2 text-xs text-success">{{ $t('views.AdminRunRetentionView.retention_period_updated') }}</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Manual Purge</CardTitle>
-            <CardDescription>Immediately delete runs older than a specified number of days</CardDescription>
+            <CardTitle>{{ $t('views.AdminRunRetentionView.manual_purge') }}</CardTitle>
+            <CardDescription>{{ $t('views.AdminRunRetentionView.immediately_delete_runs_older_than_a_specified_number_of_days') }}</CardDescription>
           </CardHeader>
           <CardContent>
             <div class="flex items-end gap-3">
               <div class="flex-1">
-                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">Purge runs older than (days)</span>
+                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminRunRetentionView.purge_runs_older_than_days') }}</span>
                 <Input aria-label="Form control"
                   :model-value="purgeAge ?? undefined"
                   @update:model-value="(v: any) => purgeAge = v === '' ? null : Number(v)"
@@ -70,8 +70,8 @@
 
         <Card>
           <CardHeader>
-            <CardTitle>Storage Info</CardTitle>
-            <CardDescription>Current run storage statistics</CardDescription>
+            <CardTitle>{{ $t('views.AdminRunRetentionView.storage_info') }}</CardTitle>
+            <CardDescription>{{ $t('views.AdminRunRetentionView.current_run_storage_statistics') }}</CardDescription>
           </CardHeader>
           <CardContent>
             <LoadingSpinner v-if="storageLoading" />
@@ -79,19 +79,19 @@
             <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div class="rounded-lg border bg-muted p-4 text-center">
                 <p class="text-2xl font-semibold" data-testid="admin-run-retention-total-runs">{{ storageInfo.total_runs ?? 0 }}</p>
-                <p class="text-xs text-muted-foreground">Total Runs</p>
+                <p class="text-xs text-muted-foreground">{{ $t('views.AdminRunRetentionView.total_runs') }}</p>
               </div>
               <div class="rounded-lg border bg-muted p-4 text-center">
-                <p class="text-2xl font-semibold">{{ storageInfo.status_breakdown ? Object.keys(storageInfo.status_breakdown).length : 0 }}</p>
-                <p class="text-xs text-muted-foreground">Status Categories</p>
+                <p class="text-2xl font-semibold capitalize">{{ storageInfo.status_breakdown ? Object.keys(storageInfo.status_breakdown).length : 0 }}</p>
+                <p class="text-xs text-muted-foreground capitalize">{{ $t('views.AdminRunRetentionView.status_categories') }}</p>
               </div>
               <div class="rounded-lg border bg-muted p-4 text-center">
                 <p class="text-2xl font-semibold" data-testid="admin-run-retention-estimated-saved">{{ storageInfo.estimated_saved_bytes ? formatBytes(storageInfo.estimated_saved_bytes) : '0 B' }}</p>
-                <p class="text-xs text-muted-foreground">Estimated Storage Saved</p>
+                <p class="text-xs text-muted-foreground">{{ $t('views.AdminRunRetentionView.estimated_storage_saved') }}</p>
               </div>
             </div>
             <div v-if="storageInfo.status_breakdown && Object.keys(storageInfo.status_breakdown).length > 0" class="mt-4">
-              <h4 class="mb-2 text-sm font-medium text-muted-foreground">Runs by Status</h4>
+              <h4 class="mb-2 text-sm font-medium text-muted-foreground">{{ $t('views.AdminRunRetentionView.runs_by_status') }}</h4>
               <div class="space-y-1">
                 <div v-for="(count, status) in storageInfo.status_breakdown" :key="status" class="flex items-center justify-between rounded border px-3 py-2 text-sm">
                   <span class="capitalize">{{ status }}</span>

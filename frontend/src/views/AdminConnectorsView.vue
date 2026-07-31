@@ -20,11 +20,11 @@
 
     <template v-else>
       <div v-if="formMode === 'add'" class="card p-6">
-        <h2 class="mb-4 text-base font-semibold">New Connector</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminConnectorsView.new_connector') }}</h2>
         <form @submit.prevent="createConnector">
           <div class="space-y-4">
             <div>
-              <label for="adminconnectorsview-field-7" class="mb-1 block text-sm font-medium">Name</label>
+              <label for="adminconnectorsview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.name') }}</label>
               <input id="adminconnectorsview-field-7"
                 v-model="formData.name"
                 type="text"
@@ -34,7 +34,7 @@
               />
             </div>
             <div>
-              <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">Type</label>
+              <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.type') }}</label>
               <Select v-model="formData.connector_type">
                 <SelectTrigger data-testid="admin-connectors-type-select" aria-label="Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                   <SelectValue placeholder="PostgreSQL" />
@@ -47,7 +47,7 @@
               </Select>
             </div>
             <div>
-              <label for="adminconnectorsview-field-5" class="mb-1 block text-sm font-medium">Description</label>
+              <label for="adminconnectorsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.description') }}</label>
               <input id="adminconnectorsview-field-5"
                 v-model="formData.description"
                 type="text"
@@ -57,7 +57,7 @@
               />
             </div>
             <div>
-              <label for="adminconnectorsview-field-4" class="mb-1 block text-sm font-medium">Configuration (JSON)</label>
+              <label for="adminconnectorsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.configuration_json') }}</label>
               <textarea id="adminconnectorsview-field-4"
                 v-model="formData.config_json"
                 rows="6"
@@ -90,7 +90,7 @@
       </div>
 
       <div v-if="nativeConnectors.length === 0" class="card p-8 text-center">
-        <p class="text-lg font-medium">No connectors configured</p>
+        <p class="text-lg font-medium">{{ $t('views.AdminConnectorsView.no_connectors_configured') }}</p>
         <p class="mt-1 text-sm text-muted-foreground">
           Add a connector to integrate with external data sources.
         </p>
@@ -100,11 +100,11 @@
         <table class="w-full text-left text-sm">
           <thead>
             <tr>
-              <th class="table-header">Name</th>
-              <th class="table-header">Type</th>
-              <th class="table-header">Description</th>
-              <th class="table-header">Status</th>
-              <th class="table-header table-cell-numeric">Actions</th>
+              <th class="table-header">{{ $t('views.AdminConnectorsView.name') }}</th>
+              <th class="table-header">{{ $t('views.AdminConnectorsView.type') }}</th>
+              <th class="table-header">{{ $t('views.AdminConnectorsView.description') }}</th>
+              <th class="table-header capitalize">{{ $t('views.AdminConnectorsView.status') }}</th>
+              <th class="table-header table-cell-numeric">{{ $t('views.AdminConnectorsView.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -149,10 +149,10 @@
           <table class="w-full text-left text-sm">
             <thead>
               <tr>
-                <th class="table-header">Name</th>
-                <th class="table-header">Type</th>
-                <th class="table-header">Tier</th>
-                <th class="table-header table-cell-numeric">Actions</th>
+                <th class="table-header">{{ $t('views.AdminConnectorsView.name') }}</th>
+                <th class="table-header">{{ $t('views.AdminConnectorsView.type') }}</th>
+                <th class="table-header">{{ $t('views.AdminConnectorsView.tier') }}</th>
+                <th class="table-header table-cell-numeric">{{ $t('views.AdminConnectorsView.actions') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -181,11 +181,11 @@
       </details>
 
       <div v-if="editConnectorId" class="card p-6">
-        <h2 class="mb-4 text-base font-semibold">Edit Connector</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminConnectorsView.edit_connector') }}</h2>
         <form @submit.prevent="updateConnector">
           <div class="space-y-4">
             <div>
-              <label for="adminconnectorsview-field-3" class="mb-1 block text-sm font-medium">Name</label>
+              <label for="adminconnectorsview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.name') }}</label>
               <input id="adminconnectorsview-field-3"
                 v-model="formData.name"
                 type="text"
@@ -194,7 +194,7 @@
               />
             </div>
             <div>
-              <label for="adminconnectorsview-field-2" class="mb-1 block text-sm font-medium">Description</label>
+              <label for="adminconnectorsview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.description') }}</label>
               <input id="adminconnectorsview-field-2"
                 v-model="formData.description"
                 type="text"
@@ -203,7 +203,7 @@
               />
             </div>
             <div>
-              <label for="adminconnectorsview-field-1" class="mb-1 block text-sm font-medium">Configuration (JSON)</label>
+              <label for="adminconnectorsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.configuration_json') }}</label>
               <textarea id="adminconnectorsview-field-1"
                 v-model="formData.config_json"
                 rows="6"
@@ -236,7 +236,7 @@
 
       <div v-if="deleteConfirmConnectorId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
         <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
-        <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
+        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminConnectorsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button
             :disabled="deleting"

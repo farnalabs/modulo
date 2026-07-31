@@ -152,11 +152,11 @@
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" class="w-40">
                       <DropdownMenuItem @click.stop="router.push({ name: 'runs-list', query: { pipeline_id: p.id } })">{{ $t('views.PipelineListView.runs') }}</DropdownMenuItem>
-                      <DropdownMenuItem @click="openRename(p)">Rename</DropdownMenuItem>
-                      <DropdownMenuItem v-if="!p.archived_at" @click="handleArchive(p)">Archive</DropdownMenuItem>
-                      <DropdownMenuItem v-else @click="handleUnarchive(p)">Unarchive</DropdownMenuItem>
+                      <DropdownMenuItem @click="openRename(p)">{{ $t('views.PipelineListView.rename') }}</DropdownMenuItem>
+                      <DropdownMenuItem v-if="!p.archived_at" @click="handleArchive(p)">{{ $t('views.PipelineListView.archive') }}</DropdownMenuItem>
+                      <DropdownMenuItem v-else @click="handleUnarchive(p)">{{ $t('views.PipelineListView.unarchive') }}</DropdownMenuItem>
                       <DropdownMenuItem @click="openMoveToFolder(p)">{{ $t('views.PipelineListView.move_to_folder') }}</DropdownMenuItem>
-                      <DropdownMenuItem v-if="planStore.featureEnabled('pipeline_delete')" @click="openDelete(p)" class="text-destructive focus:text-destructive">Delete</DropdownMenuItem>
+                      <DropdownMenuItem v-if="planStore.featureEnabled('pipeline_delete')" @click="openDelete(p)" class="text-destructive focus:text-destructive">{{ $t('common.delete') }}</DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
@@ -199,13 +199,13 @@
             <table class="w-full text-left text-sm">
               <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
                 <tr>
-                  <th class="px-4 py-3">Name</th>
-                  <th class="px-4 py-3">Description</th>
-                  <th class="px-4 py-3">Visibility</th>
-                  <th class="px-4 py-3">Last Run</th>
+                  <th class="px-4 py-3">{{ $t('views.PipelineListView.name') }}</th>
+                  <th class="px-4 py-3">{{ $t('views.PipelineListView.description') }}</th>
+                  <th class="px-4 py-3">{{ $t('views.PipelineListView.visibility') }}</th>
+                  <th class="px-4 py-3">{{ $t('views.PipelineListView.last_run') }}</th>
                   <th class="px-4 py-3">{{ $t('views.PipelineListView.trigger') }}</th>
-                  <th class="px-4 py-3">Created</th>
-                  <th class="px-4 py-3 text-right">Actions</th>
+                  <th class="px-4 py-3">{{ $t('views.PipelineListView.created') }}</th>
+                  <th class="px-4 py-3 text-right">{{ $t('views.PipelineListView.actions') }}</th>
                 </tr>
               </thead>
               <tbody class="divide-y">
@@ -298,11 +298,11 @@
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" class="w-40">
                             <DropdownMenuItem @click.prevent.stop="router.push({ name: 'runs-list', query: { pipeline_id: (row.data as PipelineItem).id } })">{{ $t('views.PipelineListView.runs') }}</DropdownMenuItem>
-                            <DropdownMenuItem @click.prevent.stop="openRename(row.data as PipelineItem)">Rename</DropdownMenuItem>
-                            <DropdownMenuItem v-if="!(row.data as PipelineItem).archived_at" @click.prevent.stop="handleArchive(row.data as PipelineItem)">Archive</DropdownMenuItem>
-                            <DropdownMenuItem v-else @click.prevent.stop="handleUnarchive(row.data as PipelineItem)">Unarchive</DropdownMenuItem>
+                            <DropdownMenuItem @click.prevent.stop="openRename(row.data as PipelineItem)">{{ $t('views.PipelineListView.rename') }}</DropdownMenuItem>
+                            <DropdownMenuItem v-if="!(row.data as PipelineItem).archived_at" @click.prevent.stop="handleArchive(row.data as PipelineItem)">{{ $t('views.PipelineListView.archive') }}</DropdownMenuItem>
+                            <DropdownMenuItem v-else @click.prevent.stop="handleUnarchive(row.data as PipelineItem)">{{ $t('views.PipelineListView.unarchive') }}</DropdownMenuItem>
                             <DropdownMenuItem @click.prevent.stop="openMoveToFolder(row.data as PipelineItem)">{{ $t('views.PipelineListView.move_to_folder') }}</DropdownMenuItem>
-                            <DropdownMenuItem v-if="planStore.featureEnabled('pipeline_delete')" @click.prevent.stop="openDelete(row.data as PipelineItem)" class="text-destructive focus:text-destructive">Delete</DropdownMenuItem>
+                            <DropdownMenuItem v-if="planStore.featureEnabled('pipeline_delete')" @click.prevent.stop="openDelete(row.data as PipelineItem)" class="text-destructive focus:text-destructive">{{ $t('common.delete') }}</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
@@ -393,7 +393,7 @@
           </div>
 
           <div v-if="showAdvanced" class="space-y-2">
-            <label for="pipelinelistview-field-2" class="block text-sm font-medium text-foreground">Input Payload (JSON)</label>
+            <label for="pipelinelistview-field-2" class="block text-sm font-medium text-foreground">{{ $t('views.PipelineListView.input_payload_json') }}</label>
             <textarea id="pipelinelistview-field-2"
               v-model="advancedPayload"
               placeholder='{"prompt": "...", "temperature": 0.7}'
@@ -487,10 +487,10 @@
         @click.self="showRenameDialog = false"
       >
         <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-          <h3 class="mb-4 text-lg font-semibold">Rename Pipeline</h3>
+          <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineListView.rename_pipeline') }}</h3>
           <div class="space-y-4">
             <div>
-              <label for="pipelinelistview-field-1" class="mb-1 block text-sm font-medium">Name</label>
+              <label for="pipelinelistview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.name') }}</label>
               <input id="pipelinelistview-field-1"
                 v-model="renameName"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -526,7 +526,7 @@
         @click.self="showDeleteConfirm = false"
       >
         <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-          <h3 class="mb-4 text-lg font-semibold text-destructive">Delete Pipeline</h3>
+          <h3 class="mb-4 text-lg font-semibold text-destructive">{{ $t('views.PipelineListView.delete_pipeline') }}</h3>
           <p class="mb-4 text-sm text-muted-foreground">
             Are you sure? This permanently deletes the pipeline and all its runs.
           </p>

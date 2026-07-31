@@ -1,4 +1,5 @@
 <template>
+  <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
   <div class="page-wide">
     <div class="flex items-center justify-between">
       <PageHeader title="Users" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
@@ -28,12 +29,12 @@
       <table class="w-full text-sm">
         <thead>
           <tr>
-            <th class="table-header">User</th>
-            <th class="table-header">Role</th>
-            <th class="table-header">Status</th>
-            <th class="table-header">Auth</th>
-            <th class="table-header table-cell-numeric">Created</th>
-            <th class="table-header table-cell-numeric">Actions</th>
+            <th class="table-header">{{ $t('views.AdminUsersView.user') }}</th>
+            <th class="table-header">{{ $t('views.AdminUsersView.role') }}</th>
+            <th class="table-header capitalize">{{ $t('views.AdminUsersView.status') }}</th>
+            <th class="table-header">{{ $t('views.AdminUsersView.auth') }}</th>
+            <th class="table-header table-cell-numeric">{{ $t('views.AdminUsersView.created') }}</th>
+            <th class="table-header table-cell-numeric">{{ $t('views.AdminUsersView.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -57,10 +58,10 @@
                   <SelectValue placeholder="Select role" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="admin">Admin</SelectItem>
-                  <SelectItem value="operator">Operator</SelectItem>
-                  <SelectItem value="runner">Runner</SelectItem>
-                  <SelectItem value="viewer">Viewer</SelectItem>
+                  <SelectItem value="admin">{{ $t('views.AdminUsersView.admin') }}</SelectItem>
+                  <SelectItem value="operator">{{ $t('views.AdminUsersView.operator') }}</SelectItem>
+                  <SelectItem value="runner">{{ $t('views.AdminUsersView.runner') }}</SelectItem>
+                  <SelectItem value="viewer">{{ $t('views.AdminUsersView.viewer') }}</SelectItem>
                 </SelectContent>
               </Select>
             </td>
@@ -123,7 +124,7 @@
     >
       <form @submit.prevent="createUser">
         <div>
-          <label for="adminusersview-field-4" class="block text-sm font-medium mb-1">Email</label>
+          <label for="adminusersview-field-4" class="block text-sm font-medium mb-1">{{ $t('common.email') }}</label>
           <input id="adminusersview-field-4" v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
         </div>
         <div>
@@ -131,20 +132,20 @@
           <input id="adminusersview-field-3" v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
         </div>
         <div>
-          <label for="adminusersview-field-2" class="block text-sm font-medium mb-1">Password</label>
+          <label for="adminusersview-field-2" class="block text-sm font-medium mb-1">{{ $t('common.password') }}</label>
           <input id="adminusersview-field-2" v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
         </div>
         <div>
-          <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">Role</label>
+          <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">{{ $t('views.AdminUsersView.role') }}</label>
           <Select v-model="newUser.org_role">
             <SelectTrigger class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" aria-label="Role" data-testid="admin-users-create-role">
               <SelectValue placeholder="Select role" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="runner">Runner</SelectItem>
-              <SelectItem value="operator">Operator</SelectItem>
-              <SelectItem value="admin">Admin</SelectItem>
-              <SelectItem value="viewer">Viewer</SelectItem>
+              <SelectItem value="runner">{{ $t('views.AdminUsersView.runner') }}</SelectItem>
+              <SelectItem value="operator">{{ $t('views.AdminUsersView.operator') }}</SelectItem>
+              <SelectItem value="admin">{{ $t('views.AdminUsersView.admin') }}</SelectItem>
+              <SelectItem value="viewer">{{ $t('views.AdminUsersView.viewer') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -185,6 +186,7 @@
       </DialogContent>
     </Dialog>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -198,6 +200,7 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog'
 import TableActions from '../components/shared/TableActions.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort } from '../lib/formatDate'
 import {
   Select,

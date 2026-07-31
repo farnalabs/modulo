@@ -16,13 +16,13 @@
       <template v-else>
         <Card>
           <CardHeader>
-            <CardTitle>Org-Level Daily Spend Limit</CardTitle>
-            <CardDescription>Maximum daily spend across all teams in USD</CardDescription>
+            <CardTitle>{{ $t('views.AdminSpendLimitsView.org_level_daily_spend_limit') }}</CardTitle>
+            <CardDescription>{{ $t('views.AdminSpendLimitsView.maximum_daily_spend_across_all_teams_in_usd') }}</CardDescription>
           </CardHeader>
           <CardContent>
             <div class="flex items-end gap-3">
               <div class="flex-1">
-                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">Daily limit (USD)</span>
+                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.daily_limit_usd') }}</span>
                 <Input aria-label="Form control" :model-value="orgLimit ?? undefined" @update:model-value="(v: any) => orgLimit = v === '' ? null : Number(v)" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
               </div>
               <Button :disabled="savingOrg" data-testid="admin-spend-limits-org-save" @click="saveOrgLimit">
@@ -30,14 +30,14 @@
               </Button>
             </div>
             <p v-if="orgSaveError" class="mt-2 text-xs text-destructive">{{ orgSaveError }}</p>
-            <p v-if="orgSaveSuccess" class="mt-2 text-xs text-success">Org limit updated.</p>
+            <p v-if="orgSaveSuccess" class="mt-2 text-xs text-success">{{ $t('views.AdminSpendLimitsView.org_limit_updated') }}</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Per-Team Spend Limits</CardTitle>
-            <CardDescription>Override the org-level limit for specific teams</CardDescription>
+            <CardTitle>{{ $t('views.AdminSpendLimitsView.per_team_spend_limits') }}</CardTitle>
+            <CardDescription>{{ $t('views.AdminSpendLimitsView.override_the_org_level_limit_for_specific_teams') }}</CardDescription>
           </CardHeader>
           <CardContent>
             <div v-if="teams.length === 0" class="py-4 text-center text-sm text-muted-foreground">
@@ -46,8 +46,8 @@
             <table v-else class="w-full text-sm">
               <thead>
                 <tr>
-                  <th class="table-header">Team</th>
-                  <th class="table-header">Daily Limit (USD)</th>
+                  <th class="table-header">{{ $t('views.AdminSpendLimitsView.team') }}</th>
+                  <th class="table-header">{{ $t('views.AdminSpendLimitsView.daily_limit_usd_caps') }}</th>
                   <th class="table-header" />
                 </tr>
               </thead>
@@ -79,15 +79,15 @@
 
         <Card>
           <CardHeader>
-            <CardTitle>Current Spend</CardTitle>
-            <CardDescription>Today's accrued costs across all teams</CardDescription>
+            <CardTitle>{{ $t('views.AdminSpendLimitsView.current_spend') }}</CardTitle>
+            <CardDescription>{{ $t('views.AdminSpendLimitsView.todays_accrued_costs_across_all_teams') }}</CardDescription>
           </CardHeader>
           <CardContent>
             <LoadingSpinner v-if="costsLoading" />
             <div v-else-if="costsError" class="text-sm text-destructive">{{ costsError }}</div>
             <div v-else class="space-y-4">
               <div class="flex items-center justify-between rounded-lg border bg-muted p-4">
-                <span class="text-sm font-medium">Org Total</span>
+                <span class="text-sm font-medium">{{ $t('views.AdminSpendLimitsView.org_total') }}</span>
                 <span class="text-lg font-semibold" :class="overageClass(orgTotalCost, orgLimit)">
                   ${{ orgTotalCost.toFixed(2) }}
                 </span>
@@ -104,7 +104,7 @@
                   </span>
                 </div>
               </div>
-              <p v-else class="text-sm text-muted-foreground">No team cost data available.</p>
+              <p v-else class="text-sm text-muted-foreground">{{ $t('views.AdminSpendLimitsView.no_team_cost_data_available') }}</p>
             </div>
           </CardContent>
         </Card>
