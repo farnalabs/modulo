@@ -196,6 +196,32 @@ class ModelBackendHub:
                 return fallback_id
         return None
 
+    async def _emit_failover_event(
+        self,
+        audit_logger: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        primary_id: uuid.UUID,
+        fallback_id: uuid.UUID,
+    ) -> None:
+        """Emit a ``model_failover`` audit event, isolating logger failures.
+
+        A failing audit logger must never break backend resolution — the failure
+        is logged and the rotation proceeds.
+        """
+        if audit_logger is None:
+            return
+        try:
+            await audit_logger(
+                {
+                    "event_type": "model_failover",
+                    "primary_id": str(primary_id),
+                    "fallback_id": str(fallback_id),
+                }
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Audit logger failed during failover for backend %s", primary_id)
+
     async def get(
         self,
         backend_id: uuid.UUID,
@@ -216,19 +242,7 @@ class ModelBackendHub:
 
         fallback_id = self._find_healthy_fallback(backend_id)
         if fallback_id is not None:
-            if audit_logger is not None:
-                try:
-                    await audit_logger(
-                        {
-                            "event_type": "model_failover",
-                            "primary_id": str(backend_id),
-                            "fallback_id": str(fallback_id),
-                        }
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    logger.exception("Audit logger failed during failover for backend %s", backend_id)
+            await self._emit_failover_event(audit_logger, backend_id, fallback_id)
             return self._backends[fallback_id]
 
         raise BackendUnavailableError(backend_id)
@@ -260,19 +274,7 @@ class ModelBackendHub:
             )
         fallback_id = self._find_healthy_fallback(backend_id)
         if fallback_id is not None:
-            if audit_logger is not None:
-                try:
-                    await audit_logger(
-                        {
-                            "event_type": "model_failover",
-                            "primary_id": str(backend_id),
-                            "fallback_id": str(fallback_id),
-                        }
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    logger.exception("Audit logger failed during failover for backend %s", backend_id)
+            await self._emit_failover_event(audit_logger, backend_id, fallback_id)
             return RotatedResult(
                 backend=self._backends[fallback_id],
                 rotated=True,
@@ -285,6 +287,7 @@ class ModelBackendHub:
         )
         for oid, backend in self._backends.items():
             if self._healthy.get(oid, False):
+                await self._emit_failover_event(audit_logger, backend_id, oid)
                 return RotatedResult(
                     backend=backend,
                     rotated=True,
