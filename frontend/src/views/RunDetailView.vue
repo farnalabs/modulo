@@ -4,7 +4,7 @@
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else-if="run">
       <nav aria-label="Breadcrumb" class="mb-4 flex items-center gap-1 text-sm text-muted-foreground">
-        <router-link to="/runs" class="hover:text-foreground transition-colors">Runs</router-link>
+        <router-link to="/runs" class="hover:text-foreground transition-colors">{{ $t('views.RunDetailView.runs') }}</router-link>
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-3.5 w-3.5"><polyline points="9 18 15 12 9 6"/></svg>
         <span class="text-foreground font-medium">{{ run.pipeline_name || (run.run_number != null ? '#' + run.run_number : shortId(run.run_id)) }}</span>
       </nav>
@@ -48,7 +48,7 @@
         <h2 class="text-base font-semibold tracking-tight mb-4">HITL Gate</h2>
         <div v-for="gate in pendingGates" :key="gate.gate_id" class="space-y-3">
           <div class="flex items-center gap-2 text-sm">
-            <span class="font-medium">Gate:</span>
+            <span class="font-medium">{{ $t('views.RunDetailView.gate_label') }}</span>
             <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ gate.gate_id }}</code>
           </div>
           <div v-if="gate.claimed_by && !claimToken" class="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
@@ -302,10 +302,10 @@
 
       <!-- Workspace Lease -->
       <section v-if="workspaceLease" class="rounded-lg border bg-card p-6">
-        <h2 class="mb-3 text-base font-semibold tracking-tight">Workspace</h2>
+        <h2 class="mb-3 text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.workspace') }}</h2>
         <div class="space-y-2 text-sm">
           <div class="flex items-center gap-2">
-            <span class="font-medium">Status:</span>
+            <span class="font-medium capitalize">{{ $t('views.RunDetailView.status_label') }}</span>
             <span
               class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
               :class="workspaceStatusClass"
@@ -315,15 +315,15 @@
             </span>
           </div>
           <div v-if="workspaceLease.sandbox_id" class="flex items-center gap-2">
-            <span class="font-medium">Sandbox:</span>
+            <span class="font-medium">{{ $t('views.RunDetailView.sandbox_label') }}</span>
             <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ workspaceLease.sandbox_id }}</code>
           </div>
           <div v-if="workspaceLease.duration_seconds != null">
-            <span class="font-medium">Duration:</span>
+            <span class="font-medium">{{ $t('views.RunDetailView.duration_label') }}</span>
             <span class="ml-1 tabular-nums">{{ formatDuration(workspaceLease.duration_seconds) }}</span>
           </div>
           <div v-if="workspaceLease.error_message" class="text-destructive">
-            <span class="font-medium">Error:</span>
+            <span class="font-medium">{{ $t('views.RunDetailView.error_label') }}</span>
             <span class="ml-1">{{ workspaceLease.error_message }}</span>
           </div>
         </div>

@@ -29,11 +29,11 @@
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
             <tr>
-              <th class="px-4 py-3">Name</th>
-              <th class="px-4 py-3">Description</th>
-              <th class="px-4 py-3">Triggers</th>
-              <th class="px-4 py-3">Active</th>
-              <th class="px-4 py-3 text-right">Actions</th>
+              <th class="px-4 py-3">{{ $t('views.UserRemySkillsView.name') }}</th>
+              <th class="px-4 py-3">{{ $t('views.UserRemySkillsView.description') }}</th>
+              <th class="px-4 py-3">{{ $t('views.UserRemySkillsView.triggers') }}</th>
+              <th class="px-4 py-3">{{ $t('common.active') }}</th>
+              <th class="px-4 py-3 text-right">{{ $t('views.UserRemySkillsView.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">

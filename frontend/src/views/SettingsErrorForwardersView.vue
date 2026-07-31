@@ -111,7 +111,7 @@
                     <SelectItem value="datadoghq.eu">EU (datadoghq.eu)</SelectItem>
                     <SelectItem value="us3.datadoghq.com">US3 (us3.datadoghq.com)</SelectItem>
                     <SelectItem value="us5.datadoghq.com">US5 (us5.datadoghq.com)</SelectItem>
-                    <SelectItem value="ddog-gov.com">Gov (ddog-gov.com)</SelectItem>
+                    <SelectItem value="ddog-gov.com">{{ $t('views.SettingsErrorForwardersView.gov_ddog_gov_com') }}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

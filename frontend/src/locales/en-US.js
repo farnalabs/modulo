@@ -186,7 +186,9 @@ export default {
       "path_prefix": "Path Prefix",
       "max_requests": "Max Requests",
       "no_rate_limit_rules_configured": "No rate limit rules configured.",
-      "inmemory": "In-Memory"
+      "inmemory": "In-Memory",
+      "mode": "Mode",
+      "rules": "Rules"
     },
     "EvalProposalsQueueView": {
       "proposal_published_eval_definition_created": "Proposal published. Eval definition created.",
@@ -209,7 +211,15 @@ export default {
       "failed_to_update_assignee": "Failed to update assignee:",
       "event_id": "Event ID",
       "first_seen": "First Seen",
-      "failed_to_load_error_group": "Failed to load error group:"
+      "failed_to_load_error_group": "Failed to load error group:",
+      "level": "Level",
+      "status": "Status",
+      "occurrences": "Occurrences",
+      "actions": "Actions",
+      "message": "Message",
+      "source": "Source",
+      "environment": "Environment",
+      "version": "Version"
     },
     "AdminCostControlsView": {
       "failed_to_save_currency": "Failed to save currency",
@@ -247,12 +257,16 @@ export default {
       "currency": "Currency",
       "billing_period": "Billing Period",
       "monthly_budget": "Monthly Budget ({currency})",
-      "budget_updated": "Budget updated."
+      "budget_updated": "Budget updated.",
+      "monthly": "Monthly",
+      "quarterly": "Quarterly",
+      "annual": "Annual"
     },
     "LoginView": {
       "governed_orchestration_for_your_agentic_sdlc": "Governed orchestration for your agentic SDLC",
       "login_failed": "Login failed:",
-      "enter_your_password": "Enter your password"
+      "enter_your_password": "Enter your password",
+      "modulo": "Modulo"
     },
     "NotificationsPage": {
       "all_status": "All Status",
@@ -261,7 +275,8 @@ export default {
       "dismissed_scope": "Dismissed (scope)",
       "no_notifications": "No notifications",
       "view_and_manage_your_notifications": "View and manage your notifications",
-      "clear_filters": "Clear filters"
+      "clear_filters": "Clear filters",
+      "apply_filters": "Apply Filters"
     },
     "AdminEnvironmentProfilesView": {
       "no_response_body": "No response body",
@@ -270,7 +285,13 @@ export default {
     "SettingsNotificationLogView": {
       "error_detail": "Error Detail",
       "delivery_history_for_all_webhook_notifications": "Delivery history for all webhook notifications",
-      "last_attempt": "Last Attempt"
+      "last_attempt": "Last Attempt",
+      "status": "Status",
+      "delivered": "Delivered",
+      "failed": "Failed",
+      "from": "From",
+      "destination": "Destination",
+      "attempts": "Attempts"
     },
     "MyProfileView": {
       "new_password": "New Password",
@@ -475,7 +496,10 @@ export default {
     "AdminSystemConfigView": {
       "deploymentwide_system_configuration_system_admin_only": "Deployment-wide system configuration (system admin only)",
       "failed_to_load_system_config": "Failed to load system config:",
-      "system_admin_config": "System Admin — Config"
+      "system_admin_config": "System Admin — Config",
+      "key": "Key",
+      "value": "Value",
+      "updated": "Updated"
     },
     "FeedbackInboxView": {
       "all_pipelines": "All Pipelines",
@@ -541,11 +565,22 @@ export default {
       "eg_production": "e.g. production",
       "no_message": "(no message)",
       "all_statuses": "All statuses",
-      "no_error_groups_found": "No error groups found"
+      "no_error_groups_found": "No error groups found",
+      "apply_filters": "Apply Filters"
     },
     "AdminNodeCategoriesView": {
       "failed_to_load_categories": "Failed to load categories:",
-      "not_available_on_current_plan": "Node Categories are not available on your current plan."
+      "not_available_on_current_plan": "Node Categories are not available on your current plan.",
+      "new_node_category": "New Node Category",
+      "no_node_categories_configured": "No node categories configured",
+      "name": "Name",
+      "description": "Description",
+      "color": "Color",
+      "icon": "Icon",
+      "sort_order": "Sort Order",
+      "actions": "Actions",
+      "edit_node_category": "Edit Node Category",
+      "this_action_cannot_be_undone": "This action cannot be undone."
     },
     "PipelineEditorView": {
       "pipeline_editor": "Pipeline Editor",
@@ -694,7 +729,8 @@ export default {
       "valid": "Valid",
       "invalid": "Invalid",
       "inactive": "Inactive",
-      "expires": "Expires"
+      "expires": "Expires",
+      "developer_mode": "Developer Mode"
     },
     "EvalEditorView": {
       "eval_system_is_not_available_on_your_current_plan": "Eval system is not available on your current plan.",
@@ -792,7 +828,14 @@ export default {
       "logs": "Logs",
       "agent_stdout": "Agent Stdout",
       "agent_stderr": "Agent Stderr",
-      "no_agent_logs": "No agent logs for this node."
+      "no_agent_logs": "No agent logs for this node.",
+      "runs": "Runs",
+      "gate_label": "Gate:",
+      "workspace": "Workspace",
+      "status_label": "Status:",
+      "sandbox_label": "Sandbox:",
+      "duration_label": "Duration:",
+      "error_label": "Error:"
     },
     "AdminRunRetentionView": {
       "run_retention": "Run Retention",
@@ -906,7 +949,18 @@ export default {
       "admin_view_of_all_webhook_notification_deliveries": "Admin view of all webhook notification deliveries",
       "failed_to_load_delivery_logs": "Failed to load delivery logs:",
       "all_types": "All types",
-      "retry_all_failed_1": "Retry all failed:"
+      "retry_all_failed_1": "Retry all failed:",
+      "status": "Status",
+      "delivered": "Delivered",
+      "failed": "Failed",
+      "pending": "Pending",
+      "from": "From",
+      "timestamp": "Timestamp",
+      "destination": "Destination",
+      "attempts": "Attempts",
+      "error": "Error",
+      "actions": "Actions",
+      "dead_letter_queue": "Dead Letter Queue"
     },
     "LibraryPipelineWizard": {
       "create_pipeline": "Create Pipeline",
@@ -942,7 +996,11 @@ export default {
     "UserRemySkillsView": {
       "my_remy_skills": "My Remy Skills",
       "manage_your_personal_skills_for_the_remy_ai_assistant": "Manage your personal skills for the Remy AI assistant",
-      "no_personal_skills_configured": "No personal skills configured"
+      "no_personal_skills_configured": "No personal skills configured",
+      "name": "Name",
+      "description": "Description",
+      "triggers": "Triggers",
+      "actions": "Actions"
     },
     "AdminOrgSettingsView": {
       "team_rbac_is_not_available_on_your_current_plan": "Team RBAC is not available on your current plan.",
@@ -986,7 +1044,18 @@ export default {
       "fields_hint": "(read-only — re-infer to change)",
       "confirm_save_schema": "Confirm & Save Schema",
       "saving": "Saving...",
-      "schema_saved": "Schema \"{name}\" saved."
+      "schema_saved": "Schema \"{name}\" saved.",
+      "create_one": "Create one",
+      "name": "Name",
+      "type": "Type",
+      "required": "Required",
+      "pipeline_templates": "Pipeline Templates",
+      "agents": "Agents",
+      "schemas": "Schemas",
+      "integrations": "Integrations",
+      "pipeline_name": "Pipeline name",
+      "selected_library_item": "Selected library item",
+      "view_runs_on_dashboard": "View runs on dashboard"
     },
     "SettingsLicenseView": {
       "paste_your_modulolicensekey_value_here": "Paste your MODULO_LICENSE_KEY value here...",
@@ -1000,7 +1069,9 @@ export default {
       "manage_your_modulo_team_license_key_and_view_plan_details": "Manage your Modulo Team license key and view plan details",
       "team_license_key_active": "Team license key active",
       "new_license_key": "New License Key",
-      "applying": "Applying..."
+      "applying": "Applying...",
+      "team": "Team",
+      "community": "Community"
     },
     "SchemaEditorView": {
       "schema_name_is_required": "Schema name is required",
@@ -1219,6 +1290,7 @@ export default {
       "datadog_api_key_placeholder": "Enter DataDog API key",
       "site": "Site",
       "select_site": "Select site",
+      "gov_ddog_gov_com": "Gov (ddog-gov.com)",
       "routing_key": "Routing Key",
       "pagerduty_routing_key_placeholder": "Enter PagerDuty routing key",
       "access_token": "Access Token",
@@ -1264,7 +1336,8 @@ export default {
     "SettingsMonitorConfigView": {
       "feature_locked": "Monitoring configuration is not available on your current plan.",
       "browser_monitoring": "Browser Monitoring",
-      "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately — no rebuild or page reload required."
+      "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately — no rebuild or page reload required.",
+      "retry": "Retry"
     },
     "ABTestModelsView": {
       "model_backend": "Model Backend",
@@ -1483,7 +1556,18 @@ export default {
       "no_match": "No Match",
       "condition_met": "Condition Met",
       "hmac_failed": "HMAC Failed",
-      "schema_validation_failed": "Schema Validation Failed"
+      "schema_validation_failed": "Schema Validation Failed",
+      "manual": "Manual",
+      "webhook": "Webhook",
+      "cron": "Cron",
+      "polling": "Polling",
+      "result": "Result",
+      "accepted": "Accepted",
+      "passed": "Passed",
+      "deduplicated": "Deduplicated",
+      "type": "Type",
+      "timestamp": "Timestamp",
+      "run": "Run"
     },
     "variantCompare": {
       "title": "Variant Comparison",
@@ -1516,6 +1600,34 @@ export default {
       "runFailed": "Run failed:",
       "failedToRunVariants": "Failed to run variants:",
       "runFailedStatus": "Run failed with status:"
+    },
+    "AdminHousekeepingView": {
+      "confirm_cleanup": "Confirm Cleanup"
+    },
+    "LifecycleMapsView": {
+      "lifecycle_maps": "Lifecycle Maps",
+      "no_lifecycle_maps_yet": "No lifecycle maps yet",
+      "create_lifecycle_map": "Create Lifecycle Map",
+      "name": "Name",
+      "description": "Description"
+    },
+    "LifecycleMapList": {
+      "create_lifecycle_map": "Create Lifecycle Map",
+      "name": "Name",
+      "description": "Description"
+    },
+    "LifecycleMapView": {
+      "version_label": "Version:"
+    },
+    "EnvironmentProfileList": {
+      "try_a_different_search_term": "Try a different search term.",
+      "no_environment_profiles": "No environment profiles",
+      "soft_delete_warning": "This will soft-delete the profile. Existing runs using it are unaffected."
+    },
+    "CompositeEditorView": {
+      "save_as_composite": "Save as Composite",
+      "name": "Name",
+      "description": "Description"
     }
   },
   "components": {

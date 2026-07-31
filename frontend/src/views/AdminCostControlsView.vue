@@ -187,9 +187,9 @@
                     <SelectValue placeholder="Monthly" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                    <SelectItem value="quarterly">Quarterly</SelectItem>
-                    <SelectItem value="annual">Annual</SelectItem>
+                    <SelectItem value="monthly">{{ $t('views.AdminCostControlsView.monthly') }}</SelectItem>
+                    <SelectItem value="quarterly">{{ $t('views.AdminCostControlsView.quarterly') }}</SelectItem>
+                    <SelectItem value="annual">{{ $t('views.AdminCostControlsView.annual') }}</SelectItem>
                   </SelectContent>
                 </Select>
                 <p v-if="periodSaveError" class="mt-1 text-xs text-destructive">{{ periodSaveError }}</p>

@@ -11,8 +11,8 @@
         <div v-if="licenseInfo.tier === 'team'" class="flex items-start justify-between">
           <div>
             <div class="flex items-center gap-2">
-              <h2 class="text-base font-semibold">Team</h2>
-              <Badge variant="default">Active</Badge>
+              <h2 class="text-base font-semibold">{{ $t('views.SettingsLicenseView.team') }}</h2>
+              <Badge variant="default">{{ $t('common.active') }}</Badge>
             </div>
             <p v-if="licenseInfo.org_id" class="mt-2 text-sm text-muted-foreground">
               Licensed to <span class="font-medium text-foreground">{{ licenseInfo.org_id }}</span>
@@ -24,8 +24,8 @@
         </div>
         <div v-else>
           <div class="flex items-center gap-2">
-            <h2 class="text-base font-semibold">Community</h2>
-            <Badge variant="outline">Community</Badge>
+            <h2 class="text-base font-semibold">{{ $t('views.SettingsLicenseView.community') }}</h2>
+            <Badge variant="outline">{{ $t('views.SettingsLicenseView.community') }}</Badge>
           </div>
           <p class="mt-2 text-sm text-muted-foreground">
             You are currently on the {{ planStore.getTierLabel(licenseInfo.tier) }} tier. Upgrade to {{ planStore.getTierLabel('team') }} to unlock all features.
