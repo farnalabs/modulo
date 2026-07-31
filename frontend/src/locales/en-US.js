@@ -996,6 +996,7 @@ export default {
       "search_schemas": "Search schemas...",
       "schemas": "Schemas",
       "no_schemas_yet": "No schemas yet.",
+      "deprecated": "Deprecated",
       "new_schema": "+ New Schema",
       "select_or_create": "Select a schema or create a new one",
       "new_schema_title": "New Schema",
