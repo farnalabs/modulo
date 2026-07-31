@@ -5,57 +5,65 @@ exporters are registered, enabling data residency compliance.
 """
 
 import os
-from collections.abc import Generator
 from unittest.mock import patch
 
 import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
-from modulo.otel_bridge.export import setup_otel, shutdown_otel
-
-
-@pytest.fixture(autouse=True)
-def reset_otel() -> Generator[None, None, None]:
-    """Clean up between tests to avoid cross-test pollution."""
-    yield
-    shutdown_otel()
+from modulo.otel_bridge.export import setup_otel
+from tests.unit.otel_bridge.conftest import span_processors
 
 
 class TestTelemetryDefaults:
     """Tests that telemetry is disabled by default."""
 
-    def test_telemetry_disabled_by_default(self):
-        """setup_otel with telemetry_enabled=False should register no exporters."""
+    def test_telemetry_disabled_registers_no_exporters(self):
+        """telemetry_enabled=False should register no span processors."""
         setup_otel(telemetry_enabled=False)
         provider = trace.get_tracer_provider()
-        # Should be a TracerProvider with no active span processors
         assert isinstance(provider, TracerProvider)
+        assert span_processors(provider) == ()
 
-    def test_no_otlp_without_endpoint(self):
-        """OTLP should not be configured when endpoint env var is unset."""
-        with patch.dict(os.environ, {}, clear=True):
-            setup_otel(telemetry_enabled=True)
-        provider = trace.get_tracer_provider()
-        assert isinstance(provider, TracerProvider)
+    def test_disabled_stdout_exporter_not_used(self):
+        """When disabled, the ConsoleSpanExporter must not be instantiated."""
+        with patch("modulo.otel_bridge.export.ConsoleSpanExporter") as mock_console:
+            setup_otel(telemetry_enabled=False)
+        mock_console.assert_not_called()
 
-    def test_disabled_skips_stdout_exporter(self):
-        """When disabled, no stdout exporter should be active."""
+    def test_disabled_otlp_exporter_not_used(self):
+        """When disabled, OTLP must not be configured even with endpoint set."""
+        with patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}), patch(
+            "modulo.otel_bridge.export.OTLPSpanExporter"
+        ) as mock_otlp:
+            setup_otel(telemetry_enabled=False)
+        mock_otlp.assert_not_called()
+
+    def test_disabled_tracer_still_works(self):
+        """Span creation must work with telemetry disabled."""
         setup_otel(telemetry_enabled=False)
         tracer = trace.get_tracer(__name__)
         with tracer.start_as_current_span("test") as span:
             span.set_attribute("test", True)
-        # No crash means no unexpected side effects
+        assert span.name == "test"
 
 
 class TestTelemetryEnabled:
     """Tests that telemetry is properly configured when enabled."""
 
-    def test_stdout_exporter_active(self):
-        """When enabled, TracerProvider should be initialized."""
+    def test_enabled_registers_stdout_exporter(self, monkeypatch: pytest.MonkeyPatch):
+        """telemetry_enabled=True should register a stdout span processor."""
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
         setup_otel(telemetry_enabled=True)
         provider = trace.get_tracer_provider()
         assert isinstance(provider, TracerProvider)
+        assert len(span_processors(provider)) == 1
+
+    def test_enabled_instantiates_console_exporter(self):
+        """When enabled, the ConsoleSpanExporter should be constructed."""
+        with patch("modulo.otel_bridge.export.ConsoleSpanExporter") as mock_console:
+            setup_otel(telemetry_enabled=True)
+        mock_console.assert_called_once()
 
     def test_tracer_works_when_enabled(self):
         """Creating spans should work when telemetry is enabled."""
@@ -63,23 +71,30 @@ class TestTelemetryEnabled:
         tracer = trace.get_tracer(__name__)
         with tracer.start_as_current_span("test-enabled") as span:
             span.set_attribute("key", "value")
-        # Span was created without error; that's the key check
         assert span.name == "test-enabled"
 
     def test_otlp_not_configured_without_env(self):
         """OTLP exporter should not be configured when env var is absent."""
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "modulo.otel_bridge.export.OTLPSpanExporter"
+        ) as mock_otlp:
             setup_otel(telemetry_enabled=True)
-        # No exception means OTLP was skipped gracefully
+        mock_otlp.assert_not_called()
 
     def test_otlp_configured_with_env(self):
-        """OTLP exporter should be attempted when endpoint env var is set."""
-        with patch.dict(
-            os.environ,
-            {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"},
-        ):
+        """OTLP exporter should be constructed when endpoint env var is set."""
+        with patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}), patch(
+            "modulo.otel_bridge.export.OTLPSpanExporter"
+        ) as mock_otlp:
             setup_otel(telemetry_enabled=True)
-        # Should not crash — endpoint just won't respond
+        mock_otlp.assert_called_once()
+
+    def test_otlp_configured_with_env_keeps_stdout(self):
+        """Both stdout and OTLP processors should be active when endpoint is set."""
+        with patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}):
+            setup_otel(telemetry_enabled=True)
+        provider = trace.get_tracer_provider()
+        assert len(span_processors(provider)) == 2
 
 
 class TestSettingsIntegration:
