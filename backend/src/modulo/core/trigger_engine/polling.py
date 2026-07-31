@@ -224,7 +224,7 @@ async def fire_polling_trigger(
         trigger = result.scalar_one_or_none()
         if trigger is None or not trigger.active:
             return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-        if trigger.next_fire_at is not None and trigger.next_fire_at > datetime.datetime.now(datetime.timezone.utc):
+        if trigger.next_fire_at is not None and trigger.next_fire_at > datetime.datetime.now(datetime.UTC):
             return {"status": "skipped", "reason": "already_fired_this_cycle"}
 
         # Concurrency check
