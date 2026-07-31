@@ -7,13 +7,15 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
 from modulo.core.error_tracking.metrics import record_error_alert
+from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
 
@@ -86,7 +88,24 @@ class AlertEngine:
             if rule.condition_level != level:
                 continue
             min_count = rule.condition_min_count if rule.condition_min_count is not None else 0
-            if count < min_count:
+            window_seconds = rule.condition_window_seconds or 0
+            if window_seconds > 0:
+                try:
+                    effective_count = await self._count_events_in_window(
+                        session=session,
+                        org_id=org_id,
+                        fingerprint=fingerprint,
+                        window_seconds=window_seconds,
+                    )
+                except Exception:
+                    _log.exception(
+                        "alert.window_count_failed",
+                        extra={"rule_id": str(rule.id), "window_seconds": window_seconds},
+                    )
+                    continue
+            else:
+                effective_count = count
+            if effective_count < min_count:
                 continue
 
             ck = _CooldownKey(rule_id=rule.id, fingerprint=fingerprint)
@@ -116,12 +135,36 @@ class AlertEngine:
                     error_group_id=error_group_id,
                     fingerprint=fingerprint,
                     level=level,
-                    count=count,
+                    count=effective_count,
                     environment=environment,
                 ),
             )
 
         return triggered
+
+    async def _count_events_in_window(
+        self,
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        fingerprint: str,
+        window_seconds: int,
+    ) -> int:
+        """Count events matching *fingerprint* created within the last *window_seconds*.
+
+        Returns zero if no events fall inside the window. The cutoff uses the
+        application clock so it is consistent across rule evaluations.
+        """
+        cutoff = datetime.now(UTC) - timedelta(seconds=window_seconds)
+        result = await session.execute(
+            select(func.count())
+            .select_from(ErrorEvent)
+            .where(
+                ErrorEvent.organisation_id == org_id,
+                ErrorEvent.fingerprint == fingerprint,
+                ErrorEvent.created_at >= cutoff,
+            ),
+        )
+        return int(result.scalar_one())
 
     async def dispatch_all(
         self,

@@ -444,6 +444,119 @@ def only_one_alert(ctx):
     assert ctx.get("alert_count", 0) == 1
 
 
+def _window_rule_session(rule_count: int) -> MagicMock:
+    """Session whose rule query returns one rule and window queries return *rule_count*."""
+    from modulo.db.models.error_notification_rule import ErrorNotificationRule
+
+    rule = MagicMock(spec=ErrorNotificationRule)
+    rule.id = uuid.uuid4()
+    rule.organisation_id = uuid.uuid4()
+    rule.name = "window rule"
+    rule.enabled = True
+    rule.condition_level = "error"
+    rule.condition_min_count = 3
+    rule.condition_window_seconds = 300
+    rule.action_type = "in_app"
+    rule.webhook_url = None
+    rule.cooldown_seconds = 300
+    session = MagicMock()
+    rules_result = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
+    count_result = MagicMock(scalar_one=MagicMock(return_value=rule_count))
+    rules_loaded = False
+
+    def _execute(_stmt: object) -> MagicMock:
+        nonlocal rules_loaded
+        if not rules_loaded:
+            rules_loaded = True
+            return rules_result
+        return count_result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session
+
+
+def _evaluate_window(ctx, rule_count: int) -> None:
+    import asyncio
+
+    from modulo.core.error_tracking.alerting import AlertEngine
+
+    engine = AlertEngine(redis_client=MagicMock())
+    alerts = asyncio.run(
+        engine.evaluate(
+            org_id=ctx["org_id"],
+            session=_window_rule_session(rule_count),
+            error_group_id=uuid.uuid4(),
+            fingerprint="fp-window",
+            level="error",
+            count=1,
+        )
+    )
+    ctx["alert_count"] = len(alerts)
+
+
+@given("a notification rule requiring 3 events within a 300 second window")
+def rule_with_window(ctx):
+    ctx["org_id"] = uuid.uuid4()
+    ctx["alert_count"] = 0
+
+
+@when("only 2 matching events occurred within the window")
+def window_below_threshold(ctx):
+    _evaluate_window(ctx, 2)
+
+
+@when("3 matching events occurred within the window")
+def window_meets_threshold(ctx):
+    _evaluate_window(ctx, 3)
+
+
+@then("no alert is dispatched")
+def no_alert_dispatched(ctx):
+    assert ctx.get("alert_count", 0) == 0
+
+
+@given("a notification rule requiring 2 events with no time window")
+def rule_without_window(ctx):
+    ctx["org_id"] = uuid.uuid4()
+    ctx["alert_count"] = 0
+
+
+@when("the group lifetime count is 2")
+def lifetime_count_two(ctx):
+    import asyncio
+
+    from modulo.core.error_tracking.alerting import AlertEngine
+    from modulo.db.models.error_notification_rule import ErrorNotificationRule
+
+    rule = MagicMock(spec=ErrorNotificationRule)
+    rule.id = uuid.uuid4()
+    rule.organisation_id = ctx["org_id"]
+    rule.name = "lifetime rule"
+    rule.enabled = True
+    rule.condition_level = "error"
+    rule.condition_min_count = 2
+    rule.condition_window_seconds = 0
+    rule.action_type = "in_app"
+    rule.webhook_url = None
+    rule.cooldown_seconds = 300
+    session = MagicMock()
+    rules_result = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
+    session.execute = AsyncMock(return_value=rules_result)
+
+    engine = AlertEngine(redis_client=MagicMock())
+    alerts = asyncio.run(
+        engine.evaluate(
+            org_id=ctx["org_id"],
+            session=session,
+            error_group_id=uuid.uuid4(),
+            fingerprint="fp-lifetime",
+            level="error",
+            count=2,
+        )
+    )
+    ctx["alert_count"] = len(alerts)
+
+
 @when(parsers.parse("I POST /api/v1/errors/notification-rules with valid config"))
 def create_notification_rule(request, ctx):
     rule_id = str(uuid.uuid4())
