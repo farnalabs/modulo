@@ -111,7 +111,7 @@ async def rotate_key(
             raise
         except Exception:
             _log.exception("Failed to record fernet_key_rotation_started audit event")
-            raise
+            raise HTTPException(status_code=500, detail="Internal server error.") from None
 
         _rotation_in_progress = True
 
@@ -141,14 +141,16 @@ async def rotate_key(
     except HTTPException:
         raise
     except IntegrityError as exc:
+        _log.exception("admin_rotation.rotate_key")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError as exc:
+        _log.exception("admin_rotation.rotate_key")
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
     except Exception as e:
-        _log.error("Unexpected error in rotate_key: %s", str(e))
+        _log.exception("admin_rotation.rotate_key")
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
@@ -172,14 +174,16 @@ async def rotation_status(
     except HTTPException:
         raise
     except IntegrityError as exc:
+        _log.exception("admin_rotation.rotation_status")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError as exc:
+        _log.exception("admin_rotation.rotation_status")
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
     except Exception as e:
-        _log.error("Unexpected error in rotation_status: %s", str(e))
+        _log.exception("admin_rotation.rotation_status")
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 

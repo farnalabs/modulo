@@ -124,6 +124,7 @@ async def login(
 
             family = await create_family(session, account.id, org_id)
     except IntegrityError:
+        _log.exception("auth.login")
         _log.warning("login.integrity_error")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -136,6 +137,7 @@ async def login(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("auth.login")
         _log.warning("login.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -232,17 +234,20 @@ async def refresh(
         async with session.begin():
             new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence, account_uuid)
     except IntegrityError:
+        _log.exception("auth.refresh")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("auth.refresh")
         _log.warning("refresh.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("auth.refresh")
         _log.warning("refresh.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -325,17 +330,20 @@ async def logout(
                     if not blacklisted:
                         _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
             except IntegrityError:
+                _log.exception("auth.logout")
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A resource with this value already exists",
                 ) from None
             except ProgrammingError:
+                _log.exception("auth.logout")
                 _log.warning("logout.programming_error")
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Feature is not available. Run database migrations to enable it.",
                 ) from None
             except SQLAlchemyError:
+                _log.exception("auth.logout")
                 _log.warning("logout.sqlalchemy_error")
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -414,12 +422,14 @@ async def me(
         async with session.begin():
             account = await get_account_by_id(session, current_user.account_id)
     except ProgrammingError:
+        _log.exception("auth.me")
         _log.warning("me.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("auth.me")
         _log.warning("me.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
