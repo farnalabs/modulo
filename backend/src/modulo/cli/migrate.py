@@ -57,6 +57,10 @@ _MODEL_MAP: dict[str, type] = {
     "model_backends": ModelBackend,
 }
 
+# Fetch rows in bounded batches so exports stay memory-safe for large orgs
+# (same page size as migrate_org.py's proven paginated export pattern).
+_PAGE_SIZE = 500
+
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -140,15 +144,20 @@ async def _collect_org_data(
     elif users_only:
         tables_to_fetch = [(n, m) for n, m in tables_to_fetch if n == "accounts"]
 
-    # TODO: OOM risk — loads ALL rows into memory at once.
-    # For orgs with 500+ rows in any table, this will exhaust available memory.
-    # migrate_org.py uses paginated queries (PAGE_SIZE=500) as a safer pattern.
     for name, model_cls in tqdm(tables_to_fetch, desc="Exporting tables", unit="table"):
-        query = select(model_cls)
-        if hasattr(model_cls, "organisation_id"):
-            query = query.where(model_cls.organisation_id == org_id)
-        rows = (await session.execute(query)).scalars().all()
-        bundle[name] = [_serialise_row(r) for r in rows]
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            query = select(model_cls).order_by(model_cls.id)
+            if hasattr(model_cls, "organisation_id"):
+                query = query.where(model_cls.organisation_id == org_id)
+            query = query.offset(offset).limit(_PAGE_SIZE)
+            batch = (await session.execute(query)).scalars().all()
+            if not batch:
+                break
+            rows.extend(_serialise_row(r) for r in batch)
+            offset += _PAGE_SIZE
+        bundle[name] = rows
 
     bundle["exported_at"] = datetime.now(UTC).isoformat()
     return bundle
