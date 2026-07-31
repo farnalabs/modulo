@@ -96,9 +96,9 @@ class VaultSecretsBackend(SecretsBackend):
                     )
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 logger.exception("VaultSecretsBackend: failed to authenticate to Vault at %s", self._addr)
-                raise
+                raise RuntimeError("VaultSecretsBackend: failed to authenticate to Vault") from exc
 
             self._client = client
             return self._client
@@ -106,7 +106,8 @@ class VaultSecretsBackend(SecretsBackend):
     def _secret_path(self, key: str) -> str:
         if ".." in key or key.startswith("/"):
             raise ValueError(f"VaultSecretsBackend: invalid secret key: {key!r}")
-        return f"{self._path_prefix}/{key}"
+        prefix = self._path_prefix.rstrip("/")
+        return f"{prefix}/{key}"
 
     async def get_secret(self, key: str) -> str:
         key = validate_key(key)
@@ -133,12 +134,12 @@ class VaultSecretsBackend(SecretsBackend):
                 logger.warning("VaultSecretsBackend: rate-limited reading secret %s", key)
                 raise RuntimeError("VaultSecretsBackend: rate-limited reading secret") from exc
             logger.error("VaultSecretsBackend: Vault error reading secret %s: %s", key, exc)
-            raise RuntimeError(f"VaultSecretsBackend: unexpected error reading secret: {exc}") from exc
+            raise RuntimeError("VaultSecretsBackend: unexpected error reading secret") from exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.error("VaultSecretsBackend: unexpected error reading secret %s: %s", key, exc)
-            raise RuntimeError(f"VaultSecretsBackend: unexpected error reading secret: {exc}") from exc
+            raise RuntimeError("VaultSecretsBackend: unexpected error reading secret") from exc
 
         data: dict[str, Any] = response.get("data", {})
         secret_data: dict[str, Any] = data.get("data", {})
@@ -170,12 +171,12 @@ class VaultSecretsBackend(SecretsBackend):
                 logger.warning("VaultSecretsBackend: rate-limited writing secret %s", key)
                 raise RuntimeError("VaultSecretsBackend: rate-limited writing secret") from exc
             logger.error("VaultSecretsBackend: Vault error writing secret %s: %s", key, exc)
-            raise RuntimeError(f"VaultSecretsBackend: unexpected error writing secret: {exc}") from exc
+            raise RuntimeError("VaultSecretsBackend: unexpected error writing secret") from exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.error("VaultSecretsBackend: unexpected error writing secret %s: %s", key, exc)
-            raise RuntimeError(f"VaultSecretsBackend: unexpected error writing secret: {exc}") from exc
+            raise RuntimeError("VaultSecretsBackend: unexpected error writing secret") from exc
 
     async def delete_secret(self, key: str) -> None:
         key = validate_key(key)
@@ -199,9 +200,9 @@ class VaultSecretsBackend(SecretsBackend):
                 logger.warning("VaultSecretsBackend: rate-limited deleting secret %s", key)
                 raise RuntimeError("VaultSecretsBackend: rate-limited deleting secret") from exc
             logger.error("VaultSecretsBackend: Vault error deleting secret %s: %s", key, exc)
-            raise RuntimeError(f"VaultSecretsBackend: unexpected error deleting secret: {exc}") from exc
+            raise RuntimeError("VaultSecretsBackend: unexpected error deleting secret") from exc
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.error("VaultSecretsBackend: unexpected error deleting secret %s: %s", key, exc)
-            raise RuntimeError(f"VaultSecretsBackend: unexpected error deleting secret: {exc}") from exc
+            raise RuntimeError("VaultSecretsBackend: unexpected error deleting secret") from exc
