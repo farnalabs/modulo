@@ -1,0 +1,80 @@
+# ADR 017 — Celery to SAQ Migration
+
+> Full migration plan: `C:\Users\dunca\AppData\Local\Temp\celery-to-saq-plan-v10.md` (referenced in the delivery-plan tasks `task-saq-migration-pr-a/b/c`).
+
+**Date**: 2026-07-31
+**Status**: Accepted
+
+---
+
+## Context
+
+Celery 5.x (Redis broker, prefork pool) causes recurring production failures. Modulo's run workload is I/O-bound async waiting (E2B sandbox dispatch), which Celery's prefork pool handles poorly — each worker process blocks an OS thread on an async wait that an asyncio-native worker would simply await. The recurring failures are not configuration bugs; they are a structural mismatch between a process-per-worker model and an I/O-bound, mostly-waiting workload.
+
+The migration plan went through **9 review iterations** using the 7-lens `plan-review-iterate` skill. Each iteration hardened the design: corrected SAQ 0.26.4 semantics were verified against source (retry off-by-one, sweeper behaviour, cron safety, web bind, CLI invocation), environment facts were verified and corrected stale AGENTS.md claims, and the shadow/cutover sequencing was stress-tested. The plan is locked at **v10**.
+
+**SAQ 0.26.4** was selected after deep research comparing alternatives:
+
+- **Arq** — async-native and similar in spirit, but effectively maintenance-only; no active development cadence to rely on for a production substrate.
+- **Hand-rolled asyncio worker** — full control but re-implements a retry/sweeper/cron/dedupe stack that is precisely the hard part; reintroduces bespoke distributed-system code under a different name.
+- **SAQ** — asyncio-native, actively maintained, and ships the primitives the migration needs: verified retry semantics, sweeper recovery, cron jobs with `unique` overlap control, deterministic job keying, and Lua-based dedupe. The trade-offs it does impose (single queue per worker, singular concurrency value per worker, job knobs set at enqueue) were verified against source and designed around.
+
+---
+
+## Decision
+
+Replace Celery with **SAQ 0.26.4** as the task queue substrate, pinned in `pyproject.toml`.
+
+### Worker topology
+
+- **TWO worker processes per machine**, both asyncio-native:
+  - **runs worker**: queue=`runs`, concurrency=2, no web UI.
+  - **system worker**: queue=`system`, concurrency=2, all cron jobs, web UI on port 8081 bound to `127.0.0.1` (fly-ssh only) via a custom runner (`aiohttp` has no host flag; the plain CLI binds `0.0.0.0`). AUTH required and **fail-closed**: the entrypoint refuses to boot the system worker if `SAQ_AUTH_PASSWORD` or `SAQ_AUTH_USERNAME` are unset.
+- `runs_manual` + `runs_automated` collapse into **ONE `runs` queue**. Celery consumes both today via `task_queues`, but the entire worker process is deleted, so the collapse loses nothing.
+- Global run concurrency: 2/machine × 2–5 machines = 4–10 concurrent runs.
+
+### Database as system of record
+
+- The DB remains the system of record for run state. Three columns are added: `dispatcher`, `saq_job_id`, `claim_token`. `re_enqueue_count` is cut (re-enqueue detection moved to log-line ingestion).
+- `dispatcher_reconcile` (system cron, every 60s) recovers "DB says job should exist, Redis says none": verifies via `queue.job(run:{id})`, repairs partial eviction with queue-name-derived key deletion, and re-enqueues — gated on the enqueue return value so it never loops.
+- Capacity gating is **DB-deferred**: capacity-blocked runs are never enqueued, stay `pending`, and `dispatcher_reconcile` re-dispatches them when capacity frees.
+
+### Delivery sequencing — three PRs
+
+- **PR A**: foundation + spike (hard gate) + tests-first. The SPIKE runs a throwaway worker against an identically-configured dev Upstash instance (never production) and settles the remaining empirical unknowns: Upstash maxmemory-policy, ttl semantics, retry timing, E2B transient-retry distribution. Raw spike evidence is committed with this ADR.
+- **PR B**: routing (`dispatch_run` single gating point) + the 3 columns + `saq` error enum + shadow mode + staging smoke. SAQ runs in shadow on production (`SAQ_ENABLED=false`): `execute_run` keeps routing to Celery (`dispatcher=NULL`), `resume_run` routes to SAQ (`dispatcher='saq'`). The staging smoke flips `SAQ_ENABLED=true` on dedicated Upstash + Postgres with queue prefixes `staging-runs`/`staging-system` so the acceptance (`dispatcher='saq'` + `claim_count==1`) is reachable.
+- **PR C**: cutover + Celery removal, with a **48–72h hold**. Sequenced rollout: deploy the image with BOTH Celery+SAQ and `SAQ_ENABLED=true` on all machines first, verify SAQ green, then deploy the Celery-removal image — never a scheduler-less window.
+
+### At-most-once residual and its mitigations
+
+- The accepted at-most-once residual: an event-loop stall ≥450s freezes the DB heartbeat and `job.update()`, the sweeper re-queues, and a retry can double-execute. Mitigated by two mechanisms:
+  - **Claim-token fence**: `claim_token` is a DISTINCT per-claim value (SAQ retries reuse the same `saq_job_id`), verified on heartbeat (cheap early-abort), immediately before the E2B dispatch (the load-bearing site), and before other side-effect commits. The finally-stale write (`heartbeat_at = now() - 8min`) is itself claim-token-fenced so a superseded original cannot stale a successor's fresh heartbeat.
+  - **E2B idempotency key** (per-claim, default ON): key `run:{id}:e2b:{claim_token}` set via SETNX before dispatch (atomic — exactly one executor wins), fenced DEL on failure, retained until terminal + upper TTL bound (~8h). Also catches E2B client-level transient retries within one claim.
+
+### Multi-machine cron safety
+
+- Cron jobs run on every machine's system worker. Safety comes from advancing `next_fire_at` **atomically at enqueue time**: a conditional `UPDATE ... WHERE next_fire_at <= now() RETURNING id` picks the due rows, and only the returned rows are enqueued. A second machine's tick sees `next_fire_at` already advanced and skips. Lost-epoch-on-crash (process dies between the atomic UPDATE and the enqueue) is accepted and self-heals on the next tick, with alerting as the closure.
+
+### CI gating
+
+- SAQ integration tests fold into `ci.yml` as jobs, keeping the workflow name "CI: Fast Validation" — `merge-queue.yml` gates on that workflow name because branch protection is unavailable on this repo (HTTP 403, free tier). Jobs run on hosted parallel `ubicloud-standard-2` runners, so CI wall-clock is `max(jobs)` (~40 min). A one-retry wrapper (pytest-rerunfailures) bounds flake churn; a red-after-rerun SAQ job is expected to trigger Branch Fixer.
+
+---
+
+## Consequences
+
+- **Substrate swap, NOT simplification.** SAQ earns its keep on async transport, timeout-kill, and verified retry/sweeper/cron/dedupe primitives. The bespoke DB glue — `dispatcher_reconcile`, capacity deferral, `after_process`, claim-token fencing — is substrate-independent: it is the price of keeping the DB as the system of record, and it carries over to any future queue substrate.
+- **Schema:** 3 columns (`dispatcher`, `saq_job_id`, `claim_token`) + a permanent `'saq'` value added to the error enum (with constraint UPDATE and validator). Two migrations in PR B; **no PR C migration**. The enum value is permanent because PostgreSQL cannot drop an enum value still referenced by rows; rows would be reclassified to `'internal'` if it were ever removed.
+- **CI wall-clock** rises to ~40 min `max(jobs)` with hosted parallel runners; the stale AGENTS.md claim ("13 workflows, self-hosted runner, concurrency group") is corrected in the same PR set.
+- **The SPIKE (PR A hard gate)** settles the remaining empirical unknowns before production exposure: Upstash `maxmemory-policy` (volatile-lru vs allkeys-lru decides whether the full partial-eviction machinery is load-bearing), ttl semantics (enqueue- vs start-origin decides `execute_run` ttl of ≥8h vs 300s), retry timing determinism (`retry_backoff=False`), and the E2B transient-retry distribution (sets `SAQ_RUN_RETRIES` at ~p99.5).
+- **Rollback** (post-PR-C, ordered): halt new dispatches → drain/fail SAQ jobs (never re-dispatch running rows onto old Celery unguarded) → SQL-flip `dispatcher=NULL` + `dispatched_at=NULL` as the owner role (RLS-safe, count-asserted) → run the 3 column down-revisions → deploy the pre-cutover image SHA. Recover from DB state, not queue state. 48–72h green before anything is considered unreversible.
+- The at-most-once residual on ≥450s event-loop stalls is acknowledged as residual, not resolved — mitigated (fence + idempotency key + `claim_count` alert), bounded (retries=5), and unlikely for an I/O-bound workload.
+
+---
+
+## References
+
+- Full plan v10: `C:\Users\dunca\AppData\Local\Temp\celery-to-saq-plan-v10.md`
+- SAQ 0.26.4 source semantics verified during plan review (retry off-by-one, sweeper, cron, dedupe, web bind, CLI invocation)
+- Delivery-plan tasks: `task-saq-migration-pr-a`, `task-saq-migration-pr-b`, `task-saq-migration-pr-c`
+- ADR 012: Managed Postgres Migration — staging dedicated database (`modulo-staging-db`)
