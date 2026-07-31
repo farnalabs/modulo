@@ -16,11 +16,11 @@
             <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">no components in pipeline</p>
           </div>
           <div class="flex items-center gap-2 pointer-events-auto">
-            <Button variant="default" size="xs" @click="openRenameDialog">Rename</Button>
-            <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">Archive</button>
-            <button v-else class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">Unarchive</button>
-            <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">Delete</button>
-            <Button variant="outline" size="xs" @click="addNode">Add Node</Button>
+            <Button variant="default" size="xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
+            <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <button v-else class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
+            <Button variant="outline" size="xs" @click="addNode">{{ $t('views.PipelineEditorView.add_node') }}</Button>
           </div>
         </div>
         <!-- Toolbar -->
@@ -30,7 +30,7 @@
             <button class="rounded p-1 hover:bg-accent" @click="openRenameDialog" title="Rename pipeline">
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
             </button>
-            <span v-if="pipeline?.archived_at" class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">Archived</span>
+            <span v-if="pipeline?.archived_at" class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.archived') }}</span>
             <span v-if="folderPath.length > 0" class="ml-2 flex items-center gap-1 text-xs text-muted-foreground">
               <span v-for="(f, i) in folderPath" :key="f.id">
                 <template v-if="i > 0"><span class="text-muted-foreground/50">/</span></template>
@@ -97,13 +97,13 @@
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="flex items-center gap-1">
-            <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">Archive</button>
-            <button v-else class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">Unarchive</button>
-            <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">Delete</button>
+            <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <button v-else class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="flex items-center gap-1">
-            <label for="pipeline-max-duration" class="text-[10px] text-muted-foreground whitespace-nowrap">Max Duration (s):</label>
+            <label for="pipeline-max-duration" class="text-[10px] text-muted-foreground whitespace-nowrap">{{ $t('views.PipelineEditorView.max_duration_s') }}:</label>
             <input id="pipeline-max-duration"
               v-model.number="maxDurationInput"
               type="number"
@@ -161,7 +161,7 @@
             </div>
 
             <div v-else class="space-y-2">
-              <label for="pipeline-editor-run-prompt" class="block text-sm font-medium text-foreground">Prompt</label>
+              <label for="pipeline-editor-run-prompt" class="block text-sm font-medium text-foreground">{{ $t('views.PipelineEditorView.prompt') }}</label>
               <textarea id="pipeline-editor-run-prompt"
                 v-model="runPrompt"
                 :placeholder="$t('views.PipelineEditorView.run_prompt_placeholder')"
@@ -290,7 +290,7 @@
             </dd>
           </div>
           <div>
-            <label for="pipeline-editor-node-label" class="text-muted-foreground text-xs uppercase tracking-wider">Label</label>
+            <label for="pipeline-editor-node-label" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.label') }}</label>
             <input id="pipeline-editor-node-label"
               v-model="selectedNodeData.label"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium mt-1"
@@ -300,7 +300,7 @@
             />
           </div>
           <div>
-            <label for="pipeline-editor-node-desc" class="text-muted-foreground text-xs uppercase tracking-wider">Description</label>
+            <label for="pipeline-editor-node-desc" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.description') }}</label>
             <textarea id="pipeline-editor-node-desc"
               v-model="selectedNodeData.description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm mt-1"
@@ -446,15 +446,15 @@
           <!-- Sandbox Agent: template, command, env, context -->
           <template v-if="selectedNodeData.node_type === 'sandbox_agent'">
             <div v-if="selectedNodeData.template_id">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Template</dt>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.template') }}</dt>
               <dd class="font-mono text-xs">{{ selectedNodeData.template_id }}</dd>
             </div>
             <div v-if="selectedNodeData.agent_command">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Command</dt>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.command') }}</dt>
               <dd class="font-mono text-xs break-all">{{ selectedNodeData.agent_command }}</dd>
             </div>
             <template v-else-if="selectedNodeData.agent_commands && selectedNodeData.agent_commands.length > 0">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Commands</dt>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.commands') }}</dt>
               <dd>
                 <ul class="list-inside list-decimal text-xs font-mono text-muted-foreground">
                   <li v-for="(cmd, idx) in selectedNodeData.agent_commands" :key="idx">{{ cmd }}</li>
@@ -465,26 +465,26 @@
               </dd>
             </template>
             <div v-if="selectedNodeData.timeout_seconds">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Timeout</dt>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.timeout') }}</dt>
               <dd>{{ selectedNodeData.timeout_seconds }}s</dd>
             </div>
             <div v-if="selectedNodeData.env_vars && Object.keys(selectedNodeData.env_vars).length > 0">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Env Vars</dt>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.env_vars') }}</dt>
               <dd class="font-mono text-[10px] break-all">{{ Object.keys(selectedNodeData.env_vars).join(', ') }}</dd>
             </div>
             <div v-if="selectedNodeData.context_files && Object.keys(selectedNodeData.context_files).length > 0">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Context Files</dt>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.context_files') }}</dt>
               <dd><ul class="list-inside list-disc text-xs text-muted-foreground"><li v-for="(content, fpath) in selectedNodeData.context_files" :key="fpath">{{ fpath }} <span class="text-[10px] opacity-60">({{ content.length }} bytes)</span></li></ul></dd>
             </div>
             <div v-if="selectedNodeData.agent_prompt">
-              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Prompt</dt>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.prompt') }}</dt>
               <dd class="text-xs text-muted-foreground italic whitespace-pre-wrap max-h-32 overflow-y-auto">{{ selectedNodeData.agent_prompt.substring(0, 300) }}{{ selectedNodeData.agent_prompt.length > 300 ? '...' : '' }}</dd>
             </div>
           </template>
 
           <!-- Lifecycle maps -->
           <div v-if="linkedLifecycleMaps.length > 0">
-            <dt class="text-muted-foreground text-xs uppercase tracking-wider">Lifecycle Maps</dt>
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.lifecycle_maps') }}</dt>
             <dd>
               <div v-for="map in linkedLifecycleMaps" :key="map.id" class="flex items-center gap-1">
                 <router-link :to="`/lifecycle-maps/${map.id}`" class="text-xs text-indigo-500 hover:text-indigo-400">
@@ -518,14 +518,14 @@
 
       <!-- Edge Properties Panel (with HITL gate config) -->
       <aside v-if="selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
-        <h2 class="mb-4 text-base font-semibold">Edge Properties</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
         <dl class="space-y-3 text-sm">
           <div>
-            <dt class="text-muted-foreground">Source</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.source') }}</dt>
             <dd class="font-mono text-xs">{{ shortId(selectedEdgeData.source_node_id) }}</dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">Target</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.target') }}</dt>
             <dd class="font-mono text-xs">{{ shortId(selectedEdgeData.target_node_id) }}</dd>
           </div>
           <div>
@@ -536,17 +536,17 @@
                   <SelectValue placeholder="Normal" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="normal">Normal</SelectItem>
-                  <SelectItem value="reject">Reject</SelectItem>
-                  <SelectItem value="conditional">Conditional</SelectItem>
-                  <SelectItem value="loop">Loop</SelectItem>
-                  <SelectItem value="llm">LLM Routing</SelectItem>
+                  <SelectItem value="normal">{{ $t('views.PipelineEditorView.normal') }}</SelectItem>
+                  <SelectItem value="reject">{{ $t('views.PipelineEditorView.reject') }}</SelectItem>
+                  <SelectItem value="conditional">{{ $t('views.PipelineEditorView.conditional') }}</SelectItem>
+                  <SelectItem value="loop">{{ $t('views.PipelineEditorView.loop') }}</SelectItem>
+                  <SelectItem value="llm">{{ $t('views.PipelineEditorView.llm_routing') }}</SelectItem>
                 </SelectContent>
               </Select>
             </dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">Condition Expression</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.condition_expression') }}</dt>
             <dd>
               <input
                 v-model="edgeForm.condition_expression"
@@ -557,7 +557,7 @@
             </dd>
           </div>
           <div v-if="edgeForm.edge_type === 'loop'">
-            <dt class="text-muted-foreground">Max Iterations</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.max_iterations') }}</dt>
             <dd>
               <input
                 v-model.number="edgeForm.max_iterations"
@@ -570,14 +570,14 @@
             </dd>
           </div>
           <div v-if="edgeForm.edge_type === 'llm'">
-            <dt class="text-muted-foreground">Routing Label</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.routing_label') }}</dt>
             <dd>
               <input
                 v-model="edgeForm.routing_label"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
                 placeholder="e.g. retry, escalate, complete"
               />
-              <p class="mt-1 text-xs text-muted-foreground">The LLM uses this label to select this path. Must be unique among outgoing edges.</p>
+              <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.the_llm_uses_this_label_to_select_this_path_must_be_unique_among_outgoing_edges') }}</p>
             </dd>
           </div>
         </dl>
@@ -592,13 +592,13 @@
               type="checkbox"
               class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
             />
-            <span class="ml-2 text-xs text-muted-foreground">Enabled</span>
+            <span class="ml-2 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.enabled') }}</span>
           </label>
         </div>
 
         <div v-if="edgeForm.hitl_enabled" class="mt-4 space-y-4">
           <div>
-            <label for="pipelineeditorview-field-14" class="mb-1 block text-xs font-medium text-muted-foreground">Label</label>
+            <label for="pipelineeditorview-field-14" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.label') }}</label>
             <input id="pipelineeditorview-field-14"
               v-model="edgeForm.label"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -606,7 +606,7 @@
             />
           </div>
           <div>
-            <label for="pipelineeditorview-field-13" class="mb-1 block text-xs font-medium text-muted-foreground">Description</label>
+            <label for="pipelineeditorview-field-13" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.description') }}</label>
             <textarea id="pipelineeditorview-field-13"
               v-model="edgeForm.description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -615,7 +615,7 @@
             />
           </div>
           <div>
-            <label for="pipelineeditorview-field-12" class="mb-1 block text-xs font-medium text-muted-foreground">Claim Expiry (minutes)</label>
+            <label for="pipelineeditorview-field-12" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.claim_expiry_minutes') }}</label>
             <input id="pipelineeditorview-field-12"
               v-model.number="edgeForm.claim_expiry_minutes"
               type="number"
@@ -630,21 +630,21 @@
               type="checkbox"
               class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
             />
-            <span class="text-xs text-muted-foreground">Human only (block LLM auto-approval)</span>
+            <span class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.human_only_block_llm_auto_approval') }}</span>
           </div>
 
           <hr class="border-t" />
 
           <div>
-            <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">Condition Type</label>
+            <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.condition_type') }}</label>
             <Select v-model="edgeForm.condition_type">
               <SelectTrigger aria-label="Condition type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                 <SelectValue placeholder="None (always gate)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">None (always gate)</SelectItem>
-                <SelectItem value="jmespath">JMESPath Expression</SelectItem>
-                <SelectItem value="eval">Eval Reference</SelectItem>
+                <SelectItem value="none">{{ $t('views.PipelineEditorView.none_always_gate') }}</SelectItem>
+                <SelectItem value="jmespath">{{ $t('views.PipelineEditorView.jmespath_expression') }}</SelectItem>
+                <SelectItem value="eval">{{ $t('views.PipelineEditorView.eval_reference') }}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -663,7 +663,7 @@
 
           <div v-if="edgeForm.condition_type === 'eval'" class="space-y-3">
             <div>
-              <label for="pipelineeditorview-field-9" class="mb-1 block text-xs font-medium text-muted-foreground">Eval Name</label>
+              <label for="pipelineeditorview-field-9" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.eval_name') }}</label>
               <input id="pipelineeditorview-field-9"
                 v-model="edgeForm.eval_name"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
@@ -672,7 +672,7 @@
             </div>
             <div class="flex gap-2">
               <div class="flex-1">
-                <label for="pipelineeditorview-field-8" class="mb-1 block text-xs font-medium text-muted-foreground">Threshold</label>
+                <label for="pipelineeditorview-field-8" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.threshold') }}</label>
                 <input id="pipelineeditorview-field-8"
                   v-model.number="edgeForm.eval_threshold"
                   type="number"
@@ -683,7 +683,7 @@
                 />
               </div>
               <div class="flex-1">
-                <label for="pipelineeditorview-field-7" class="mb-1 block text-xs font-medium text-muted-foreground">Operator</label>
+                <label for="pipelineeditorview-field-7" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.operator') }}</label>
                 <Select v-model="edgeForm.eval_operator">
                   <SelectTrigger aria-label="Operator" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="lt (score &lt; threshold)" />
@@ -767,7 +767,7 @@
             </div>
           </div>
           <div v-if="selectedAgent" class="rounded-lg border bg-muted p-3 text-sm">
-            <p class="text-xs text-muted-foreground">Schema</p>
+            <p class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.schema') }}</p>
             <p class="mt-0.5 font-medium">Input: {{ agentSchemaName(selectedAgent, 'input') }}</p>
             <p class="font-medium">Output: {{ agentSchemaName(selectedAgent, 'output') }}</p>
           </div>
@@ -842,7 +842,7 @@
           />
         </div>
         <div>
-          <label for="pipelineeditorview-field-2" class="mb-1 block text-sm font-medium">Description</label>
+          <label for="pipelineeditorview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.description') }}</label>
           <textarea id="pipelineeditorview-field-2"
             v-model="saveAsDescription"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -851,7 +851,7 @@
           />
         </div>
         <div>
-          <span class="mb-1 block text-sm font-medium">Selected Nodes</span>
+          <span class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.selected_nodes') }}</span>
           <div class="max-h-32 space-y-1 overflow-y-auto">
             <label
               v-for="node in rawNodes"
@@ -885,7 +885,7 @@
     >
       <div class="space-y-4">
         <div>
-          <label for="pipelineeditorview-field-1" class="mb-1 block text-sm font-medium">Name</label>
+          <label for="pipelineeditorview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.name') }}</label>
           <input id="pipelineeditorview-field-1"
             v-model="renameName"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"

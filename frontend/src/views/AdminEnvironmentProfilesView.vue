@@ -24,7 +24,7 @@
           <form @submit.prevent="formMode === 'add' ? createProfile() : updateProfile()">
             <div class="space-y-4">
               <div>
-                <label for="adminenvironmentprofilesview-field-8" class="mb-1 block text-sm font-medium">Name</label>
+                <label for="adminenvironmentprofilesview-field-8" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.name') }}</label>
                 <input id="adminenvironmentprofilesview-field-8"
                   v-model="formData.name"
                   type="text"
@@ -34,7 +34,7 @@
                 />
               </div>
               <div>
-                <label for="adminenvironmentprofilesview-field-7" class="mb-1 block text-sm font-medium">Description</label>
+                <label for="adminenvironmentprofilesview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.description') }}</label>
                 <input id="adminenvironmentprofilesview-field-7"
                   v-model="formData.description"
                   type="text"
@@ -44,20 +44,20 @@
                 />
               </div>
               <div>
-                <label for="adminenvironmentprofilesview-field-6" class="mb-1 block text-sm font-medium">Provider Type</label>
+                <label for="adminenvironmentprofilesview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.provider_type') }}</label>
                 <Select v-model="formData.provider_type">
                   <SelectTrigger data-testid="admin-envprofiles-provider-select" aria-label="Provider type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="E2B" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="e2b">E2B</SelectItem>
-                    <SelectItem value="docker">Docker</SelectItem>
+                    <SelectItem value="docker">{{ $t('views.AdminEnvironmentProfilesView.docker') }}</SelectItem>
                     <SelectItem value="custom">Custom / None</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div v-if="formData.provider_type === 'custom'">
-                <label for="adminenvironmentprofilesview-field-5" class="mb-1 block text-sm font-medium">Image Reference</label>
+                <label for="adminenvironmentprofilesview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.image_reference') }}</label>
                 <input id="adminenvironmentprofilesview-field-5"
                   v-model="formData.image_ref"
                   type="text"
@@ -67,7 +67,7 @@
                 />
               </div>
               <div>
-                <label for="adminenvironmentprofilesview-field-4" class="mb-1 block text-sm font-medium">Timeout (seconds)</label>
+                <label for="adminenvironmentprofilesview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.timeout_seconds') }}</label>
                 <input id="adminenvironmentprofilesview-field-4"
                   v-model.number="formData.timeout_seconds"
                   type="number"
@@ -79,7 +79,7 @@
               </div>
               <div class="grid grid-cols-2 gap-4">
                 <div>
-                  <label for="adminenvironmentprofilesview-field-3" class="mb-1 block text-sm font-medium">Memory Limit (MB)</label>
+                  <label for="adminenvironmentprofilesview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.memory_limit_mb') }}</label>
                   <input id="adminenvironmentprofilesview-field-3"
                     v-model.number="formData.memory_mb"
                     type="number"
@@ -102,7 +102,7 @@
               </div>
               <div>
                 <div class="mb-1 flex items-center justify-between">
-                  <label for="adminenvironmentprofilesview-field-1" class="block text-sm font-medium">Environment Variables</label>
+                  <label for="adminenvironmentprofilesview-field-1" class="block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.environment_variables') }}</label>
                   <button
                     type="button"
                     class="text-xs text-primary hover:underline"
@@ -144,7 +144,7 @@
                     </button>
                   </div>
                 </div>
-                <p v-if="formData.env_vars.length === 0" class="text-xs text-muted-foreground mt-1">No environment variables set</p>
+                <p v-if="formData.env_vars.length === 0" class="text-xs text-muted-foreground mt-1">{{ $t('views.AdminEnvironmentProfilesView.no_environment_variables_set') }}</p>
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div class="flex items-center gap-2">
@@ -170,7 +170,7 @@
         </div>
 
         <div v-if="profiles.length === 0" class="card p-8 text-center">
-          <p class="text-lg font-medium">No environment profiles configured</p>
+          <p class="text-lg font-medium">{{ $t('views.AdminEnvironmentProfilesView.no_environment_profiles_configured') }}</p>
           <p class="mt-1 text-sm text-muted-foreground">
             Create a profile to define sandbox environments for code execution.
           </p>
@@ -180,12 +180,12 @@
         <table class="w-full text-left text-sm">
           <thead>
             <tr>
-              <th class="table-header">Name</th>
-              <th class="table-header">Provider</th>
-              <th class="table-header table-cell-numeric">Timeout</th>
-              <th class="table-header">Status</th>
-              <th class="table-header">Created</th>
-              <th class="table-header table-cell-numeric">Actions</th>
+              <th class="table-header">{{ $t('views.AdminEnvironmentProfilesView.name') }}</th>
+              <th class="table-header">{{ $t('views.AdminEnvironmentProfilesView.provider') }}</th>
+              <th class="table-header table-cell-numeric">{{ $t('views.AdminEnvironmentProfilesView.timeout') }}</th>
+              <th class="table-header capitalize">{{ $t('views.AdminEnvironmentProfilesView.status') }}</th>
+              <th class="table-header">{{ $t('views.AdminEnvironmentProfilesView.created') }}</th>
+              <th class="table-header table-cell-numeric">{{ $t('views.AdminEnvironmentProfilesView.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -256,7 +256,7 @@
 
         <div v-if="deleteConfirmProfileId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
           <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
-          <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
+          <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminEnvironmentProfilesView.this_action_cannot_be_undone') }}</p>
           <div class="mt-3 flex items-center gap-2">
           <Button
             :disabled="deleting"

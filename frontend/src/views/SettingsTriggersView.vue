@@ -32,7 +32,7 @@
             <tr>
               <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.pipeline') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.type') }}</th>
-              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.status') }}</th>
+              <th class="px-4 py-3 capitalize">{{ $t('views.SettingsTriggersView.status') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.last_fired') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.next_fire') }}</th>
               <th class="px-4 py-3 text-right">{{ $t('views.SettingsTriggersView.actions') }}</th>
