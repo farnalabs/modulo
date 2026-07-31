@@ -6,10 +6,12 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import FastAPI
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.models.error_notification_rule import ErrorNotificationRuleCreate, ErrorNotificationRuleUpdate
+from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.error_tracking.alert_dispatcher import _format_slack_payload
 from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
@@ -45,6 +47,44 @@ def _make_session_with_rules(rules: list[MagicMock]) -> AsyncMock:
         return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=rules))))
     )
     return session
+
+
+def _make_rules_app_with_count(rule_count: int) -> FastAPI:
+    """Build the notification-rules router against a session reporting *rule_count* existing rules."""
+    from modulo.api.routes.error_notification_rules import router as rules_router
+
+    app = FastAPI()
+    app.include_router(rules_router)
+
+    session = MagicMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__.return_value = session
+    begin_cm.__aexit__.return_value = None
+    session.begin.return_value = begin_cm
+    session.info = {}
+    count_result = MagicMock()
+    count_result.scalar_one.return_value = rule_count
+    session.execute = AsyncMock(return_value=count_result)
+    session.flush = AsyncMock()
+    session.add = MagicMock()
+
+    async def _override_db() -> MagicMock:
+        return session
+
+    async def _override_user() -> AuthenticatedPrincipal:
+        return AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_ORG_ID,
+            account_id=uuid.uuid4(),
+            org_role="admin",
+        )
+
+    from modulo.api.dependencies import get_db_session
+    from modulo.auth.dependencies import get_current_user
+
+    app.dependency_overrides[get_current_user] = _override_user
+    app.dependency_overrides[get_db_session] = _override_db
+    return app
 
 
 # =========================================================================
@@ -281,10 +321,25 @@ class TestCRUDRules:
         assert body.name == "Renamed"
         assert body.enabled is None
 
-    async def test_max_rules_limit(self) -> None:
-        max_rules = 10
-        rules = [_make_rule() for _ in range(max_rules)]
-        assert len(rules) == 10
+    def test_create_rule_rejects_when_at_max(self) -> None:
+        from fastapi.testclient import TestClient
+
+        client = TestClient(_make_rules_app_with_count(10))
+        resp = client.post(
+            "/api/v1/errors/notification-rules",
+            json={"name": "Rule 11", "condition_level": "error", "action_type": "in_app"},
+        )
+        assert resp.status_code == 422
+
+    def test_create_rule_allows_below_max(self) -> None:
+        from fastapi.testclient import TestClient
+
+        client = TestClient(_make_rules_app_with_count(9))
+        resp = client.post(
+            "/api/v1/errors/notification-rules",
+            json={"name": "Rule 10", "condition_level": "error", "action_type": "in_app"},
+        )
+        assert resp.status_code == 201
 
 
 # =========================================================================

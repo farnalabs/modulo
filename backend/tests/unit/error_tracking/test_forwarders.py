@@ -13,6 +13,7 @@ from modulo.core.error_tracking.forwarders import (
     PagerDutyErrorForwarder,
     RollbarErrorForwarder,
     SentryErrorForwarder,
+    get_default_registry,
     get_forwarder,
 )
 
@@ -129,6 +130,7 @@ class TestSentryErrorForwarder:
                     {"dsn": "https://key@sentry.io/123"},
                 )
             assert result is True
+            assert sentry_sdk.capture_message.call_args.kwargs["level"] == expected
 
     async def test_exception_does_not_crash(self) -> None:
         fwd = SentryErrorForwarder()
@@ -466,13 +468,9 @@ class TestForwarderRegistry:
         assert fwd is None
 
     def test_list_types(self) -> None:
-        types = (
-            get_forwarder.list_types()
-            if hasattr(get_forwarder, "list_types")
-            else list({"sentry", "datadog", "pagerduty", "rollbar", "opsgenie", "loki"})
-        )
-        assert "sentry" in types
-        assert "datadog" in types
+        types = get_default_registry().list_types()
+        for expected in ("sentry", "datadog", "pagerduty", "rollbar", "opsgenie", "loki"):
+            assert expected in types
 
     def test_registry_custom_registration(self) -> None:
         registry = ForwarderRegistry()
@@ -512,18 +510,27 @@ class TestForwarderFailureIsolation:
             assert result is False
 
     async def test_dispatch_forwarders_swallows_all_exceptions(self) -> None:
-        from modulo.core.error_tracking import _dispatch_forwarders, configure_forwarders
+        from modulo.core.error_tracking import _DEFAULT_FORWARDER_CONFIGS, _dispatch_forwarders, configure_forwarders
 
-        configure_forwarders(
-            {
-                "sentry": {"dsn": "dummy"},
-            }
-        )
+        original_configs = _DEFAULT_FORWARDER_CONFIGS
+        try:
+            configure_forwarders(
+                {
+                    "sentry": {"dsn": "dummy"},
+                }
+            )
 
-        result = await _dispatch_forwarders(
-            _ORG_ID,
-            _make_error_group(),
-            _make_error_event(),
-            {},
-        )
+            with patch("modulo.core.error_tracking.forwarders.sentry.httpx.AsyncClient") as mock_client:
+                instance = AsyncMock()
+                instance.post = AsyncMock(side_effect=Exception("network down"))
+                mock_client.return_value.__aenter__.return_value = instance
+
+                result = await _dispatch_forwarders(
+                    _ORG_ID,
+                    _make_error_group(),
+                    _make_error_event(),
+                    {},
+                )
+        finally:
+            configure_forwarders(original_configs)
         assert result is None
