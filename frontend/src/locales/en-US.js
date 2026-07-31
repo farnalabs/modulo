@@ -32,6 +32,7 @@ export default {
       "pipeline_templates": "Pipeline Templates",
       "search_primitives": "Search modules...",
       "no_primitives_found": "No modules found",
+      "all_types": "All types",
       "preview_integrations_count": "{count} preview integration | {count} preview integrations",
       "preview_badge": "Preview",
       "native_library": "Native Library",
@@ -41,6 +42,7 @@ export default {
       "modulo_badge": "Modulo",
       "community_badge": "Community — not verified",
       "type_workflows": "Workflows",
+      "type_pipeline_templates": "Pipeline Templates",
       "type_agents": "Agents",
       "type_schemas": "Schemas",
       "type_integrations": "Integrations",
@@ -863,7 +865,8 @@ export default {
       "primitivename_pipeline_from_template": "Pipeline (from template)",
       "choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi": "Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.",
       "owner": "Owner",
-      "pipeline_created_from_library_template": "Pipeline created from library template"
+      "pipeline_created_from_library_template": "Pipeline created from library template",
+      "back_to_library": "Back to Library"
     },
     "SettingsMcpView": {
       "mcp_server_is_not_available_on_your_current_plan": "MCP server is not available on your current plan."
