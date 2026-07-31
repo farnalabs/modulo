@@ -150,7 +150,9 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] `DELETE /api/v1/errors/notification-rules/{rule_id}` — 204 No Content
 - [x] Webhook URL validated to start with http:// or https://
 - [ ] No user-facing notification rules UI exists — API-only
-- [ ] `condition_window_seconds` stored on model but never evaluated in alert logic
+- [x] `condition_window_seconds` evaluated in alert logic — rule counts only events for the
+  fingerprint created within the window; `0`/`None` falls back to the group lifetime count
+  (`AlertEngine._count_events_in_window`, 6 unit tests + 3 BDD scenarios)
 
 ### Alert Engine & Dispatch
 
@@ -186,8 +188,8 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   scenarios (backend error capture, API ingest, dedup, invalid input, batch)
 - [x] `backend/tests/bdd/features/error_tracking/error_dashboard.feature` — 5 real
   scenarios (list, filter, detail, resolve, 404)
-- [x] `backend/tests/bdd/features/error_tracking/error_notifications.feature` — 4 real
-  scenarios (alert fires, cooldown, create rule, max rules)
+- [x] `backend/tests/bdd/features/error_tracking/error_notifications.feature` — 7 real
+  scenarios (alert fires, cooldown, condition window x3, create rule, max rules)
 - [x] `backend/tests/bdd/features/error_tracking/error_external_integrations.feature` — 6 real
   scenarios (list, configure Sentry, test connection, community gating,
   enable/disable toggle, unknown type 404)
@@ -234,8 +236,13 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 
 - **Email dispatch placeholder:** `_dispatch_email()` only logs intent — no actual
   email integration
-- **`condition_window_seconds` unused:** Stored on model and Pydantic schema but
-  alert evaluation never applies a time-window filter
+- ~~**`condition_window_seconds` unused:** alert evaluation never applied a time-window
+  filter — **RESOLVED 2026-07-31**: `AlertEngine.evaluate()` now counts events per
+  fingerprint within the window via `_count_events_in_window()` and compares that
+  against `condition_min_count`; `0`/`None` falls back to the lifetime group count.
+  Window-count query failures skip the rule (logged, fail-safe). 6 unit tests
+  (`test_error_alerting.py::TestConditionWindow`) + 3 BDD scenarios
+  (`error_notifications.feature`).~~
 - **`modulo_error_groups_active` gauge never updated:** Metric function exists but
   is never called
 - **`ErrorEvent.resolved_at` never set when group resolved:** The column exists but no code populates
@@ -253,6 +260,24 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - **Public ingest daily cap memory leak (fixed 2026-07-07):** `_public_daily_event_count` entries for stale IPs are now pruned by `_prune_stale_ip_counters()`. See QA History 2026-07-07.
 
 ## QA History
+
+### 2026-07-31 — improve-architecture (condition window gap→implemented)
+
+- **Fixed feature gap:** `condition_window_seconds` on `ErrorNotificationRule` was stored,
+  validated, and exposed by the API but never evaluated. Alert rules with
+  `condition_min_count=N` fired off the group *lifetime* count, so "N events within the
+  window" was silently ignored. Implemented `AlertEngine._count_events_in_window()`
+  (`SELECT count(*) FROM error_events WHERE organisation_id = :org AND fingerprint = :fp
+  AND created_at >= now() - window`). Rules with `window > 0` now compare the windowed
+  count against `condition_min_count`; `0`/`None` falls back to the lifetime count.
+- **Fail-safe semantics:** a window-count query failure logs `alert.window_count_failed`
+  and skips only that rule — it cannot block the rest of the evaluation loop or the ingest.
+- **Test coverage:** added 6 unit tests (`TestConditionWindow` in
+  `test_error_alerting.py`): window threshold met/below, window=0 lifetime fallback,
+  query-failure rule skip, per-rule independence, org+fingerprint scoping of the query.
+  Added 3 BDD scenarios + step definitions to `error_notifications.feature`.
+  222/222 error_tracking unit tests pass; 3/3 new BDD scenarios pass (7 pre-existing
+  ingestion/dashboard BDD failures unchanged). Updated product map checkboxes and known gaps.
 
 ### 2026-07-07 — Cross-cutting QA (improve-architecture index 297)
 - **CRITICAL**: Added `except Exception → 500` catches with `_log.exception` to all 13 DB-accessing error-tracking route handlers across errors.py (6 routes), error_notification_rules.py (4 routes), and error_forwarder_config.py (3 routes). Python-level errors (TypeError, KeyError, ValueError) previously propagated as opaque 500 to CatchAllMiddleware.
