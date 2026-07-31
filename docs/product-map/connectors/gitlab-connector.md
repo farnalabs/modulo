@@ -193,4 +193,3 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 **Product map fixed:** Added `# noqa: S311` to `_jitter()` — same suppression as GitHub connector.
 
 **Status:** partial (6 known gaps unchanged).
-

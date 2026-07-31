@@ -129,11 +129,13 @@ async def list_teams_endpoint(
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             result = await list_teams(session, org_id=current_user.organisation_id, page=page, page_size=page_size)
     except IntegrityError as exc:
+        _log.exception("teams.list_teams_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.list_teams_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -195,11 +197,13 @@ async def create_team_endpoint(
                 description=req.description,
             )
     except IntegrityError:
+        _log.exception("teams.create_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A team with this name already exists in your organisation",
         ) from None
     except ProgrammingError:
+        _log.exception("teams.create_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -234,11 +238,13 @@ async def create_team_endpoint(
                 payload_json={"team_id": str(team.id), "name": team.name},
             )
     except IntegrityError as exc:
+        _log.exception("teams.create_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.create_team_endpoint")
         _log.warning(
             "create_team audit event ProgrammingError — team was created",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
@@ -271,11 +277,13 @@ async def get_team_endpoint(
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             team = await get_team(session, team_id)
     except IntegrityError as exc:
+        _log.exception("teams.get_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.get_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -338,11 +346,13 @@ async def update_team_endpoint(
 
             team = await update_team(session, team_id, updates)
     except IntegrityError as exc:
+        _log.exception("teams.update_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.update_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -384,11 +394,13 @@ async def update_team_endpoint(
                 payload_json={"team_id": str(team_id), "updates": updates},
             )
     except IntegrityError as exc:
+        _log.exception("teams.update_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.update_team_endpoint")
         _log.warning(
             "update_team audit event ProgrammingError — team was updated",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
@@ -457,11 +469,13 @@ async def delete_team_endpoint(
 
             deleted = await delete_team(session, team_id)
     except IntegrityError as exc:
+        _log.exception("teams.delete_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.delete_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -503,11 +517,13 @@ async def delete_team_endpoint(
                 payload_json={"team_id": str(team_id)},
             )
     except IntegrityError as exc:
+        _log.exception("teams.delete_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.delete_team_endpoint")
         _log.warning(
             "delete_team audit event ProgrammingError — team was deleted",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
@@ -537,11 +553,13 @@ async def list_members_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
             result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
     except IntegrityError as exc:
+        _log.exception("teams.list_members_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.list_members_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -643,11 +661,13 @@ async def add_member_endpoint(
                 role=req.role,
             )
     except IntegrityError as exc:
+        _log.exception("teams.add_member_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.add_member_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -710,11 +730,13 @@ async def remove_member_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
             await remove_team_member(session, membership_id)
     except IntegrityError as exc:
+        _log.exception("teams.remove_member_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.remove_member_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -788,11 +810,13 @@ async def change_member_role_endpoint(
             if membership is None or membership.team_id != team_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     except IntegrityError as exc:
+        _log.exception("teams.change_member_role_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
+        _log.exception("teams.change_member_role_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",

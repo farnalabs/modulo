@@ -53,6 +53,25 @@ echo "=== Running DB migrations ==="
 .venv/bin/alembic upgrade heads && echo "  Migrations complete" || echo "  WARNING: migrations failed (will retry in lifespan)"
 
 
+echo "=== Starting Celery beat ==="
+rm -f /tmp/celery-beat.pid /tmp/celery-beat.heartbeat
+BEAT_BACKOFF=1
+start_beat() {
+    while true; do
+        BEAT_START=$(date +%s)
+        .venv/bin/celery -A modulo.cli_celery beat --loglevel=info --pidfile=/tmp/celery-beat.pid
+        BEAT_END=$(date +%s)
+        if [ $((BEAT_END - BEAT_START)) -gt 60 ]; then
+            BEAT_BACKOFF=1
+        else
+            BEAT_BACKOFF=$(( BEAT_BACKOFF * 2 > 30 ? 30 : BEAT_BACKOFF * 2 ))
+        fi
+        sleep $BEAT_BACKOFF
+    done
+}
+start_beat &
+BEAT_PID=$!
+
 echo "=== Starting Celery worker (pipeline execution, concurrency=2) ==="
 .venv/bin/celery -A modulo.cli_celery worker --loglevel=info --concurrency=2 --pidfile=/tmp/celery-worker.pid &
 CELERY_WORKER_PID=$!
@@ -60,9 +79,13 @@ CELERY_WORKER_PID=$!
 echo "=== Admin user seeding handled by backend lifespan startup ==="
 
 echo "=== Starting uvicorn ==="
-exec .venv/bin/uvicorn modulo.api.main:app \
+.venv/bin/uvicorn modulo.api.main:app \
     --host 0.0.0.0 --port ${PORT:-8000} \
     --proxy-headers \
     --timeout-keep-alive 30 \
     --timeout-graceful-shutdown 30 \
-    --limit-concurrency 100
+    --limit-concurrency 100 &
+UVICORN_PID=$!
+
+trap 'kill 0; wait' SIGTERM SIGINT
+wait

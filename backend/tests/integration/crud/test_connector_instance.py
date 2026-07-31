@@ -24,7 +24,7 @@ def _ci_kwargs(test_org: uuid.UUID, test_user: uuid.UUID, *, suffix: str = "") -
         "org_id": test_org,
         "name": f"TestConnector{suffix}",
         "connector_type_id": "filesystem",
-        "owner_id": test_user,
+        "account_id": test_user,
         "credentials_ciphertext": b"fake-cipher",
     }
 
