@@ -16,6 +16,7 @@ Org context validated per-event for streaming (SSE) connections.
 import contextvars
 import json
 import logging
+import time
 import traceback as _traceback
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -41,6 +42,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.auth.api_key import ApiKeyInvalidError, validate_api_key
+from modulo.auth.dependencies import resolve_role_from_membership
 from modulo.auth.oauth import (
     check_oauth_token_family_valid,
     decode_oauth_access_token,
@@ -159,12 +161,52 @@ async def _session(org_id: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
 # Per-event auth validation
 # ---------------------------------------------------------------------------
 
+# TTL-bounded live-role cache for SSE per-event revalidation (ADR 017): at most
+# one org_memberships read per connection per window, so a demoted admin loses
+# scope mid-stream without a DB round-trip on every event.
+_LIVE_ROLE_TTL_SECONDS = 15.0
+_MAX_LIVE_ROLE_CACHE = 1024
+_live_role_cache: dict[str, tuple[float, str | None]] = {}
+
+
+async def _revalidate_live_role(token: str, account_id: uuid.UUID, org_id: uuid.UUID) -> str | None:
+    """TTL-bounded live-role re-read for a JWT principal (ADR 017).
+
+    Returns the live org role, or None if the membership is missing/deactivated
+    (removed user) or the read failed — the caller then denies (fail closed,
+    matching the ``validate_current_auth`` posture). The cache is keyed by the
+    connection's auth token, so it acts as a per-connection timestamp cache.
+    """
+    now = time.monotonic()
+    cached = _live_role_cache.get(token)
+    if cached is not None and now - cached[0] < _LIVE_ROLE_TTL_SECONDS:
+        return cached[1]
+
+    live_role: str | None = None
+    try:
+        async with _session(org_id) as s:
+            live_role = await resolve_role_from_membership(
+                s,
+                str(account_id),
+                str(org_id),
+            )
+    except SQLAlchemyError:
+        _log.warning("permission.live_role_read_failed", exc_info=True)
+        live_role = None
+
+    if len(_live_role_cache) >= _MAX_LIVE_ROLE_CACHE:
+        _live_role_cache.clear()
+    _live_role_cache[token] = (now, live_role)
+    return live_role
+
 
 async def validate_current_auth() -> bool:
     """Re-validate the current auth credential for per-event SSE enforcement.
 
     Checks the stored credential against the DB/issuer to detect mid-session
-    revocation, expiry, or OAuth token family blacklisting.
+    revocation, expiry, or OAuth token family blacklisting. For JWT principals
+    the LIVE org role is re-resolved (TTL-bounded) and ``_ctx_role`` is re-set
+    so a demoted admin loses scope mid-stream (ADR 017).
     Returns True if the credential is still valid, False otherwise.
 
     Fail closed: the credential and org come exclusively from the
@@ -197,9 +239,19 @@ async def validate_current_auth() -> bool:
                 try:
                     from modulo.auth.jwt import decode_principal
 
-                    decode_principal(token, settings.secret_key)
+                    principal = decode_principal(token, settings.secret_key)
                 except JWTError:
                     return False
+                if principal.organisation_id is None:
+                    return False
+                live_role = await _revalidate_live_role(
+                    token,
+                    principal.account_id,
+                    principal.organisation_id,
+                )
+                if live_role is None:
+                    return False
+                _ctx_role.set(live_role)
                 return True
             async with _session(claims.organisation_id) as s:
                 return await check_oauth_token_family_valid(
@@ -331,8 +383,37 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     status_code=403,
                     media_type="application/json",
                 )
+            # ADR 017: no claim-less default-up. A None role claim fails closed,
+            # and the LIVE role is re-read from org_memberships so a demoted or
+            # removed member loses access on the very next request.
+            if principal.org_role is None:
+                return Response(
+                    '{"error":"forbidden","detail":"No org role claim on token"}',
+                    status_code=403,
+                    media_type="application/json",
+                )
+            try:
+                async with _session(principal.organisation_id) as s:
+                    live_role = await resolve_role_from_membership(
+                        s,
+                        str(principal.account_id),
+                        str(principal.organisation_id),
+                    )
+            except SQLAlchemyError:
+                _log.warning("permission.live_role_read_failed", exc_info=True)
+                return Response(
+                    '{"error":"unauthorized","detail":"Role validation failed"}',
+                    status_code=401,
+                    media_type="application/json",
+                )
+            if live_role is None:
+                return Response(
+                    '{"error":"forbidden","detail":"Organisation membership required"}',
+                    status_code=403,
+                    media_type="application/json",
+                )
             _ctx_org_id.set(principal.organisation_id)
-            _ctx_role.set(principal.org_role or "runner")
+            _ctx_role.set(live_role)
             _ctx_key_id.set(uuid.UUID(int=0))
             _ctx_user_id.set(principal.account_id)
             _ctx_auth_token.set(token)
@@ -2705,7 +2786,7 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
     for n in nodes:
         safe = {k: v for k, v in n.items() if k not in ("agent_prompt", "agent_command")}
         result += json.dumps(safe, indent=2, default=str)[:2000] + "\n"
-        ap = n.get("agent_prompt", "") or ""
+        ap = n.get("agent_prompt") or ""
         if ap:
             result += f"    agent_prompt: {ap[:200].replace(chr(10), ' ')}...\n"
         ac = n.get("agent_command", "") or ""

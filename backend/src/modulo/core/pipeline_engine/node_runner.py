@@ -638,7 +638,7 @@ def make_sandbox_agent_fn(
 
     node_id: str = str(node_def["id"])
     agent_prompt_template: str = node_def.get("agent_prompt") or ""
-    template_id: str = node_def.get("template_id", "base")
+    template_id: str = node_def.get("template_id", "opencode")
     env_vars_extra: dict[str, str] = _resolve_env_vars(node_def.get("env_vars") or {})
     commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
     agent_commands_raw: list[str] | None = node_def.get("agent_commands")
@@ -650,7 +650,7 @@ def make_sandbox_agent_fn(
     else:
         agent_command = "claude --output-json /home/user/prompt.md"
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
-    sandbox_timeout: int = node_def.get("timeout_seconds", 600)
+    sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
     context_files: dict[str, str] = node_def.get("context_files") or {}
 
     from e2b import AsyncSandbox  # type: ignore[import-untyped]

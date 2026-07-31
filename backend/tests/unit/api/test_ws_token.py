@@ -190,7 +190,11 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     )
 
     try:
-        yield TestClient(app)
+        with patch(
+            "modulo.api.routes.auth.resolve_role_from_membership",
+            new=AsyncMock(return_value="admin"),
+        ):
+            yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
 
