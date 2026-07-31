@@ -1,6 +1,6 @@
 # ADR 017 — Celery to SAQ Migration
 
-> Full migration plan: `C:\Users\dunca\AppData\Local\Temp\celery-to-saq-plan-v10.md` (referenced in the delivery-plan tasks `task-saq-migration-pr-a/b/c`).
+> Full migration plan: [`docs/adr/plans/celery-to-saq-plan-v10.md`](plans/celery-to-saq-plan-v10.md) (referenced in the delivery-plan tasks `task-saq-migration-pr-a/b/c`).
 
 **Date**: 2026-07-31
 **Status**: Accepted
@@ -41,7 +41,7 @@ Replace Celery with **SAQ 0.26.4** as the task queue substrate, pinned in `pypro
 
 ### Delivery sequencing — three PRs
 
-- **PR A**: foundation + spike (hard gate) + tests-first. The SPIKE runs a throwaway worker against an identically-configured dev Upstash instance (never production) and settles the remaining empirical unknowns: Upstash maxmemory-policy, ttl semantics, retry timing, E2B transient-retry distribution. Raw spike evidence is committed with this ADR.
+- **PR A**: foundation + spike (hard gate) + tests-first. The SPIKE runs a throwaway worker against an identically-configured dev Upstash instance (never production) and settles the remaining empirical unknowns: Upstash maxmemory-policy, ttl semantics, retry timing, E2B transient-retry distribution. Raw spike evidence will be committed with PR A.
 - **PR B**: routing (`dispatch_run` single gating point) + the 3 columns + `saq` error enum + shadow mode + staging smoke. SAQ runs in shadow on production (`SAQ_ENABLED=false`): `execute_run` keeps routing to Celery (`dispatcher=NULL`), `resume_run` routes to SAQ (`dispatcher='saq'`). The staging smoke flips `SAQ_ENABLED=true` on dedicated Upstash + Postgres with queue prefixes `staging-runs`/`staging-system` so the acceptance (`dispatcher='saq'` + `claim_count==1`) is reachable.
 - **PR C**: cutover + Celery removal, with a **48–72h hold**. Sequenced rollout: deploy the image with BOTH Celery+SAQ and `SAQ_ENABLED=true` on all machines first, verify SAQ green, then deploy the Celery-removal image — never a scheduler-less window.
 
@@ -74,7 +74,7 @@ Replace Celery with **SAQ 0.26.4** as the task queue substrate, pinned in `pypro
 
 ## References
 
-- Full plan v10: `C:\Users\dunca\AppData\Local\Temp\celery-to-saq-plan-v10.md`
+- Full plan v10: [`docs/adr/plans/celery-to-saq-plan-v10.md`](plans/celery-to-saq-plan-v10.md)
 - SAQ 0.26.4 source semantics verified during plan review (retry off-by-one, sweeper, cron, dedupe, web bind, CLI invocation)
 - Delivery-plan tasks: `task-saq-migration-pr-a`, `task-saq-migration-pr-b`, `task-saq-migration-pr-c`
 - ADR 012: Managed Postgres Migration — staging dedicated database (`modulo-staging-db`)
