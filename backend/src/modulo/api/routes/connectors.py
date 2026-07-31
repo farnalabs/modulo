@@ -151,16 +151,19 @@ async def list_connectors_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_connector_instances(session, page=page, page_size=page_size, cursor=cursor)
     except IntegrityError:
+        logger.exception("connectors.list_connectors_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("connectors.list_connectors_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Connectors are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("connectors.list_connectors_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing connectors.",
@@ -229,6 +232,7 @@ async def create_connector_endpoint(
                 tier=req.tier,
             )
     except IntegrityError:
+        logger.exception("connectors.create_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -237,11 +241,13 @@ async def create_connector_endpoint(
             ),
         ) from None
     except ProgrammingError:
+        logger.exception("connectors.create_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Connectors are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("connectors.create_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating connector.",
@@ -270,16 +276,19 @@ async def get_connector_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             ci = await get_connector_instance(session, connector_id)
     except IntegrityError:
+        logger.exception("connectors.get_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("connectors.get_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Connectors are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("connectors.get_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching connector.",
@@ -337,6 +346,7 @@ async def update_connector_endpoint(
                     )
             ci = await update_connector_instance(session, connector_id, updates)
     except IntegrityError:
+        logger.exception("connectors.update_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -345,11 +355,13 @@ async def update_connector_endpoint(
             ),
         ) from None
     except ProgrammingError:
+        logger.exception("connectors.update_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Connectors are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("connectors.update_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating connector.",
@@ -380,16 +392,19 @@ async def delete_connector_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_connector_instance(session, connector_id)
     except IntegrityError:
+        logger.exception("connectors.delete_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        logger.exception("connectors.delete_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Connectors are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
+        logger.exception("connectors.delete_connector_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting connector.",

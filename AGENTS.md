@@ -1061,9 +1061,8 @@ After creating a PR via \gh pr create\, the Conductor MUST poll the PR checks un
 
 `powershell
 gh pr checks <PR-NUMBER> --watch
-` 
+`
 
 This waits for all checks to finish and returns the result. If checks fail, investigate and fix before moving on. A PR with failing checks that gets merged will break main and block all subsequent PRs.
 
 This applies to ALL PRs, not just complex ones. Even a single-file rename can break CI (encoding issues, stale references, missing internationalisation keys). Always wait for green before calling it done.
-

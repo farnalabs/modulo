@@ -73,6 +73,7 @@ async def list_housekeeping(
             await set_rls_org(session, principal.organisation_id)
             results = await scan_all(session, principal.organisation_id)
     except ProgrammingError:
+        _log.exception("admin_housekeeping.list_housekeeping")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -151,11 +152,13 @@ async def perform_cleanup(
                                 await session.delete(obj)
                                 deleted_count += 1
                     except IntegrityError:
+                        _log.exception("admin_housekeeping.perform_cleanup")
                         _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
                         errors.append(
                             {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}
                         )
     except ProgrammingError:
+        _log.exception("admin_housekeeping.perform_cleanup")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",

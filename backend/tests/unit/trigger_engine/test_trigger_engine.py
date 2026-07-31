@@ -94,10 +94,16 @@ def _make_session(
 
     call_count = 0
 
+    # Pipeline lookup for rate-limit config (call 6+). No rate limit by default.
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value.rate_limit_config = None
+
     async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_count
         call_count += 1
-        # Order: 1=advisory lock, 2=trigger lookup, 3=dedup SELECT, 4=dedup DELETE, 5=count active runs
+        # Order: 1=advisory lock, 2=trigger lookup, 3=dedup SELECT, 4=dedup DELETE, 5=count active runs,
+        #        6+=pipeline lookup (rate limit) / other
         if call_count == 1:
             return lock_result
         if call_count == 2:
@@ -108,7 +114,7 @@ def _make_session(
             return generic_result
         if call_count == 5:
             return count_result
-        return count_result
+        return pipeline_result
 
     session.execute = _execute
     session.add = MagicMock()
@@ -419,14 +425,6 @@ async def test_handle_webhook_applies_payload_mapping() -> None:
         ({"hmac_secret": "secret"}, {}, "sha256=wrong", lambda: str(int(time.time())), HmacValidationError, None),
         ({"hmac_secret": "secret"}, {}, None, lambda: str(int(time.time())), HmacValidationError, None),
         ({}, {"dedup_exists": True}, None, lambda: str(int(time.time())), DuplicateWebhookError, None),
-        (
-            {"max_concurrent_runs": 2},
-            {"active_run_count": 2},
-            None,
-            lambda: str(int(time.time())),
-            ConcurrentRunLimitError,
-            lambda e: e.value.limit == 2,
-        ),
     ],
 )
 async def test_handle_webhook_validation_raises(
@@ -475,8 +473,8 @@ async def test_handle_webhook_validation_raises(
             {"active_run_count": 1},
             None,
             lambda: str(int(time.time())),
-            ConcurrentRunLimitError,
-            "concurrency_limit_reached",
+            None,  # no longer raises - run is queued
+            "concurrency_limit_reached_queued",
         ),
     ],
 )
@@ -486,7 +484,19 @@ async def test_handle_webhook_logs_trigger_event(
     trigger = _make_trigger(**trigger_overrides)
     session = _make_session(trigger=trigger, **session_overrides)
     mod_ts = mod_ts_factory() if callable(mod_ts_factory) else mod_ts_factory
-    with pytest.raises(expected_exc):
+    if expected_exc is not None:
+        with pytest.raises(expected_exc):
+            await TriggerEngine().handle_webhook(
+                session,
+                trigger_id=trigger.id,
+                org_id=_ORG,
+                raw_body=_RAW_BODY,
+                raw_payload=_RAW_PAYLOAD,
+                hmac_signature=hmac_sig,
+                modulo_timestamp=mod_ts,
+                snapshot_id=_SNAP,
+            )
+    else:
         await TriggerEngine().handle_webhook(
             session,
             trigger_id=trigger.id,

@@ -110,5 +110,3 @@ const iconComponent = computed(() => {
   return icon;
 });
 </script>
-
-

@@ -47,4 +47,3 @@ Feature: Cross-Team Isolation
     And user "alice" is a member of team "design"
     When user "alice" requests the pipeline list
     Then the response total count does not include team-private pipelines
-
