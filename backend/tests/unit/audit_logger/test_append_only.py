@@ -19,6 +19,29 @@ from modulo.core.audit_logger.append_only import register_append_only_guard
 from modulo.db.models.audit_event import AuditEvent
 
 
+def _capture_guard_listeners(monkeypatch) -> dict[tuple, object]:
+    """Re-register the guard while recording the exact listener closures.
+
+    Returns ``{(model_class, mutation): listener_fn}`` for every listener that
+    ``register_append_only_guard()`` wires up, so tests can assert the real
+    registered closures are present and block mutations.
+    """
+    from modulo.core.audit_logger import append_only
+
+    captured: dict[tuple, object] = {}
+    real_make_blocker = append_only._make_blocker
+
+    def _recording_blocker(model_class, table_name, mutation):
+        fn = real_make_blocker(model_class, table_name, mutation)
+        captured[(model_class, mutation)] = fn
+        return fn
+
+    monkeypatch.setattr(append_only, "_make_blocker", _recording_blocker)
+    monkeypatch.setattr(append_only, "_guard_registered", False)
+    register_append_only_guard()
+    return captured
+
+
 class TestAppendOnlyGuardRegistration:
     """Tests that the guard registers without errors."""
 
@@ -27,12 +50,17 @@ class TestAppendOnlyGuardRegistration:
         register_append_only_guard()
         register_append_only_guard()
 
-    def test_listeners_are_registered(self):
-        """Verify event listeners are registered on AuditEvent."""
-        register_append_only_guard()
-        # SQLAlchemy's event.contains checks if a listener is registered
-        # We check for our guard by verifying registration doesn't fail
-        assert True  # register_idempotent already proves no crash
+    def test_listeners_are_registered(self, monkeypatch):
+        """Verify event listeners are actually registered on AuditEvent."""
+        from sqlalchemy import event as sa_event
+
+        from modulo.core.audit_logger import append_only
+
+        captured = _capture_guard_listeners(monkeypatch)
+
+        assert append_only._guard_registered is True
+        assert sa_event.contains(AuditEvent, "before_update", captured[(AuditEvent, "update")])
+        assert sa_event.contains(AuditEvent, "before_delete", captured[(AuditEvent, "delete")])
 
 
 class TestAppendOnlyGuardDoesNotBlockInsert:
@@ -67,32 +95,94 @@ class TestAppendOnlyGuardDoesNotBlockInsert:
 class TestAppendOnlyGuardListenerLogic:
     """Tests the guard's listener logic directly."""
 
-    def test_listener_error_message_format(self):
-        """Verify the error message contains expected text."""
-        register_append_only_guard()
+    def test_update_listener_blocks(self):
+        """The registered before_update listener raises AppendOnlyViolationError."""
+        from modulo.core.audit_logger.append_only import (
+            AppendOnlyViolationError,
+            _make_blocker,
+        )
+
+        blocker = _make_blocker(AuditEvent, "audit_events", "update")
+        event = AuditEvent(organisation_id=uuid.uuid4(), event_type="test")
+        event.id = uuid.uuid4()
+
+        with pytest.raises(AppendOnlyViolationError) as exc_info:
+            blocker(None, None, event)
+
+        assert "append-only" in str(exc_info.value).lower()
+        assert str(event.id) in str(exc_info.value)
+
+    def test_delete_listener_blocks(self):
+        """The registered before_delete listener raises AppendOnlyViolationError."""
+        from modulo.core.audit_logger.append_only import (
+            AppendOnlyViolationError,
+            _make_blocker,
+        )
+
+        blocker = _make_blocker(AuditEvent, "audit_events", "delete")
+        event = AuditEvent(organisation_id=uuid.uuid4(), event_type="test")
+        event.id = uuid.uuid4()
+
+        with pytest.raises(AppendOnlyViolationError) as exc_info:
+            blocker(None, None, event)
+
+        assert "append-only" in str(exc_info.value).lower()
+        assert str(event.id) in str(exc_info.value)
+
+    def test_registered_update_listener_blocks(self, monkeypatch):
+        """The listener actually registered on AuditEvent blocks an update."""
+        from sqlalchemy import event as sa_event
+
+        from modulo.core.audit_logger.append_only import AppendOnlyViolationError
+
+        captured = _capture_guard_listeners(monkeypatch)
 
         event = AuditEvent(organisation_id=uuid.uuid4(), event_type="test")
         event.id = uuid.uuid4()
 
-        # The actual listener raises RuntimeError with "append-only" in message
-        expected_msg = f"AuditEvent {event.id} cannot be updated: audit_events are append-only"
-        with pytest.raises(RuntimeError) as exc_info:
-            raise RuntimeError(expected_msg)
+        registered_fn = captured[(AuditEvent, "update")]
+        assert sa_event.contains(AuditEvent, "before_update", registered_fn)
+        with pytest.raises(AppendOnlyViolationError, match="append-only"):
+            registered_fn(None, None, event)
 
-        assert "append-only" in str(exc_info.value).lower()
+    def test_registered_delete_listener_blocks(self, monkeypatch):
+        """The listener actually registered on AuditEvent blocks a delete."""
+        from sqlalchemy import event as sa_event
 
-    def test_delete_listener_error_message_format(self):
-        """Verify the delete listener error message."""
-        register_append_only_guard()
+        from modulo.core.audit_logger.append_only import AppendOnlyViolationError
+
+        captured = _capture_guard_listeners(monkeypatch)
 
         event = AuditEvent(organisation_id=uuid.uuid4(), event_type="test")
         event.id = uuid.uuid4()
 
-        expected_msg = f"AuditEvent {event.id} cannot be deleted: audit_events are append-only"
-        with pytest.raises(RuntimeError) as exc_info:
-            raise RuntimeError(expected_msg)
+        registered_fn = captured[(AuditEvent, "delete")]
+        assert sa_event.contains(AuditEvent, "before_delete", registered_fn)
+        with pytest.raises(AppendOnlyViolationError, match="append-only"):
+            registered_fn(None, None, event)
 
-        assert "append-only" in str(exc_info.value).lower()
+    def test_error_event_is_guarded(self, monkeypatch):
+        """ErrorEvent is also protected by the append-only guard."""
+        from sqlalchemy import event as sa_event
+
+        from modulo.core.audit_logger.append_only import AppendOnlyViolationError
+        from modulo.db.models.error_event import ErrorEvent
+
+        captured = _capture_guard_listeners(monkeypatch)
+
+        event = ErrorEvent(
+            organisation_id=uuid.uuid4(),
+            fingerprint="f" * 64,
+            level="error",
+            message="boom",
+            source="backend",
+        )
+        event.id = uuid.uuid4()
+
+        registered_fn = captured[(ErrorEvent, "update")]
+        assert sa_event.contains(ErrorEvent, "before_update", registered_fn)
+        with pytest.raises(AppendOnlyViolationError, match="append-only"):
+            registered_fn(None, None, event)
 
 
 class TestAppendOnlyGuardWithMockSession:

@@ -60,6 +60,21 @@ class TestAWSSecretsManagerBackend:
         with pytest.raises(KeyError):
             await backend.get_secret("unknown-key")
 
+    async def test_get_secret_access_denied_raises_permission_error(self, mock_boto3):
+        backend = _make_backend()
+        backend._client.get_secret_value.side_effect = backend._client.exceptions.AccessDeniedException()
+
+        with pytest.raises(PermissionError, match="access denied"):
+            await backend.get_secret("restricted-key")
+
+    async def test_get_secret_no_string_or_binary_raises_key_error(self, mock_boto3):
+        """A response with neither SecretString nor SecretBinary is treated as missing."""
+        backend = _make_backend()
+        backend._client.get_secret_value.return_value = {}
+
+        with pytest.raises(KeyError):
+            await backend.get_secret("empty-key")
+
     async def test_set_secret_creates_new(self, mock_boto3):
         backend = _make_backend()
 
@@ -77,6 +92,25 @@ class TestAWSSecretsManagerBackend:
             SecretId="my-key",
             SecretString="my-value",
         )
+
+    async def test_set_secret_timeout_wraps_as_runtime_error(self, mock_boto3):
+        import asyncio
+
+        backend = _make_backend()
+
+        with (
+            patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
+            pytest.raises(RuntimeError, match="timeout writing secret"),
+        ):
+            await backend.set_secret("my-key", "my-value")
+
+    async def test_set_secret_update_failure_wraps_as_runtime_error(self, mock_boto3):
+        backend = _make_backend()
+        backend._client.create_secret.side_effect = backend._client.exceptions.ResourceExistsException()
+        backend._client.update_secret.side_effect = ConnectionError("connection refused")
+
+        with pytest.raises(RuntimeError, match="unexpected error writing secret"):
+            await backend.set_secret("my-key", "my-value")
 
     async def test_delete_secret_removes_from_aws(self, mock_boto3):
         backend = _make_backend()
@@ -117,6 +151,17 @@ class TestAWSSecretsManagerBackend:
             pytest.raises(RuntimeError, match="timeout reading secret"),
         ):
             await backend.get_secret("my-key")
+
+    async def test_delete_secret_timeout_wraps_as_runtime_error(self, mock_boto3):
+        import asyncio
+
+        backend = _make_backend()
+
+        with (
+            patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
+            pytest.raises(RuntimeError, match="timeout deleting secret"),
+        ):
+            await backend.delete_secret("my-key")
 
     async def test_get_secret_network_error_wraps_as_runtime_error(self, mock_boto3):
         backend = _make_backend()
