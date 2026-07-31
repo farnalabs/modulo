@@ -192,10 +192,13 @@ async def test_health_check_failure_still_attempts_queries() -> None:
     await hub.initialise([ci])
 
     respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(401, text="Unauthorized"))
+    respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[{"full_name": "owner/repo1"}]))
+    respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(httpx.Response(200, json=[]))
 
     samples = await run_scan(hub)
-    resources = {s.resource for s in samples}
-    assert len(resources) > 0
+    assert len(samples) == 2
+    assert {s.resource for s in samples} == {"repos", "pulls"}
+    assert all(s.error is None for s in samples)
 
 
 @respx.mock
@@ -222,7 +225,7 @@ async def test_connector_query_error_returns_error_in_sample() -> None:
 
 
 @respx.mock
-async def test_connector_initialisation_error_returns_no_samples() -> None:
+async def test_empty_repo_list_still_produces_repos_sample() -> None:
     ci = _fake_ci("github", creds={"token": "ghp_test"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -231,9 +234,9 @@ async def test_connector_initialisation_error_returns_no_samples() -> None:
     respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[]))
 
     samples = await run_scan(hub)
-    assert len(samples) >= 1
-    resources = {s.resource for s in samples}
-    assert "repos" in resources
+    assert len(samples) == 1
+    assert samples[0].resource == "repos"
+    assert samples[0].error is None
 
 
 @respx.mock
@@ -248,12 +251,14 @@ async def test_multiple_connectors_scanned_independently() -> None:
     respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(httpx.Response(200, json=[]))
 
     samples = await run_scan(hub)
-    assert len(samples) >= 1
+    assert len(samples) == 4
     assert all(s.error is None for s in samples)
+    assert [s.resource for s in samples].count("repos") == 2
+    assert [s.resource for s in samples].count("pulls") == 2
 
 
 @respx.mock
-async def test_all_health_checks_fail_returns_no_samples() -> None:
+async def test_health_and_query_failures_produce_error_samples() -> None:
     ci = _fake_ci("github", creds={"token": "bad_token"})
     hub = _hub(ci)
     await hub.initialise([ci])
@@ -262,5 +267,6 @@ async def test_all_health_checks_fail_returns_no_samples() -> None:
     respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(401, text="Unauthorized"))
 
     samples = await run_scan(hub)
-    assert len(samples) > 0
-    assert any(s.error for s in samples)
+    assert len(samples) == 1
+    assert samples[0].resource == "repos"
+    assert samples[0].error is not None

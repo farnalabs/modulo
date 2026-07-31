@@ -47,7 +47,7 @@ class TestFilesystemConnector:
             await fs_connector.query(ConnectorQuery(resource="file", filters={"path": "../etc/passwd"}))
 
     async def test_invalid_path_empty(self, fs_connector: FilesystemConnector) -> None:
-        with pytest.raises((ValueError, PathTraversalError)):
+        with pytest.raises(IsADirectoryError):
             await fs_connector.query(ConnectorQuery(resource="file", filters={"path": ""}))
 
     async def test_connector_type_is_filesystem(self, fs_connector: FilesystemConnector) -> None:

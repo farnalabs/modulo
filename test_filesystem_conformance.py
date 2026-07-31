@@ -49,7 +49,7 @@ class TestFilesystemConnector:
         [
             pytest.param("nonexistent.txt", ValueError, "File not found", id="missing"),
             pytest.param("../etc/passwd", PathTraversalError, "traversal", id="traversal"),
-            pytest.param("", (ValueError, PathTraversalError), "empty", id="empty"),
+            pytest.param("", IsADirectoryError, "Is a directory", id="empty"),
         ],
     )
     async def test_invalid_file_query_resolves(
@@ -77,14 +77,11 @@ class TestFilesystemConnector:
         assert "f1.txt" in paths
         assert "f2.txt" in paths
 
-    async def test_write_binary_content(self, fs_connector: FilesystemConnector) -> None:
-        binary_data = b"\x00\x01\x02\xff\xfe"
-        result = await fs_connector.write(
-            ConnectorPayload(resource="file", data={"path": "binary.bin", "content": binary_data})
-        )
-        assert result.get("bytes_written") == 5
-        read_result = await fs_connector.query(_file_query("binary.bin"))
-        assert read_result.records[0]["content"] == binary_data
+    async def test_write_rejects_non_text_content(self, fs_connector: FilesystemConnector) -> None:
+        with pytest.raises(TypeError, match="str"):
+            await fs_connector.write(
+                ConnectorPayload(resource="file", data={"path": "binary.bin", "content": b"\x00\x01\x02\xff\xfe"})
+            )
 
     async def test_overwrite_existing_file(self, fs_connector: FilesystemConnector) -> None:
         await fs_connector.write(

@@ -7,9 +7,10 @@ from modulo.connectors.base import (
     ConnectorQuery,
     ConnectorType,
 )
+
 from tests.connectors._conformance import assert_health_shape
 
-pytestmark = pytest.mark.connector_conformance
+pytestmark = [pytest.mark.connector_conformance, pytest.mark.asyncio(loop_scope="module")]
 
 
 class TestConnectorInitialisation:

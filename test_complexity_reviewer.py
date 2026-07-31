@@ -108,7 +108,6 @@ class TestContextSetterRole:
     async def test_context_setter_with_missing_run_context_defaults(self) -> None:
         @cancellable_node(role="context_setter")
         async def context_setter_node(state: dict[str, Any]) -> dict[str, Any]:
-            state.get("run_context", {})
             return {"run_context": {"model_tier": "tier-1", "estimated_tokens": 0, "complexity_reason": "No context"}}
 
         result = await context_setter_node({"run_context": {"cancelled": False, "input": {}}})

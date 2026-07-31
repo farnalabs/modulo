@@ -21,6 +21,13 @@ def fs_connector(tmp_path: Path):
 register_conformance_connector("filesystem", "fs_connector")
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "connector_conformance: connector contract conformance suite — every ConnectorType must pass",
+    )
+
+
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "connector_type" in metafunc.fixturenames or "conformance_connector" in metafunc.fixturenames:
         types = get_registered_types()
