@@ -14,7 +14,7 @@ code:
 unit-tests:
   - backend/tests/unit/auth/test_api_key.py
   - backend/tests/unit/api/test_api_keys_endpoint.py
-  - backend/tests/unit/auth/test_api_keys_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---

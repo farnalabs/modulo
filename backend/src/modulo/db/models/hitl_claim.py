@@ -25,7 +25,7 @@ class HitlClaim(OrgScoped):
     account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     claim_token: Mapped[str | None] = mapped_column(Text)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     decision: Mapped[str | None] = mapped_column(String(20))
     decision_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

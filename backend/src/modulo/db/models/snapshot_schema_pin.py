@@ -20,8 +20,8 @@ class SnapshotSchemaPin(OrgScoped):
     __table_args__ = (
         CheckConstraint("direction IN ('input', 'output')", name="ck_snapshot_schema_pins_direction"),
         ForeignKeyConstraint(
-            ["schema_id", "schema_version"],
-            ["schema_versions.schema_id", "schema_versions.version"],
+            ["schema_id", "schema_version", "organisation_id"],
+            ["schema_versions.schema_id", "schema_versions.version", "schema_versions.organisation_id"],
             ondelete="RESTRICT",
         ),
     )

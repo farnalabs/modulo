@@ -4,7 +4,7 @@ prd: 8.3
 bdd:
   - backend/tests/bdd/features/schemas/deletion_protection.feature
 unit-tests:
-  - backend/tests/unit/api/test_schema_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/api/test_schemas_endpoint.py
 code:
   - backend/src/modulo/api/routes/schemas.py

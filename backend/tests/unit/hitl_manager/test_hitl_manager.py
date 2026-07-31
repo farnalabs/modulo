@@ -443,8 +443,12 @@ async def test_claim_membership_lost_between_check_and_update_undoes_claim():
         await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert len(undo_stmt) == 1, "Claim should be undone when membership is lost post-check"
-    assert all(expr.value is None for _, expr in undo_stmt[0]._values.items()), (
-        "Undo UPDATE should clear account_id/claim_token/expires_at"
+    undo_values = {col.name: expr.value for col, expr in undo_stmt[0]._values.items()}
+    assert undo_values["account_id"] is None
+    assert undo_values["claimed_at"] is None
+    assert undo_values["claim_token"] is None
+    assert undo_values["expires_at"] is not None, (
+        "Undo UPDATE should settle expires_at (non-null) to release the claim"
     )
 
 
@@ -713,6 +717,30 @@ async def test_reject_wrong_token_raises():
         await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="wrong")
 
 
+async def test_reject_expired_token_raises():
+    past = datetime.now(UTC) - timedelta(minutes=1)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=past)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(ClaimTokenExpiredError):
+        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+
+
+async def test_reject_gate_not_found_raises():
+    session = _session_decide(update_returns_id=None, diagnosis_gate=None)
+    mgr = HITLManager()
+    with pytest.raises(GateNotFoundError):
+        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+
+
+async def test_reject_already_decided_raises():
+    gate = _gate(decision="rejected")
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(GateAlreadyDecidedError):
+        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+
+
 # ---------------------------------------------------------------------------
 # deliver_manual
 # ---------------------------------------------------------------------------
@@ -927,7 +955,6 @@ async def test_list_overdue_returns_overdue_gates():
 
 
 async def test_list_overdue_below_threshold_returns_empty():
-
     # The DB WHERE clause (claimed_at < now - threshold) excludes the recent gate.
     # The mock simulates the DB returning no rows, as it would in production.
     session = AsyncMock()

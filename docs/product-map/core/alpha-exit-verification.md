@@ -5,7 +5,6 @@ delivery-tasks: [task-prd-alpha-exit-verification, task-prd-alpha-exit-verificat
 bdd: []
 code:
   - scripts/verify-alpha-exit.ps1
-  - .github/workflows/alpha-exit-report.yml
 unit-tests: []
 depends-on: [feat-core-pipeline-execution, feat-core-run-context]
 status: partial
@@ -23,13 +22,13 @@ status: partial
 ### Criterion #2: All happy-path BDD scenarios green in CI
 
 - [x] Verification script runs `pytest tests/bdd/ -x --tb=short -q`
-- [x] CI workflow starts Postgres and Redis containers for BDD tests
-- [x] CI workflow runs migrations before tests
-- [x] BDD test failures are reported as workflow annotations
-- [x] Verification report is uploaded as a CI artifact
-- [x] Summary step prints gate status
+- [ ] CI workflow starts Postgres and Redis containers for BDD tests
+- [ ] CI workflow runs migrations before tests
+- [ ] BDD test failures are reported as workflow annotations
+- [ ] Verification report is uploaded as a CI artifact
+- [ ] Summary step prints gate status
 - [x] Verification script accepts `-SkipBDD` parameter to avoid duplicate test execution in CI
-- [x] CI workflow passes `skip_bdd` input to verification script
+- [ ] CI workflow passes `skip_bdd` input to verification script
 - [x] Docker-unavailable detection → BDD tests skipped gracefully with clear message, not opaque failure
 
 ### Criterion #3: Non-demo pipeline built and run to completion
@@ -67,13 +66,13 @@ status: partial
 
 ### CI workflow
 
-- [x] Workflow runs on workflow_dispatch
-- [x] Postgres and Redis are started as Docker containers
-- [x] Backend dependencies are installed via uv
-- [x] Alembic migrations run before tests
-- [x] Verification script runs and reports exit code
-- [x] Report artifact is uploaded with 90-day retention
-- [x] Summary step displays gate result
+- [ ] Workflow runs on workflow_dispatch
+- [ ] Postgres and Redis are started as Docker containers
+- [ ] Backend dependencies are installed via uv
+- [ ] Alembic migrations run before tests
+- [ ] Verification script runs and reports exit code
+- [ ] Report artifact is uploaded with 90-day retention
+- [ ] Summary step displays gate result
 
 ### Error Handling
 
@@ -90,10 +89,9 @@ status: partial
 - [x] Missing FilesystemConnector directory → machine check FAIL
 - [x] Missing GitHubConnector directory → machine check FAIL
 - [x] Docker unavailable → BDD tests skipped gracefully, clear message, no opaque pytest failure
-- [x] CI workflow cleanup containers on failure → continues via always() + Continue error action
-- [x] CI workflow step failure → continues to verification script via continue-on-error: true
+- [ ] CI workflow cleanup containers on failure → continues via always() + Continue error action
+- [ ] CI workflow step failure → continues to verification script via continue-on-error: true
 - [ ] BDD scenario skipped vs failed distinction: SkipBDD logs "assumed passing" but has no way to verify CI step outcome
-- [ ] CI environment variables (SECRET_KEY, FERNET_KEY) hardcoded in workflow YAML rather than GitHub Secrets
 
 ## QA History
 
@@ -109,19 +107,23 @@ status: partial
 
 ## Known Gaps
 - **Criteria #1, #3, #4, #5, #6 require manual sign-off**: These require human walkthroughs and cannot be fully automated by design.
-- **CI workflow is workflow_dispatch only**: Does not automatically run on push/PR. This is by design — alpha exit is a deliberate decision, not a CI gate.
+- **CI workflow `alpha-exit-report.yml` was removed**: Deleted in the dead-workflow cleanup (commit b7ecbdf4). Alpha exit is now run locally via `scripts/verify-alpha-exit.ps1` (optionally with `-SkipBDD`). All CI-workflow behaviours in this entry are marked `[ ]` until a replacement CI job is added.
 - **BDD test dependency on Postgres/Redis containers**: Verification requires Docker to be available. When running locally without Docker, BDD tests are skipped.
 - **No frontend lint/type-check in verification**: Frontend has `lint` and `type-check` npm scripts available. Could be added as an optional script step, but requires Node.js/npm in the CI runner.
 - **Temp file collision in RunPytest/RunTool**: Uses [System.IO.Path]::GetTempFileName() which creates a zero-byte file. On systems with aggressive temp file cleanup, this could race with pytest output.
-- **Duplicate test execution in CI (partially fixed)**: Before the -SkipBDD fix, the CI workflow ran BDD tests → then the verification script ran them again. Now fixed via `skip_bdd` passthrough. When `skip_bdd=false`, duplication still occurs — ideal fix would have the verification script trust CI step outcomes.
 - **No retry/backoff on Docker container readiness**: Wait loops poll every 2s but have no exponential backoff or jitter. Timer-based polling is adequate for the expected single-run pattern.
-- **Port conflict risk**: If port 5432 or 6379 is already in use on the self-hosted runner, Docker containers will fail to start. No port-fallback or pre-check logic.
-- **CI secrets hardcoded in workflow YAML**: SECRET_KEY and FERNET_KEY are plaintext in alpha-exit-report.yml. Acceptable for test-only CI where the runner is isolated, but would be a security concern if the repo were public.
+- **Port conflict risk**: If port 5432 or 6379 is already in use, Docker containers will fail to start. No port-fallback or pre-check logic.
 - **SkipBDD cannot distinguish "skipped because CI passed" from "skipped because CI didn't run"**: The verification script logs "assumed passing" but has no mechanism to verify the CI step outcome. A future improvement could parse CI step annotations or accept an explicit pass/fail status parameter.
 
 ### 2026-07-12 — Round 3 improve-architecture
 
-Reviewed for B904, exc_info=True, stale frontmatter, dead code. No Python code in this entry (PowerShell/YAML only — `verify-alpha-exit.ps1` and `alpha-exit-report.yml`). No code changes needed. Frontmatter intact, QA History already complete through Round 2.
+Reviewed for B904, exc_info=True, stale frontmatter, dead code. No Python code in this entry (PowerShell/YAML only — `verify-alpha-exit.ps1`). No code changes needed. Frontmatter intact, QA History already complete through Round 2.
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- **STALE**: Removed `code:` ref to `.github/workflows/alpha-exit-report.yml` — the workflow was deleted in the dead-workflow cleanup (commit b7ecbdf4). It no longer exists on disk, so the `code:` ref was broken.
+- **STALE**: Marked all CI-workflow behaviour checkboxes (Criterion #2, "CI workflow", CI-related error-handling items) `[x]` → `[ ]` — they describe the removed workflow.
+- **STALE**: Updated Known Gaps — removed "CI workflow is workflow_dispatch only", "Duplicate test execution in CI", and "CI secrets hardcoded in workflow YAML" gaps (all referenced the deleted workflow); added the workflow-removal gap.
 
 ### Index 332 (2026-07-08)
 - **BUG fix**: Added `$dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'` initialization before the report header renders the timestamp (was undefined variable → empty string in report header)
