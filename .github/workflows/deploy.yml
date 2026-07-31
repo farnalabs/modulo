@@ -38,7 +38,7 @@ jobs:
           uv run --no-sync ruff check .
           uv run --no-sync mypy src/modulo/
           uv run --no-sync bandit -r src/modulo/ -ll
-          uv run --no-sync semgrep --config=../.semgrep/ --error .
+          (cd .. && uv run --project backend --no-sync semgrep --config=.semgrep/ --error .)
           uv run --no-sync pip-audit
 
       - name: Backend unit tests
@@ -102,7 +102,7 @@ jobs:
         working-directory: backend
         run: |
           uv run pip-audit
-          uv run --no-sync semgrep --config=../.semgrep/ --error .
+          (cd .. && uv run --project backend --no-sync semgrep --config=.semgrep/ --error .)
         env:
           SEMGREP_BASELINE_COMMIT: "HEAD^"
 

@@ -32,6 +32,7 @@ jobs:
       - run: uv run --no-sync mypy src/modulo/
       - run: uv run --no-sync bandit -r src/modulo/ -ll
       - name: Semgrep (block new findings)
+        working-directory: .
         shell: bash
         run: |
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
@@ -39,7 +40,7 @@ jobs:
           else
             baseline="HEAD^"
           fi
-          uv run --no-sync semgrep --config=../.semgrep/ --baseline-commit "$baseline" --error .
+          uv run --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error .
       - run: uv run --no-sync pip-audit
       - name: Import-linter architecture contracts
         run: uv run --no-sync lint-imports
