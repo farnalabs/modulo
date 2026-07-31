@@ -1046,6 +1046,8 @@ export default {
       "saving": "Saving...",
       "schema_saved": "Schema \"{name}\" saved.",
       "create_one": "Create one",
+      "no_connectors_found": "No connectors found.",
+      "first_then_come_back": "first, then come back.",
       "name": "Name",
       "type": "Type",
       "required": "Required",
@@ -1622,6 +1624,7 @@ export default {
     "EnvironmentProfileList": {
       "try_a_different_search_term": "Try a different search term.",
       "no_environment_profiles": "No environment profiles",
+      "no_profiles_match": "No profiles match \"{search}\"",
       "soft_delete_warning": "This will soft-delete the profile. Existing runs using it are unaffected."
     },
     "CompositeEditorView": {
@@ -2078,6 +2081,7 @@ export default {
     "next": "Next",
     "back": "Back",
     "active": "Active",
+    "deleted": "Deleted",
     "inactive": "Inactive",
     "show": "Show",
     "hide": "Hide",
