@@ -139,9 +139,7 @@ class TestIngest:
             create_kwargs = create_mock.await_args.kwargs
             assert create_kwargs["session"] is session
             assert create_kwargs["org_id"] == _ORG_ID
-            assert create_kwargs["fingerprint"] == svc.fingerprint(
-                message="test", stacktrace=None, source="backend"
-            )
+            assert create_kwargs["fingerprint"] == svc.fingerprint(message="test", stacktrace=None, source="backend")
             assert create_kwargs["level"] == "error"
             assert create_kwargs["message"] == "test"
             assert create_kwargs["source"] == "backend"
