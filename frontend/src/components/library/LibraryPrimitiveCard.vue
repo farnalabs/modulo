@@ -17,7 +17,7 @@
         {{ $t('views.LibraryView.modulo_badge') }}
       </span>
       <span
-        v-else-if="badge === 'community'"
+        v-else-if="badge === 'community' || (badge === 'modulo' && prim.source === 'community')"
         class="text-xs text-muted-foreground font-medium bg-muted px-2 py-0.5 rounded"
         data-testid="library-community-badge"
       >

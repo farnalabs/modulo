@@ -61,6 +61,15 @@ describe('LibraryPrimitiveCard', () => {
     expect(wrapper.text()).toContain('not verified')
   })
 
+  it('shows the community badge for community-sourced primitives in the native section', () => {
+    const wrapper = mountCard({
+      badge: 'modulo',
+      prim: { id: 'prim-1', source: 'community', primitive_type: 'workflow', name: 'Test', description: null, tags: [], forked_from: null, auto_update: false },
+    })
+    expect(wrapper.find('[data-testid="library-community-badge"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('not verified')
+  })
+
   it('shows the preview badge for preview primitives', () => {
     const wrapper = mountCard({ badge: 'preview' })
     expect(wrapper.text()).toContain('preview')
