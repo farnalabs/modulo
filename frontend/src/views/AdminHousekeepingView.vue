@@ -176,6 +176,7 @@ interface CandidateItem {
   name: string
   detail: string
   created_at: string | null
+  entity_type: string
 }
 
 interface HousekeepingCategory {
@@ -232,11 +233,11 @@ async function scan() {
   }
 }
 
-const allCandidates = computed<{ id: string; category: string }[]>(() => {
-  const result: { id: string; category: string }[] = []
+const allCandidates = computed<{ id: string; category: string; entity_type: string }[]>(() => {
+  const result: { id: string; category: string; entity_type: string }[] = []
   for (const cat of categories.value) {
     for (const c of cat.candidates) {
-      result.push({ id: c.id, category: cat.category })
+      result.push({ id: c.id, category: cat.category, entity_type: c.entity_type })
     }
   }
   return result
@@ -301,12 +302,17 @@ function toggleItem(id: string) {
   selectedIds.value = next
 }
 
+function entityTypeOf(c: { id: string; category: string; entity_type?: string }): string {
+  return c.entity_type && c.entity_type.length > 0 ? c.entity_type : c.category
+}
+
 const groupedConfirmItems = computed(() => {
   const map: Record<string, string[]> = {}
   for (const c of allCandidates.value) {
     if (selectedIds.value.has(c.id)) {
-      if (!map[c.category]) map[c.category] = []
-      map[c.category].push(c.id)
+      const et = entityTypeOf(c)
+      if (!map[et]) map[et] = []
+      map[et].push(c.id)
     }
   }
   return map
@@ -321,7 +327,7 @@ async function doCleanup() {
   try {
     const items: CleanupItem[] = allCandidates.value
       .filter(c => selectedIds.value.has(c.id))
-      .map(c => ({ id: c.id, entity_type: c.category }))
+      .map(c => ({ id: c.id, entity_type: entityTypeOf(c) }))
 
     await post<CleanupResponse>('/api/v1/admin/housekeeping/cleanup', { items })
     showConfirm.value = false

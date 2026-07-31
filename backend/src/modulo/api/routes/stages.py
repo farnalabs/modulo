@@ -80,11 +80,13 @@ async def list_stages_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_stages(session, page=page, page_size=page_size, owner_team_id=owner_team_id)
     except ProgrammingError as exc:
+        _log.exception("stages.list_stages_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("stages.list_stages_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -127,11 +129,13 @@ async def create_stage_endpoint(
                 visibility=req.visibility,
             )
     except ProgrammingError as exc:
+        _log.exception("stages.create_stage_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("stages.create_stage_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -160,11 +164,13 @@ async def get_stage_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             stage = await get_stage(session, stage_id)
     except ProgrammingError as exc:
+        _log.exception("stages.get_stage_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("stages.get_stage_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -197,11 +203,13 @@ async def update_stage_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             stage = await update_stage(session, stage_id, updates)
     except ProgrammingError as exc:
+        _log.exception("stages.update_stage_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("stages.update_stage_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -232,11 +240,13 @@ async def delete_stage_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_stage(session, stage_id)
     except ProgrammingError as exc:
+        _log.exception("stages.delete_stage_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("stages.delete_stage_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",

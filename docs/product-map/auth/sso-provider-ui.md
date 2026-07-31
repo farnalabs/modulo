@@ -19,15 +19,11 @@ bdd:
 unit-tests:
   - backend/tests/unit/api/test_admin_sso.py
   - backend/tests/unit/api/test_sso_gating.py
-  - backend/tests/unit/api/test_sso_programming_error.py
-  - backend/tests/unit/api/test_sso_sqlalchemy_error.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/auth/test_sso.py
   - backend/tests/bdd/steps/test_sso_oidc.py
   - backend/tests/bdd/steps/test_sso_saml.py
   - backend/tests/bdd/steps/test_sso_team_mapping.py
-  - backend/tests/unit/auth/test_sso_oidc_bdd.py
-  - backend/tests/unit/auth/test_sso_saml_bdd.py
-  - backend/tests/unit/auth/test_sso_team_mapping_bdd.py
 depends-on: [feat-core-oidc-integration, feat-core-saml-integration, feat-auth-team-rbac]
 status: partial
 ---

@@ -14,9 +14,8 @@ code:
   - backend/src/modulo/core/feedback_manager/__init__.py
 unit-tests:
   - backend/tests/unit/api/test_variants.py
-  - backend/tests/unit/api/test_variant_groups_bdd.py
-  - backend/tests/unit/api/test_variants_programming_error.py
-  - backend/tests/unit/api/test_evals_programming_error.py
+  - backend/tests/bdd/steps/test_variant_groups.py
+  - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/db/crud/test_variant_group.py
   - backend/tests/integration/crud/test_variant_group.py
 depends-on: [feat-evals-eval-engine, feat-variants-variant-groups]

@@ -60,6 +60,7 @@ async def create_run(
         snapshot_id=snapshot_id,
         trigger_type=trigger_type,
         input_hash=_input_hash(input_payload),
+        input_payload=input_payload,
         account_id=account_id,
         trigger_id=trigger_id,
         owner_team_id=owner_team_id,

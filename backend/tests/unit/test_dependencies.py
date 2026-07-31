@@ -147,26 +147,48 @@ class TestGetDbSession:
 class TestPgConnectionString:
     """Test pg_connection_string URL transformation."""
 
-    def test_strips_asyncpg_prefix(self):
+    @pytest.mark.parametrize(
+        ("input_url", "expected"),
+        [
+            pytest.param(
+                "postgresql+asyncpg://user:pass@localhost/db",
+                "postgresql://user:pass@localhost/db?sslmode=disable",
+                id="asyncpg_prefix",
+            ),
+            pytest.param(
+                "postgresql+psycopg://user:pass@localhost/db",
+                "postgresql://user:pass@localhost/db?sslmode=disable",
+                id="psycopg_prefix",
+            ),
+            pytest.param(
+                "postgresql+asyncpg://user:pass@localhost/db?sslmode=require",
+                "postgresql://user:pass@localhost/db?sslmode=require",
+                id="preserves_sslmode",
+            ),
+            pytest.param(
+                "postgresql://user:pass@localhost/db",
+                "postgresql://user:pass@localhost/db?sslmode=disable",
+                id="noop_for_plain_postgresql",
+            ),
+            pytest.param(
+                "postgresql+asyncpg://user:pass@localhost/db?connect_timeout=10",
+                "postgresql://user:pass@localhost/db?connect_timeout=10&sslmode=disable",
+                id="preserves_existing_query_params",
+            ),
+            pytest.param(
+                "postgresql+psycopg://user:pass@localhost:5432/mydb?sslmode=require&connect_timeout=30",
+                "postgresql://user:pass@localhost:5432/mydb?sslmode=require&connect_timeout=30",
+                id="multiple_existing_params_sslmode",
+            ),
+            pytest.param(
+                "postgresql+asyncpg://user:pass@localhost/db?sslmode=disable",
+                "postgresql://user:pass@localhost/db?sslmode=disable",
+                id="already_disabled",
+            ),
+        ],
+    )
+    def test_pg_connection_string(self, input_url: str, expected: str) -> None:
         from modulo.api.dependencies import pg_connection_string
 
-        result = pg_connection_string("postgresql+asyncpg://user:pass@localhost/db")
-        assert result.startswith("postgresql://user:pass@localhost/db")
-
-    def test_strips_psycopg_prefix(self):
-        from modulo.api.dependencies import pg_connection_string
-
-        result = pg_connection_string("postgresql+psycopg://user:pass@localhost/db")
-        assert result == "postgresql://user:pass@localhost/db?sslmode=disable"
-
-    def test_preserves_sslmode(self):
-        from modulo.api.dependencies import pg_connection_string
-
-        result = pg_connection_string("postgresql+asyncpg://user:pass@localhost/db?sslmode=require")
-        assert result == "postgresql://user:pass@localhost/db?sslmode=require"
-
-    def test_noop_for_plain_postgresql(self):
-        from modulo.api.dependencies import pg_connection_string
-
-        result = pg_connection_string("postgresql://user:pass@localhost/db")
-        assert result == "postgresql://user:pass@localhost/db?sslmode=disable"
+        result = pg_connection_string(input_url)
+        assert result == expected

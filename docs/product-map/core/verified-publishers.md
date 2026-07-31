@@ -14,7 +14,7 @@ unit-tests:
   - backend/tests/unit/api/test_admin_publishers.py
   - backend/tests/unit/api/test_registry_publishers.py
   - backend/tests/unit/registry/test_publisher_trust.py
-  - backend/tests/unit/api/test_publishers_programming_error.py
+  - backend/tests/unit/api/test_error_handling.py
 depends-on: [feat-core-registry-protocol-v2]
 bdd: []
 status: partial

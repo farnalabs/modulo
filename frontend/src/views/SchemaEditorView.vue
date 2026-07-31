@@ -1,8 +1,8 @@
 <template>
   <PageTabs :tabs="[
-    { label: 'Browse', to: '/schemas' },
-    { label: 'Editor', to: '/schemas/editor' },
-    { label: 'Infer', to: '/schemas/infer' },
+    { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+    { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+    { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
   ]" />
   <div class="flex h-[calc(100vh-3.5rem)]">
     <aside class="flex w-80 flex-col border-r bg-background">
@@ -36,7 +36,7 @@
               <span
                 v-if="schema.deprecated"
                 class="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive"
-              >Deprecated</span>
+              >{{ $t('views.SchemaEditorView.deprecated') }}</span>
             </div>
             <p v-if="schema.description" class="mt-0.5 truncate text-xs text-muted-foreground">{{ schema.description }}</p>
           </div>
@@ -323,7 +323,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { api, getAccessToken } from '../lib/api/client'
+import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -365,6 +365,23 @@ interface SchemaVersion {
 }
 
 let fieldKeyCounter = 0
+
+function parseDefinitionToFields(def: Record<string, unknown>): SchemaField[] {
+  const properties = def.properties
+  if (!properties || typeof properties !== 'object') return []
+  const loadedFields: SchemaField[] = []
+  for (const [name, prop] of Object.entries(properties as Record<string, any>)) {
+    loadedFields.push({
+      _key: ++fieldKeyCounter,
+      name,
+      type: prop.type ?? 'string',
+      required: Array.isArray(def.required) && def.required.includes(name),
+      description: prop.description ?? '',
+      defaultValue: prop.default !== undefined ? String(prop.default) : '',
+    })
+  }
+  return loadedFields
+}
 
 const route = useRoute()
 
@@ -536,30 +553,14 @@ function moveField(index: number, delta: number) {
 
 async function loadLatestVersion(schemaId: string) {
   try {
-    const token = getAccessToken()
-    const res = await fetch(`/api/v1/schemas/${schemaId}/versions?page=1&page_size=1`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    const { data, error } = await api.GET('/api/v1/schemas/{schema_id}/versions', {
+      params: { path: { schema_id: schemaId }, query: { page: 1, page_size: 1 } },
     })
-    if (!res.ok) return
-    const data = await res.json()
+    if (error) return
     if (data.items && data.items.length > 0) {
       const latest = data.items[0]
       schemaVersion.value = latest.version
-      const def = latest.definition_json
-      if (def.properties && typeof def.properties === 'object') {
-        const loadedFields: SchemaField[] = []
-        for (const [name, prop] of Object.entries(def.properties as Record<string, any>)) {
-          loadedFields.push({
-            _key: ++fieldKeyCounter,
-            name,
-            type: prop.type ?? 'string',
-            required: Array.isArray(def.required) && def.required.includes(name),
-            description: prop.description ?? '',
-            defaultValue: prop.default !== undefined ? String(prop.default) : '',
-          })
-        }
-        fields.value = loadedFields
-      }
+      fields.value = parseDefinitionToFields(latest.definition_json)
     }
   } catch (e) {
     console.warn('Failed to load schema', e)
@@ -569,12 +570,10 @@ async function loadLatestVersion(schemaId: string) {
 async function loadVersions(schemaId: string) {
   loadingVersions.value = true
   try {
-    const token = getAccessToken()
-    const res = await fetch(`/api/v1/schemas/${schemaId}/versions?page=1&page_size=50`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    const { data, error } = await api.GET('/api/v1/schemas/{schema_id}/versions', {
+      params: { path: { schema_id: schemaId }, query: { page: 1, page_size: 50 } },
     })
-    if (!res.ok) return
-    const data = await res.json()
+    if (error) return
     versions.value = data.items ?? []
   } catch {
     versions.value = []
@@ -609,18 +608,12 @@ async function validateSchema(): Promise<boolean> {
   }
 
   try {
-    const token = getAccessToken()
-    const res = await fetch('/api/v1/schemas/validate', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ definition: JSON.parse(jsonPreview.value) }),
+    const { data, error } = await api.POST('/api/v1/schemas/validate', {
+      body: { definition: JSON.parse(jsonPreview.value) as Record<string, unknown> },
     })
-    const result = await res.json()
-    if (!result.valid && result.errors) {
-      for (const e of result.errors) {
+    if (error) return false
+    if (!data.valid && data.errors) {
+      for (const e of data.errors) {
         errors.push(`${e.path}: ${e.message}`)
       }
     }
@@ -659,21 +652,16 @@ async function saveSchema() {
       }
       if (!schemaData) return
 
-      const token = getAccessToken()
-      const versionRes = await fetch(`/api/v1/schemas/${schemaData.id}/versions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
+      const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
+        params: { path: { schema_id: schemaData.id } },
+        body: {
           version: schemaVersion.value.trim(),
           version_number: 1,
           definition_json: definitionJson,
           published: true,
-        }),
+        },
       })
-      if (!versionRes.ok) {
+      if (versionErr) {
         saveError.value = t('views.SchemaEditorView.schema_created_version_failed')
         return
       }
@@ -695,24 +683,19 @@ async function saveSchema() {
         return
       }
 
-      const token = getAccessToken()
       const nextVersion = versions.value.length > 0
         ? Math.max(...versions.value.map(v => v.version_number)) + 1
         : 1
-      const versionRes = await fetch(`/api/v1/schemas/${selectedSchemaId.value}/versions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
+      const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
+        params: { path: { schema_id: selectedSchemaId.value } },
+        body: {
           version: schemaVersion.value.trim(),
           version_number: nextVersion,
           definition_json: definitionJson,
           published: true,
-        }),
+        },
       })
-      if (!versionRes.ok) {
+      if (versionErr) {
         saveError.value = t('views.SchemaEditorView.schema_updated_version_failed')
         return
       }
@@ -729,22 +712,8 @@ async function saveSchema() {
 }
 
 async function restoreVersion(version: SchemaVersion) {
-  const def = version.definition_json
   schemaVersion.value = version.version
-  if (def.properties && typeof def.properties === 'object') {
-    const loadedFields: SchemaField[] = []
-    for (const [name, prop] of Object.entries(def.properties as Record<string, any>)) {
-      loadedFields.push({
-        _key: ++fieldKeyCounter,
-        name,
-        type: prop.type ?? 'string',
-        required: Array.isArray(def.required) && def.required.includes(name),
-        description: prop.description ?? '',
-        defaultValue: prop.default !== undefined ? String(prop.default) : '',
-      })
-    }
-    fields.value = loadedFields
-  }
+  fields.value = parseDefinitionToFields(version.definition_json)
 }
 
 function formatDate(dateStr: string): string {

@@ -64,4 +64,3 @@ Feature: Library Primitive Ratings
     Then the response status is 200
     And the response contains average_rating = null
     And the response contains review_count = 0
-

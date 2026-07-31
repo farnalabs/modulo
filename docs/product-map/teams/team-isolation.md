@@ -17,8 +17,8 @@ code:
   - backend/src/modulo/db/models/base.py
   - backend/src/modulo/db/models/team.py
   - backend/src/modulo/db/models/team_membership.py
-  - backend/src/modulo/db/migrations/versions/0002_rls_policies.py
-  - backend/src/modulo/db/migrations/versions/0025_team_visibility_rls.py
+  - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
+  - backend/src/modulo/db/migrations/versions/0003_v2_pipeline_runtime.py
 unit-tests:
   - backend/tests/integration/test_rls_isolation.py
   - backend/tests/integration/test_cross_tenant_isolation.py
@@ -131,3 +131,7 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 - Added QA History section for 2026-07-09.
 
 **Status:** partial (3 known gaps remain — connector_team_mismatch, view_as_team JWT enforcement, stage_team_mismatch).
+
+### 2026-07-31 — improve-architecture (product-map walk)
+
+- Fixed stale CODE refs: `0002_rls_policies.py`/`0025_team_visibility_rls.py` renamed in v2 squash → `0002_v2_teams_library.py` + `0003_v2_pipeline_runtime.py` (RLS team-isolation policies).

@@ -14,13 +14,14 @@ ignore_imports =
     modulo.api.main -> modulo.core.scheduler
     modulo.api.routes.runs -> modulo.core.pipeline_engine.executor
     modulo.api.routes.runs -> modulo.core.trigger_engine
+    modulo.api.routes.hitl -> modulo.core.pipeline_engine.executor
     modulo.api.routes.webhooks -> modulo.core.pipeline_executor_task
     modulo.api.routes.webhooks -> modulo.core.trigger_engine
     modulo.api.routes.triggers -> modulo.core.cron_scheduler
     modulo.api.routes.triggers -> modulo.core.trigger_engine
-    modulo.api.mcp_server -> modulo.core.pipeline_executor_task
     modulo.api.mcp_server -> modulo.core.cron_scheduler
-    modulo.api.routes.hitl -> modulo.core.pipeline_engine.executor
+    modulo.api.mcp_server -> modulo.core.pipeline_executor_task
+    modulo.api.routes.pipelines -> modulo.core.reports.quality_report
 
 [importlinter:contract:connectors-do-not-import-api]
 name = Connectors layer is independent of API
@@ -50,3 +51,38 @@ forbidden_modules =
     modulo.core.pipeline_engine
     modulo.core.hitl_manager
     modulo.core.eval_engine
+
+[importlinter:contract:core-does-not-import-api]
+name = Core layer never sees FastAPI
+type = forbidden
+source_modules =
+    modulo.core
+forbidden_modules =
+    modulo.api
+ignore_imports =
+    modulo.core.feature_flags -> modulo.api.dependencies
+    modulo.core.logging_config -> modulo.api.dependencies
+    modulo.core.error_tracking.celery_hooks -> modulo.api.dependencies
+
+[importlinter:contract:db-does-not-import-core]
+name = DB layer has no business logic imports
+type = forbidden
+source_modules =
+    modulo.db
+forbidden_modules =
+    modulo.core
+    modulo.api
+ignore_imports =
+    modulo.db.crud.pipeline_snapshot -> modulo.core.exceptions
+    modulo.db.crud.sso_provider -> modulo.core.audit_logger
+    modulo.db.session -> modulo.core.audit_logger.append_only
+
+[importlinter:contract:connectors-do-not-import-core]
+name = Connectors don't reach into core
+type = forbidden
+source_modules =
+    modulo.connectors
+forbidden_modules =
+    modulo.core
+ignore_imports =
+    modulo.connectors.shell -> modulo.db.session

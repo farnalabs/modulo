@@ -26,6 +26,8 @@ def test_no_bare_session_rollback():
             if not isinstance(node, ast.Expr):
                 continue
             call = node.value
+            if isinstance(call, ast.Await):
+                call = call.value
             if not isinstance(call, ast.Call):
                 continue
             func = call.func
@@ -37,7 +39,7 @@ def test_no_bare_session_rollback():
             parent = _find_parent_except_handler(tree, node)
             if parent is not None:
                 continue
-            violations.append(f"  {path.relative_to(SRC)}:{node.lineno}  {ast.unparse(call)[:80]}")
+            violations.append(f"  {path.relative_to(SRC)}:{node.lineno}  {ast.unparse(node.value)[:80]}")
     assert not violations, (
         f"Found {len(violations)} session.rollback() calls outside exception handlers.\n"
         "Use savepoint = await session.begin_nested() instead.\n" + "\n".join(violations)

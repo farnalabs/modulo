@@ -25,6 +25,7 @@ export default {
     },
     "LibraryView": {
       "title": "Library",
+      "all_types": "All types",
       "failed_to_load_primitives": "Failed to load modules",
       "test_fixtures": "Test Fixtures",
       "failed_to_toggle_autoupdate": "Failed to toggle auto-update",
@@ -32,6 +33,7 @@ export default {
       "pipeline_templates": "Pipeline Templates",
       "search_primitives": "Search modules...",
       "no_primitives_found": "No modules found",
+      "all_types": "All types",
       "preview_integrations_count": "{count} preview integration | {count} preview integrations",
       "preview_badge": "Preview",
       "native_library": "Native Library",
@@ -41,6 +43,7 @@ export default {
       "modulo_badge": "Modulo",
       "community_badge": "Community — not verified",
       "type_workflows": "Workflows",
+      "type_pipeline_templates": "Pipeline Templates",
       "type_agents": "Agents",
       "type_schemas": "Schemas",
       "type_integrations": "Integrations",
@@ -49,7 +52,8 @@ export default {
       "view_details": "View Details",
       "previous_page": "Previous",
       "next_page": "Next",
-      "page_of": "Page {page} of {total}"
+      "page_of": "Page {page} of {total}",
+      "all_types": "All types"
     },
     "AdminRemyView": {
       "configure_remy_ai_assistant_behaviour_access_and_skills": "Configure Remy AI assistant behaviour, access, and skills",
@@ -278,7 +282,8 @@ export default {
       "update_password": "Update Password",
       "passwords_do_not_match": "Passwords do not match",
       "manage_your_account_settings_and_password": "Manage your account settings and password.",
-      "password_must_be_at_least_8_characters": "Password must be at least 8 characters"
+      "password_must_be_at_least_8_characters": "Password must be at least 8 characters",
+      "member_since": "Member since {date}"
     },
     "AdminModelBackendsView": {
       "preview_model_backends_count": "{count} preview model backend | {count} preview model backends",
@@ -423,7 +428,48 @@ export default {
       "no_claim_token_claim_the_gate_first": "No claim token. Claim the gate first.",
       "rejected_by_reviewer": "Rejected by reviewer",
       "gate_approved_pipeline_resuming": "Gate approved. Pipeline resuming.",
-      "gate_rejected_pipeline_routed_to_reject_target": "Gate rejected. Pipeline routed to reject target."
+      "gate_rejected_pipeline_routed_to_reject_target": "Gate rejected. Pipeline routed to reject target.",
+      "title": "HITL Review",
+      "subtitle": "Review and respond to pending human-in-the-loop gates",
+      "search_placeholder": "Search pipeline or node name...",
+      "status_label": "Status",
+      "status_pending": "Pending",
+      "status_claimed": "Claimed",
+      "status_approved": "Approved",
+      "status_rejected": "Rejected",
+      "pipeline_label": "Pipeline",
+      "all_pipelines": "All Pipelines",
+      "date_label": "date",
+      "auto_refresh": "Auto-refresh: {seconds}s",
+      "empty_title": "No pending HITL gates",
+      "empty_description": "All gates have been resolved or no pipelines have hit a human-in-the-loop gate yet.",
+      "assigned_to": "Assigned: {user}",
+      "unassigned": "Unassigned",
+      "claim_metadata": "Claim Metadata",
+      "run_id": "Run ID",
+      "node_label": "Node",
+      "created_label": "Created",
+      "claimed_label": "Claimed",
+      "expires_label": "Expires",
+      "decided_label": "Decided",
+      "decision_label": "Decision",
+      "assignees_label": "Assignees",
+      "team_label": "Team",
+      "actions_label": "Actions",
+      "claim_gate": "Claim Gate",
+      "claiming": "Claiming...",
+      "review_notes": "Review notes...",
+      "approve": "Approve",
+      "approving": "Approving...",
+      "reject": "Reject",
+      "rejecting": "Rejecting...",
+      "approved_banner": "Gate was approved. The pipeline has resumed.",
+      "rejected_banner": "Gate was rejected. The pipeline was routed to the reject target.",
+      "claim_token_label": "Claim Token",
+      "claim_failed": "Claim failed:",
+      "approve_failed": "Approve failed:",
+      "reject_failed": "Reject failed:",
+      "claimed_by_you": "You"
     },
     "AdminSystemConfigView": {
       "deploymentwide_system_configuration_system_admin_only": "Deployment-wide system configuration (system admin only)",
@@ -688,13 +734,18 @@ export default {
       "llm_judge": "LLM Judge",
       "regex": "Regex",
       "json_schema": "JSON Schema",
-      "custom_function": "Custom Function"
+      "custom_function": "Custom Function",
+      "tab_evals": "Evals",
+      "tab_proposals": "Proposals",
+      "tab_variants": "Variants",
+      "tab_ab_test": "AB Test"
     },
     "RunDetailView": {
       "copy_run_id": "Copy run ID",
       "copy": "Copy",
       "final_output": "Final Output",
       "no_node_data": "No node data available for this run.",
+      "no_node_data_failed": "No node-level data recorded for this failed run. The error may have occurred during pipeline setup or before any node started execution.",
       "node": "Node",
       "status": "Status",
       "duration": "Duration",
@@ -722,6 +773,8 @@ export default {
       "input_tokens": "Input Tokens",
       "trace_id": "Trace ID",
       "run_detail": "Run Detail",
+      "run_error": "Run Error",
+      "run_input": "Run Input",
       "hide": "Hide",
       "show": "Show",
       "prompt_hidden_click_to_reveal": "[Prompt hidden — click to reveal]",
@@ -863,7 +916,8 @@ export default {
       "primitivename_pipeline_from_template": "Pipeline (from template)",
       "choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi": "Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.",
       "owner": "Owner",
-      "pipeline_created_from_library_template": "Pipeline created from library template"
+      "pipeline_created_from_library_template": "Pipeline created from library template",
+      "back_to_library": "Back to Library"
     },
     "SettingsMcpView": {
       "mcp_server_is_not_available_on_your_current_plan": "MCP server is not available on your current plan."
@@ -942,6 +996,7 @@ export default {
       "search_schemas": "Search schemas...",
       "schemas": "Schemas",
       "no_schemas_yet": "No schemas yet.",
+      "deprecated": "Deprecated",
       "new_schema": "+ New Schema",
       "select_or_create": "Select a schema or create a new one",
       "new_schema_title": "New Schema",
@@ -984,7 +1039,8 @@ export default {
       "schema_updated_version_failed": "Schema updated but version save failed",
       "schema_created": "Schema created.",
       "schema_updated": "Schema updated.",
-      "save_failed": "Save failed:"
+      "save_failed": "Save failed:",
+      "deprecated": "Deprecated"
     },
     "SchemaInferenceView": {
       "browse": "Browse",
@@ -1121,7 +1177,8 @@ export default {
       "error_forwarders": "Error Forwarders",
       "error_forwarders_are_not_available_on_your_current_plan": "Error forwarders are not available on your current plan.",
       "configure_external_error_tracking_and_alerting_integrations": "Configure external error tracking and alerting integrations",
-      "configuration_saved": "Configuration saved."
+      "configuration_saved": "Configuration saved.",
+      "not_configured": "Not configured"
     },
     "SettingsEmailView": {
       "email_settings": "Email Settings",
@@ -1270,7 +1327,9 @@ export default {
       "deprecate_confirm_title": "Deprecate \"{name}\"?",
       "deprecate_confirm_description": "This schema will be marked as deprecated. Agents using it will still function, but it will no longer appear as active.",
       "deprecate": "Deprecate",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "schemas": "Schemas",
+      "empty_hint": "Schemas are created through inference or direct creation."
     },
     "SettingsTriggersView": {
       "failed_to_load_triggers": "Failed to load triggers:",
@@ -1396,7 +1455,9 @@ export default {
       "close_navigation": "Close navigation",
       "open_navigation": "Open navigation",
       "all_features": "All Features",
-      "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'"
+      "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'",
+      "remy_performing_actions": "Remy is performing actions on this page",
+      "remy_stop": "Stop"
     },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",
@@ -1649,7 +1710,37 @@ export default {
   },
   "nav": {
     "environment-profiles": "Environment Profiles",
-    "parameter-schemas": "Parameter Schemas"
+    "parameter-schemas": "Parameter Schemas",
+    "eval_proposals": "Proposals",
+    "variant_compare": "Variants",
+    "ab_test_models": "AB Test",
+    "browser_monitoring": "Browser Monitoring",
+    "error_dashboard": "Error Dashboard",
+    "notification_log": "Notification Log",
+    "api_changelog": "API Changelog",
+    "team_comparison": "Team Comparison",
+    "schema_editor": "Editor",
+    "schema_infer": "Infer",
+    "sso": "SSO",
+    "teams": "Teams",
+    "audit_log": "Audit Log",
+    "org_settings": "Org Settings",
+    "hitl_review": "HITL Review",
+    "remy_skills": "Remy Skills",
+    "environments": "Environments",
+    "run_retention": "Run Retention",
+    "saved_views": "Saved Views",
+    "node_categories": "Node Categories",
+    "email_settings": "Email Settings",
+    "plugins": "Plugins",
+    "error_forwarders": "Error Forwarders",
+    "housekeeping": "Housekeeping",
+    "mcp": "MCP",
+    "runtime_config": "Runtime Config",
+    "env_profiles": "Env Profiles",
+    "spend_limits": "Spend Limits",
+    "cost_controls": "Cost Controls",
+    "rate_limits": "Rate Limits"
   },
   "OnboardingBanner": {
     "set_up_modulo": "Set up Modulo",

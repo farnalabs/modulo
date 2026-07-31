@@ -8,6 +8,8 @@ const mockResponses: Record<string, unknown> = {
   default: { items: [], total: 0, page: 1, page_size: 100 },
 }
 
+const { patchMock } = vi.hoisted(() => ({ patchMock: vi.fn() }))
+
 vi.mock('../lib/api/client', () => {
   const mockGet = vi.fn((url: string, options?: { params?: { query?: { page_size?: number } } }) => {
     if (url === '/api/v1/pipeline-folders') {
@@ -38,7 +40,7 @@ vi.mock('../composables/useApi', () => ({
   useApi: () => ({
     get: vi.fn((url: string) => Promise.resolve(mockResponses[url] ?? [])),
     post: vi.fn(),
-    patch: vi.fn(),
+    patch: patchMock,
   }),
 }))
 
@@ -139,5 +141,61 @@ describe('PipelineListView', () => {
       },
     })
     expect(wrapper.exists()).toBe(true)
+  })
+
+  it('skips the PATCH when dropping a pipeline onto another in the same folder', async () => {
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Pipeline One', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: 'f1' },
+        { id: 'p2', organisation_id: 'org1', name: 'Pipeline Two', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: 'f1' },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: { ErrorAlert: true, FolderTree: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+    const folderTree = wrapper.findComponent({ name: 'FolderTree' })
+    folderTree.vm.$emit('move-pipeline', { pipelineId: 'p1', folderId: 'f1' })
+    await flushPromises()
+    expect(patchMock).not.toHaveBeenCalled()
+  })
+
+  it('shows an error banner when a drop-move fails', async () => {
+    patchMock.mockRejectedValueOnce(new Error('Move failed'))
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Pipeline One', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: 'f1' },
+        { id: 'p2', organisation_id: 'org1', name: 'Pipeline Two', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: null },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: { ErrorAlert: true, FolderTree: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+    const folderTree = wrapper.findComponent({ name: 'FolderTree' })
+    folderTree.vm.$emit('move-pipeline', { pipelineId: 'p2', folderId: 'f1' })
+    await flushPromises()
+    expect(patchMock).toHaveBeenCalled()
+    const banner = wrapper.find('[data-testid="pipeline-list-move-error"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Move failed')
   })
 })

@@ -454,11 +454,13 @@ async def dashboard_summary(
         await _set_cached_dashboard(org_id_str, result)
         return result
     except ProgrammingError as exc:
+        _log.exception("dashboard.dashboard_summary")
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("dashboard.dashboard_summary")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",
@@ -671,11 +673,13 @@ async def dashboard_trends(
             "feedback_volume": feedback_volume,
         }
     except ProgrammingError as exc:
+        _log.exception("dashboard.dashboard_trends")
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("dashboard.dashboard_trends")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",
@@ -725,11 +729,13 @@ async def daily_run_counts(
 
         return {"daily_counts": daily, "days": days}
     except ProgrammingError as exc:
+        _log.exception("dashboard.daily_run_counts")
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
+        _log.exception("dashboard.daily_run_counts")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",

@@ -37,9 +37,11 @@ except ImportError:
 
 from croniter import croniter
 from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import InterfaceError, OperationalError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+from modulo.core.pipeline_executor_task import SchedulerDBError
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
@@ -261,7 +263,6 @@ async def fire_cron_trigger(
                     "daily_spend_limit": str(spend_limit),
                     "today_cost": str(today_cost),
                 }
-
         # Resolve snapshot_id — auto-create from live graph if not provided
         if snapshot_id is None:
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -426,9 +427,10 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
 
     def _sync_with_db(self) -> None:
         """Query the database and update the in-memory schedule."""
-        import asyncio
-
-        rows = asyncio.run(self._fetch_due_triggers())
+        try:
+            rows = self._fetch_due_triggers()
+        except SchedulerDBError:
+            return  # Beat will retry on next tick
 
         current_ids = set(self._schedule.keys())
         db_ids: set[str] = set()
@@ -457,14 +459,19 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
         for sid in stale:
             self._schedule.pop(sid, None)
 
-    async def _fetch_due_triggers(self) -> list[dict[str, Any]]:
-        """Async query for cron triggers due to fire."""
+    def _fetch_due_triggers(self) -> list[dict[str, Any]]:
+        """Sync query for cron triggers due to fire — runs inside Celery beat."""
         try:
-            factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
+            import uuid
+            from datetime import UTC, datetime
 
-            async with factory() as session:
-                now = datetime.datetime.now(datetime.UTC)
-                result = await session.execute(
+            from modulo.core.pipeline_executor_task import get_beat_sync_session
+            from modulo.db.models.trigger import Trigger
+
+            session = get_beat_sync_session()
+            try:
+                now = datetime.now(UTC)
+                rows = session.execute(
                     select(
                         Trigger.id,
                         Trigger.organisation_id,
@@ -474,12 +481,11 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
                         Trigger.next_fire_at,
                     ).where(
                         Trigger.trigger_type == "cron",
-                        Trigger.active == True,  # noqa: E712
+                        Trigger.active,
                         Trigger.next_fire_at <= now,
                         Trigger.cron_expression.isnot(None),
                     )
-                )
-                rows = result.all()
+                ).all()
 
                 triggers: list[dict[str, Any]] = []
                 pipelines_needing_snapshots: set[uuid.UUID] = set()
@@ -491,7 +497,7 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
                 latest_snapshots: dict[uuid.UUID, uuid.UUID] = {}
                 if pipelines_needing_snapshots:
                     pids = list(pipelines_needing_snapshots)
-                    snap_result = await session.execute(
+                    snap_result = session.execute(
                         text(
                             "SELECT DISTINCT ON (pipeline_id) pipeline_id, id "
                             "FROM pipeline_snapshots "
@@ -530,9 +536,15 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
                         }
                     )
                 return triggers
-        except Exception:
+            finally:
+                session.close()
+        except (
+            OperationalError,
+            InterfaceError,
+            TimeoutError,
+        ):
             _log.exception("Failed to fetch cron triggers from database")
-            return []
+            raise SchedulerDBError("Cron scheduler DB query failed") from None
 
     # max_interval: class attribute (not @property) so Celery can set it
     max_interval: int = 30
