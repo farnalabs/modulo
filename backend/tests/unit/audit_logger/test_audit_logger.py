@@ -286,10 +286,15 @@ class TestVerifyChain:
     async def test_verify_truncated_chain(self, session):
         """total_events > max_events -> partial check flagged as truncated."""
         org_id = uuid.uuid4()
-        h1 = _compute_event_hash("e1", None, None, None, {}, None, None, str(uuid.uuid4()), str(org_id), "t1")
-        e1 = _make_event(org_id=org_id, event_type="e1", previous_hash=None, created_at_val="t1")
-        e2 = _make_event(org_id=org_id, event_type="e2", previous_hash=h1, created_at_val="t2")
+        event_id1 = uuid.uuid4()
+        event_id2 = uuid.uuid4()
+
+        h1 = _compute_event_hash("e1", None, None, None, {}, None, None, str(event_id1), str(org_id), "t1")
+        e1 = _make_event(event_id=event_id1, org_id=org_id, event_type="e1", previous_hash=None, created_at_val="t1")
+        e2 = _make_event(event_id=event_id2, org_id=org_id, event_type="e2", previous_hash=h1, created_at_val="t2")
         # Simulate the full chain head pointing at an event that was NOT fetched.
+        # The fetched window is internally consistent, so the head check must run
+        # and report the mismatch against the (unfetched) real head hash.
         head = MagicMock()
         head.last_event_hash = "hash-not-in-window"
         head.event_count = 5
@@ -312,6 +317,11 @@ class TestVerifyChain:
         assert result["truncated"] is True
         assert result["valid"] is False
         assert result["checked_events"] == 2
+        # The gap check passes for the fetched window; truncation is reported
+        # because the real chain head does not match the last fetched event.
+        assert result["first_gap_index"] is None
+        assert result["chain_head_match"] is False
+        assert result["chain_count_mismatch"] is False
 
 
 class TestExportChain:
@@ -480,18 +490,28 @@ class TestGetAuditEventsBatch:
         result = await get_audit_events_batch(session, org_id, [])
         assert result == []
 
-    async def test_batch_truncates_over_max(self, session):
+    async def test_batch_truncates_over_max(self, caplog, session):
         """More than BATCH_MAX_SIZE ids are truncated with a warning."""
         org_id = uuid.uuid4()
         ids = [str(uuid.uuid4()) for _ in range(BATCH_MAX_SIZE + 5)]
 
-        async def _execute(*a, **kw):
+        executed = []
+
+        async def _execute(stmt, *a, **kw):
+            executed.append(stmt)
             return _scalars_result([])
 
         session.execute = _execute
 
-        result = await get_audit_events_batch(session, org_id, ids)
+        with caplog.at_level(logging.WARNING):
+            result = await get_audit_events_batch(session, org_id, ids)
         assert result == []
+
+        assert any("truncating" in rec.message for rec in caplog.records)
+        assert len(executed) == 1
+        sql = str(executed[0].compile(compile_kwargs={"literal_binds": True}))
+        in_values = sql[sql.index("id IN (") + len("id IN (") : sql.index(")", sql.index("id IN ("))]
+        assert len(in_values.split(", ")) == BATCH_MAX_SIZE
 
 
 class TestListAuditEvents:
