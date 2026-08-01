@@ -1,0 +1,20 @@
+rules:
+  - id: graph-write-missing-is-privileged
+    patterns:
+      - pattern-either:
+          - pattern: replace_pipeline_graph(...)
+          - pattern: rollback_to_snapshot(...)
+      - pattern-not: |
+          replace_pipeline_graph(..., is_privileged=...)
+      - pattern-not: |
+          rollback_to_snapshot(..., is_privileged=...)
+    message: >
+      ADR 017 service-layer backstop: replace_pipeline_graph() and
+      rollback_to_snapshot() require an explicit is_privileged= argument.
+      The HITL gate guard consumes this flag to block gate-weakening by
+      non-privileged callers. A missing is_privileged= is a runtime
+      TypeError (keyword-only, no default) — always pass it explicitly.
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

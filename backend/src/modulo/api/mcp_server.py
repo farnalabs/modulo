@@ -777,10 +777,15 @@ async def update_pipeline_graph(
         except ValueError:
             return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
+        # ADR 017 service-layer backstop: operator+ is privileged (may weaken a
+        # HITL gate). Resolved from the live ContextVar role, NOT the
+        # kill-switched scope check, so the HITL guard stays live.
+        from modulo.api.routes.pipelines import PipelineGraphUpdate, _is_privileged
+
+        is_privileged = _is_privileged(_ctx_role_val())
+
         # Validate graph structure using Pydantic models (same as REST endpoint)
         from pydantic import ValidationError as _PydanticValidationError
-
-        from modulo.api.routes.pipelines import PipelineGraphUpdate
 
         try:
             PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
@@ -813,6 +818,7 @@ async def update_pipeline_graph(
                 org_id=org_id,
                 nodes=nodes,
                 edges=edges,
+                is_privileged=is_privileged,
             )
             if result is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
