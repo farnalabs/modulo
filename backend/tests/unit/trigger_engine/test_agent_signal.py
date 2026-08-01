@@ -286,3 +286,117 @@ class TestFireAgentSignal:
         assert len(results) == 2
         assert all(r["status"] == "fired" for r in results)
         assert mock_create_run.await_count == 2
+
+    async def test_invalid_snapshot_id_skips_fire(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """Trigger with an invalid snapshot_id is skipped and logged as poll_error."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+            snapshot_id="not-a-uuid",
+        )
+        _setup_session(mock_session, [trigger])
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == "invalid_snapshot_id"
+        mock_create_run.assert_not_called()
+        assert any(getattr(c[0][0], "validation_result", None) == "poll_error" for c in mock_session.add.call_args_list)
+
+    async def test_valid_snapshot_id_passed_to_create_run(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A valid snapshot_id from config must be forwarded to create_run."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        snapshot_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+            snapshot_id=str(snapshot_id),
+        )
+        _setup_session(mock_session, [trigger])
+
+        await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert mock_create_run.await_count == 1
+        assert mock_create_run.call_args[1]["snapshot_id"] == snapshot_id
+
+    async def test_missing_snapshot_id_defaults_to_zero(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A trigger with no snapshot_id in config must use uuid.UUID(int=0)."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+            snapshot_id=None,
+        )
+        _setup_session(mock_session, [trigger])
+
+        await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert mock_create_run.await_count == 1
+        assert mock_create_run.call_args[1]["snapshot_id"] == uuid.UUID(int=0)
+
+    async def test_create_run_failure_reports_error(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A create_run failure should be recorded as an error result, not crash."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger])
+        mock_create_run.side_effect = RuntimeError("boom")
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "error"
+        assert results[0]["reason"] == "create_run_failed"
+        assert any(getattr(c[0][0], "validation_result", None) == "error" for c in mock_session.add.call_args_list)

@@ -17,6 +17,8 @@ from modulo.core.trigger_engine.polling import (
     _build_polling_connector,
     _fire_polling_trigger,
     _log_poll_event,
+    _update_next_fire,
+    _update_next_fire_no_last,
     evaluate_condition,
 )
 from modulo.db.models.trigger import Trigger
@@ -254,6 +256,17 @@ def _setup_session_for_polling(
 
 
 class TestDatabasePollingEntry:
+    def _entry(self, **overrides: Any) -> DatabasePollingEntry:
+        return DatabasePollingEntry(
+            trigger_id=overrides.get("trigger_id", uuid.uuid4()),
+            org_id=overrides.get("org_id", uuid.uuid4()),
+            pipeline_id=overrides.get("pipeline_id", uuid.uuid4()),
+            connector_instance_id=overrides.get("connector_instance_id", uuid.uuid4()),
+            poll_query=overrides.get("poll_query", "query"),
+            condition_expression=overrides.get("condition_expression"),
+            next_fire_at=overrides.get("next_fire_at", datetime.datetime.now(datetime.UTC)),
+        )
+
     @pytest.mark.parametrize(
         "offset_from_now,expected_due",
         [
@@ -262,31 +275,43 @@ class TestDatabasePollingEntry:
         ],
     )
     def test_is_due(self, offset_from_now: datetime.timedelta, expected_due: bool) -> None:
-        entry = DatabasePollingEntry(
-            trigger_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            pipeline_id=uuid.uuid4(),
-            connector_instance_id=uuid.uuid4(),
-            poll_query="query",
-            condition_expression=None,
+        entry = self._entry(
             next_fire_at=datetime.datetime.now(datetime.UTC) + offset_from_now,
         )
         due, delay = entry.is_due()
         assert due is expected_due
         if expected_due:
             assert delay.total_seconds() == 0
+        else:
+            assert delay.total_seconds() > 0
 
     def test_task_name(self) -> None:
-        entry = DatabasePollingEntry(
-            trigger_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            pipeline_id=uuid.uuid4(),
-            connector_instance_id=uuid.uuid4(),
-            poll_query="query",
-            condition_expression=None,
-            next_fire_at=datetime.datetime.now(datetime.UTC),
-        )
+        entry = self._entry()
         assert entry.task == "modulo.polling.fire_trigger"
+
+    def test_name(self) -> None:
+        tid = uuid.uuid4()
+        entry = self._entry(trigger_id=tid)
+        assert entry.name == f"polling-{tid}"
+
+    def test_schedule_is_self(self) -> None:
+        entry = self._entry()
+        assert entry.schedule is entry
+
+    def test_kwargs_empty(self) -> None:
+        entry = self._entry()
+        assert entry.kwargs == {}
+
+    def test_options_task_id_includes_trigger_and_timestamp(self) -> None:
+        tid = uuid.uuid4()
+        entry = self._entry(trigger_id=tid)
+        opts = entry.options
+        assert opts["task_id"].startswith(f"polling-{tid}-")
+
+    def test_repr(self) -> None:
+        tid = uuid.uuid4()
+        entry = self._entry(trigger_id=tid)
+        assert repr(entry) == f"<DatabasePollingEntry trigger={tid} next={entry._next_fire_at.isoformat()}>"
 
     def test_args(self) -> None:
         tid = uuid.uuid4()
@@ -305,15 +330,7 @@ class TestDatabasePollingEntry:
         assert entry.args == [str(tid), str(oid), str(pid), str(ci), "select *", "[?id]"]
 
     def test_args_condition_none(self) -> None:
-        entry = DatabasePollingEntry(
-            trigger_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            pipeline_id=uuid.uuid4(),
-            connector_instance_id=uuid.uuid4(),
-            poll_query="q",
-            condition_expression=None,
-            next_fire_at=datetime.datetime.now(datetime.UTC),
-        )
+        entry = self._entry(poll_query="q")
         assert entry.args[-1] == ""
 
 
@@ -389,6 +406,192 @@ class TestDatabasePollingScheduler:
             result = scheduler.tick()
             mock_sync.assert_called_once()
             assert result == 30.0
+
+    def test_fetch_due_triggers_missing_connector_instance(self) -> None:
+        """A polling trigger without connector_instance_id is skipped, logged, and advanced."""
+        row = MagicMock()
+        row.id = uuid.uuid4()
+        row.organisation_id = uuid.uuid4()
+        row.pipeline_id = uuid.uuid4()
+        row.config_json = {}
+        row.next_fire_at = datetime.datetime.now(datetime.UTC)
+
+        session = MagicMock()
+        result = MagicMock()
+        result.all.return_value = [row]
+        session.execute.return_value = result
+
+        # Avoid DatabasePollingScheduler.__init__ which opens a real DB session.
+        scheduler = DatabasePollingScheduler.__new__(DatabasePollingScheduler)
+        with (
+            patch("modulo.core.pipeline_executor_task.get_beat_sync_session", return_value=session),
+            patch("modulo.core.trigger_engine.polling._log.warning") as mock_warning,
+        ):
+            rows = scheduler._fetch_due_triggers()
+
+        assert rows == []
+        mock_warning.assert_called_once()
+        session.add.assert_called_once()
+        session.commit.assert_called_once()
+
+    def test_fetch_due_triggers_includes_due_row(self) -> None:
+        """A due polling trigger with a valid connector_instance_id is returned as a row dict."""
+        tid = uuid.uuid4()
+        oid = uuid.uuid4()
+        pid = uuid.uuid4()
+        ci = uuid.uuid4()
+        next_fire = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=5)
+
+        row = MagicMock()
+        row.id = tid
+        row.organisation_id = oid
+        row.pipeline_id = pid
+        row.config_json = {"connector_instance_id": str(ci), "poll_query": "select 1", "condition_expression": "[?id]"}
+        row.next_fire_at = next_fire
+
+        session = MagicMock()
+        result = MagicMock()
+        result.all.return_value = [row]
+        session.execute.return_value = result
+
+        scheduler = DatabasePollingScheduler.__new__(DatabasePollingScheduler)
+        with patch("modulo.core.pipeline_executor_task.get_beat_sync_session", return_value=session):
+            rows = scheduler._fetch_due_triggers()
+
+        assert rows == [
+            {
+                "trigger_id": tid,
+                "org_id": oid,
+                "pipeline_id": pid,
+                "connector_instance_id": ci,
+                "poll_query": "select 1",
+                "condition_expression": "[?id]",
+                "next_fire_at": next_fire,
+            }
+        ]
+        session.add.assert_not_called()
+        session.commit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# fire_polling_trigger — lock contention and query timeout paths
+# ---------------------------------------------------------------------------
+
+
+async def test_fire_polling_trigger_busy_lock_not_acquired(mock_db_components) -> None:
+    """When the advisory lock is not acquired, the fire is skipped as busy."""
+    session = mock_db_components
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = MagicMock(return_value=bind_mock)
+
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = False
+    session.execute = AsyncMock(return_value=lock_result)
+
+    result = await _fire_polling_trigger(
+        trigger_id=_TRIGGER_ID,
+        org_id=_ORG_ID,
+        pipeline_id=_PIPELINE_ID,
+        connector_instance_id=_CI_ID,
+        poll_query="query",
+        condition_expression=None,
+    )
+    assert result == {"status": "skipped", "reason": "trigger_busy"}
+
+
+async def test_fire_polling_trigger_query_timeout(
+    mock_db_components,
+    mock_secrets_backend,
+    mock_connector,
+) -> None:
+    """A query timeout should be reported as query_timeout, not crash."""
+    session = mock_db_components
+    _, connector = mock_connector
+    connector.query.side_effect = SATimeoutError()
+
+    trigger = _make_trigger(config={"snapshot_id": "uuid", "poll_interval_seconds": 60})
+    _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
+
+    result = await _fire_polling_trigger(
+        trigger_id=_TRIGGER_ID,
+        org_id=_ORG_ID,
+        pipeline_id=_PIPELINE_ID,
+        connector_instance_id=_CI_ID,
+        poll_query="select * from issues",
+        condition_expression=None,
+    )
+    assert result["status"] == "error"
+    assert result["reason"] == "query_timeout"
+
+
+async def test_fire_polling_trigger_asyncio_timeout_maps_to_query_failed(
+    mock_db_components,
+    mock_secrets_backend,
+    mock_connector,
+) -> None:
+    """A real asyncio timeout escapes the sqlalchemy TimeoutError handler and
+    surfaces as query_failed — locks in current behaviour for the wait_for path."""
+    session = mock_db_components
+    _, connector = mock_connector
+    connector.query.side_effect = TimeoutError()
+
+    trigger = _make_trigger(config={"snapshot_id": "uuid", "poll_interval_seconds": 60})
+    _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
+
+    result = await _fire_polling_trigger(
+        trigger_id=_TRIGGER_ID,
+        org_id=_ORG_ID,
+        pipeline_id=_PIPELINE_ID,
+        connector_instance_id=_CI_ID,
+        poll_query="select * from issues",
+        condition_expression=None,
+    )
+    assert result["status"] == "error"
+    assert result["reason"] == "query_failed"
+
+
+# ---------------------------------------------------------------------------
+# _update_next_fire / _update_next_fire_no_last
+# ---------------------------------------------------------------------------
+
+
+def _update_stmt_sql(session: MagicMock) -> str:
+    args, _kwargs = session.execute.call_args
+    return str(args[0])
+
+
+class TestUpdateNextFire:
+    async def test_update_next_fire_sets_last_and_next(self) -> None:
+        session = MagicMock()
+        session.execute = AsyncMock(return_value=MagicMock())
+        trigger = _make_trigger(config={"poll_interval_seconds": 120})
+
+        await _update_next_fire(session, trigger)
+
+        sql = _update_stmt_sql(session)
+        assert "last_fired_at" in sql
+        assert "next_fire_at" in sql
+
+    async def test_update_next_fire_default_interval(self) -> None:
+        session = MagicMock()
+        session.execute = AsyncMock(return_value=MagicMock())
+        trigger = _make_trigger(config={})
+
+        await _update_next_fire(session, trigger)
+
+        assert "next_fire_at" in _update_stmt_sql(session)
+
+    async def test_update_next_fire_no_last_omits_last_fired_at(self) -> None:
+        session = MagicMock()
+        session.execute = AsyncMock(return_value=MagicMock())
+        trigger = _make_trigger(config={"poll_interval_seconds": 60})
+
+        await _update_next_fire_no_last(session, trigger)
+
+        sql = _update_stmt_sql(session)
+        assert "next_fire_at" in sql
+        assert "last_fired_at" not in sql
 
 
 # ---------------------------------------------------------------------------
