@@ -666,7 +666,7 @@ async def test_execute_sets_cancelled_on_run_cancelled_error():
 # ---------------------------------------------------------------------------
 
 
-async def _bypass_capacity(mock_self, *, run_id, org_id, pipeline_id, max_concurrent):
+async def _bypass_capacity(mock_self, **kwargs):
     """Return a run with status='running' to bypass the capacity check."""
     run = MagicMock()
     run.status = "running"
