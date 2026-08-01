@@ -1178,7 +1178,8 @@ async def migrate_data_endpoint(
             logger.exception("schemas.migrate_audit")
             logger.warning("Audit event not recorded — schema migration table missing")
 
-    except HTTPException:
+    except HTTPException as exc:
+        logger.debug("schemas.migrate.audit_http_error", extra={"detail": exc.detail})
         raise
     except asyncio.CancelledError:
         raise
