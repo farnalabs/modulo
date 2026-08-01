@@ -11,6 +11,7 @@ Supports:
 - Backwards-compatible API key check
 """
 
+import base64
 import hashlib
 import hmac
 import logging
@@ -32,18 +33,19 @@ from authlib.oauth2.rfc6749 import (  # type: ignore[import-untyped]
 from fastapi import HTTPException, status
 from jwt import InvalidTokenError as JWTError
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.oauth_client import OAuthClient
-from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
+from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthConsentState, OAuthTokenFamily
 
 _log = logging.getLogger(__name__)
 
 _ALGORITHM = "HS256"
 _CODE_LENGTH = 64
 _CODE_TTL_MINUTES = 10
+_CONSENT_STATE_TTL_MINUTES = 15
 
 VALID_SCOPES = frozenset({"trigger:run", "hitl:review", "library:browse"})
 
@@ -289,6 +291,55 @@ def _generate_code() -> str:
     return secrets.token_urlsafe(_CODE_LENGTH)
 
 
+# ---------------------------------------------------------------------------
+# PKCE (RFC 7636) — S256 only
+# ---------------------------------------------------------------------------
+
+
+def _base64url_encode(data: bytes) -> str:
+    """Base64url encode without padding (RFC 4648 §5, as used by RFC 7636)."""
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def compute_pkce_challenge(code_verifier: str) -> str:
+    """Compute the S256 code challenge for a verifier (RFC 7636 §4.2)."""
+    return _base64url_encode(hashlib.sha256(code_verifier.encode("ascii")).digest())
+
+
+def validate_pkce_method(code_challenge_method: str | None) -> str:
+    """Validate the PKCE method — S256 is mandatory, plain/empty rejected.
+
+    Returns the normalized method ("S256"). Raises InvalidGrantError on any
+    non-S256 value so the challenge is always verifiable at exchange time.
+    """
+    if code_challenge_method is None or not code_challenge_method.strip():
+        raise InvalidGrantError("PKCE code_challenge_method 'S256' is required")
+    normalized = code_challenge_method.strip().upper()
+    if normalized != "S256":
+        raise InvalidGrantError("PKCE code_challenge_method must be 'S256'")
+    return normalized
+
+
+def verify_pkce(
+    code_verifier: str | None,
+    code_challenge: str | None,
+    code_challenge_method: str | None,
+) -> None:
+    """Verify a PKCE code_verifier against the stored challenge (RFC 7636 §4.6).
+
+    Fail-closed: missing verifier, missing challenge, or a non-S256 method all
+    raise InvalidGrantError. Comparison is constant-time via hmac.compare_digest.
+    """
+    if not code_verifier or not code_verifier.strip():
+        raise InvalidGrantError("PKCE code_verifier is required")
+    validate_pkce_method(code_challenge_method)
+    if not code_challenge or not code_challenge.strip():
+        raise InvalidGrantError("PKCE code_challenge missing from authorization code")
+    expected = compute_pkce_challenge(code_verifier)
+    if not hmac.compare_digest(expected.encode("ascii"), code_challenge.encode("ascii")):
+        raise InvalidGrantError("PKCE verification failed - code_verifier does not match code_challenge")
+
+
 async def create_authorization_code(
     session: AsyncSession,
     *,
@@ -296,15 +347,29 @@ async def create_authorization_code(
     org_id: uuid.UUID,
     scopes: str,
     redirect_uri: str,
+    account_id: uuid.UUID,
+    code_challenge: str,
+    code_challenge_method: str = "S256",
 ) -> str:
-    """Generate and store a one-time authorization code using authlib scope validation."""
+    """Generate and store a one-time, account-bound authorization code.
+
+    The code is minted ONLY by the authenticated consent approve endpoint
+    (ADR 017 DECISION 1 — approve POST is the consent). ``account_id`` is the
+    account that approved; ``code_challenge`` comes from the consent state row
+    (never client-supplied at approve). The challenge is verified at token
+    exchange via ``verify_pkce``.
+    """
+    normalized_method = validate_pkce_method(code_challenge_method)
     code = _generate_code()
     auth_code = OAuthAuthorizationCode(
         code=code,
         client_id=client_id,
         organisation_id=org_id,
+        account_id=account_id,
         scopes=scopes,
         redirect_uri=redirect_uri,
+        code_challenge=code_challenge,
+        code_challenge_method=normalized_method,
         expires_at=datetime.now(UTC) + timedelta(minutes=_CODE_TTL_MINUTES),
     )
     session.add(auth_code)
@@ -319,12 +384,14 @@ async def consume_authorization_code(
     client_id: str,
     redirect_uri: str,
     client_secret: str,
+    code_verifier: str | None = None,
 ) -> OAuthAuthorizationCode:
     """Validate and consume a one-time authorization code.
 
-    Validates client credentials and code properties, then marks the code used.
-    Uses authlib's AuthlibClientWrapper for credential validation and the
-    authlib exception hierarchy for RFC-compliant error codes.
+    Validates client credentials, code properties, and the PKCE code_verifier
+    against the stored S256 challenge, then marks the code used. Uses authlib's
+    AuthlibClientWrapper for credential validation and the authlib exception
+    hierarchy for RFC-compliant error codes.
     """
     client = await validate_client_secret(session, client_id, client_secret)
 
@@ -353,6 +420,10 @@ async def consume_authorization_code(
             if auth_code.expires_at < datetime.now(UTC):
                 raise InvalidGrantError("Authorization code has expired")
 
+            # PKCE must be verified BEFORE the code is consumed — a failing
+            # verifier leaves the code intact for a legitimate retry.
+            verify_pkce(code_verifier, auth_code.code_challenge, auth_code.code_challenge_method)
+
             auth_code.used = True
             await session.flush()
     except ProgrammingError:
@@ -364,6 +435,75 @@ async def consume_authorization_code(
         ) from None
 
     return auth_code
+
+
+# ---------------------------------------------------------------------------
+# Consent-state store (ADR 017 A1b)
+# ---------------------------------------------------------------------------
+
+
+async def create_consent_state(
+    session: AsyncSession,
+    *,
+    state: str,
+    client_id: str,
+    redirect_uri: str,
+    scopes: list[str],
+    code_challenge: str,
+    org_id: uuid.UUID,
+) -> None:
+    """Persist a browser consent handoff created by the anonymous authorize 302.
+
+    ``account_id`` stays NULL until the authenticated approve POST populates
+    it. The state is single-use and TTL-bounded (~15 min). The stored scopes
+    and code_challenge are the ONLY source at mint time — a tampered approve
+    payload can never escalate them (approve re-reads the state row).
+    """
+    state_row = OAuthConsentState(
+        state=state,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        scopes=scopes,
+        code_challenge=code_challenge,
+        organisation_id=org_id,
+        expires_at=datetime.now(UTC) + timedelta(minutes=_CONSENT_STATE_TTL_MINUTES),
+    )
+    session.add(state_row)
+    await session.flush()
+
+
+async def consume_consent_state(
+    session: AsyncSession, *, state: str, org_id: uuid.UUID, account_id: uuid.UUID
+) -> OAuthConsentState | None:
+    """Atomically claim and return an unexpired, unconsumed consent state.
+
+    Uses ``UPDATE ... WHERE state=:s AND consumed=false AND expires_at > now
+    RETURNING`` so two concurrent approves cannot both consume the same state
+    (TOCTOU-safe). ``account_id`` (the Bearer principal who approved) is
+    stamped onto the row for auditability. Returns None for unknown,
+    already-consumed, or expired states — the caller denies. RLS context is set
+    by the caller before this runs, so the UPDATE is also org-bounded at the
+    DB layer (cross-org states are never visible and return None).
+    """
+    try:
+        result = await session.execute(
+            update(OAuthConsentState)
+            .where(
+                OAuthConsentState.state == state,
+                OAuthConsentState.consumed.is_(False),
+                OAuthConsentState.expires_at > datetime.now(UTC),
+            )
+            .values(consumed=True, account_id=account_id)
+            .returning(OAuthConsentState)
+        )
+    except ProgrammingError:
+        _log.exception("auth.oauth")
+
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    return result.scalar_one_or_none()
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +519,7 @@ class OAuthAccessTokenClaims:
 
     client_id: str
     organisation_id: uuid.UUID
+    account_id: uuid.UUID
     scopes: list[str]
     token_family: str
     token_sequence: int
@@ -389,15 +530,22 @@ def create_oauth_access_token(
     secret_key: str,
     *,
     organisation_id: str,
+    account_id: str,
     scopes: list[str],
     token_family: str,
     token_sequence: int,
 ) -> str:
-    """Issue a JWT access token for OAuth client credentials flow."""
+    """Issue a JWT access token for OAuth client credentials flow.
+
+    Carries the consenting account's ``account_id`` so the MCP middleware can
+    resolve the account's LIVE org role per call and clamp scope-derived roles
+    to it (ADR 017) instead of synthesising a uuid5(client_id) actor.
+    """
     now = datetime.now(UTC)
     claims = {
         "sub": client_id,
         "org_id": organisation_id,
+        "account_id": account_id,
         "scopes": " ".join(scopes),
         "purpose": "oauth_access",
         "token_family": token_family,
@@ -426,6 +574,10 @@ def decode_oauth_access_token(token: str, secret_key: str) -> OAuthAccessTokenCl
     if not isinstance(org_id_str, str):
         raise JWTError("Token missing or invalid 'org_id' claim")
 
+    account_id_str = payload.get("account_id")
+    if not isinstance(account_id_str, str) or not account_id_str:
+        raise JWTError("Token missing or invalid 'account_id' claim")
+
     scopes_str = payload.get("scopes")
     if not isinstance(scopes_str, str):
         scopes_str = ""
@@ -440,12 +592,14 @@ def decode_oauth_access_token(token: str, secret_key: str) -> OAuthAccessTokenCl
 
     try:
         parsed_org_id = uuid.UUID(org_id_str)
+        parsed_account_id = uuid.UUID(account_id_str)
     except ValueError as exc:
-        raise JWTError("Token contains malformed org_id") from exc
+        raise JWTError("Token contains malformed org_id/account_id") from exc
 
     return OAuthAccessTokenClaims(
         client_id=client_id,
         organisation_id=parsed_org_id,
+        account_id=parsed_account_id,
         scopes=scopes_str.split(),
         token_family=token_family,
         token_sequence=token_sequence,
@@ -578,6 +732,7 @@ class OAuthRefreshTokenClaims:
 
     client_id: str
     organisation_id: uuid.UUID
+    account_id: uuid.UUID
     scopes: list[str]
     token_family: str
     token_sequence: int
@@ -588,6 +743,7 @@ def create_oauth_refresh_token(
     secret_key: str,
     *,
     organisation_id: str,
+    account_id: str,
     scopes: list[str],
     token_family: str,
     token_sequence: int,
@@ -599,6 +755,7 @@ def create_oauth_refresh_token(
         "purpose": "oauth_refresh",
         "sub": client_id,
         "org_id": organisation_id,
+        "account_id": account_id,
         "scopes": " ".join(scopes),
         "token_family": token_family,
         "token_sequence": token_sequence,
@@ -626,6 +783,10 @@ def decode_oauth_refresh_token(token: str, secret_key: str) -> OAuthRefreshToken
     if not isinstance(org_id_str, str):
         raise JWTError("Token missing or invalid 'org_id' claim")
 
+    account_id_str = payload.get("account_id")
+    if not isinstance(account_id_str, str) or not account_id_str:
+        raise JWTError("Token missing or invalid 'account_id' claim")
+
     scopes_str = payload.get("scopes")
     if not isinstance(scopes_str, str):
         scopes_str = ""
@@ -640,12 +801,14 @@ def decode_oauth_refresh_token(token: str, secret_key: str) -> OAuthRefreshToken
 
     try:
         parsed_org_id = uuid.UUID(org_id_str)
+        parsed_account_id = uuid.UUID(account_id_str)
     except ValueError as exc:
-        raise JWTError("Token contains malformed org_id") from exc
+        raise JWTError("Token contains malformed org_id/account_id") from exc
 
     return OAuthRefreshTokenClaims(
         client_id=client_id,
         organisation_id=parsed_org_id,
+        account_id=parsed_account_id,
         scopes=scopes_str.split(),
         token_family=token_family,
         token_sequence=token_sequence,
@@ -689,3 +852,63 @@ def validate_client_scopes(client: OAuthClient, requested_scopes: list[str]) -> 
 def validate_token_scope(token_scopes: str, required_scope: str) -> bool:
     """Check whether token scopes satisfy a required scope using authlib scope matching."""
     return required_scope in scope_to_list(token_scopes) if required_scope else True
+
+
+# ---------------------------------------------------------------------------
+# Scope → role mapping (shared by token/refresh issuance and MCP middleware)
+# ---------------------------------------------------------------------------
+
+
+def scopes_required_role(scopes: list[str]) -> str:
+    """Return the minimum org role a live account must hold to carry these scopes.
+
+    Mirrors the MCP middleware's scope→role ladder: ``hitl:review`` requires
+    ``operator``; anything else is ``runner`` (ADR 017 — scope grants can never
+    exceed the account's live role).
+    """
+    if "hitl:review" in scopes:
+        return "operator"
+    return "runner"
+
+
+def clamp_oauth_role(scope_role: str, live_role: str) -> str:
+    """Clamp a scope-derived role to the account's live org role (the lower wins).
+
+    A token's scope grants can never exceed what the account currently holds:
+    a demoted operator's ``hitl:review`` token degrades to the live role on the
+    next call (ADR 017 per-call live re-validation). Pure + unit-testable, no DB.
+    """
+    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+
+    if scope_role not in ORG_ROLE_HIERARCHY or live_role not in ORG_ROLE_HIERARCHY:
+        return live_role
+    if ORG_ROLE_HIERARCHY[scope_role] <= ORG_ROLE_HIERARCHY[live_role]:
+        return scope_role
+    return live_role
+
+
+async def verify_live_role_covers_scopes(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    org_id: uuid.UUID,
+    scopes: list[str],
+) -> str:
+    """Resolve the account's LIVE org role and assert it covers the granted scopes.
+
+    Returns the live role on success. Raises InvalidGrantError when the account
+    has no active membership or its live role is below what the scopes require —
+    the token/refresh endpoints then deny issuance (fail-closed, ADR 017).
+    """
+    from modulo.auth.dependencies import resolve_role_from_membership
+    from modulo.auth.permissions import PermissionDenied, assert_org_role
+
+    live_role = await resolve_role_from_membership(session, str(account_id), str(org_id))
+    if live_role is None:
+        raise InvalidGrantError("Account has no active membership for this organisation")
+    required = scopes_required_role(scopes)
+    try:
+        assert_org_role(live_role, required, subject="OAuth scope grant")
+    except PermissionDenied as exc:
+        raise InvalidGrantError(f"Account role does not cover the granted scopes: {exc}") from exc
+    return live_role

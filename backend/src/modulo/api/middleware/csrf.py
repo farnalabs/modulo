@@ -25,6 +25,14 @@ _log = logging.getLogger(__name__)
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
+# Hardcoded exact-path CSRF exemptions (ADR 017 DECISION 1). These endpoints
+# authenticate via client_secret (body or Basic auth) — cookie-independent —
+# so a CSRF cookie check would 403 them even though they carry no CSRF risk.
+# They are deliberately exact paths, NOT env-configurable: a deploy can never
+# silently un-exempt the OAuth token/refresh exchange and break every MCP
+# client. The configurable prefix list (triggers/auth) stays audited separately.
+_HARDCODED_EXEMPT_PATHS: frozenset[str] = frozenset({"/mcp/oauth/token", "/mcp/oauth/refresh"})
+
 
 class CsrfMiddleware(BaseHTTPMiddleware):
     """Double-submit cookie CSRF protection for cookie-authenticated requests."""
@@ -85,6 +93,8 @@ class CsrfMiddleware(BaseHTTPMiddleware):
         return await call_next(request)  # type: ignore[no-any-return]
 
     def _is_exempt(self, path: str) -> bool:
+        if path in _HARDCODED_EXEMPT_PATHS:
+            return True
         for pattern in self._exempt_paths:
             if fnmatch.fnmatch(path, pattern):
                 return True
