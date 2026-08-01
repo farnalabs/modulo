@@ -575,7 +575,8 @@ async function loadVersions(schemaId: string) {
     })
     if (error) return
     versions.value = data.items ?? []
-  } catch {
+  } catch (e: unknown) {
+    console.warn('Failed to load versions', e)
     versions.value = []
   } finally {
     loadingVersions.value = false
@@ -719,7 +720,8 @@ async function restoreVersion(version: SchemaVersion) {
 function formatDate(dateStr: string): string {
   try {
     return formatDateShort(new Date(dateStr))
-  } catch {
+  } catch (e: unknown) {
+    console.warn('Failed to format date', e)
     return dateStr
   }
 }

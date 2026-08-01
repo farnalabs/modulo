@@ -860,8 +860,8 @@ async function fetchHitlGates(runId: string) {
     if (data) {
       pendingGates.value = ((data as any).gates || []) as components['schemas']['GateResponse'][]
     }
-  } catch {
-    // silently fail
+  } catch (e: unknown) {
+    console.warn('Failed to load pending HITL gates', e)
   } finally {
     hitlLoading.value = false
   }
