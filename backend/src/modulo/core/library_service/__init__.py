@@ -829,16 +829,31 @@ def _parse_version_key(version: str | None) -> tuple[int, ...]:
         return (0,)
 
 
+def _resolve_primitive_types(
+    primitive_type: str | None,
+    primitive_types: list[str] | None,
+) -> list[str] | None:
+    """Merge single and plural type filters into one set, or None when unfiltered."""
+    if primitive_types:
+        return primitive_types
+    if primitive_type is not None:
+        return [primitive_type]
+    return None
+
+
 def _filter_primitives(
     primitives: list[LibraryPrimitive],
     *,
-    primitive_type: str | None,
-    search: str | None,
+    primitive_type: str | None = None,
+    primitive_types: list[str] | None = None,
+    search: str | None = None,
 ) -> list[LibraryPrimitive]:
     if not primitives:
         return []
-    if primitive_type is not None:
-        primitives = [p for p in primitives if p.primitive_type == primitive_type]
+    allowed_types = _resolve_primitive_types(primitive_type, primitive_types)
+    if allowed_types is not None:
+        allowed = set(allowed_types)
+        primitives = [p for p in primitives if p.primitive_type in allowed]
     if search:
         term = search.strip().lower()
         if term:
@@ -850,13 +865,19 @@ def _filter_primitives(
 
 def _filter_modulo(
     *,
-    primitive_type: str | None,
-    search: str | None,
+    primitive_type: str | None = None,
+    primitive_types: list[str] | None = None,
+    search: str | None = None,
 ) -> list[LibraryPrimitive]:
     items = _MODULO_PRIMITIVES
     if os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
         items = [*items, *_ensure_dogfood_primitives()]
-    return _filter_primitives(items, primitive_type=primitive_type, search=search)
+    return _filter_primitives(
+        items,
+        primitive_type=primitive_type,
+        primitive_types=primitive_types,
+        search=search,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -869,6 +890,7 @@ async def list_primitives(
     org_id: uuid.UUID,
     *,
     primitive_type: str | None = None,
+    primitive_types: list[str] | None = None,
     search: str | None = None,
     page: int = 1,
     page_size: int = 20,
@@ -885,6 +907,10 @@ async def list_primitives(
     built-ins, ``source="local"`` returns only the org's own saved
     primitives. When omitted, all sources are merged (existing default
     behaviour, unchanged for backwards compatibility).
+
+    ``primitive_types`` (when given) restricts the result to any of the
+    listed primitive types, e.g. ``["workflow", "agent"]``. It takes
+    precedence over the single-value ``primitive_type`` filter.
     """
     if excluded_tiers is None:
         excluded_tiers = ["in_dev"]
@@ -899,6 +925,7 @@ async def list_primitives(
                 page=page,
                 page_size=page_size,
                 primitive_type=primitive_type,
+                primitive_types=primitive_types,
                 search=search,
                 cursor=cursor,
                 excluded_tiers=excluded_tiers,
@@ -908,6 +935,7 @@ async def list_primitives(
                     session,
                     org_id,
                     primitive_type=primitive_type,
+                    primitive_types=primitive_types,
                     search=search,
                 )
     except ProgrammingError:
@@ -927,9 +955,17 @@ async def list_primitives(
     community: list[LibraryPrimitive] = []
     if include_community:
         if source is None or source == "modulo":
-            modulo = _filter_modulo(primitive_type=primitive_type, search=search)
+            modulo = _filter_modulo(
+                primitive_type=primitive_type,
+                primitive_types=primitive_types,
+                search=search,
+            )
         if source is None or source == "community":
-            community = _filter_community(primitive_type=primitive_type, search=search)
+            community = _filter_community(
+                primitive_type=primitive_type,
+                primitive_types=primitive_types,
+                search=search,
+            )
             seen_ids = {p.id for p in community}
             for p in db_community:
                 if p.id not in seen_ids:
@@ -1664,10 +1700,16 @@ _COMMUNITY_CACHE_LOCK: asyncio.Lock = asyncio.Lock()
 
 def _filter_community(
     *,
-    primitive_type: str | None,
-    search: str | None,
+    primitive_type: str | None = None,
+    primitive_types: list[str] | None = None,
+    search: str | None = None,
 ) -> list[LibraryPrimitive]:
-    return _filter_primitives(_COMMUNITY_PRIMITIVES, primitive_type=primitive_type, search=search)
+    return _filter_primitives(
+        _COMMUNITY_PRIMITIVES,
+        primitive_type=primitive_type,
+        primitive_types=primitive_types,
+        search=search,
+    )
 
 
 async def _fetch_published_community_from_db(
@@ -1675,6 +1717,7 @@ async def _fetch_published_community_from_db(
     org_id: uuid.UUID,
     *,
     primitive_type: str | None = None,
+    primitive_types: list[str] | None = None,
     search: str | None = None,
 ) -> list[LibraryPrimitive]:
     """Fetch published community items from the database.
@@ -1693,8 +1736,9 @@ async def _fetch_published_community_from_db(
                 .where(LibraryPrimitive.visibility == "community")
                 .order_by(LibraryPrimitive.created_at.desc())
             )
-            if primitive_type is not None:
-                stmt = stmt.where(LibraryPrimitive.primitive_type == primitive_type)
+            allowed_types = _resolve_primitive_types(primitive_type, primitive_types)
+            if allowed_types is not None:
+                stmt = stmt.where(LibraryPrimitive.primitive_type.in_(allowed_types))
             if search:
                 term = f"%{search.strip()}%"
                 stmt = stmt.where(LibraryPrimitive.name.ilike(term))

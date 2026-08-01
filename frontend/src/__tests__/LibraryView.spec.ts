@@ -141,4 +141,36 @@ describe('LibraryView', () => {
     expect(wrapper.find('[data-testid="library-community-disclaimer"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('PRD to Requirements')
   })
+
+  it('sends a combined primitive_types filter when multiple types are selected', async () => {
+    getMock.mockResolvedValue({ items: [NATIVE_ITEM], total: 1, page: 1, page_size: 12 })
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+
+    const openDropdown = async () => {
+      await wrapper.get('[data-testid="library-type-filter-button"]').trigger('click')
+      await nextTick()
+    }
+    const checkboxAt = (index: number) => {
+      const checkbox = wrapper.findAll('[data-testid="library-type-filter-dropdown"] input')[index]
+      if (!checkbox) throw new Error(`expected a type checkbox at index ${index}`)
+      return checkbox
+    }
+
+    await openDropdown()
+    await checkboxAt(1).trigger('change') // workflow
+    await nextTick()
+    await openDropdown()
+    await checkboxAt(2).trigger('change') // agent
+    await nextTick()
+
+    const lastCall = getMock.mock.calls.at(-1)!
+    const opts = lastCall[1] as { params: { query: Record<string, unknown> } }
+    expect(opts.params.query.primitive_types).toBe('workflow,agent')
+    expect(opts.params.query.primitive_type).toBeUndefined()
+  })
 })

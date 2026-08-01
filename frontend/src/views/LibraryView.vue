@@ -271,6 +271,7 @@ const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<Li
     if (search.value) params.set('search', search.value)
     if (section.value === 'community') params.set('source', 'community')
     if (selectedTypes.value.length === 1) params.set('primitive_type', selectedTypes.value[0])
+    if (selectedTypes.value.length > 1) params.set('primitive_types', selectedTypes.value.join(','))
 
     const { data, error: err } = await api.GET('/api/v1/libraries', {
       params: { query: Object.fromEntries(params) as any },

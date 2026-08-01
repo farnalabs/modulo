@@ -71,6 +71,18 @@ _MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50 MB
 router = APIRouter(prefix="/api/v1/libraries", tags=["libraries"])
 
 
+def _split_primitive_types(raw: str | None) -> list[str] | None:
+    """Split a comma-separated ``primitive_types`` query value into a list.
+
+    Returns ``None`` when the value is empty so callers can treat it as
+    "no type filter".
+    """
+    if not raw:
+        return None
+    types = [t.strip() for t in raw.split(",") if t.strip()]
+    return types or None
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -279,6 +291,7 @@ async def list_library_primitives_endpoint(
     page_size: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(default=None),
     primitive_type: str | None = None,
+    primitive_types: str | None = None,
     search: str | None = None,
     source: str | None = None,
     session: AsyncSession = Depends(get_db_session),
@@ -294,6 +307,7 @@ async def list_library_primitives_endpoint(
                     session,
                     principal.organisation_id,
                     primitive_type=primitive_type,
+                    primitive_types=_split_primitive_types(primitive_types),
                     search=search,
                     page=page,
                     page_size=page_size,
