@@ -7,7 +7,7 @@ invalid-uuid short-circuits, and ``_validate_payload`` type edge cases.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,7 +16,7 @@ from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.core.graph_validator._types import try_parse_uuids
 from modulo.core.graph_validator.category_validator import validate_node_category
 
-_PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=UTC)
+_PHASE_1_CUTOVER = _gv_module._PHASE_1_CUTOVER
 
 
 def _snapshot(**kw) -> MagicMock:
@@ -41,17 +41,17 @@ def test_pre_existing_none_created_at():
 
 
 def test_pre_existing_before_cutover():
-    snap = _snapshot(created_at=datetime(2026, 7, 21, 12, 0, 0, tzinfo=UTC))
+    snap = _snapshot(created_at=_PHASE_1_CUTOVER - timedelta(days=1))
     assert _gv_module._is_pre_existing(snap)
 
 
 def test_pre_existing_after_cutover():
-    snap = _snapshot(created_at=datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC))
+    snap = _snapshot(created_at=_PHASE_1_CUTOVER + timedelta(days=1))
     assert not _gv_module._is_pre_existing(snap)
 
 
 def test_pre_existing_naive_datetime_assumed_utc():
-    snap = _snapshot(created_at=datetime(2026, 7, 21, 12, 0, 0))
+    snap = _snapshot(created_at=(_PHASE_1_CUTOVER - timedelta(days=1)).replace(tzinfo=None))
     assert _gv_module._is_pre_existing(snap)
 
 
@@ -69,7 +69,7 @@ async def test_validate_for_run_null_payload_is_error():
     """validate_for_run with input_payload=None emits INPUT_NULL_PAYLOAD."""
     snap = _snapshot(
         graph_json={"nodes": [{"id": "a"}, {"id": "b"}], "edges": [{"source": "a", "target": "b", "type": "normal"}]},
-        created_at=datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC),
+        created_at=_PHASE_1_CUTOVER + timedelta(days=1),
     )
     session = AsyncMock()
     session.execute = AsyncMock()
@@ -153,7 +153,7 @@ async def test_schema_compatibility_deep_skips_missing_pins():
     """Edges whose endpoints lack schema pins are skipped by deep check."""
     snap = _snapshot(
         graph_json={"nodes": [{"id": "a"}, {"id": "b"}], "edges": [{"source": "a", "target": "b", "type": "normal"}]},
-        created_at=datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC),
+        created_at=_PHASE_1_CUTOVER + timedelta(days=1),
     )
     session = AsyncMock()
     session.execute = AsyncMock()
