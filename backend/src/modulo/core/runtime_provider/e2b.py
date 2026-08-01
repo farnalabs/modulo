@@ -17,6 +17,7 @@ _DEFAULT_TEMPLATE_ID = "base"
 _DEFAULT_CMD_TIMEOUT = 60
 _REPO_CLONE_TIMEOUT = 120
 _MAX_PROVISION_TIMEOUT = 120
+_KILL_TIMEOUT = 30
 
 
 class E2BRuntimeProvider(RuntimeProvider):
@@ -85,10 +86,10 @@ class E2BRuntimeProvider(RuntimeProvider):
             try:
                 await self._clone_repo(sandbox, repo_url, spec.labels or {})
             except asyncio.CancelledError:
-                await sandbox.kill()
+                await asyncio.wait_for(sandbox.kill(), timeout=_KILL_TIMEOUT)
                 raise
             except Exception:
-                await sandbox.kill()
+                await asyncio.wait_for(sandbox.kill(), timeout=_KILL_TIMEOUT)
                 raise
 
         self._sandboxes[sandbox.sandbox_id] = sandbox
@@ -112,7 +113,10 @@ class E2BRuntimeProvider(RuntimeProvider):
 
         start = time.monotonic()
         try:
-            proc = await sandbox.commands.run(cmd_str, timeout=effective_timeout)
+            proc = await asyncio.wait_for(
+                sandbox.commands.run(cmd_str, timeout=effective_timeout),
+                timeout=effective_timeout,
+            )
             duration = int((time.monotonic() - start) * 1000)
             return ExecResult(
                 exit_code=getattr(proc, "exit_code", -1),
@@ -141,7 +145,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         sandbox = self._sandboxes.pop(provider_ref, None)
         if sandbox is not None:
             try:
-                await sandbox.kill()
+                await asyncio.wait_for(sandbox.kill(), timeout=_KILL_TIMEOUT)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -182,7 +186,10 @@ class E2BRuntimeProvider(RuntimeProvider):
             cmds.append(f"cd /home/user/repo && git checkout {shlex.quote(repo_ref)}")
         combined = " && ".join(cmds)
         try:
-            result = await sandbox.commands.run(combined, timeout=_REPO_CLONE_TIMEOUT)
+            result = await asyncio.wait_for(
+                sandbox.commands.run(combined, timeout=_REPO_CLONE_TIMEOUT),
+                timeout=_REPO_CLONE_TIMEOUT,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:

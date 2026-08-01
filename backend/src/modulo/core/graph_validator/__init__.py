@@ -522,7 +522,7 @@ class GraphValidator:
             # 2. Outgoing non-reject edges must have unique routing_labels.
             labels: list[str] = []
             for edge in edges:
-                if str(edge.get("source", edge.get("source_node_id", ""))) != nid:
+                if _string_or_default(edge.get("source"), _string_or_default(edge.get("source_node_id"), "")) != nid:
                     continue
                 if edge.get("type", edge.get("edge_type", "")) == "reject":
                     continue

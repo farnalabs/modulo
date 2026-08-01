@@ -80,6 +80,7 @@ _MAX_ERROR_MSG = 500
 
 _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after command times out
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
+_SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
@@ -706,9 +707,12 @@ def make_sandbox_agent_fn(
                 if path.endswith(".b64"):
                     content = base64.b64decode(content).decode()
                     path = path[:-4]
-                await sandbox.files.write(path, content)
+                await asyncio.wait_for(sandbox.files.write(path, content), timeout=_SANDBOX_IO_TIMEOUT)
 
-            await sandbox.files.write("/home/user/prompt.md", rendered_prompt)
+            await asyncio.wait_for(
+                sandbox.files.write("/home/user/prompt.md", rendered_prompt),
+                timeout=_SANDBOX_IO_TIMEOUT,
+            )
 
             _input_json = json.dumps(raw_input)
             if len(_input_json) > 10240:
@@ -778,9 +782,12 @@ def make_sandbox_agent_fn(
             output_json: Any = None
             try:
                 _remaining_after_cmd = max(_OUTPUT_READ_TIMEOUT, sandbox_timeout - (time.monotonic() - start_time))
-                raw_output = await sandbox.files.read(
-                    "/home/user/output.json",
-                    request_timeout=_remaining_after_cmd,
+                raw_output = await asyncio.wait_for(
+                    sandbox.files.read(
+                        "/home/user/output.json",
+                        request_timeout=_remaining_after_cmd,
+                    ),
+                    timeout=_remaining_after_cmd,
                 )
                 output_json = json.loads(raw_output)
             except Exception:
