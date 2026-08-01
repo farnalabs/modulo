@@ -1,6 +1,7 @@
 """Tests for readiness endpoint — aggregation logic, degraded/unavailable status, and check structure."""
 
 import asyncio
+import json
 from collections.abc import Generator
 from typing import Self
 from unittest.mock import AsyncMock, patch
@@ -15,6 +16,8 @@ from modulo.api.routes.health import (
     _check_database,
     _check_migrations,
     _check_redis,
+    _check_saq_workers,
+    _live_worker_hostnames,
     _per_check_timeout,
 )
 from modulo.settings import Settings, get_settings
@@ -265,3 +268,142 @@ class TestPerCheckTimeouts:
         assert result.status == "ok"
         assert result.latency_ms is not None
         assert result.latency_ms < 60_000
+
+
+class _FakeStatsRedis:
+    """Fake redis client exposing zrangebyscore/mget over an in-memory zset.
+
+    Scores are milliseconds, matching SAQ 0.26.4 (``saq.utils.now()``).
+    """
+
+    def __init__(self, stats: dict[str, int], blobs: dict[str, str]) -> None:
+        self._stats = stats
+        self._blobs = blobs
+
+    async def zrangebyscore(self, _key: str, min_score: int, max_score: str) -> list[bytes]:
+        out = []
+        for member, score in self._stats.items():
+            if score >= min_score and (max_score == "+inf" or score <= max_score):
+                out.append(member.encode())
+        return out
+
+    async def mget(self, members: list[bytes]) -> list[bytes | None]:
+        return [self._blobs.get(m.decode()).encode() if m.decode() in self._blobs else None for m in members]
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _worker_blob(hostname: str) -> str:
+    return json.dumps({"metadata": {"hostname": hostname}})
+
+
+@pytest.fixture()
+def reset_stale_probes() -> Generator[None, None, None]:
+    import modulo.api.routes.health as health_mod
+
+    health_mod._consecutive_stale_probes = 0
+    yield
+    health_mod._consecutive_stale_probes = 0
+
+
+class TestLiveWorkerHostnamesMsScores:
+    """SAQ stats zset scores are milliseconds — the liveness filter must compare in ms."""
+
+    async def _call(self, stats: dict[str, int], blobs: dict[str, str], now_ms: int) -> set[str]:
+        settings = _make_settings()
+        fake = _FakeStatsRedis(stats, blobs)
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("modulo.api.routes.health.time.time", return_value=now_ms / 1000),
+        ):
+            return await _live_worker_hostnames("runs")
+
+    async def test_fresh_included_stale_excluded_same_ms(self) -> None:
+        now_ms = 1_700_000_000_000
+        stats = {
+            "saq:runs:stats:fresh": now_ms + 90_000,
+            "saq:runs:stats:stale": now_ms - 1_000,
+            "saq:runs:stats:boundary": now_ms,
+        }
+        blobs = {
+            "saq:runs:stats:fresh": _worker_blob("machine-a"),
+            "saq:runs:stats:stale": _worker_blob("machine-b"),
+            "saq:runs:stats:boundary": _worker_blob("machine-c"),
+        }
+        hosts = await self._call(stats, blobs, now_ms)
+        # boundary (score == now_ms) is live; stale (now_ms - 1s) is excluded.
+        assert hosts == {"machine-a", "machine-c"}
+
+    async def test_crossing_second_boundary(self) -> None:
+        # now_ms lands on a fractional second boundary: scores 1ms apart on
+        # either side of the comparison point must be correctly split.
+        now_ms = int(1_700_000_000.999 * 1000)
+        stats = {
+            "saq:runs:stats:just_before": now_ms - 1,
+            "saq:runs:stats:just_after": now_ms + 1,
+        }
+        blobs = {
+            "saq:runs:stats:just_before": _worker_blob("machine-stale"),
+            "saq:runs:stats:just_after": _worker_blob("machine-fresh"),
+        }
+        hosts = await self._call(stats, blobs, now_ms)
+        assert hosts == {"machine-fresh"}
+
+
+class TestCheckSaqWorkersPerQueue:
+    async def _run(
+        self,
+        live_by_queue: dict[str, set[str]],
+        *,
+        saq_enabled: bool = True,
+        this_host: str = "machine-a",
+    ) -> CheckResult:
+        settings = _make_settings().model_copy(update={"saq_enabled": saq_enabled})
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
+            patch("modulo.api.routes.health._live_worker_hostnames") as live,
+            patch.dict("os.environ", {"FLY_MACHINE_ID": this_host}, clear=False),
+        ):
+            queues.return_value = ["runs", "system"]
+
+            async def _live_side_effect(qname: str) -> set[str]:
+                return live_by_queue.get(qname, set())
+
+            live.side_effect = _live_side_effect
+            return await _check_saq_workers()
+
+    async def test_live_on_both_queues_ok(self, reset_stale_probes: None) -> None:
+        result = await self._run({"runs": {"machine-a"}, "system": {"machine-a"}})
+        assert result.status == "ok"
+
+    async def test_dead_runs_worker_not_masked_by_live_system(self, reset_stale_probes: None) -> None:
+        # runs worker dead, system worker live — the machine-scoped gate MUST
+        # fail because THIS machine is stale on the runs queue.
+        result = await self._run({"runs": set(), "system": {"machine-a"}})
+        assert result.status == "degraded"
+        assert "runs" in result.detail
+
+    async def test_dead_system_worker_not_masked_by_live_runs(self, reset_stale_probes: None) -> None:
+        result = await self._run({"runs": {"machine-a"}, "system": set()})
+        assert result.status == "degraded"
+        assert "system" in result.detail
+
+    async def test_other_machine_live_does_not_cover_this_machine(self, reset_stale_probes: None) -> None:
+        # machine-b is live on both queues; THIS machine (machine-a) is stale.
+        result = await self._run({"runs": {"machine-b"}, "system": {"machine-b"}})
+        assert result.status == "degraded"
+        assert "machine-a" in result.detail
+
+    async def test_stale_four_probes_unavailable_when_enabled(self, reset_stale_probes: None) -> None:
+        result: CheckResult | None = None
+        for _ in range(4):
+            result = await self._run({"runs": set(), "system": set()})
+        assert result is not None
+        assert result.status == "unavailable"
+
+    async def test_shadow_staleness_alert_only(self, reset_stale_probes: None) -> None:
+        result = await self._run({"runs": set(), "system": set()}, saq_enabled=False)
+        assert result.status == "ok"

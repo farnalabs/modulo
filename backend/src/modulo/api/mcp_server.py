@@ -52,7 +52,7 @@ from modulo.auth.oauth import (
     scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, set_authz_enforce
-from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
+from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 
 # ContextVars populated by McpAuthMiddleware before each request.
 # Propagation: this server runs FastMCP in stateless HTTP mode, where each request
