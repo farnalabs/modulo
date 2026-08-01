@@ -991,7 +991,7 @@ def _mock_graph_validator() -> MagicMock:
     return mock_cls
 
 
-async def _bypass_capacity(mock_self: Any, *, run_id: Any, org_id: Any, pipeline_id: Any, max_concurrent: Any) -> Any:
+async def _bypass_capacity(mock_self: Any, **kwargs: Any) -> Any:
     run = MagicMock()
     run.status = "running"
     return run
