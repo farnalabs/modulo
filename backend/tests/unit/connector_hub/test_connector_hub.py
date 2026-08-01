@@ -1,9 +1,10 @@
 """Unit tests for ConnectorHub lifecycle."""
 
+import asyncio
 import json
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Self
 from unittest.mock import patch
 
 import pytest
@@ -258,6 +259,278 @@ async def test_initialise_is_idempotent(tmp_path):
     assert hub.get(id1) is not None
     with pytest.raises(ConnectorNotFoundError):
         hub.get(id2)
+
+
+# ---------------------------------------------------------------------------
+# initialise() secret handling edge cases
+# ---------------------------------------------------------------------------
+
+
+async def test_initialise_secret_timeout_skips_connector():
+    """get_secret timing out is logged and the connector is skipped."""
+    ci = _FakeCI(id=uuid.uuid4(), connector_type_id="filesystem", config_json={"base_path": "/tmp"})
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", side_effect=TimeoutError):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
+
+
+async def test_initialise_decrypt_error_skips_connector():
+    """JSON that is not a dict triggers ConnectorDecryptError and the connector is skipped."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": "/tmp"},
+        credentials_ciphertext=_encrypt([]),  # list, not dict
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="[]"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
+
+
+async def test_initialise_non_json_secret_skips_connector():
+    """Malformed JSON in the secret triggers ConnectorDecryptError and skips the connector."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": "/tmp"},
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="not-json{{{"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
+
+
+async def test_initialise_ciphertext_fallback_uses_column():
+    """When the secrets backend raises KeyError, credentials_ciphertext column is used."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="linear",
+        credentials_ciphertext=_encrypt({"api_key": "lin_fallback"}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = _KEY
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    connector = hub.get(ci.id)
+    assert connector.connector_type == "linear"
+
+
+async def test_initialise_ciphertext_fallback_skip_on_bad_key():
+    """credentials_ciphertext fallback that fails to decrypt is skipped."""
+    other_key = Fernet.generate_key().decode()
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="linear",
+        credentials_ciphertext=_encrypt({"api_key": "lin_fallback"}),
+    )
+    backend = create_secrets_backend(fernet_key=other_key, backend_name="fernet")
+    with (
+        patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
+        patch("modulo.settings.get_settings") as get_settings,
+    ):
+        settings = get_settings.return_value
+        settings.fernet_key = other_key
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
+
+
+async def test_initialise_ciphertext_fallback_empty_column_uses_empty():
+    """Empty credentials_ciphertext with no backend secret defaults to empty creds."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": "/tmp"},
+        credentials_ciphertext=b"",
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    assert hub.get(ci.id) is not None
+
+
+async def test_initialise_none_secret_uses_empty_creds(tmp_path):
+    """get_secret returning None falls back to empty credentials and still builds the connector."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value=None):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    assert hub.get(ci.id) is not None
+
+
+async def test_initialise_double_guard_inside_lock_warns(tmp_path, caplog):
+    """The second _initialised check inside the lock logs a warning when another coroutine wins."""
+    import logging
+
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+
+    class _RacingLock:
+        """A lock whose __aenter__ flips _initialised, simulating a concurrent initialise."""
+
+        def __init__(self, hub: ConnectorHub) -> None:
+            self._hub = hub
+
+        async def __aenter__(self) -> Self:
+            self._hub._initialised = True
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    hub = ConnectorHub(secrets_backend=backend)
+    hub._init_lock = _RacingLock(hub)
+
+    with (
+        patch.object(backend, "get_secret", return_value="{}"),
+        caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
+    ):
+        await hub.initialise([ci])
+
+    assert any("already initialised" in rec.message for rec in caplog.records)
+    # Nothing was built because the inner guard fired before the loop.
+    assert hub.connector_ids == frozenset()
+
+
+async def test_initialise_cancelled_error_propagates():
+    """CancelledError during initialise is re-raised, not swallowed."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": "/tmp"},
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", side_effect=asyncio.CancelledError):
+        hub = ConnectorHub(secrets_backend=backend)
+        with pytest.raises(asyncio.CancelledError):
+            await hub.initialise([ci])
+
+
+async def test_initialise_programming_bug_logs_error(caplog):
+    """Unexpected exceptions during initialise are logged as programming bugs and skipped."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": "/tmp"},
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with (
+        patch.object(backend, "get_secret", return_value="{}"),
+        patch(
+            "modulo.core.connector_hub._build_connector",
+            side_effect=RuntimeError("boom"),
+        ),
+    ):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
+
+
+# ---------------------------------------------------------------------------
+# ConnectorHub API surface
+# ---------------------------------------------------------------------------
+
+
+async def test_acl_returns_acl_for_connector(tmp_path):
+    """acl() returns the stored ACL for a registered connector."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+        visibility="team",
+        allowed_operations=["read", "write"],
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    acl = hub.acl(ci.id)
+    assert acl.visibility == "team"
+    assert acl.allowed_operations == frozenset({"read", "write"})
+
+
+async def test_acl_unknown_connector_raises():
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    hub = ConnectorHub(secrets_backend=backend)
+    with pytest.raises(ConnectorNotFoundError):
+        hub.acl(uuid.uuid4())
+
+
+async def test_get_checks_operation_acl(tmp_path):
+    """get() with an operation not in allowed_operations raises ConnectorPermissionError."""
+    from modulo.connectors.base import ConnectorPermissionError
+
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+        allowed_operations=["read"],
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorPermissionError):
+        hub.get(ci.id, operation="write")
+
+
+async def test_sample_propagates_query_results(tmp_path):
+    """sample() returns query records and enforces the read ACL."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+        allowed_operations=["read"],
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    records = await hub.sample(ci.id, "directory", filters={"path": str(tmp_path)}, limit=5)
+    assert isinstance(records, list)
+
+
+async def test_sample_enforces_read_acl(tmp_path):
+    """sample() raises ConnectorPermissionError when 'read' is not allowed."""
+    from modulo.connectors.base import ConnectorPermissionError
+
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+        allowed_operations=["write"],
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorPermissionError):
+        await hub.sample(ci.id, "directory")
 
 
 # ---------------------------------------------------------------------------
