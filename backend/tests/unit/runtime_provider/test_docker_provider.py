@@ -7,9 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.runtime_provider import ExecResult, WorkspaceSpec
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider
-
-_DEFAULT_MEMORY_MB = 512
+from modulo.core.runtime_provider.docker import _DEFAULT_MEMORY_MB, DockerRuntimeProvider
 
 
 class _FakeDockerError(Exception):
@@ -520,9 +518,18 @@ async def test_close_destroys_all_workspaces(
     assert mock_container.stop.await_count == 2
 
 
-async def test_get_client_returns_cached_client(provider: DockerRuntimeProvider, mock_docker_client: MagicMock) -> None:
-    first = await provider._get_client()
-    second = await provider._get_client()
+async def test_get_client_lazily_initializes_once(mock_docker_client: MagicMock) -> None:
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.Docker",
+        return_value=mock_docker_client,
+    ) as docker_cls:
+        p = DockerRuntimeProvider(docker_host="unix:///var/run/docker.sock")
+        assert p._client is None
+
+        first = await p._get_client()
+        second = await p._get_client()
 
     assert first is mock_docker_client
     assert second is mock_docker_client
+    assert p._client is mock_docker_client
+    docker_cls.assert_called_once_with(url="unix:///var/run/docker.sock")
