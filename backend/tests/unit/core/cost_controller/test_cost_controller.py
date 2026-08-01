@@ -190,6 +190,7 @@ class TestCheckAndRecordSpend:
         assert org_count.total_spend_usd == Decimal("15.50")
         assert org_count.run_count == 3
         mock_session.flush.assert_awaited_once()
+        assert mock_session.execute.await_count == 2
 
     async def test_rejects_spend_over_org_limit(self, mock_session: AsyncMock) -> None:
         org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(90))
@@ -211,6 +212,7 @@ class TestCheckAndRecordSpend:
         assert org_count.run_count == 0
         assert org_count.total_spend_usd == Decimal(90)
         mock_session.flush.assert_not_awaited()
+        assert mock_session.execute.await_count == 2
 
     async def test_approves_spend_at_exact_limit(self, mock_session: AsyncMock) -> None:
         org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(90))
@@ -472,7 +474,11 @@ class TestGetCostReport:
         assert report == []
 
     async def test_group_by_team_skips_rows_without_team_id(self, mock_session: AsyncMock) -> None:
-        """Org-level rows (team_id is None) are filtered out of the team report."""
+        """Org-level rows (team_id is None) are filtered out of the team report.
+
+        The SQL query already filters ``team_id IS NOT NULL`` (asserted below), so
+        this exercises the Python-side defensive guard for rows that slip through.
+        """
         org_row = MagicMock()
         org_row.team_id = None
         org_row.total_spend_usd = Decimal(900)
@@ -501,6 +507,9 @@ class TestGetCostReport:
         assert report[0]["entity_name"] == "Alpha Team"
         assert report[0]["total_spend_usd"] == 50.0
         assert report[0]["total_runs"] == 3
+
+        q = mock_session.execute.call_args_list[0].args[0]
+        assert "team_id IS NOT NULL" in str(q.compile())
 
     @pytest.mark.parametrize(
         ("period", "expected_since"),
