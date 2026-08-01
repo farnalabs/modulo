@@ -61,6 +61,10 @@ _MODEL_MAP: dict[str, type] = {
 # (same page size as migrate_org.py's proven paginated export pattern).
 _PAGE_SIZE = 500
 
+# Upper bound on any single database operation during export/import so a slow
+# or hung database fails loudly instead of blocking the CLI indefinitely.
+_DB_OP_TIMEOUT_SECONDS = 600
+
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -73,7 +77,7 @@ def _resolve_admin_auth(token: str | None) -> str | None:
         try:
             settings = get_settings()
             principal = decode_principal(raw, settings.secret_key)
-            if principal.org_role not in ("admin", "owner"):
+            if principal.org_role != "admin":
                 raise click.ClickException("Token is not an admin-level JWT")
             return str(principal.user_id)
         except asyncio.CancelledError:
@@ -94,7 +98,7 @@ async def _verify_admin_access(session: Any, org_id: uuid.UUID, admin_user_id: s
     membership = await get_membership_by_account_and_org(session, account.id, org_id)
     if membership is None:
         raise click.ClickException("Admin account does not belong to the target organisation")
-    if membership.role not in ("admin", "owner"):
+    if membership.role != "admin":
         raise click.ClickException("Account does not have admin-level access")
 
 
@@ -452,23 +456,25 @@ async def _async_export_org(
     pipelines_only: bool,
     users_only: bool,
 ) -> None:
-    # TODO: no timeout on DB operations — a slow or hung database will block
-    # indefinitely. Consider wrapping the session context with asyncio.wait_for()
-    # or adding a statement_timeout at the connection level.
     export_completed = False
     try:
-        async with AsyncSessionLocal() as session:
-            await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-            bundle = await _collect_org_data(session, org_id, pipelines_only=pipelines_only, users_only=users_only)
-            hashes = _write_jsonl(bundle, output)
-            export_completed = True
-            record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
-            click.echo(f"Exported {record_count} records to {output}")
-            click.echo(f"Export hash: {hashes['__export__']}")
+        async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS):
+            async with AsyncSessionLocal() as session:
+                await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
+                bundle = await _collect_org_data(session, org_id, pipelines_only=pipelines_only, users_only=users_only)
+                hashes = _write_jsonl(bundle, output)
+                export_completed = True
+                record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
+                click.echo(f"Exported {record_count} records to {output}")
+                click.echo(f"Export hash: {hashes['__export__']}")
     except asyncio.CancelledError:
         raise
     except click.ClickException:
         raise
+    except TimeoutError:
+        raise click.ClickException(
+            f"Export timed out after {_DB_OP_TIMEOUT_SECONDS}s — database may be slow or hung"
+        ) from None
     except Exception as exc:
         raise click.ClickException(f"Export failed: {exc}") from exc
     finally:
@@ -523,27 +529,32 @@ async def _async_import_org(
         raise click.ClickException("Import aborted: hash verification failed — file may be corrupted")
 
     try:
-        async with AsyncSessionLocal() as session:
-            await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-            counts = await _import_org_data(
-                session,
-                org_id,
-                records,
-                strategy,
-                pipelines_only=pipelines_only,
-                users_only=users_only,
-            )
-            await session.commit()
-            click.echo(
-                f"Import complete: {counts['created']} created, "
-                f"{counts['overwritten']} overwritten, "
-                f"{counts['skipped']} skipped, "
-                f"{counts['errors']} errors"
-            )
+        async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS):
+            async with AsyncSessionLocal() as session:
+                await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
+                counts = await _import_org_data(
+                    session,
+                    org_id,
+                    records,
+                    strategy,
+                    pipelines_only=pipelines_only,
+                    users_only=users_only,
+                )
+                await session.commit()
+                click.echo(
+                    f"Import complete: {counts['created']} created, "
+                    f"{counts['overwritten']} overwritten, "
+                    f"{counts['skipped']} skipped, "
+                    f"{counts['errors']} errors"
+                )
     except asyncio.CancelledError:
         raise
     except click.ClickException:
         raise
+    except TimeoutError:
+        raise click.ClickException(
+            f"Import timed out after {_DB_OP_TIMEOUT_SECONDS}s — database may be slow or hung"
+        ) from None
     except Exception as exc:
         raise click.ClickException(f"Import failed: {exc}") from exc
 

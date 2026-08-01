@@ -4,7 +4,7 @@ flood protection, trigger event log."""
 import contextlib
 import json
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
@@ -19,7 +19,34 @@ with contextlib.suppress(FileNotFoundError, OSError):
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/trigger_event_log.feature")
 
-from tests.bdd.conftest import make_mock_pipeline
+from tests.bdd.conftest import make_mock_pipeline, make_mock_run, make_mock_snapshot
+
+_PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
+_TRIGGER_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
+
+
+def _patch_trigger_run(client, request, *, pipeline=None, run=None, payload=None, pipeline_not_found=False):
+    """POST /api/v1/runs with the current route's patch targets."""
+    if pipeline is None and not pipeline_not_found:
+        pipeline = make_mock_pipeline(id=_PIPELINE_ID, name=request.node._pipeline_name)
+    run = run or make_mock_run(status="pending", trigger_type="manual")
+    with (
+        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+        patch(
+            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            return_value=make_mock_snapshot(),
+        ),
+        patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run) as create_run,
+        patch("modulo.api.routes.runs._get_celery_app"),
+    ):
+        resp = client.post(
+            "/api/v1/runs",
+            json={"pipeline_id": str(_PIPELINE_ID), "input_payload": payload or {}},
+        )
+    request.node._resp = resp
+    request.node._create_run = create_run
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}"'))
@@ -27,43 +54,14 @@ def org_has_pipeline(org: str, name: str, request):
     request.node._pipeline_name = name
 
 
-@when(parsers.parse("I POST /api/pipelines/{pipeline}/runs with empty run_context"))
+@when(parsers.parse('I POST /api/v1/runs for "{pipeline}" with empty run_context'))
 def trigger_manual_run(pipeline: str, client, request):
-    with (
-        patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
-        patch(
-            "modulo.core.pipeline_engine.run_crud.get_pipeline_by_name",
-            return_value=make_mock_pipeline(name=pipeline),
-        ),
-        patch(
-            "modulo.core.pipeline_engine.run_crud.create_run",
-            return_value=MagicMock(id=uuid.uuid4(), status="pending"),
-        ),
-        patch("modulo.trigger_engine.TriggerEngine.trigger_manual"),
-    ):
-        resp = client.post(f"/api/pipelines/{pipeline}/runs", json={})
-    request.node._resp = resp
+    _patch_trigger_run(client, request)
 
 
-@when(parsers.parse('I POST /api/pipelines/{pipeline}/runs with run_context branch="{branch}"'))
+@when(parsers.parse('I POST /api/v1/runs for "{pipeline}" with run_context branch="{branch}"'))
 def trigger_run_with_context(pipeline: str, branch: str, client, request):
-    with (
-        patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
-        patch(
-            "modulo.core.pipeline_engine.run_crud.get_pipeline_by_name",
-            return_value=make_mock_pipeline(name=pipeline),
-        ),
-        patch(
-            "modulo.core.pipeline_engine.run_crud.create_run",
-            return_value=MagicMock(id=uuid.uuid4(), status="pending"),
-        ),
-        patch("modulo.trigger_engine.TriggerEngine.trigger_manual"),
-    ):
-        resp = client.post(
-            f"/api/pipelines/{pipeline}/runs",
-            json={"run_context": {"branch": branch}},
-        )
-    request.node._resp = resp
+    _patch_trigger_run(client, request, payload={"run_context": {"branch": branch}})
 
 
 @then(parsers.parse('a run is created with status "{status}"'))
@@ -72,205 +70,160 @@ def check_run_status(status: str, request):
     assert data.get("status") == status, f"Expected status {status}, got {data}"
 
 
+@then(parsers.parse("the run has run_context with {key} {value}"))
+def check_run_context(key: str, value, request):
+    create_run = request.node._create_run
+    kwargs = create_run.await_args.kwargs
+    payload = kwargs.get("input_payload", {})
+    run_context = payload.get("run_context", {})
+    expected = value.strip('"')
+    assert str(run_context.get(key)) == str(expected), f"Expected run_context.{key}={expected}, got {run_context}"
+
+
+@then(parsers.parse('the run is created with trigger_type "{ttype}"'))
+def check_trigger_type(ttype: str, request):
+    create_run = request.node._create_run
+    assert create_run.await_args.kwargs.get("trigger_type") == ttype
+
+
 @given(parsers.parse('no pipeline exists with slug "{slug}"'))
 def no_pipeline_slug(slug: str, request):
     request.node._no_pipeline = slug
 
 
-@when(parsers.parse("I POST /api/pipelines/{slug}/runs with empty run_context"))
-def trigger_nonexistent(slug: str, client, request):
-    with (
-        patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
-        patch(
-            "modulo.core.pipeline_engine.run_crud.get_pipeline_by_name",
-            return_value=None,
-        ),
-    ):
-        resp = client.post(f"/api/pipelines/{slug}/runs", json={})
-    request.node._resp = resp
+@when("I POST /api/v1/runs for a non-existent pipeline")
+def trigger_nonexistent(client, request):
+    request.node._pipeline_name = "ghost"
+    _patch_trigger_run(client, request, pipeline_not_found=True)
 
 
-@given(parsers.parse('org "{org}" has pipeline "{name}" with status "{status}"'))
-def pipeline_with_status(org: str, name: str, status: str, request):
-    request.node._pipeline_name = name
-    request.node._pipeline_status = status
-
-
-@given(parsers.parse('org "{org}" has pipeline "{name}" with webhook secret "{secret}"'))
-def pipeline_with_webhook_secret(org: str, name: str, secret: str, request):
-    request.node._pipeline_name = name
+@given(parsers.parse('org "{org}" has trigger "{name}" with webhook secret "{secret}"'))
+def trigger_with_webhook_secret(org: str, name: str, secret: str, request):
+    request.node._trigger_name = name
     request.node._webhook_secret = secret
 
 
-@given('org "{org}" has pipeline "{name}" with no webhook secret')
-def pipeline_no_webhook_secret(org: str, name: str, request):
-    request.node._pipeline_name = name
-    request.node._webhook_secret = None
+@given(parsers.parse('no trigger exists with id "{trigger_id}"'))
+def no_trigger_exists(trigger_id: str, request, mock_session):
+    request.node._trigger_name = trigger_id
+    request.node._webhook_secret = "secret"
+    request.node._mock_session = mock_session
 
 
-@when(parsers.parse("I POST /api/webhooks/{pipeline} with payload {payload} and valid HMAC"))
-def webhook_valid_hmac(pipeline: str, payload, client, request):
-    payload_dict = json.loads(payload) if isinstance(payload, str) else payload
-    with (
-        patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
-        patch(
-            "modulo.core.pipeline_engine.run_crud.get_pipeline_by_name",
-            return_value=make_mock_pipeline(name=pipeline),
-        ),
-        patch(
-            "modulo.webhook_trigger.verify_hmac_signature",
-            return_value=True,
-        ),
-        patch(
-            "modulo.webhook_trigger.deduplicate_trigger",
-            return_value=None,
-        ),
-        patch(
-            "modulo.core.pipeline_engine.run_crud.create_run",
-            return_value=MagicMock(id=uuid.uuid4(), status="pending"),
-        ),
-    ):
-        resp = client.post(
-            f"/api/webhooks/{pipeline}",
-            json=payload_dict,
-            headers={"X-Modulo-Signature-256": "valid_signature"},
+def _post_webhook(client, request, payload, *, error=None, trigger_missing=False):
+    """POST /api/v1/triggers/{name}/webhook with the current route's patch targets."""
+    from modulo.core import trigger_engine as trigger_engine_module
+
+    handle_webhook = AsyncMock(
+        return_value=(
+            make_mock_run(status="pending", trigger_type="webhook"),
+            MagicMock(),
+            payload,
         )
-    request.node._resp = resp
-
-
-@when(parsers.parse("I POST /api/webhooks/{pipeline} with payload {payload} and invalid HMAC"))
-def webhook_invalid_hmac(pipeline: str, payload, client, request):
-    payload_dict = json.loads(payload) if isinstance(payload, str) else payload
+    )
+    if error is not None:
+        handle_webhook.side_effect = error
+    request.node._handle_webhook = handle_webhook
     with (
-        patch("modulo.webhook_trigger.verify_hmac_signature", return_value=False),
+        patch("modulo.api.routes.webhooks.set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            return_value=make_mock_snapshot(),
+        ),
+        patch.object(trigger_engine_module.TriggerEngine, "handle_webhook", handle_webhook),
+        patch("modulo.core.pipeline_executor_task.dispatch"),
     ):
-        resp = client.post(
-            f"/api/webhooks/{pipeline}",
-            json=payload_dict,
-            headers={"X-Modulo-Signature-256": "bad_signature"},
-        )
+        if trigger_missing:
+            missing_row = MagicMock()
+            missing_row.scalar_one_or_none.return_value = None
+
+            async def _execute(stmt, *a, **kw):
+                return missing_row
+
+            with patch.object(request.node._mock_session, "execute", side_effect=_execute):
+                resp = client.post(
+                    f"/api/v1/triggers/{request.node._trigger_name}/webhook",
+                    json=payload,
+                    headers={
+                        "X-Modulo-Timestamp": "1700000000",
+                        "X-Modulo-Webhook-Secret": request.node._webhook_secret or "secret",
+                    },
+                )
+        else:
+            resp = client.post(
+                f"/api/v1/triggers/{request.node._trigger_name}/webhook",
+                json=payload,
+                headers={
+                    "X-Modulo-Timestamp": "1700000000",
+                    "X-Modulo-Webhook-Secret": request.node._webhook_secret or "secret",
+                },
+            )
     request.node._resp = resp
 
 
-@when(parsers.parse("I POST /api/webhooks/{pipeline} with payload {payload} and no HMAC"))
-def webhook_no_hmac(pipeline: str, payload, client, request):
+@when(parsers.parse("I POST /api/v1/triggers/{name}/webhook with payload {payload} and valid HMAC"))
+def webhook_valid_hmac(name: str, payload, client, request):
     payload_dict = json.loads(payload) if isinstance(payload, str) else payload
-    resp = client.post(f"/api/webhooks/{pipeline}", json=payload_dict)
-    request.node._resp = resp
+    trigger_missing = hasattr(request.node, "_mock_session")
+    _post_webhook(client, request, payload_dict, trigger_missing=trigger_missing)
 
 
-@then(parsers.parse("a TriggerEvent is created with type {event_type}"))
-def trigger_event_created(event_type: str, request):
-    pass
+@when(parsers.parse("I POST /api/v1/triggers/{name}/webhook with payload {payload} and valid HMAC raising duplicate"))
+def webhook_duplicate(name: str, payload, client, request):
+    from modulo.core.trigger_engine import DuplicateWebhookError
+
+    payload_dict = json.loads(payload) if isinstance(payload, str) else payload
+    _post_webhook(client, request, payload_dict, error=DuplicateWebhookError(payload_hash="x"))
 
 
-@then(parsers.parse("the TriggerEvent references the created run"))
-def trigger_event_references_run(request):
-    pass
+@when(parsers.parse("I POST /api/v1/triggers/{name}/webhook with payload {payload} and valid HMAC raising rate_limit"))
+def webhook_rate_limited(name: str, payload, client, request):
+    from modulo.core.trigger_engine import PipelineRateLimitError
+
+    payload_dict = json.loads(payload) if isinstance(payload, str) else payload
+    _post_webhook(
+        client,
+        request,
+        payload_dict,
+        error=PipelineRateLimitError(pipeline_id=_PIPELINE_ID, key="k", max_triggers=10, window_seconds=3600),
+    )
 
 
-@then(parsers.parse("the TriggerEvent has the original payload"))
-def trigger_event_has_payload(request):
-    pass
+@when(parsers.parse("I POST /api/v1/triggers/{name}/webhook with payload {payload} and invalid HMAC"))
+def webhook_invalid_hmac(name: str, payload, client, request):
+    from modulo.core.trigger_engine import HmacValidationError
+
+    payload_dict = json.loads(payload) if isinstance(payload, str) else payload
+    _post_webhook(client, request, payload_dict, error=HmacValidationError())
 
 
-@then(parsers.parse("the TriggerEvent has payload {payload}"))
-def trigger_event_payload(payload: str, request):
-    pass
+@when(parsers.parse("I POST /api/v1/triggers/{name}/webhook with payload {payload} and no HMAC"))
+def webhook_no_hmac(name: str, payload, client, request):
+    from modulo.core.trigger_engine import HmacValidationError
+
+    payload_dict = json.loads(payload) if isinstance(payload, str) else payload
+    _post_webhook(client, request, payload_dict, error=HmacValidationError())
 
 
-@then(parsers.parse('the TriggerEvent has triggered_by "{user}"'))
-def trigger_event_triggered_by(user: str, request):
-    pass
-
-
-@then(parsers.parse('the TriggerEvent has status "{status}"'))
-def trigger_event_status(status: str, request):
-    pass
-
-
-@then("the TriggerEvent has error_detail")
-def trigger_event_error(request):
-    pass
-
-
-@then(parsers.parse("the run has run_context with {key} {value}"))
-def check_run_context(key: str, value, request):
-    pass
-
-
-@then(parsers.parse('the run has trigger_type "{ttype}"'))
-def check_trigger_type(ttype: str, request):
+@then("the webhook is accepted")
+def webhook_accepted(request):
     data = request.node._resp.json()
-    assert data.get("trigger_type") == ttype
+    assert data.get("status") == "accepted", f"Expected accepted, got {data}"
 
 
-@given(parsers.parse('org "{org}" has pipeline "{name}" with payload mapping {mapping}'))
-def pipeline_with_payload_mapping(org: str, name: str, mapping, request):
-    request.node._pipeline_name = name
-    request.node._payload_mapping = json.loads(mapping) if isinstance(mapping, str) else mapping
+@then("the trigger engine received the raw payload")
+def trigger_engine_received_payload(request):
+    handle_webhook = request.node._handle_webhook
+    assert handle_webhook.await_args is not None, "handle_webhook was not called"
+    kwargs = handle_webhook.await_args.kwargs
+    assert kwargs.get("raw_payload") is not None
 
 
-@when(parsers.parse("I POST /api/webhooks/{pipeline} with same payload {payload} and valid HMAC"))
-def webhook_duplicate(pipeline: str, payload, client, request):
-    payload_dict = json.loads(payload) if isinstance(payload, str) else payload
-    with (
-        patch("modulo.webhook_trigger.verify_hmac_signature", return_value=True),
-        patch(
-            "modulo.webhook_trigger.deduplicate_trigger",
-            return_value=uuid.uuid4(),
-        ),
-    ):
-        resp = client.post(
-            f"/api/webhooks/{pipeline}",
-            json=payload_dict,
-            headers={"X-Modulo-Signature-256": "valid_signature"},
-        )
-    request.node._resp = resp
-
-
-@when("I send {count:d} webhooks in rapid succession")
-def send_rapid_webhooks(count: int, client, request):
-    request.node._webhook_count = count
-
-
-@then(parsers.parse("the {nth} webhook is rate limited"))
-def check_rate_limited(nth: str, request):
-    pass
-
-
-@then(parsers.parse("only {count:d} run was created"))
-def check_only_n_runs(count: int, request):
-    pass
-
-
-@when(parsers.parse('I trigger a manual run for pipeline "{name}"'))
-def trigger_manual_run_simple(name: str, client, request):
-    trigger_manual_run(name, client, request)
-
-
-@given(parsers.parse("{count:d} manual triggers have been performed"))
-def manual_triggers_performed(count: int, request):
-    request.node._trigger_count = count
-
-
-@when(parsers.parse("I GET /api/triggers/events?limit={limit:d}"))
-def get_trigger_events(limit: int, client, request):
-    with (
-        patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
-        patch(
-            "modulo.core.pipeline_engine.run_crud.list_trigger_events",
-            return_value=[MagicMock(id=uuid.uuid4()) for _ in range(limit)],
-        ),
-    ):
-        resp = client.get(f"/api/triggers/events?limit={limit}")
-    request.node._resp = resp
-
-
-@then(parsers.parse("the response contains {count:d} TriggerEvents"))
-def check_trigger_event_count(count: int, request):
-    data = request.node._resp.json()
-    assert len(data) == count
+@then("the trigger engine was called for the delivery")
+def trigger_engine_called(request):
+    handle_webhook = request.node._handle_webhook
+    assert handle_webhook.await_args is not None, "handle_webhook was not called"
 
 
 @then(parsers.parse('the error mentions "{text}"'))
@@ -280,6 +233,45 @@ def error_mentions(text: str, request):
     assert text.lower() in detail, f"Does not mention '{text}': {data}"
 
 
-@given("I am authenticated in org {org} as {user}")
-def authenticated_as_user(org: str, user: str, request):
-    request.node._auth_user = user
+@given(parsers.parse("{count:d} trigger events have been recorded for the trigger"))
+def trigger_events_recorded(count: int, request, mock_session):
+    events = []
+    for _ in range(count):
+        ev = MagicMock()
+        ev.id = uuid.uuid4()
+        ev.validation_result = "accepted"
+        ev.received_at = None
+        ev.created_at = None
+        ev.run_id = None
+        ev.error_detail = None
+        events.append(ev)
+    request.node._trigger_events = events
+    request.node._mock_session = mock_session
+
+
+@when(parsers.parse("I GET /api/v1/triggers/{name}/events?limit={limit:d}"))
+def list_trigger_events(name: str, limit: int, client, request, mock_session):
+    events = getattr(request.node, "_trigger_events", [])
+
+    trigger_row = MagicMock()
+    trigger_row.scalar_one_or_none.return_value = MagicMock()
+    events_row = MagicMock()
+    events_row.scalars.return_value.all.return_value = events[:limit]
+
+    async def _fake_execute(stmt, *args, **kwargs):
+        if "trigger_events" in str(stmt):
+            return events_row
+        return trigger_row
+
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org", new_callable=AsyncMock),
+        patch.object(mock_session, "execute", side_effect=_fake_execute),
+    ):
+        resp = client.get(f"/api/v1/triggers/{name}/events?limit={limit}")
+    request.node._resp = resp
+
+
+@then(parsers.parse("the response contains {count:d} TriggerEvents"))
+def check_trigger_event_count(count: int, request):
+    data = request.node._resp.json()
+    assert len(data.get("items", data)) == count, f"Expected {count} events, got {data}"

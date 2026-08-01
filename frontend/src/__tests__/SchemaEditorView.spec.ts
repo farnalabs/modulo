@@ -37,6 +37,12 @@ const mockSchemas = [
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockImplementation((_url: string) => {
+      if (String(_url).includes('/versions')) {
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, page_size: 1 },
+          error: undefined,
+        })
+      }
       return Promise.resolve({
         data: { items: mockSchemas, total: 2, page: 1, page_size: 100 },
         error: undefined,
@@ -74,15 +80,6 @@ import SchemaEditorView from '../views/SchemaEditorView.vue'
 describe('SchemaEditorView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      items: [],
-      total: 0,
-      page: 1,
-      page_size: 1,
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })))
   })
 
   it('renders without crashing', async () => {

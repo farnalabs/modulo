@@ -1,15 +1,15 @@
 <template>
   <div class="page-wide">
-  <PageHeader title="HITL Review" subtitle="Review and respond to pending human-in-the-loop gates" />
+  <PageHeader :title="$t('views.SettingsHitlReviewView.title')" :subtitle="$t('views.SettingsHitlReviewView.subtitle')" />
   <FilterBar
-    :search="{ placeholder: 'Search pipeline or node name...' }"
+    :search="{ placeholder: $t('views.SettingsHitlReviewView.search_placeholder') }"
     :search-value="searchQuery"
     :filters="[
-      { key: 'status', label: 'Status', options: [
-        { value: 'pending', label: 'Pending' },
-        { value: 'claimed', label: 'Claimed' },
-        { value: 'approved', label: 'Approved' },
-        { value: 'rejected', label: 'Rejected' },
+      { key: 'status', label: $t('views.SettingsHitlReviewView.status_label'), options: [
+        { value: 'pending', label: $t('views.SettingsHitlReviewView.status_pending') },
+        { value: 'claimed', label: $t('views.SettingsHitlReviewView.status_claimed') },
+        { value: 'approved', label: $t('views.SettingsHitlReviewView.status_approved') },
+        { value: 'rejected', label: $t('views.SettingsHitlReviewView.status_rejected') },
       ]},
     ]"
     :filter-values="{ status: statusFilter }"
@@ -19,8 +19,8 @@
     <template #after>
       <div class="flex items-center gap-2">
         <Select v-model="pipelineFilter" @update:model-value="loadGates">
-          <SelectTrigger data-testid="hitl-review-pipeline-select" aria-label="Pipeline" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <SelectValue placeholder="All Pipelines" />
+          <SelectTrigger data-testid="hitl-review-pipeline-select" :aria-label="$t('views.SettingsHitlReviewView.pipeline_label')" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <SelectValue :placeholder="$t('views.SettingsHitlReviewView.all_pipelines')" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">
@@ -28,14 +28,14 @@
             </SelectItem>
           </SelectContent>
         </Select>
-        <input aria-label="date"
+        <input :aria-label="$t('views.SettingsHitlReviewView.date_label')"
           v-model="dateFrom"
           type="date"
           data-testid="hitl-review-date-from"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadGates"
         />
-        <input aria-label="date"
+        <input :aria-label="$t('views.SettingsHitlReviewView.date_label')"
           v-model="dateTo"
           type="date"
           data-testid="hitl-review-date-to"
@@ -47,7 +47,7 @@
   </FilterBar>
   <div class="flex items-center gap-1 text-xs text-muted-foreground">
       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-      Auto-refresh: {{ refreshCountdown }}s
+      {{ $t('views.SettingsHitlReviewView.auto_refresh', { seconds: refreshCountdown }) }}
     </div>
   </div>
   <LoadingSpinner v-if="loading" />
@@ -55,8 +55,8 @@
   <template v-else>
     <EmptyState
       v-if="filteredGates.length === 0"
-      title="No pending HITL gates"
-      description="All gates have been resolved or no pipelines have hit a human-in-the-loop gate yet."
+      :title="$t('views.SettingsHitlReviewView.empty_title')"
+      :description="$t('views.SettingsHitlReviewView.empty_description')"
     />
     <div v-else class="space-y-2">
       <div
@@ -98,7 +98,7 @@
           </div>
           <div class="min-w-0 flex-1">
             <p class="truncate text-xs text-muted-foreground">
-              {{ gate.claimed_by ? `Assigned: ${gate.claimed_by}` : 'Unassigned' }}
+              {{ gate.claimed_by ? $t('views.SettingsHitlReviewView.assigned_to', { user: gate.claimed_by }) : $t('views.SettingsHitlReviewView.unassigned') }}
             </p>
           </div>
           <span class="flex-shrink-0 text-xs text-muted-foreground">
@@ -112,52 +112,52 @@
           <template v-else>
             <div class="grid grid-cols-2 gap-6">
               <div>
-                <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Claim Metadata</h3>
+                <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.SettingsHitlReviewView.claim_metadata') }}</h3>
                 <div class="space-y-1 text-sm">
                   <div class="flex justify-between">
-                    <span class="text-muted-foreground">Run ID</span>
+                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.run_id') }}</span>
                     <span class="font-mono text-xs">{{ shortId(gate.run_id) }}</span>
                   </div>
                   <div class="flex justify-between">
-                    <span class="text-muted-foreground">Node</span>
+                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.node_label') }}</span>
                     <span class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
                   </div>
                   <div class="flex justify-between">
-                    <span class="text-muted-foreground">Pipeline</span>
+                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.pipeline_label') }}</span>
                     <span>{{ pipelineName(gate.pipeline_id) }}<span v-if="!pipelineName(gate.pipeline_id)" class="font-mono text-xs">{{ shortId(gate.pipeline_id) }}</span></span>
                   </div>
                   <div class="flex justify-between">
-                    <span class="text-muted-foreground">Created</span>
+                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.created_label') }}</span>
                     <span>{{ formatDate(gate.created_at || '') }}</span>
                   </div>
                   <div v-if="gate.claimed_at" class="flex justify-between">
-                    <span class="text-muted-foreground">Claimed</span>
+                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.claimed_label') }}</span>
                     <span>{{ formatDate(gate.claimed_at) }}</span>
                   </div>
                   <div v-if="gate.expires_at" class="flex justify-between">
-                    <span class="text-muted-foreground">Expires</span>
+                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.expires_label') }}</span>
                     <span>{{ formatDate(gate.expires_at) }}</span>
                   </div>
                   <div v-if="gate.decision_at" class="flex justify-between">
-                    <span class="text-muted-foreground">Decided</span>
+                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.decided_label') }}</span>
                     <span>{{ formatDate(gate.decision_at) }}</span>
                   </div>
                   <div v-if="gate.decision" class="flex justify-between">
-                    <span class="text-muted-foreground">Decision</span>
+                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.decision_label') }}</span>
                     <span :class="gate.decision === 'approved' ? 'text-success' : 'text-destructive'">{{ gate.decision }}</span>
                   </div>
                   <div v-if="gate.claimed_by" class="flex justify-between">
-                    <span class="text-muted-foreground">Assignees</span>
+                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.assignees_label') }}</span>
                     <span>{{ gate.claimed_by }}</span>
                   </div>
                   <div v-if="gate.team_scope" class="flex justify-between">
-                    <span class="text-muted-foreground">Team</span>
+                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.team_label') }}</span>
                     <span>{{ gate.team_scope }}</span>
                   </div>
                 </div>
               </div>
               <div>
-                <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Actions</h3>
+                <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.SettingsHitlReviewView.actions_label') }}</h3>
                 <div class="space-y-3">
                   <div v-if="gateStatus(gate) === 'pending'">
                     <Button
@@ -167,17 +167,17 @@
                       data-testid="hitl-review-claim"
                       @click="claimGate(gate)"
                     >
-                      {{ claiming[expandKey(gate)] ? 'Claiming...' : 'Claim Gate' }}
+                      {{ claiming[expandKey(gate)] ? $t('views.SettingsHitlReviewView.claiming') : $t('views.SettingsHitlReviewView.claim_gate') }}
                     </Button>
                   </div>
                   <div v-if="gateStatus(gate) === 'claimed'">
                     <div class="space-y-2">
-                      <textarea aria-label="Review notes..."
+                      <textarea :aria-label="$t('views.SettingsHitlReviewView.review_notes')"
                         v-model="reviewNotes[expandKey(gate)]"
                         rows="2"
                         data-testid="hitl-review-notes"
                         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        placeholder="Review notes..."
+                        :placeholder="$t('views.SettingsHitlReviewView.review_notes')"
                       />
                       <div class="flex gap-2">
                         <button
@@ -186,7 +186,7 @@
                           class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
                           @click="approveGate(gate)"
                         >
-                          {{ actioning[expandKey(gate)] === 'approve' ? 'Approving...' : 'Approve' }}
+                          {{ actioning[expandKey(gate)] === 'approve' ? $t('views.SettingsHitlReviewView.approving') : $t('views.SettingsHitlReviewView.approve') }}
                         </button>
                         <button
                           :disabled="Boolean(actioning[expandKey(gate)])"
@@ -194,20 +194,20 @@
                           class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
                           @click="rejectGate(gate)"
                         >
-                          {{ actioning[expandKey(gate)] === 'reject' ? 'Rejecting...' : 'Reject' }}
+                          {{ actioning[expandKey(gate)] === 'reject' ? $t('views.SettingsHitlReviewView.rejecting') : $t('views.SettingsHitlReviewView.reject') }}
                         </button>
                       </div>
                     </div>
                   </div>
                   <div v-if="gateStatus(gate) === 'approved'" class="rounded-lg bg-success/10 p-3 text-sm text-success">
-                    Gate was approved. The pipeline has resumed.
+                    {{ $t('views.SettingsHitlReviewView.approved_banner') }}
                   </div>
                   <div v-if="gateStatus(gate) === 'rejected'" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                    Gate was rejected. The pipeline was routed to the reject target.
+                    {{ $t('views.SettingsHitlReviewView.rejected_banner') }}
                   </div>
                   <div v-if="gateStatus(gate) === 'claimed' && claimTokens[expandKey(gate)]">
                     <div class="rounded-lg bg-muted p-3 text-xs">
-                      <p class="font-medium text-muted-foreground mb-1">Claim Token</p>
+                      <p class="font-medium text-muted-foreground mb-1">{{ $t('views.SettingsHitlReviewView.claim_token_label') }}</p>
                       <code class="break-all">{{ claimTokens[expandKey(gate)] }}</code>
                     </div>
                   </div>
@@ -226,9 +226,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { api } from '../lib/api/client'
-import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -241,6 +242,7 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 interface GateItem {
   run_id: string
@@ -301,6 +303,7 @@ const refreshInterval = ref(30000)
 const refreshCountdown = ref(30)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
+let refreshInFlight = false
 
 function expandKey(gate: GateItem): string {
   return `${gate.run_id}:${gate.gate_id}`
@@ -375,22 +378,20 @@ async function claimGate(gate: GateItem) {
     if (err) {
       actionMessage.value[key] = {
         type: 'error',
-        text: err && typeof err === 'object' && 'detail' in err
-          ? `Claim failed: ${(err as unknown as ProblemDetail).detail}`
-          : `Claim failed: ${formatApiError(err)}`,
+        text: `${t('views.SettingsHitlReviewView.claim_failed')} ${formatApiError(err)}`,
       }
     } else if (data) {
       const d = data as any
       claimTokens.value[key] = d.claim_token
       const idx = gates.value.findIndex(g => expandKey(g) === key)
       if (idx !== -1) {
-        gates.value[idx] = { ...gates.value[idx], claimed_by: 'You', claimed_at: new Date().toISOString(), expires_at: d.expires_at }
+        gates.value[idx] = { ...gates.value[idx], claimed_by: t('views.SettingsHitlReviewView.claimed_by_you'), claimed_at: new Date().toISOString(), expires_at: d.expires_at }
       }
-      actionMessage.value[key] = { type: 'success', text: 'Gate claimed. You can now approve or reject.' }
+      actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_claimed_you_can_now_approve_or_reject') }
       setTimeout(() => { actionMessage.value[key] = null }, 5000)
     }
   } catch (e: unknown) {
-    actionMessage.value[key] = { type: 'error', text: `Claim failed: ${formatApiError(e)}` }
+    actionMessage.value[key] = { type: 'error', text: `${t('views.SettingsHitlReviewView.claim_failed')} ${formatApiError(e)}` }
   } finally {
     claiming.value[key] = false
   }
@@ -400,7 +401,7 @@ async function approveGate(gate: GateItem) {
   const key = expandKey(gate)
   const token = claimTokens.value[key]
   if (!token) {
-    actionMessage.value[key] = { type: 'error', text: 'No claim token. Claim the gate first.' }
+    actionMessage.value[key] = { type: 'error', text: t('views.SettingsHitlReviewView.no_claim_token_claim_the_gate_first') }
     return
   }
   actioning.value[key] = 'approve'
@@ -414,20 +415,18 @@ async function approveGate(gate: GateItem) {
     if (err) {
       actionMessage.value[key] = {
         type: 'error',
-        text: err && typeof err === 'object' && 'detail' in err
-          ? `Approve failed: ${(err as unknown as ProblemDetail).detail}`
-          : `Approve failed: ${formatApiError(err)}`,
+        text: `${t('views.SettingsHitlReviewView.approve_failed')} ${formatApiError(err)}`,
       }
     } else {
       const idx = gates.value.findIndex(g => expandKey(g) === key)
       if (idx !== -1) {
         gates.value[idx] = { ...gates.value[idx], decision: 'approved', decision_at: new Date().toISOString() }
       }
-      actionMessage.value[key] = { type: 'success', text: 'Gate approved. Pipeline resuming.' }
+      actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_approved_pipeline_resuming') }
       setTimeout(() => { actionMessage.value[key] = null }, 5000)
     }
   } catch (e: unknown) {
-    actionMessage.value[key] = { type: 'error', text: `Approve failed: ${formatApiError(e)}` }
+    actionMessage.value[key] = { type: 'error', text: `${t('views.SettingsHitlReviewView.approve_failed')} ${formatApiError(e)}` }
   } finally {
     actioning.value[key] = null
     actionLoading.value[key] = false
@@ -438,10 +437,10 @@ async function rejectGate(gate: GateItem) {
   const key = expandKey(gate)
   const token = claimTokens.value[key]
   if (!token) {
-    actionMessage.value[key] = { type: 'error', text: 'No claim token. Claim the gate first.' }
+    actionMessage.value[key] = { type: 'error', text: t('views.SettingsHitlReviewView.no_claim_token_claim_the_gate_first') }
     return
   }
-  const reason = reviewNotes.value[key] || 'Rejected by reviewer'
+  const reason = reviewNotes.value[key] || t('views.SettingsHitlReviewView.rejected_by_reviewer')
   actioning.value[key] = 'reject'
   actionLoading.value[key] = true
   actionMessage.value[key] = null
@@ -453,20 +452,18 @@ async function rejectGate(gate: GateItem) {
     if (err) {
       actionMessage.value[key] = {
         type: 'error',
-        text: err && typeof err === 'object' && 'detail' in err
-          ? `Reject failed: ${(err as unknown as ProblemDetail).detail}`
-          : `Reject failed: ${formatApiError(err)}`,
+        text: `${t('views.SettingsHitlReviewView.reject_failed')} ${formatApiError(err)}`,
       }
     } else {
       const idx = gates.value.findIndex(g => expandKey(g) === key)
       if (idx !== -1) {
         gates.value[idx] = { ...gates.value[idx], decision: 'rejected', decision_at: new Date().toISOString() }
       }
-      actionMessage.value[key] = { type: 'success', text: 'Gate rejected. Pipeline routed to reject target.' }
+      actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_rejected_pipeline_routed_to_reject_target') }
       setTimeout(() => { actionMessage.value[key] = null }, 5000)
     }
   } catch (e: unknown) {
-    actionMessage.value[key] = { type: 'error', text: `Reject failed: ${formatApiError(e)}` }
+    actionMessage.value[key] = { type: 'error', text: `${t('views.SettingsHitlReviewView.reject_failed')} ${formatApiError(e)}` }
   } finally {
     actioning.value[key] = null
     actionLoading.value[key] = false
@@ -484,8 +481,12 @@ function toggleExpand(gate: GateItem) {
 
 function startAutoRefresh() {
   refreshTimer = setInterval(() => {
-    loadGates()
-    refreshCountdown.value = Math.floor(refreshInterval.value / 1000)
+    if (refreshInFlight) return
+    refreshInFlight = true
+    loadGates().finally(() => {
+      refreshInFlight = false
+      refreshCountdown.value = Math.floor(refreshInterval.value / 1000)
+    })
   }, refreshInterval.value)
   countdownTimer = setInterval(() => {
     if (refreshCountdown.value > 0) refreshCountdown.value--

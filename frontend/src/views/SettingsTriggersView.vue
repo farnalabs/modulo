@@ -3,14 +3,14 @@
 
     <div data-theme="agent" class="page-wide">
     <header class="flex items-center justify-between">
-      <PageHeader title="Triggers" subtitle="Automate pipeline execution with schedules (cron), webhooks, polling, or inter-pipeline signals. Each trigger launches a pipeline run when its conditions are met." />
+      <PageHeader :title="$t('views.SettingsTriggersView.title')" :subtitle="$t('views.SettingsTriggersView.subtitle')" />
       <Button
         data-testid="settings-triggers-create"
         variant="default"
            class="border-primary/30 hover:border-primary/60"
         @click="openCreateDialog"
       >
-        Create Trigger
+        {{ $t('views.SettingsTriggersView.create_trigger') }}
       </Button>
     </header>
 
@@ -19,9 +19,9 @@
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadAll" />
 
     <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
-      <p class="text-lg font-medium">No triggers configured</p>
+      <p class="text-lg font-medium">{{ $t('views.SettingsTriggersView.no_triggers_configured') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
-        Create a trigger to automatically start pipeline runs on a schedule, webhook, or other event.
+        {{ $t('views.SettingsTriggersView.no_triggers_configured_description') }}
       </p>
     </div>
 
@@ -30,12 +30,12 @@
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
             <tr>
-              <th class="px-4 py-3">Pipeline</th>
-              <th class="px-4 py-3">Type</th>
-              <th class="px-4 py-3">Status</th>
-              <th class="px-4 py-3">Last Fired</th>
-              <th class="px-4 py-3">Next Fire</th>
-              <th class="px-4 py-3 text-right">Actions</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.pipeline') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.type') }}</th>
+              <th class="px-4 py-3 capitalize">{{ $t('views.SettingsTriggersView.status') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.last_fired') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.next_fire') }}</th>
+              <th class="px-4 py-3 text-right">{{ $t('views.SettingsTriggersView.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -64,7 +64,7 @@
                     class="h-1.5 w-1.5 rounded-full"
                     :class="t.active ? 'bg-success' : 'bg-muted-foreground'"
                   />
-                  {{ triggerToggling[t.id] ? '...' : (t.active ? 'Active' : 'Inactive') }}
+                  {{ triggerToggling[t.id] ? '...' : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
                 </button>
               </td>
               <td class="px-4 py-3 text-muted-foreground">
@@ -85,18 +85,18 @@
     <FormDialog
       :open="dialogOpen"
       @update:open="dialogOpen = false"
-      :title="editingId ? 'Edit Trigger' : 'Create Trigger'"
-      :description="editingId ? 'Update the trigger configuration.' : 'Configure a new trigger for your pipeline.'"
-      :confirmText="editingId ? 'Update' : 'Create'"
+      :title="editingId ? $t('views.SettingsTriggersView.edit_trigger') : $t('views.SettingsTriggersView.create_trigger')"
+      :description="editingId ? $t('views.SettingsTriggersView.update_trigger_description') : $t('views.SettingsTriggersView.create_trigger_description')"
+      :confirmText="editingId ? $t('views.SettingsTriggersView.update') : $t('views.SettingsTriggersView.create')"
       :loading="saving"
       @confirm="saveTrigger"
     >
       <form @submit.prevent="saveTrigger" class="space-y-4">
         <div>
-          <label for="settingstriggersview-pipeline" class="mb-1 block text-sm font-medium">Pipeline</label>
+          <label for="settingstriggersview-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.pipeline') }}</label>
           <Select v-model="form.pipeline_id">
-            <SelectTrigger id="settingstriggersview-pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Pipeline" data-testid="settings-triggers-form-pipeline">
-              <SelectValue placeholder="Select pipeline" />
+            <SelectTrigger id="settingstriggersview-pipeline" class="input-base" :aria-label="$t('views.SettingsTriggersView.pipeline')" data-testid="settings-triggers-form-pipeline">
+              <SelectValue :placeholder="$t('views.SettingsTriggersView.select_pipeline')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
@@ -105,40 +105,40 @@
         </div>
 
         <div v-if="!editingId">
-          <label for="settingstriggersview-trigger-type" class="mb-1 block text-sm font-medium">Trigger Type</label>
+          <label for="settingstriggersview-trigger-type" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.trigger_type_label') }}</label>
           <Select v-model="form.trigger_type">
-            <SelectTrigger id="settingstriggersview-trigger-type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Trigger type" data-testid="settings-triggers-form-type">
-              <SelectValue placeholder="Select type" />
+            <SelectTrigger id="settingstriggersview-trigger-type" class="input-base" :aria-label="$t('views.SettingsTriggersView.trigger_type_label')" data-testid="settings-triggers-form-type">
+              <SelectValue :placeholder="$t('views.SettingsTriggersView.select_type')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="webhook">Webhook</SelectItem>
-              <SelectItem value="cron">Cron</SelectItem>
-              <SelectItem value="polling">Polling</SelectItem>
-              <SelectItem value="agent_signal">Agent Signal</SelectItem>
+              <SelectItem value="webhook">{{ $t('views.SettingsTriggersView.webhook') }}</SelectItem>
+              <SelectItem value="cron">{{ $t('views.SettingsTriggersView.cron') }}</SelectItem>
+              <SelectItem value="polling">{{ $t('views.SettingsTriggersView.polling') }}</SelectItem>
+              <SelectItem value="agent_signal">{{ $t('views.SettingsTriggersView.agent_signal') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div v-else class="text-sm text-muted-foreground">
-          Type: <span class="font-medium">{{ typeLabel(editingType) }}</span>
+          {{ $t('views.SettingsTriggersView.type_label') }}: <span class="font-medium">{{ typeLabel(editingType) }}</span>
         </div>
 
         <!-- Webhook config -->
         <template v-if="form.trigger_type === 'webhook'">
           <div>
-            <label for="settingstriggersview-field-13" class="mb-1 block text-sm font-medium">URL</label>
+            <label for="settingstriggersview-field-13" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.url') }}</label>
             <input id="settingstriggersview-field-13"
               v-model="form.webhook_url"
               type="url"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="https://example.com/webhook"
+              class="input-base"
+              :placeholder="$t('views.SettingsTriggersView.url_placeholder')"
               data-testid="settings-triggers-form-webhook-url"
             />
           </div>
           <div>
-            <label for="settingstriggersview-http-method" class="mb-1 block text-sm font-medium">HTTP Method</label>
+            <label for="settingstriggersview-http-method" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.http_method') }}</label>
             <Select v-model="form.webhook_method">
-              <SelectTrigger id="settingstriggersview-http-method" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="HTTP method" data-testid="settings-triggers-form-webhook-method">
-                <SelectValue placeholder="Select method" />
+              <SelectTrigger id="settingstriggersview-http-method" class="input-base" :aria-label="$t('views.SettingsTriggersView.http_method')" data-testid="settings-triggers-form-webhook-method">
+                <SelectValue :placeholder="$t('views.SettingsTriggersView.select_method')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="POST">POST</SelectItem>
@@ -148,12 +148,12 @@
             </Select>
           </div>
           <div>
-            <label for="settingstriggersview-field-11" class="mb-1 block text-sm font-medium">Headers (JSON)</label>
+            <label for="settingstriggersview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.headers_json') }}</label>
             <textarea id="settingstriggersview-field-11"
               v-model="form.webhook_headers"
               rows="3"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder='{ "X-Custom-Header": "value" }'
+              class="input-base font-mono"
+              :placeholder="$t('views.SettingsTriggersView.headers_placeholder')"
               data-testid="settings-triggers-form-webhook-headers"
             />
           </div>
@@ -162,32 +162,32 @@
         <!-- Cron config -->
         <template v-if="form.trigger_type === 'cron'">
           <div>
-            <label for="settingstriggersview-field-10" class="mb-1 block text-sm font-medium">Cron Expression</label>
+            <label for="settingstriggersview-field-10" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.cron_expression') }}</label>
             <input id="settingstriggersview-field-10"
               v-model="form.cron_expression"
               type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-              placeholder="*/5 * * * *"
+              class="input-base font-mono"
+              :placeholder="$t('views.SettingsTriggersView.cron_expression_placeholder')"
               data-testid="settings-triggers-form-cron-expr"
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-9" class="mb-1 block text-sm font-medium">Timezone</label>
+            <label for="settingstriggersview-field-9" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.timezone') }}</label>
             <input id="settingstriggersview-field-9"
               v-model="form.cron_timezone"
               type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="UTC"
+              class="input-base"
+              :placeholder="$t('views.SettingsTriggersView.timezone_placeholder')"
               data-testid="settings-triggers-form-cron-tz"
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-8" class="mb-1 block text-sm font-medium">Input Template (JSON)</label>
+            <label for="settingstriggersview-field-8" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.input_template_json') }}</label>
             <textarea id="settingstriggersview-field-8"
               v-model="form.input_template"
               rows="3"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder='{ "key": "value" }'
+              class="input-base font-mono"
+              :placeholder="$t('views.SettingsTriggersView.input_template_placeholder')"
               data-testid="settings-triggers-form-cron-input"
             />
           </div>
@@ -196,43 +196,43 @@
         <!-- Polling config -->
         <template v-if="form.trigger_type === 'polling'">
           <div>
-            <label for="settingstriggersview-field-7" class="mb-1 block text-sm font-medium">Connector Instance ID</label>
+            <label for="settingstriggersview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.connector_instance_id') }}</label>
             <input id="settingstriggersview-field-7"
               v-model="form.connector_instance_id"
               type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-              placeholder="uuid"
+              class="input-base font-mono"
+              :placeholder="$t('views.SettingsTriggersView.connector_instance_id_placeholder')"
               data-testid="settings-triggers-form-polling-connector"
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-6" class="mb-1 block text-sm font-medium">Query</label>
+            <label for="settingstriggersview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.query') }}</label>
             <textarea id="settingstriggersview-field-6"
               v-model="form.poll_query"
               rows="3"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-              placeholder="SELECT * FROM table WHERE status = 'pending'"
+              class="input-base font-mono"
+              :placeholder="$t('views.SettingsTriggersView.query_placeholder')"
               data-testid="settings-triggers-form-polling-query"
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-5" class="mb-1 block text-sm font-medium">Poll Interval (seconds)</label>
+            <label for="settingstriggersview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.poll_interval_seconds') }}</label>
             <input id="settingstriggersview-field-5"
               v-model="form.poll_interval"
               type="number"
               min="10"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="60"
+              class="input-base"
+              :placeholder="$t('views.SettingsTriggersView.poll_interval_placeholder')"
               data-testid="settings-triggers-form-polling-interval"
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-4" class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
+            <label for="settingstriggersview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.condition_expression') }}</label>
             <input id="settingstriggersview-field-4"
               v-model="form.condition_expression"
               type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-              placeholder="length(@) > `0`"
+              class="input-base font-mono"
+              :placeholder="$t('views.SettingsTriggersView.condition_expression_placeholder')"
               data-testid="settings-triggers-form-polling-condition"
             />
           </div>
@@ -241,10 +241,10 @@
         <!-- Agent Signal config -->
         <template v-if="form.trigger_type === 'agent_signal'">
           <div>
-            <label for="settingstriggersview-source-pipeline" class="mb-1 block text-sm font-medium">Source Pipeline</label>
+            <label for="settingstriggersview-source-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.source_pipeline') }}</label>
             <Select v-model="form.signal_source_pipeline">
-              <SelectTrigger id="settingstriggersview-source-pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Source pipeline" data-testid="settings-triggers-form-signal-pipeline">
-                <SelectValue placeholder="Select source pipeline" />
+              <SelectTrigger id="settingstriggersview-source-pipeline" class="input-base" :aria-label="$t('views.SettingsTriggersView.source_pipeline')" data-testid="settings-triggers-form-signal-pipeline">
+                <SelectValue :placeholder="$t('views.SettingsTriggersView.select_source_pipeline')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
@@ -252,12 +252,12 @@
             </Select>
           </div>
           <div>
-            <label for="settingstriggersview-field-2" class="mb-1 block text-sm font-medium">Source Node ID</label>
+            <label for="settingstriggersview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.source_node_id') }}</label>
             <input id="settingstriggersview-field-2"
               v-model="form.signal_source_node"
               type="text"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
-              placeholder="node_abc123"
+              class="input-base font-mono"
+              :placeholder="$t('views.SettingsTriggersView.source_node_id_placeholder')"
               data-testid="settings-triggers-form-signal-node"
             />
           </div>
@@ -271,7 +271,7 @@
               class="rounded border-input"
               data-testid="settings-triggers-form-active"
             />
-            Active
+            {{ $t('views.SettingsTriggersView.active') }}
           </label>
         </div>
 
@@ -282,9 +282,9 @@
     <FormDialog
       :open="deleteDialogOpen"
       @update:open="deleteDialogOpen = false"
-      title="Delete Trigger"
-      description="Are you sure you want to delete this trigger? This action cannot be undone."
-      confirmText="Delete"
+      :title="$t('views.SettingsTriggersView.delete_trigger')"
+      :description="$t('views.SettingsTriggersView.delete_trigger_description')"
+      :confirmText="$t('views.SettingsTriggersView.delete')"
       :loading="deleting"
       @confirm="deleteTrigger"
     />
@@ -294,6 +294,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
@@ -316,6 +317,7 @@ import {
 } from '@/components/ui/select'
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 interface TriggerItem {
   id: string
@@ -395,11 +397,11 @@ const form = ref<TriggerForm>({ ...defaultForm })
 
 function typeLabel(type: string): string {
   const labels: Record<string, string> = {
-    manual: 'Manual',
-    webhook: 'Webhook',
-    cron: 'Cron',
-    polling: 'Polling',
-    agent_signal: 'Agent Signal',
+    manual: t('views.SettingsTriggersView.manual'),
+    webhook: t('views.SettingsTriggersView.webhook'),
+    cron: t('views.SettingsTriggersView.cron'),
+    polling: t('views.SettingsTriggersView.polling'),
+    agent_signal: t('views.SettingsTriggersView.agent_signal'),
   }
   return labels[type] || type
 }
@@ -478,12 +480,12 @@ async function saveTrigger() {
   formError.value = null
 
   if (!form.value.pipeline_id) {
-    formError.value = 'Please select a pipeline.'
+    formError.value = t('views.SettingsTriggersView.please_select_a_pipeline')
     return
   }
 
   if (!editingId.value && !form.value.trigger_type) {
-    formError.value = 'Please select a trigger type.'
+    formError.value = t('views.SettingsTriggersView.please_select_a_trigger_type')
     return
   }
 
@@ -498,7 +500,7 @@ async function saveTrigger() {
         try {
           configJson.headers = JSON.parse(form.value.webhook_headers)
         } catch {
-          formError.value = 'Headers must be valid JSON.'
+          formError.value = t('views.SettingsTriggersView.headers_must_be_valid_json')
           return
         }
       }
@@ -515,7 +517,7 @@ async function saveTrigger() {
       try {
         configJson.input_template = JSON.parse(form.value.input_template)
       } catch {
-        formError.value = 'Input template must be valid JSON.'
+        formError.value = t('views.SettingsTriggersView.input_template_must_be_valid_json')
         return
       }
     }
@@ -541,7 +543,7 @@ async function saveTrigger() {
         body: body as any,
       })
       if (err) {
-        formError.value = `Failed to update trigger: ${formatApiError(err)}`
+        formError.value = t('views.SettingsTriggersView.failed_to_update_trigger', { detail: formatApiError(err) })
         return
       }
     } else {
@@ -559,7 +561,7 @@ async function saveTrigger() {
         body: body as any,
       })
       if (err) {
-        formError.value = `Failed to create trigger: ${formatApiError(err)}`
+        formError.value = t('views.SettingsTriggersView.failed_to_create_trigger', { detail: formatApiError(err) })
         return
       }
     }
@@ -567,7 +569,7 @@ async function saveTrigger() {
     dialogOpen.value = false
     await loadTriggers()
   } catch (e: unknown) {
-    formError.value = `Error: ${formatApiError(e)}`
+    formError.value = t('views.SettingsTriggersView.error_saving_trigger', { detail: formatApiError(e) })
   } finally {
     saving.value = false
   }
@@ -581,14 +583,14 @@ async function deleteTrigger() {
       params: { path: { trigger_id: deleteTarget.value.id } },
     })
     if (err) {
-      error.value = `Failed to delete trigger: ${formatApiError(err)}`
+      error.value = t('views.SettingsTriggersView.failed_to_delete_trigger', { detail: formatApiError(err) })
       return
     }
     deleteDialogOpen.value = false
     deleteTarget.value = null
     await loadTriggers()
   } catch (e: unknown) {
-    error.value = `Error deleting trigger: ${formatApiError(e)}`
+    error.value = t('views.SettingsTriggersView.error_deleting_trigger', { detail: formatApiError(e) })
   } finally {
     deleting.value = false
   }
@@ -603,12 +605,12 @@ async function toggleActive(trigger: TriggerItem) {
       params: { path: { trigger_id: trigger.id } },
     })
     if (err) {
-      error.value = `Failed to toggle trigger: ${formatApiError(err)}`
+      error.value = t('views.SettingsTriggersView.failed_to_toggle_trigger', { detail: formatApiError(err) })
       return
     }
     await loadTriggers()
   } catch (e: unknown) {
-    error.value = `Error toggling trigger: ${formatApiError(e)}`
+    error.value = t('views.SettingsTriggersView.error_toggling_trigger', { detail: formatApiError(e) })
   } finally {
     triggerToggling.value[trigger.id] = false
   }
@@ -622,12 +624,12 @@ function triggerActions(trigger: TriggerItem) {
   return [
     {
       key: 'edit',
-      label: 'Edit',
+      label: t('views.SettingsTriggersView.edit'),
       onClick: () => openEditDialog(trigger),
     },
     {
       key: 'delete',
-      label: 'Delete',
+      label: t('views.SettingsTriggersView.delete'),
       onClick: () => confirmDelete(trigger),
       danger: true,
     },

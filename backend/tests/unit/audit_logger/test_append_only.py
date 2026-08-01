@@ -73,6 +73,56 @@ class TestAppendOnlyGuardRegistration:
         register_append_only_guard()
         register_append_only_guard()
 
+    def test_update_blocked_by_orm_listener(self):
+        """UPDATE on an AuditEvent instance raises AppendOnlyViolationError."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+
+        from modulo.core.audit_logger.append_only import (
+            AppendOnlyViolationError,
+            register_append_only_guard,
+        )
+        from modulo.db.models.audit_event import AuditEvent
+        from modulo.db.models.base import Base
+
+        register_append_only_guard()
+
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine, tables=[AuditEvent.__table__])
+        with Session(engine) as session:
+            event = AuditEvent(organisation_id=uuid.uuid4(), event_type="test.event")
+            session.add(event)
+            session.commit()
+
+            event.event_type = "mutated"
+            with pytest.raises(AppendOnlyViolationError, match="append-only"):
+                session.commit()
+
+    def test_delete_blocked_by_orm_listener(self):
+        """DELETE on an AuditEvent instance raises AppendOnlyViolationError."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+
+        from modulo.core.audit_logger.append_only import (
+            AppendOnlyViolationError,
+            register_append_only_guard,
+        )
+        from modulo.db.models.audit_event import AuditEvent
+        from modulo.db.models.base import Base
+
+        register_append_only_guard()
+
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine, tables=[AuditEvent.__table__])
+        with Session(engine) as session:
+            event = AuditEvent(organisation_id=uuid.uuid4(), event_type="test.event")
+            session.add(event)
+            session.commit()
+
+            session.delete(event)
+            with pytest.raises(AppendOnlyViolationError, match="append-only"):
+                session.commit()
+
     def test_listeners_are_registered(self, monkeypatch):
         """Verify event listeners are actually registered on both append-only models."""
         from sqlalchemy import event as sa_event

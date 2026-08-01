@@ -170,13 +170,13 @@ async def publish_contribution_endpoint(
 ) -> ContributionStatusResponse:
     """Publish a reviewed fixture contribution to the community library.
 
-    Only org owners/admins may publish contributions.  This endpoint requires
-    the user to have org_role='admin' or org_role='owner'.
+    Only org admins may publish contributions.  This endpoint requires the
+    user to have org_role='admin'.
     """
-    if principal.org_role not in ("admin", "owner"):
+    if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only org owners and admins may publish contributions",
+            detail="Only org admins may publish contributions",
         )
 
     try:

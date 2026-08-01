@@ -15,6 +15,7 @@ os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
+os.environ.setdefault("MODULO_DB", "sqlite")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "b" * 32)
 
@@ -99,6 +100,7 @@ def make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.lock_wait_timeout_seconds = kwargs.get("lock_wait_timeout_seconds", 300)
     p.node_timeout_seconds = kwargs.get("node_timeout_seconds", 300)
     p.run_context_defaults = kwargs.get("run_context_defaults", {})
+    p.rate_limit_config = kwargs.get("rate_limit_config")
     p.created_by = uuid.uuid4()
     p.created_at = kwargs.get("created_at", datetime.now())
     p.updated_at = kwargs.get("updated_at", datetime.now())
@@ -112,9 +114,15 @@ def make_mock_run(**kwargs: Any) -> MagicMock:
     r.status = kwargs.get("status", "pending")
     r.langgraph_thread_id = str(uuid.uuid4())
     r.error_detail = kwargs.get("error_detail")
+    r.error_code = kwargs.get("error_code")
     r.input_hash = kwargs.get("input_hash", "0" * 64)
     r.trigger_type = kwargs.get("trigger_type", "manual")
     r.final_state = kwargs.get("final_state")
+    r.run_number = kwargs.get("run_number", 1)
+    r.total_tokens = kwargs.get("total_tokens", 0)
+    r.total_cost_usd = kwargs.get("total_cost_usd")
+    r.node_token_usage = kwargs.get("node_token_usage")
+    r.pipeline = kwargs.get("pipeline")
     return r
 
 
@@ -210,19 +218,42 @@ def _bdd_check_response_status(status: int, request) -> None:
 
 
 def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Generator[TestClient, None, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
     from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_user
+    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+    from modulo.auth.jwt import TenantPrincipal
     from modulo.settings import get_settings
+
+    class _AllFeatures:
+        def feature_enabled(self, name: str) -> bool:
+            return True
+
+        def list_enabled_features(self) -> list:
+            return []
+
+        def tier(self) -> str:
+            return "enterprise"
+
+        def has_license_key(self) -> bool:
+            return True
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
+    async def _override_plan_context() -> _AllFeatures:
+        return _AllFeatures()
+
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_plan_context] = _override_plan_context
     if principal_kwargs:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**principal_kwargs)
+
+        async def _override_tenant() -> TenantPrincipal:
+            return TenantPrincipal(**principal_kwargs)
+
+        app.dependency_overrides[get_current_tenant_user] = _override_tenant
 
     yield TestClient(app)
 

@@ -254,7 +254,9 @@ class PipelineExecutor:
                     raise RunNotFoundError(run_id)
                 return cancelled_run
 
-            active_count = await count_active_runs_for_pipeline(session, pipeline_id, exclude_run_id=run_id)
+            active_count = await count_active_runs_for_pipeline(
+                session, pipeline_id, include_pending=False, exclude_run_id=run_id
+            )
             if active_count < max_concurrent:
                 await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
                 running_run = await get_run(session, run_id)

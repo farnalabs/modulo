@@ -1641,10 +1641,10 @@ async def admin_billing_overview(
 def _require_org_admin(principal: TenantPrincipal) -> None:
     if principal.is_system_admin:
         return
-    if principal.org_role not in ("admin", "owner"):
+    if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin or owner users can manage organisation deletion",
+            detail="Only org admins can manage organisation deletion",
         )
 
 

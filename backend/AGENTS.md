@@ -273,9 +273,9 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 
 - Every call to the E2B Sandbox SDK (creating a sandbox, running commands, reading files, closing) must be wrapped in `asyncio.wait_for()` with a realistic timeout. The E2B API can hang indefinitely under network congestion, upstream provider issues, or resource exhaustion. Without a timeout, a hung SDK call blocks the entire pipeline node indefinitely, consuming the node's timeout budget without making progress. Use 30s for sandbox creation, 300s for command execution, and 10s for teardown operations as baseline timeouts.
 
-### `**env_vars_extra` must precede system env vars in sandbox command construction
+### `**env_vars_extra` must stay AFTER system env vars in the sandbox envs dict
 
-- When constructing the shell command for a sandbox agent, environment variables from user config (`env_vars_extra`) must be placed BEFORE system-injected env vars (`OPENCODE_API_KEY`, `GITHUB_TOKEN`, etc.) in the shell command prefix. If system vars come first and a user-provided `GITHUB_TOKEN` is in `env_vars_extra`, the system value is silently overwritten — the user's token may have narrower permissions. Putting user vars first means the system vars win on conflict, providing a guaranteed baseline capability. Pattern: `env_vars_extra kv pairs` then `system env vars` then `opencode run ...`.
+- In `node_runner.py` the sandbox `envs={...}` dict is ordered: system env vars first (`MODULO_*`, `APP_MODULO_OPENCODE_API_KEY`, `GITHUB_TOKEN`), then `**env_vars_extra` last. This is DELIBERATE — pipelines must be able to override system defaults for identity separation (e.g. PR Reviewer injects its own `modulo-reviewbot` PAT via `env_vars_extra`, not the system's `farnalabs` bot token). Commit b0c4bde97 reverted an earlier "env_vars_extra first" change for exactly this reason; do not move it back. The reserved-prefix validator prevents pipelines from overriding `MODULO_*` vars.
 
 ### Stale cleanup `outputs_json` comparison needs `::jsonb` cast in PostgreSQL
 

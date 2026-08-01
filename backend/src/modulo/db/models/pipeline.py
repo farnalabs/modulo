@@ -55,7 +55,9 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     )
     default_feedback_handler: Mapped[str | None] = mapped_column(String(50))
     rate_limit_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    stale_run_timeout_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    stale_run_timeout_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30, server_default=text("'30'")
+    )
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )

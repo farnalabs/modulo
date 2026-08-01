@@ -27,6 +27,7 @@ def ctx() -> dict[str, Any]:
         "org_skills": [],
         "user_skills": [],
         "product_primer": "",
+        "product_docs_content": "Modulo is an AI-powered SDLC orchestration platform.",
         "sys_prompt": "",
         "org_id": uuid.UUID("00000000-0000-0000-0000-000000000001"),
         "user_id": uuid.UUID("00000000-0000-0000-0000-000000000002"),
@@ -130,12 +131,16 @@ def build_system_prompt(request, ctx) -> None:
     if merged.get("product_primer") == "always_on" and ctx.get("product_primer"):
         parts.append("## Product Overview\n\n" + ctx["product_primer"])
 
+    # Product Documentation inline when always_on
+    if merged.get("product_docs") == "always_on" and ctx.get("product_docs_content"):
+        parts.append("## Product Documentation\n\n" + ctx["product_docs_content"])
+
     # Knowledge Tools
     tool_lines: list[str] = []
     for source_key, mode in merged.items():
         if mode == "tool":
             if source_key == "product_docs":
-                tool_lines.append("- get_documentation(query, section?) — Search product docs")
+                tool_lines.append("- search_documentation(query, section?) — Search product docs")
             elif source_key == "integration_status":
                 tool_lines.append("- get_integration_status() — Get connector health")
             elif source_key == "org_config":
@@ -164,8 +169,8 @@ def build_system_prompt(request, ctx) -> None:
     ctx["built_prompt"] = "\n\n".join(parts)
 
 
-@when(parsers.parse('the user calls get_documentation with query "{query}"'))
-def call_get_documentation(query: str, request, ctx) -> None:
+@when(parsers.parse('the user calls search_documentation with query "{query}"'))
+def call_search_documentation(query: str, request, ctx) -> None:
     entries = [
         DocEntry(
             heading_path="Pipelines > Overview",

@@ -1,8 +1,8 @@
 <template>
   <PageTabs :tabs="[
-    { label: 'Browse', to: '/schemas' },
-    { label: 'Editor', to: '/schemas/editor' },
-    { label: 'Infer', to: '/schemas/infer' },
+    { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+    { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+    { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
   ]" />
   <div class="flex h-[calc(100vh-3.5rem)]">
     <aside class="flex w-80 flex-col border-r bg-background">
@@ -110,7 +110,7 @@
                       type="text"
                       data-testid="schema-editor-name"
                       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      placeholder="My Schema"
+                      :placeholder="$t('views.SchemaEditorView.name_placeholder')"
                     />
                   </div>
                   <div>
@@ -120,7 +120,7 @@
                       type="text"
                       data-testid="schema-editor-description"
                       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      placeholder="Optional description"
+                      :placeholder="$t('views.SchemaEditorView.description_placeholder')"
                     />
                   </div>
                   <div>
@@ -130,7 +130,7 @@
                       type="text"
                       data-testid="schema-editor-version"
                       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      placeholder="1.0.0"
+                      :placeholder="$t('views.SchemaEditorView.version_placeholder')"
                     />
                   </div>
                 </div>
@@ -192,14 +192,14 @@
                               type="text"
                               data-testid="schema-editor-field-name"
                               class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              placeholder="field_name"
+                              :placeholder="$t('views.SchemaEditorView.field_name_placeholder')"
                             />
                           </div>
                           <div>
                             <label for="schemaeditorview-field-type" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
                             <Select v-model="field.type">
-                              <SelectTrigger id="schemaeditorview-field-type" class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Field type" data-testid="schema-editor-field-type">
-                                <SelectValue placeholder="Select type" />
+                              <SelectTrigger id="schemaeditorview-field-type" class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('views.SchemaEditorView.field_type_aria')" data-testid="schema-editor-field-type">
+                                <SelectValue :placeholder="$t('views.SchemaEditorView.select_type')" />
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectItem value="string">string</SelectItem>
@@ -220,7 +220,7 @@
                               type="text"
                               data-testid="schema-editor-field-description"
                               class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              placeholder="Optional"
+                              :placeholder="$t('views.SchemaEditorView.optional')"
                             />
                           </div>
                           <div>
@@ -230,7 +230,7 @@
                               type="text"
                               data-testid="schema-editor-field-default"
                               class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              placeholder="Optional"
+                              :placeholder="$t('views.SchemaEditorView.optional')"
                             />
                           </div>
                         </div>
@@ -323,7 +323,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { api, getAccessToken } from '../lib/api/client'
+import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -450,7 +450,7 @@ const jsonPreview = computed(() => {
 
   const schema: Record<string, unknown> = {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
-    title: schemaName.value || 'Untitled Schema',
+    title: schemaName.value || t('views.SchemaEditorView.untitled_schema'),
     type: 'object',
     properties,
   }
@@ -553,12 +553,10 @@ function moveField(index: number, delta: number) {
 
 async function loadLatestVersion(schemaId: string) {
   try {
-    const token = getAccessToken()
-    const res = await fetch(`/api/v1/schemas/${schemaId}/versions?page=1&page_size=1`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    const { data, error } = await api.GET('/api/v1/schemas/{schema_id}/versions', {
+      params: { path: { schema_id: schemaId }, query: { page: 1, page_size: 1 } },
     })
-    if (!res.ok) return
-    const data = await res.json()
+    if (error) return
     if (data.items && data.items.length > 0) {
       const latest = data.items[0]
       schemaVersion.value = latest.version
@@ -572,12 +570,10 @@ async function loadLatestVersion(schemaId: string) {
 async function loadVersions(schemaId: string) {
   loadingVersions.value = true
   try {
-    const token = getAccessToken()
-    const res = await fetch(`/api/v1/schemas/${schemaId}/versions?page=1&page_size=50`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    const { data, error } = await api.GET('/api/v1/schemas/{schema_id}/versions', {
+      params: { path: { schema_id: schemaId }, query: { page: 1, page_size: 50 } },
     })
-    if (!res.ok) return
-    const data = await res.json()
+    if (error) return
     versions.value = data.items ?? []
   } catch {
     versions.value = []
@@ -612,18 +608,12 @@ async function validateSchema(): Promise<boolean> {
   }
 
   try {
-    const token = getAccessToken()
-    const res = await fetch('/api/v1/schemas/validate', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ definition: JSON.parse(jsonPreview.value) }),
+    const { data, error } = await api.POST('/api/v1/schemas/validate', {
+      body: { definition: JSON.parse(jsonPreview.value) as Record<string, unknown> },
     })
-    const result = await res.json()
-    if (!result.valid && result.errors) {
-      for (const e of result.errors) {
+    if (error) return false
+    if (!data.valid && data.errors) {
+      for (const e of data.errors) {
         errors.push(`${e.path}: ${e.message}`)
       }
     }
@@ -662,21 +652,16 @@ async function saveSchema() {
       }
       if (!schemaData) return
 
-      const token = getAccessToken()
-      const versionRes = await fetch(`/api/v1/schemas/${schemaData.id}/versions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
+      const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
+        params: { path: { schema_id: schemaData.id } },
+        body: {
           version: schemaVersion.value.trim(),
           version_number: 1,
           definition_json: definitionJson,
           published: true,
-        }),
+        },
       })
-      if (!versionRes.ok) {
+      if (versionErr) {
         saveError.value = t('views.SchemaEditorView.schema_created_version_failed')
         return
       }
@@ -698,24 +683,19 @@ async function saveSchema() {
         return
       }
 
-      const token = getAccessToken()
       const nextVersion = versions.value.length > 0
         ? Math.max(...versions.value.map(v => v.version_number)) + 1
         : 1
-      const versionRes = await fetch(`/api/v1/schemas/${selectedSchemaId.value}/versions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
+      const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
+        params: { path: { schema_id: selectedSchemaId.value } },
+        body: {
           version: schemaVersion.value.trim(),
           version_number: nextVersion,
           definition_json: definitionJson,
           published: true,
-        }),
+        },
       })
-      if (!versionRes.ok) {
+      if (versionErr) {
         saveError.value = t('views.SchemaEditorView.schema_updated_version_failed')
         return
       }

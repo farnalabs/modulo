@@ -80,7 +80,7 @@ class TestCheckToolScope:
 
     @pytest.mark.parametrize("role", ["viewer", "runner", "operator", "admin"])
     def test_tools_without_scope_req_always_pass(self, role: str) -> None:
-        check_tool_scope(role, "list_pipelines_tool")
+        check_tool_scope(role, "list_pipelines")
         check_tool_scope(role, "get_run_status")
 
     def test_none_role_raises(self) -> None:
@@ -180,6 +180,62 @@ class TestReviewHitlActionScopes:
         with pytest.raises(MCPAuthorizationError):
             check_tool_scope("runner", "review_hitl")
 
+    def test_deliver_manual_requires_operator(self) -> None:
+        check_tool_scope("operator", "review_hitl", action="deliver_manual")
+        check_tool_scope("admin", "review_hitl", action="deliver_manual")
+
+    def test_deliver_manual_rejects_runner(self) -> None:
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope("runner", "review_hitl", action="deliver_manual")
+
+    def test_deliver_manual_rejects_viewer(self) -> None:
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope("viewer", "review_hitl", action="deliver_manual")
+
+
+class TestNewlyGuardedTools:
+    """The 5 previously-unguarded tools now enforce their roles."""
+
+    @pytest.mark.parametrize(
+        ("role", "tool"),
+        [
+            ("viewer", "delete_connector"),
+            ("runner", "delete_connector"),
+            ("viewer", "create_secret"),
+            ("runner", "create_secret"),
+            ("viewer", "delete_secret"),
+            ("runner", "delete_secret"),
+            ("viewer", "list_secrets"),
+            ("runner", "list_secrets"),
+        ],
+    )
+    def test_low_role_denied(self, role: str, tool: str) -> None:
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope(role, tool)
+
+    @pytest.mark.parametrize(
+        ("role", "tool"),
+        [
+            ("operator", "delete_connector"),
+            ("admin", "delete_connector"),
+            ("operator", "create_secret"),
+            ("admin", "create_secret"),
+            ("operator", "delete_secret"),
+            ("admin", "delete_secret"),
+            ("operator", "list_secrets"),
+            ("admin", "list_secrets"),
+            ("runner", "list_trigger_events"),
+            ("operator", "list_trigger_events"),
+            ("admin", "list_trigger_events"),
+        ],
+    )
+    def test_authorized_role_passes(self, role: str, tool: str) -> None:
+        check_tool_scope(role, tool)
+
+    def test_viewer_denied_list_trigger_events(self) -> None:
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope("viewer", "list_trigger_events")
+
 
 class TestMCPAuthorizationError:
     """MCPAuthorizationError behaviour."""
@@ -203,10 +259,10 @@ class TestConstants:
             "review_hitl:claim",
             "review_hitl:approve",
             "review_hitl:reject",
+            "review_hitl:deliver_manual",
             "copy_library_primitive",
             "list_pending_hitl",
             "get_run_output",
-            "get_trigger_events",
             "create_pipeline",
             "update_pipeline_graph",
             "create_model_backend",
@@ -218,21 +274,36 @@ class TestConstants:
             "list_housekeeping",
             "perform_housekeeping",
             "create_connector",
+            "delete_connector",
             "create_trigger",
             "delete_pipeline",
             "create_agent",
             "infer_schema",
+            "create_secret",
+            "delete_secret",
+            "list_secrets",
+            "list_trigger_events",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 
-    def test_tool_requirements_use_valid_roles(self) -> None:
+    def test_tool_requirements_resolve_to_valid_roles(self) -> None:
         valid_roles = {"viewer", "runner", "operator", "admin"}
-        for tool, role in TOOL_SCOPE_REQUIREMENTS.items():
-            assert role in valid_roles, f"{tool} has invalid role '{role}'"
+        from modulo.auth.permissions import resolve_required
 
-    def test_unregistered_tool_returns_none(self) -> None:
-        result = check_tool_scope("viewer", "some_unknown_tool")
-        assert result is None
+        for tool, permission_key in TOOL_SCOPE_REQUIREMENTS.items():
+            role = resolve_required(permission_key)
+            assert role in valid_roles, f"{tool} resolves to invalid role '{role}'"
+
+    def test_unregistered_tool_denied_by_default(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("viewer", "some_unknown_tool")
+        assert "not registered in the scope policy" in str(excinfo.value)
+
+    def test_read_only_tools_pinned_at_viewer(self) -> None:
+        for tool in ("list_pipelines", "get_run_status", "search_library", "get_pipeline_graph"):
+            check_tool_scope("viewer", tool)
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope(None, "list_pipelines")
 
     def test_mcp_configuration_error_is_exception(self) -> None:
         assert issubclass(MCPConfigurationError, Exception)

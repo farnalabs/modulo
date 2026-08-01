@@ -1,4 +1,4 @@
-"""Unit tests for the browse_library MCP tool."""
+"""Unit tests for the search_library MCP tool (formerly browse_library)."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,11 +27,11 @@ def _make_mock_primitive(
     return p
 
 
-class TestBrowseLibrary:
+class TestSearchLibrary:
     pytestmark = pytest.mark.asyncio
 
     async def test_returns_formatted_items(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, browse_library
+        from modulo.api.mcp_server import _ctx_org_id, search_library
 
         mock_items = [
             _make_mock_primitive(
@@ -69,7 +69,7 @@ class TestBrowseLibrary:
             ) as mock_list,
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
-            result = await browse_library()
+            result = await search_library()
 
         mock_list.assert_called_once()
         assert result == {
@@ -99,7 +99,7 @@ class TestBrowseLibrary:
         }
 
     async def test_returns_empty_list_when_no_results(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, browse_library
+        from modulo.api.mcp_server import _ctx_org_id, search_library
 
         page_result = PageResult(
             items=[],
@@ -121,7 +121,7 @@ class TestBrowseLibrary:
             ) as mock_list,
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
-            result = await browse_library()
+            result = await search_library()
 
         mock_list.assert_called_once()
         assert result == {
@@ -132,7 +132,7 @@ class TestBrowseLibrary:
         }
 
     async def test_passes_filter_params(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, browse_library
+        from modulo.api.mcp_server import _ctx_org_id, search_library
 
         _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
 
@@ -145,7 +145,7 @@ class TestBrowseLibrary:
             ) as mock_list,
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
-            await browse_library(
+            await search_library(
                 primitive_type="agent",
                 search="test",
                 cursor="abc123",
@@ -164,7 +164,7 @@ class TestBrowseLibrary:
         )
 
     async def test_uses_default_limit_of_20(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, browse_library
+        from modulo.api.mcp_server import _ctx_org_id, search_library
 
         _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
 
@@ -177,18 +177,18 @@ class TestBrowseLibrary:
             ) as mock_list,
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
-            await browse_library()
+            await search_library()
 
         _, kwargs = mock_list.call_args
         assert kwargs["page_size"] == 20
 
     async def test_rejects_expired_token(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, browse_library
+        from modulo.api.mcp_server import _ctx_org_id, search_library
 
         _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
 
         with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
-            result = await browse_library()
+            result = await search_library()
 
         assert result == {
             "error": "auth_expired",
@@ -197,7 +197,7 @@ class TestBrowseLibrary:
 
     async def test_no_scope_check_needed(self) -> None:
         from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import browse_library
+        from modulo.api.mcp_server import search_library
 
         _role.set(None)
 
@@ -210,12 +210,12 @@ class TestBrowseLibrary:
             ),
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
-            result = await browse_library()
+            result = await search_library()
 
         assert "insufficient_scope" not in result
 
     async def test_error_handling(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, browse_library
+        from modulo.api.mcp_server import _ctx_org_id, search_library
 
         _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
 
@@ -228,7 +228,7 @@ class TestBrowseLibrary:
             ),
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
-            result = await browse_library()
+            result = await search_library()
 
         assert result == {
             "error": "internal_error",

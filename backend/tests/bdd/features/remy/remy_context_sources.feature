@@ -16,7 +16,7 @@ Feature: Remy Context Sources
   Scenario: Tool-mode sources are listed as available tools
     Given the "product_docs" context source is set to "tool"
     When Remy builds a system prompt for a new session
-    Then the prompt contains "get_documentation" in the "## Available Knowledge Tools" section
+    Then the prompt contains "search_documentation" in the "## Available Knowledge Tools" section
 
   Scenario: Disabled sources are excluded entirely
     Given the "integration_status" context source is set to "off"
@@ -34,9 +34,9 @@ Feature: Remy Context Sources
     When Remy builds a system prompt
     Then the prompt does not mention "Pipeline Reference"
 
-  Scenario: get_documentation tool returns results
+  Scenario: search_documentation tool returns results
     Given a documentation index has been loaded
-    When the user calls get_documentation with query "pipeline"
+    When the user calls search_documentation with query "pipeline"
     Then results include sections matching the query
 
   Scenario: get_integration_status returns Markdown table

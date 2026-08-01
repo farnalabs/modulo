@@ -2,10 +2,10 @@
   <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
     <PageTabs :tabs="[
-      { label: 'Evals', to: '/evals/editor' },
-      { label: 'Proposals', to: '/evals/proposals' },
-      { label: 'Variants', to: '/variants/compare' },
-      { label: 'AB Test', to: '/variants/ab-test' },
+      { label: $t('views.EvalEditorView.tab_evals'), to: '/evals/editor' },
+      { label: $t('views.EvalEditorView.tab_proposals'), to: '/evals/proposals' },
+      { label: $t('views.EvalEditorView.tab_variants'), to: '/variants/compare' },
+      { label: $t('views.EvalEditorView.tab_ab_test'), to: '/variants/ab-test' },
     ]" />
 
     <div class="page-narrow">
@@ -20,7 +20,7 @@
         <div>
           <label for="evaleditorview-field-8" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
           <Select v-model="selectedPipelineId" @update:model-value="onPipelineChange">
-            <SelectTrigger data-testid="eval-editor-pipeline" aria-label="Pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <SelectTrigger data-testid="eval-editor-pipeline" :aria-label="$t('views.EvalEditorView.pipeline_aria')" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <SelectValue :placeholder="$t('views.EvalEditorView.select_a_pipeline')" />
             </SelectTrigger>
             <SelectContent>
@@ -33,7 +33,7 @@
         <div>
           <label for="evaleditorview-field-7" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
           <Select v-model="form.node_id" :disabled="!selectedPipelineId || nodesLoading">
-            <SelectTrigger data-testid="eval-editor-node" aria-label="Node" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
+            <SelectTrigger data-testid="eval-editor-node" :aria-label="$t('views.EvalEditorView.node_aria')" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
               <SelectValue :placeholder="$t('views.EvalEditorView.all_pipeline_outputs')" />
             </SelectTrigger>
             <SelectContent>
@@ -66,7 +66,7 @@
               <div>
                 <label for="evaleditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.eval_type') }}</label>
                 <Select v-model="form.eval_type">
-                  <SelectTrigger data-testid="eval-editor-eval-type" aria-label="Eval type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectTrigger data-testid="eval-editor-eval-type" :aria-label="$t('views.EvalEditorView.eval_type_aria')" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     <SelectValue placeholder="llm_judge" />
                   </SelectTrigger>
                   <SelectContent>
@@ -79,7 +79,7 @@
               </div>
 
               <div>
-                <label for="evaleditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.config_json') }} <span class="text-muted-foreground">(JSON)</span></label>
+                <label for="evaleditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.config_json') }} <span class="text-muted-foreground">{{ $t('views.EvalEditorView.config_json_hint') }}</span></label>
                 <textarea id="evaleditorview-field-4"
                   v-model="form.config_json"
                   rows="6"
@@ -105,7 +105,7 @@
                     step="0.05"
                     data-testid="eval-editor-pass-threshold"
                     class="h-2 w-full cursor-pointer appearance-none rounded-full bg-input accent-primary"
-                    aria-label="Pass threshold"
+                    :aria-label="$t('views.EvalEditorView.pass_threshold_aria')"
                   />
                   <span class="text-xs text-muted-foreground">1.0</span>
                 </div>
@@ -201,10 +201,10 @@
                       {{ ev.failure_behaviour }}
                     </span>
                     <span v-if="ev.pass_threshold != null" class="text-xs text-muted-foreground">
-                      threshold: {{ ev.pass_threshold.toFixed(2) }}
+                      {{ $t('views.EvalEditorView.threshold', { value: ev.pass_threshold.toFixed(2) }) }}
                     </span>
                     <span v-if="ev.node_id" class="text-xs text-muted-foreground font-mono">
-                      node: {{ shortId(ev.node_id) }}
+                      {{ $t('views.EvalEditorView.node_prefix', { id: shortId(ev.node_id) }) }}
                     </span>
                   </div>
                 </div>

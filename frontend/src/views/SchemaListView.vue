@@ -1,11 +1,11 @@
 <template>
   <PageTabs :tabs="[
-    { label: 'Browse', to: '/schemas' },
-    { label: 'Editor', to: '/schemas/editor' },
-    { label: 'Infer', to: '/schemas/infer' },
+    { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+    { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+    { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
   ]" />
     <div class="page-narrow">
-    <PageHeader title="Schemas" :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')" />
+    <PageHeader :title="$t('views.SchemaListView.schemas')" :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -15,7 +15,7 @@
       <div v-if="schemas.length === 0" class="card p-8 text-center">
         <p class="text-lg font-medium">{{ $t('views.SchemaListView.no_schemas_found') }}</p>
         <p class="mt-1 text-sm text-muted-foreground">
-          Schemas are created through inference or direct creation.
+          {{ $t('views.SchemaListView.empty_hint') }}
         </p>
       </div>
 
@@ -59,7 +59,7 @@
                     class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
                     data-testid="schema-deprecate"
                     :aria-label="$t('views.SchemaListView.deprecate_schema')"
-                    :title="$t('views.SchemaListView.deprecate_schema_1')"
+                    :title="$t('views.SchemaListView.deprecate_schema')"
                     @click="confirmDeprecate(schema)"
                   >
                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -153,7 +153,7 @@ async function deprecateSchema() {
       params: { path: { schema_id: deprecateConfirmId.value } },
     })
     if (err) {
-      deprecateError.value = String(err)
+      deprecateError.value = formatApiError(err)
     } else if (data) {
       const idx = schemas.value.findIndex(s => s.id === deprecateConfirmId.value)
       if (idx >= 0) {

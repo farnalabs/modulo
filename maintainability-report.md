@@ -83,5 +83,6 @@ refreshTimer = setInterval(() => {
 ```
 `loadGates()` is async but called without `await` from a `setInterval` callback. Errors are caught internally but the promise is fire-and-forget.
 
-### 17. Duplicated Tailwind class strings — SettingsErrorForwardersView.vue
+### 17. ~~Duplicated Tailwind class strings — SettingsErrorForwardersView.vue~~ **FIXED**
 The input class string `w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring` is repeated ~20 times. Should be extracted to a shared component or a CSS utility class.
+Extracted into a shared `.input-base` CSS utility class in `frontend/src/style.css`; all 13 duplicated occurrences in `SettingsErrorForwardersView.vue` now reference `class="input-base"`.
