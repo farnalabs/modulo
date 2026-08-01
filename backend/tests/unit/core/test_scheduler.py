@@ -128,6 +128,7 @@ async def test_loop_creates_postgres_engine_with_ssl_connect_args(env: SimpleNam
     assert kwargs["pool_pre_ping"] is True
     assert kwargs["connect_args"]["ssl"] is False
     assert kwargs["connect_args"]["statement_cache_size"] == 0
+    assert kwargs["connect_args"]["timeout"] == 10
     env.engine.dispose.assert_awaited_once()
 
 
@@ -238,6 +239,26 @@ async def test_loop_fires_all_due_triggers(env: SimpleNamespace) -> None:
 
     assert env.fire.await_count == 2
     assert bg_worker.submit.call_count == 2
+
+
+async def test_loop_passes_empty_cron_expression_when_trigger_has_none(env: SimpleNamespace) -> None:
+    trigger = _make_trigger(cron_expression=None)
+    env.factory.return_value = _FakeSession([trigger])
+    env.fire.return_value = {"status": "skipped", "reason": "trigger_busy"}
+    bg_worker = MagicMock()
+    bg_worker.submit = MagicMock()
+
+    await _run_loop(env, bg_worker=bg_worker)
+
+    env.fire.assert_awaited_once_with(
+        trigger_id=trigger.id,
+        org_id=trigger.organisation_id,
+        pipeline_id=trigger.pipeline_id,
+        cron_expression="",
+        snapshot_id=None,
+        factory=env.factory,
+    )
+    bg_worker.submit.assert_not_called()
 
 
 async def test_loop_passes_snapshot_id_from_config_json(env: SimpleNamespace) -> None:
