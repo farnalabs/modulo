@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.cron_scheduler import fire_cron_trigger
+from modulo.core.cron_helpers import fire_cron_trigger
 from modulo.core.dispatch import dispatch_run
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org

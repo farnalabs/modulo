@@ -63,6 +63,11 @@ class Run(OrgScoped):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancellation_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # Execution heartbeats + dispatch tracking (migration 0027). Used by the
+    # shared claim logic and dispatcher_reconcile (SAQ, PR B-2).
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     total_tokens: Mapped[int | None] = mapped_column(Integer)
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)

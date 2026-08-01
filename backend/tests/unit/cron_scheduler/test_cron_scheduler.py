@@ -11,13 +11,10 @@ import pytest
 from celery.beat import Scheduler
 from sqlalchemy.sql.dml import Update
 
-from modulo.core.cron_scheduler import (
-    DatabaseCronEntry,
-    DatabaseCronScheduler,
-    _get_engine,
-    fire_cron_trigger,
-)
-from modulo.core.pipeline_executor_task import SchedulerDBError
+import modulo.core.cron_helpers as mch
+from modulo.core.cron_helpers import _get_engine, fire_cron_trigger
+from modulo.core.cron_scheduler import DatabaseCronEntry, DatabaseCronScheduler
+from modulo.core.pipeline_execution import SchedulerDBError
 from modulo.db.models.trigger import Trigger
 from modulo.settings import Settings
 
@@ -126,16 +123,14 @@ async def _run_fire(
     ``create_run`` mocks after the call completes.
     """
     with ExitStack() as stack:
-        stack.enter_context(patch("modulo.core.cron_scheduler._get_engine"))
-        stack.enter_context(
-            patch("modulo.core.cron_scheduler.async_sessionmaker", return_value=_MockSessionFactory(session))
-        )
-        mock_rls = stack.enter_context(patch("modulo.core.cron_scheduler._set_rls_org", new_callable=AsyncMock))
+        stack.enter_context(patch("modulo.core.cron_helpers._get_engine"))
+        stack.enter_context(patch.object(mch, "_open_factory", return_value=_MockSessionFactory(session)))
+        mock_rls = stack.enter_context(patch("modulo.core.cron_helpers._set_rls_org", new_callable=AsyncMock))
         mock_count = stack.enter_context(
-            patch("modulo.core.cron_scheduler._count_active_runs", new_callable=AsyncMock, return_value=active_count)
+            patch("modulo.core.cron_helpers._count_active_runs", new_callable=AsyncMock, return_value=active_count)
         )
-        mock_log_event = stack.enter_context(patch("modulo.core.cron_scheduler._log_event", new_callable=AsyncMock))
-        mock_create_run = stack.enter_context(patch("modulo.core.cron_scheduler.create_run", new_callable=AsyncMock))
+        mock_log_event = stack.enter_context(patch("modulo.core.cron_helpers._log_event", new_callable=AsyncMock))
+        mock_create_run = stack.enter_context(patch("modulo.db.crud.run.create_run", new_callable=AsyncMock))
         if create_run_return is not None:
             mock_create_run.return_value = create_run_return
         if log_event_return is not None:
@@ -152,13 +147,13 @@ async def _run_fire(
 
 class TestGetEngine:
     def test_returns_cached_engine(self):
-        import modulo.core.cron_scheduler as mcs
+        import modulo.core.cron_helpers as mch
 
         mock_engine = MagicMock()
         with (
-            patch.object(mcs, "_ENGINE", None),
-            patch.object(mcs, "create_async_engine", return_value=mock_engine) as mock_create,
-            patch.object(mcs, "get_settings", return_value=_make_mock_settings()),
+            patch.object(mch, "_ENGINE", None),
+            patch.object(mch, "create_async_engine", return_value=mock_engine) as mock_create,
+            patch.object(mch, "get_settings", return_value=_make_mock_settings()),
         ):
             e1 = _get_engine()
             e2 = _get_engine()
@@ -166,12 +161,12 @@ class TestGetEngine:
         mock_create.assert_called_once()
 
     def test_engine_uses_postgres_connect_args(self):
-        import modulo.core.cron_scheduler as mcs
+        import modulo.core.cron_helpers as mch
 
         with (
-            patch.object(mcs, "_ENGINE", None),
-            patch.object(mcs, "create_async_engine") as mock_create,
-            patch.object(mcs, "get_settings", return_value=_make_mock_settings()),
+            patch.object(mch, "_ENGINE", None),
+            patch.object(mch, "create_async_engine") as mock_create,
+            patch.object(mch, "get_settings", return_value=_make_mock_settings()),
         ):
             _get_engine()
         assert mock_create.call_args.kwargs["connect_args"] == {"timeout": 10, "ssl": False}
@@ -361,8 +356,6 @@ class TestFireCronTrigger:
         assert result["run_id"] == str(run_id)
         assert result["event_id"] == str(event_id)
         assert result["input_payload"] == {}
-        next_fire_at = datetime.datetime.fromisoformat(result["next_fire_at"])
-        assert next_fire_at.tzinfo is not None
 
         mocks["rls"].assert_awaited_once_with(session, org_id)
         mocks["count"].assert_awaited_once_with(session, trigger_id)
@@ -390,7 +383,9 @@ class TestFireCronTrigger:
         assert isinstance(update_stmt, Update)
         bound = {col.name: val.value for col, val in update_stmt._values.items()}
         assert isinstance(bound["last_fired_at"], datetime.datetime)
-        assert isinstance(bound["next_fire_at"], datetime.datetime)
+        # SAQ path (advance_next_fire_at=False): next_fire_at is advanced at
+        # enqueue time in fire_due_triggers, not at fire time.
+        assert "next_fire_at" not in bound
 
 
 class TestDatabaseCronSchedulerTick:

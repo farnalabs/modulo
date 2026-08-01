@@ -1,10 +1,23 @@
-"""Health check endpoints — liveness, readiness, and dependency health."""
+"""Health check endpoints — liveness, readiness, and dependency health.
+
+PR B-2 (plan F7): ``/healthz/ready`` gains a machine-scoped SAQ worker check.
+Each worker writes its metadata (``{"hostname": FLY_MACHINE_ID}``) to
+``saq:{queue}:worker_info:{worker_id}``; this machine's readiness verifies that
+a live worker for THIS hostname exists on EACH configured queue independently
+(runs AND system — one live queue does not mask a dead sibling). Stale workers
+for 4 consecutive probes => 503, gated on ``SAQ_ENABLED=true`` (shadow is
+alert-only so a shadow worker crash can never degrade web capacity on a
+Celery-served system).
+"""
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 import asyncpg  # type: ignore[import-untyped]
@@ -26,6 +39,12 @@ router = APIRouter(tags=["health"])
 
 VERSION = "0.1.0"
 _START_TIME: datetime = datetime.now(UTC)
+
+# 4 consecutive stale probes before 503 (plan F7): 4 x ~15-30s probe interval
+# leaves margin over the 90s worker_info TTL (3 strikes = exactly the TTL was
+# fragile). Counter is per-process (each web machine tracks its own).
+_STALE_PROBE_LIMIT = 4
+_consecutive_stale_probes: int = 0
 
 
 class CheckResult(BaseModel):
@@ -164,14 +183,34 @@ async def _check_checkpointer() -> CheckResult:
         )
 
 
+def _resolve_alembic_ini() -> Path:
+    """Locate backend/alembic.ini robustly regardless of the process cwd.
+
+    Same pattern as ``modulo.api.main._resolve_alembic_ini`` — the readiness
+    migration check must not depend on the cwd (the pre-commit test harness
+    runs pytest from the repo root while CI and the container run from
+    ``backend/``).
+    """
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "alembic.ini"
+        if candidate.exists():
+            return candidate
+    return Path("alembic.ini")
+
+
 async def _check_migrations() -> CheckResult:
     settings = get_settings()
     timeout = _per_check_timeout(settings, "modulo_health_migrations_timeout_seconds")
     start = time.monotonic()
 
     async def _probe() -> tuple[Literal["ok", "degraded"], str]:
-        alembic_cfg = Config("alembic.ini")
+        alembic_ini = _resolve_alembic_ini()
+        alembic_cfg = Config(str(alembic_ini))
         alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
+        alembic_cfg.set_main_option(
+            "script_location",
+            str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
+        )
 
         script = ScriptDirectory.from_config(alembic_cfg)
         heads = set(script.get_heads())
@@ -202,6 +241,131 @@ async def _check_migrations() -> CheckResult:
         )
 
 
+async def _configured_queues() -> list[str]:
+    """PREFIX-AWARE queue names for this environment (runs + system)."""
+    settings = get_settings()
+    runs_queue = settings.saq_runs_queue
+    system_queue = runs_queue.replace("runs", "system") if "runs" in runs_queue else "system"
+    return [runs_queue, system_queue]
+
+
+async def _live_worker_hostnames(queue_name: str) -> set[str]:
+    """Read live worker hostnames for *queue_name* from SAQ worker metadata.
+
+    Live = a ``saq:{queue}:stats`` zset entry whose expiry score is in the
+    future (worker_info timer 89s / TTL 90s). The metadata hash holds
+    ``{"hostname": FLY_MACHINE_ID}`` written by the worker at startup.
+
+    SAQ stores zset scores in MILLISECONDS (``saq.utils.now()`` is
+    ``int(time.time() * 1000)``) — the comparison lower bound must be
+    milliseconds too, or ``zrangebyscore(key, now_seconds, "+inf")`` matches
+    every entry and stale workers are never filtered.
+    """
+    settings = get_settings()
+    r: aioredis.Redis | None = None
+    try:
+        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
+        stats_key = f"saq:{queue_name}:stats"
+        now_ms = int(time.time() * 1000)
+        member_keys = await r.zrangebyscore(stats_key, now_ms, "+inf")
+        if not member_keys:
+            return set()
+        raw = await r.mget(member_keys)
+        hostnames: set[str] = set()
+        for blob in raw:
+            if not blob:
+                continue
+            try:
+                info = json.loads(blob)
+            except (ValueError, TypeError):
+                continue
+            metadata = info.get("metadata") if isinstance(info, dict) else None
+            hostname = (metadata or {}).get("hostname") if isinstance(metadata, dict) else None
+            if hostname:
+                hostnames.add(str(hostname))
+        return hostnames
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("health._live_worker_hostnames queue=%s: %s", queue_name, exc)
+        return set()
+    finally:
+        if r is not None:
+            with contextlib.suppress(Exception):
+                await r.aclose()
+
+
+async def _check_saq_workers() -> CheckResult:
+    """Machine-scoped SAQ worker staleness check (plan F7).
+
+    Verifies THIS machine's workers (by FLY_MACHINE_ID hostname) are live on
+    EACH configured queue independently (runs AND system). The check is
+    machine-scoped: it only fails when THIS machine's worker is stale on ANY
+    queue — a live system worker does not mask a dead runs worker on the same
+    machine. After 4 consecutive stale probes the check reports
+    ``unavailable`` (503) — but ONLY when ``SAQ_ENABLED=true``. In shadow
+    (``SAQ_ENABLED=false``) staleness is alert-only (reported degraded, never
+    503) so a shadow worker crash cannot degrade web capacity on a
+    Celery-served system.
+    """
+    global _consecutive_stale_probes
+
+    settings = get_settings()
+    this_host = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
+    try:
+        queues = await _configured_queues()
+        live_by_queue: dict[str, set[str]] = {}
+        for qname in queues:
+            live_by_queue[qname] = await _live_worker_hostnames(qname)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("health._check_saq_workers failed: %s", exc)
+        return CheckResult(status="ok", detail="saq worker check unavailable (redis read failed)")
+
+    # THIS machine must be live on EVERY configured queue. A host that is live
+    # on only one queue is a partially-dead worker and must fail the gate.
+    missing_queues = [qname for qname, live in live_by_queue.items() if this_host not in live]
+    this_machine_live = not missing_queues
+
+    if this_machine_live:
+        _consecutive_stale_probes = 0
+        return CheckResult(
+            status="ok",
+            detail=f"saq workers live on this machine for all queues ({this_host})",
+        )
+
+    _consecutive_stale_probes += 1
+    if settings.saq_enabled and _consecutive_stale_probes >= _STALE_PROBE_LIMIT:
+        return CheckResult(
+            status="unavailable",
+            detail=(
+                f"this machine's saq workers stale for {_consecutive_stale_probes} "
+                f"consecutive probes (hostname={this_host}, stale_queues={sorted(missing_queues)}, "
+                f"live_by_queue={live_by_queue})"
+            ),
+        )
+    if settings.saq_enabled:
+        return CheckResult(
+            status="degraded",
+            detail=(
+                f"this machine's saq workers stale ({_consecutive_stale_probes}/"
+                f"{_STALE_PROBE_LIMIT} probes; hostname={this_host}, stale_queues={sorted(missing_queues)})"
+            ),
+        )
+    # Shadow: alert-only — report ok so the check never 503s a Celery-served env.
+    _log.warning(
+        "health.saq_workers_stale_shadow hostname=%s stale_queues=%s probes=%d",
+        this_host,
+        sorted(missing_queues),
+        _consecutive_stale_probes,
+    )
+    return CheckResult(
+        status="ok",
+        detail=f"saq workers stale (shadow alert-only) on this machine ({this_host})",
+    )
+
+
 @handle_db_errors("health.liveness")
 @router.get("/healthz")
 async def liveness() -> dict[str, str]:
@@ -211,11 +375,12 @@ async def liveness() -> dict[str, str]:
 @handle_db_errors("health.readiness")
 @router.get("/healthz/ready")
 async def readiness(response: Response) -> ReadinessResponse:
-    db_check, redis_check, cp_check, mig_check = await asyncio.gather(
+    db_check, redis_check, cp_check, mig_check, saq_check = await asyncio.gather(
         _check_database(),
         _check_redis(),
         _check_checkpointer(),
         _check_migrations(),
+        _check_saq_workers(),
     )
 
     checks: dict[str, CheckResult] = {
@@ -223,6 +388,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         "redis": redis_check,
         "checkpointer": cp_check,
         "migrations": mig_check,
+        "saq_workers": saq_check,
     }
 
     statuses = [c.status for c in checks.values()]
