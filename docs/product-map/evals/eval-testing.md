@@ -149,8 +149,9 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 - [x] No recent data (recent_total=0) → alert skipped
 - [x] Multiple evals with mixed trends each returned correctly
 - [x] Affected_run_ids empty when no recent failures
-- [x] GET /api/v1/admin/evals/regressions returns expected shape: alerts, total_regressions, threshold, lookback_days
+- [x] GET /api/v1/admin/evals/regressions returns expected shape: alerts, total_regressions, threshold, recent_window_ratio, lookback_days
 - [x] Custom days and threshold query parameters accepted
+- [x] Custom recent_window_ratio query parameter accepted (0.5 widens the recent window)
 - [x] Empty database returns total_regressions 0, alerts []
 
 ### Error Handling

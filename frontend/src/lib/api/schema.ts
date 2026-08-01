@@ -10331,6 +10331,8 @@ export interface components {
             total_regressions: number;
             /** Threshold */
             threshold: number;
+            /** Recent Window Ratio */
+            recent_window_ratio: number;
             /** Lookback Days */
             lookback_days: number;
         };
@@ -13369,6 +13371,8 @@ export interface operations {
                 days?: number;
                 /** @description Minimum drop fraction to trigger an alert */
                 threshold?: number;
+                /** @description Fraction of the lookback period used as the recent window (e.g. 0.5 = last half) */
+                recent_window_ratio?: number;
             };
             header?: never;
             path?: never;

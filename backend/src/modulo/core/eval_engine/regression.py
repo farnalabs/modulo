@@ -36,12 +36,14 @@ async def detect_regressions(
     org_id: UUID,
     days: int = 7,
     threshold: float = 0.15,
+    recent_window_ratio: float = 0.25,
 ) -> list[RegressionAlert]:
     """Detect pass-rate regressions by comparing recent vs baseline windows.
 
     The lookback period is split into a *baseline* window (earlier portion)
-    and a *recent* window (last ``max(days // 4, 1)`` days).  Alerts are
-    emitted for evals whose pass rate dropped by at least *threshold*.
+    and a *recent* window (last ``max(int(days * recent_window_ratio), 1)``
+    days, default 25% of the lookback).  Alerts are emitted for evals whose
+    pass rate dropped by at least *threshold*.
 
     Args:
         session: Async DB session.
@@ -49,6 +51,9 @@ async def detect_regressions(
         days: Total lookback period in days.
         threshold: Minimum absolute drop (as a fraction, e.g. ``0.15``)
             to trigger an alert.
+        recent_window_ratio: Fraction of the lookback period used as the
+            "recent" window (must be ``> 0`` and ``<= 1.0``).  Defaults to
+            ``0.25`` (i.e. the legacy ``max(days // 4, 1)`` behaviour).
 
     Returns:
         List of ``RegressionAlert`` for evals with significant drops.
@@ -57,9 +62,13 @@ async def detect_regressions(
         raise ValueError(f"days must be >= 1, got {days}")
     if threshold < 0:
         raise ValueError(f"threshold must be >= 0, got {threshold}")
+    if not 0 < recent_window_ratio <= 1.0:
+        raise ValueError(
+            f"recent_window_ratio must be > 0 and <= 1.0, got {recent_window_ratio}"
+        )
 
     now = datetime.now(UTC)
-    recent_window_days = max(days // 4, 1)
+    recent_window_days = max(int(days * recent_window_ratio), 1)
     if recent_window_days >= days:
         recent_window_days = max(days // 2, 1)
     baseline_start = now - timedelta(days=days)

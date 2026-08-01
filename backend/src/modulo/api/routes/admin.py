@@ -2220,6 +2220,7 @@ class RegressionAlertsResponse(BaseModel):
     alerts: list[RegressionAlertResponse]
     total_regressions: int
     threshold: float
+    recent_window_ratio: float
     lookback_days: int
 
 
@@ -2228,6 +2229,12 @@ class RegressionAlertsResponse(BaseModel):
 async def eval_regressions(
     days: int = Query(default=7, ge=1, le=90, description="Lookback period in days"),
     threshold: float = Query(default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"),
+    recent_window_ratio: float = Query(
+        default=0.25,
+        gt=0.0,
+        le=1.0,
+        description="Fraction of the lookback period used as the recent window (e.g. 0.5 = last half)",
+    ),
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RegressionAlertsResponse:
@@ -2245,6 +2252,7 @@ async def eval_regressions(
                 org_id=current_user.organisation_id,
                 days=days,
                 threshold=threshold,
+                recent_window_ratio=recent_window_ratio,
             )
     except IntegrityError:
         logger.exception("admin.eval_regressions")
@@ -2293,6 +2301,7 @@ async def eval_regressions(
         ],
         total_regressions=len(alerts),
         threshold=threshold,
+        recent_window_ratio=recent_window_ratio,
         lookback_days=days,
     )
 
