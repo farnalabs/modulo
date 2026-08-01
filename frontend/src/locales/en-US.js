@@ -1,5 +1,15 @@
 export default {
   "views": {
+    "OAuthConsentView": {
+      "authorize_access": "Authorize access",
+      "consent_description": "Approve this application to access your organisation's MCP tools.",
+      "login_required": "You must be signed in to the Modulo web app to approve this request. Sign in, then the request will continue.",
+      "requesting_application": "Requesting application",
+      "requested_scopes": "Requested scopes",
+      "approve": "Approve",
+      "approving": "Approving...",
+      "approved_redirecting": "Approved — redirecting to the application...",
+    },
     "TeamComparisonView": {
       "failed_to_load_data": "Failed to load data:",
       "failed_to_load_teams": "Failed to load teams:",
