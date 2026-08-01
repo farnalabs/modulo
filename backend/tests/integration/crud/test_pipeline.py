@@ -128,6 +128,7 @@ async def test_replace_pipeline_graph_persists_nodes_and_first_class_edges(
                 "hitl_gate_config": None,
             },
         ],
+        is_privileged=True,
     )
 
     assert saved is not None
@@ -172,6 +173,7 @@ async def test_clone_pipeline_returns_new_id_and_name_prefix(
                 "hitl_gate_config": None,
             },
         ],
+        is_privileged=True,
     )
 
     cloned = await clone_pipeline(
@@ -215,6 +217,7 @@ async def test_clone_pipeline_independent_from_original(
         org_id=test_org,
         nodes=nodes,
         edges=[],
+        is_privileged=True,
     )
 
     cloned = await clone_pipeline(
@@ -233,6 +236,7 @@ async def test_clone_pipeline_independent_from_original(
         org_id=test_org,
         nodes=[],
         edges=[],
+        is_privileged=True,
     )
 
     # Check clone is unchanged
@@ -282,6 +286,7 @@ async def test_replace_pipeline_graph_removes_stale_edges(
                 "hitl_gate_config": None,
             },
         ],
+        is_privileged=True,
     )
     await replace_pipeline_graph(
         rls_session,
@@ -289,6 +294,7 @@ async def test_replace_pipeline_graph_removes_stale_edges(
         org_id=test_org,
         nodes=[],
         edges=[],
+        is_privileged=True,
     )
 
     loaded = await get_pipeline_graph(rls_session, pipeline.id)

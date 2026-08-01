@@ -442,6 +442,7 @@ async def seed_examples(
                 org_id=principal.organisation_id,
                 nodes=nodes,
                 edges=[],
+                is_privileged=True,
             )
 
         progress = await _get_or_create_progress(session, principal.organisation_id)
@@ -535,6 +536,7 @@ async def create_starter_pipeline(
             org_id=principal.organisation_id,
             nodes=nodes,
             edges=edges,
+            is_privileged=True,
         )
 
     return StarterPipelineResponse(

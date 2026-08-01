@@ -391,8 +391,14 @@ async def replace_pipeline_graph(
     org_id: uuid.UUID,
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
+    is_privileged: bool,
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
-    """Atomically replace an editable graph while preserving first-class edges."""
+    """Atomically replace an editable graph while preserving first-class edges.
+
+    ADR 017 service-layer backstop: explicit is_privileged marks this write as
+    privileged-capable. The HITL gate guard (hitl-gate-removal-guard-plan.md)
+    consumes this to block gate-weakening by non-privileged callers.
+    """
     result = await session.execute(
         select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None)).with_for_update()
     )
