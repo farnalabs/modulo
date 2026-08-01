@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -410,6 +411,166 @@ def test_migrate_data_source_no_versions_returns_404(client: TestClient) -> None
             },
         )
     assert resp.status_code == 404
+
+
+def test_migrate_data_records_audit_event(client: TestClient) -> None:
+    from_schema = _make_schema()
+    to_schema = _make_schema()
+    from_sv = _make_schema_version(from_schema.id)
+    from_sv.definition_json = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "legacy": {"type": "boolean"}},
+    }
+    to_sv = _make_schema_version(to_schema.id)
+    to_sv.definition_json = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+    }
+    page_result = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
+    to_page = MagicMock(items=[to_sv], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_append,
+    ):
+        resp = client.post(
+            "/api/v1/schemas/migrate",
+            json={
+                "from_schema_id": str(from_schema.id),
+                "to_schema_id": str(to_schema.id),
+                "data": {"name": "Alice", "legacy": True},
+            },
+        )
+    assert resp.status_code == 200
+    mock_append.assert_awaited_once()
+    call = mock_append.await_args
+    assert call.kwargs["org_id"] == _ORG_ID
+    assert call.kwargs["event_type"] == "schema_migration_completed"
+    assert call.kwargs["resource_type"] == "schema"
+    assert call.kwargs["resource_id"] == to_schema.id
+    payload = call.kwargs["payload_json"]
+    assert payload["from_schema_id"] == str(from_schema.id)
+    assert payload["to_schema_id"] == str(to_schema.id)
+    assert payload["dry_run"] is False
+    assert payload["field_removals"] == 1
+    assert payload["field_additions"] == 1
+    assert payload["renames"] == 0
+    assert payload["type_changes"] == 0
+
+
+def test_migrate_data_dry_run_records_audit_event(client: TestClient) -> None:
+    from_schema = _make_schema()
+    to_schema = _make_schema()
+    from_sv = _make_schema_version(from_schema.id)
+    from_sv.definition_json = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+    }
+    to_sv = _make_schema_version(to_schema.id)
+    to_sv.definition_json = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+    }
+    page_result = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
+    to_page = MagicMock(items=[to_sv], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_append,
+    ):
+        resp = client.post(
+            "/api/v1/schemas/migrate?dry_run=true",
+            json={
+                "from_schema_id": str(from_schema.id),
+                "to_schema_id": str(to_schema.id),
+                "data": {"name": "Alice"},
+            },
+        )
+    assert resp.status_code == 200
+    mock_append.assert_awaited_once()
+    payload = mock_append.await_args.kwargs["payload_json"]
+    assert payload["dry_run"] is True
+    body = resp.json()
+    assert body["plan"]["dry_run"] is True
+    assert body["migrated_data"] == {"name": "Alice"}
+
+
+def test_migrate_data_audit_failure_does_not_break_response(client: TestClient) -> None:
+    from_schema = _make_schema()
+    to_schema = _make_schema()
+    from_sv = _make_schema_version(from_schema.id)
+    from_sv.definition_json = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "legacy": {"type": "boolean"}},
+    }
+    to_sv = _make_schema_version(to_schema.id)
+    to_sv.definition_json = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+    }
+    page_result = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
+    to_page = MagicMock(items=[to_sv], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch(
+            "modulo.api.routes.schemas.append_audit_event",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("audit chain unavailable"),
+        ),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/migrate",
+            json={
+                "from_schema_id": str(from_schema.id),
+                "to_schema_id": str(to_schema.id),
+                "data": {"name": "Alice", "legacy": True},
+            },
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "legacy" not in body["migrated_data"]
+    assert body["migrated_data"]["email"] is None
+
+
+def test_migrate_data_audit_programming_error_returns_200(client: TestClient) -> None:
+    from_schema = _make_schema()
+    to_schema = _make_schema()
+    from_sv = _make_schema_version(from_schema.id)
+    from_sv.definition_json = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+    }
+    to_sv = _make_schema_version(to_schema.id)
+    to_sv.definition_json = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+    }
+    page_result = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
+    to_page = MagicMock(items=[to_sv], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch(
+            "modulo.api.routes.schemas.append_audit_event",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("statement", {}, Exception("missing table")),
+        ),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/migrate",
+            json={
+                "from_schema_id": str(from_schema.id),
+                "to_schema_id": str(to_schema.id),
+                "data": {"name": "Alice"},
+            },
+        )
+    assert resp.status_code == 200
+    assert resp.json()["migrated_data"]["email"] is None
 
 
 def test_migration_plan_endpoint_returns_200(client: TestClient) -> None:

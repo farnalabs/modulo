@@ -1154,6 +1154,38 @@ async def migrate_data_endpoint(
         "renames": plan.renames,
     }
 
+    try:
+        try:
+            async with session.begin():
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="schema_migration_completed",
+                    actor_user_id=principal.account_id,
+                    resource_type="schema",
+                    resource_id=req.to_schema_id,
+                    payload_json={
+                        "from_schema_id": str(req.from_schema_id),
+                        "to_schema_id": str(req.to_schema_id),
+                        "dry_run": dry_run,
+                        "field_additions": len(plan.field_additions),
+                        "field_removals": len(plan.field_removals),
+                        "type_changes": len(plan.type_changes),
+                        "renames": len(plan.renames),
+                    },
+                )
+        except ProgrammingError:
+            logger.exception("schemas.migrate_audit")
+            logger.warning("Audit event not recorded — schema migration table missing")
+
+    except HTTPException as exc:
+        logger.debug("schemas.migrate.audit_http_error", extra={"detail": exc.detail})
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("schemas.migrate.audit_failed")
+
     if dry_run:
         plan_dict["dry_run"] = True
         return SchemaMigrationResponse(
