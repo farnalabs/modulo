@@ -154,12 +154,10 @@ def test_all_call_sites_pass_is_privileged() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Privilege resolution semantics (operator+ -> True), matching the REST/MCP
-# callers. The REST routes use _is_privileged (pipelines.py); the MCP tool
-# resolves org_role_level(_ctx_role_val()) >= org_role_level("operator").
-# Asserting on the shared production helper keeps the unit suite honest: a bug
-# in _is_privileged is caught here rather than being masked by a re-implemented
-# copy of the same logic.
+# Privilege resolution semantics (operator+ -> True). Assert on the actual
+# helper both the REST routes and the MCP tool use (_is_privileged from
+# pipelines.py) rather than re-implementing org_role_level(role) >=
+# _OPERATOR_LEVEL, so a regression in the helper is caught here.
 # ---------------------------------------------------------------------------
 
 
@@ -176,5 +174,4 @@ def test_all_call_sites_pass_is_privileged() -> None:
     ],
 )
 def test_operator_plus_is_privileged_semantics(role: str | None, expected: bool) -> None:
-    actual = _is_privileged(role)
-    assert actual is expected
+    assert _is_privileged(role) is expected

@@ -48,7 +48,6 @@ from modulo.auth.oauth import (
     decode_oauth_access_token,
 )
 from modulo.auth.permissions import set_authz_enforce
-from modulo.auth.team_rbac import org_role_level
 from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
 
 # ContextVars populated by McpAuthMiddleware before each request.
@@ -781,13 +780,12 @@ async def update_pipeline_graph(
         # ADR 017 service-layer backstop: operator+ is privileged (may weaken a
         # HITL gate). Resolved from the live ContextVar role, NOT the
         # kill-switched scope check, so the HITL guard stays live.
-        ctx_role = _ctx_role_val()
-        is_privileged = ctx_role is not None and org_role_level(ctx_role) >= org_role_level("operator")
+        from modulo.api.routes.pipelines import PipelineGraphUpdate, _is_privileged
+
+        is_privileged = _is_privileged(_ctx_role_val())
 
         # Validate graph structure using Pydantic models (same as REST endpoint)
         from pydantic import ValidationError as _PydanticValidationError
-
-        from modulo.api.routes.pipelines import PipelineGraphUpdate
 
         try:
             PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
