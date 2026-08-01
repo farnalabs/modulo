@@ -213,7 +213,7 @@ def test_clone_pipeline_viewer_denied_returns_403(viewer_client: TestClient) -> 
     assert resp.status_code == 403
     body = resp.json()
     msg = body.get("detail", body.get("error", {}).get("message", ""))
-    assert "clone" in msg.lower() or "member" in msg.lower()
+    assert "clone" in msg.lower() or "member" in msg.lower() or "permission" in msg.lower()
 
 
 # ---------------------------------------------------------------------------

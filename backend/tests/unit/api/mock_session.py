@@ -3,6 +3,19 @@
 from typing import Any
 from unittest.mock import DEFAULT, AsyncMock, MagicMock
 
+from sqlalchemy.sql import Select
+
+# require_permission's per-request kill-switch read (ADR 017 DECISION 3). The
+# strict mock raises on un-stubbed queries, so this SELECT on the organisations
+# authz_enforce column is stubbed by default to the enforce=True default.
+_AUTHZ_ENFORCE_SNIPPET = "authz_enforce"
+
+
+def _is_authz_enforce_query(stmt: Any) -> bool:
+    if not isinstance(stmt, Select):
+        return False
+    return _AUTHZ_ENFORCE_SNIPPET in str(stmt)
+
 
 def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = False) -> AsyncMock:
     """Configure AsyncSession contracts, requiring explicit query results by default."""
@@ -33,6 +46,10 @@ def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = Fa
         def require_explicit_result(*args: Any, **kwargs: Any) -> Any:
             if execute._mock_return_value is not DEFAULT:
                 return execute._mock_return_value
+            if _is_authz_enforce_query(args[0] if args else None):
+                authz_result = MagicMock()
+                authz_result.scalar_one_or_none.return_value = None
+                return authz_result
             raise AssertionError(
                 "Unexpected session.execute(); stub the expected result or opt in with allow_empty_execute=True"
             )

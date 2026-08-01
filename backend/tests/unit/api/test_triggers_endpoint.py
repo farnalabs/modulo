@@ -367,11 +367,14 @@ def test_trigger_events_returns_200(client: TestClient) -> None:
         patch("modulo.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
+        # require_permission kill-switch read consumes the first execute
+        authz_result = MagicMock()
+        authz_result.scalar_one_or_none = MagicMock(return_value=None)
         # First call loads trigger, second call loads events
         trigger_result = _make_trigger_result([trigger])
         event_result = MagicMock()
         event_result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[event])))
-        session.execute = AsyncMock(side_effect=[trigger_result, event_result])
+        session.execute = AsyncMock(side_effect=[authz_result, trigger_result, event_result])
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session

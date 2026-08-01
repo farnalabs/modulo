@@ -15,8 +15,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.prompt_optimizer import OptimizationFailedError, PromptOptimizer
 from modulo.core.secrets_backend import create_secrets_backend
@@ -254,7 +253,7 @@ async def list_agents_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.list"),
 ) -> AgentListResponse:
     try:
         async with session.begin():
@@ -291,7 +290,7 @@ async def list_agents_endpoint(
 async def create_agent_endpoint(
     req: AgentCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.create"),
 ) -> AgentResponse:
     _validate_generic_agent(
         name=req.name,
@@ -361,7 +360,7 @@ async def create_agent_endpoint(
 async def get_agent_endpoint(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.list"),
 ) -> AgentResponse:
     try:
         async with session.begin():
@@ -396,7 +395,7 @@ async def update_agent_endpoint(
     agent_id: uuid.UUID,
     req: AgentUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.update"),
 ) -> AgentResponse:
     try:
         async with session.begin():
@@ -476,7 +475,7 @@ async def optimize_prompt(
     version: str,
     req: PromptOptimizeRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.update"),
 ) -> PromptOptimizeResponse:
     if not req.eval_result_ids:
         raise HTTPException(
@@ -615,7 +614,7 @@ async def apply_optimized_prompt(
     version: str,
     req: ApplyOptimizedPromptRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.update"),
 ) -> AgentResponse:
     try:
         async with session.begin():
@@ -663,7 +662,7 @@ async def apply_optimized_prompt(
 async def list_prompt_versions(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.list"),
 ) -> list[PromptVersionListEntry]:
     try:
         async with session.begin():
@@ -709,7 +708,7 @@ async def get_prompt_version_endpoint(
     agent_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.list"),
 ) -> PromptVersionDetail:
     try:
         async with session.begin():
@@ -751,7 +750,7 @@ async def rollback_prompt(
     agent_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.update"),
 ) -> PromptRollbackResponse:
     try:
         async with session.begin():
@@ -798,7 +797,7 @@ async def diff_prompt_versions(
     agent_id: uuid.UUID,
     req: PromptDiffRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.list"),
 ) -> PromptDiffResponse:
     try:
         async with session.begin():
@@ -928,7 +927,7 @@ async def diff_prompt_versions(
 async def delete_agent_endpoint(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("agent.delete"),
 ) -> None:
     try:
         async with session.begin():

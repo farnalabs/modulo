@@ -22,9 +22,10 @@ from modulo.api.dependencies import (
     _get_engine,
     _get_session_factory,
     get_db_session,
+    require_permission,
 )
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
 from modulo.core.pipeline_engine.recovery import (
@@ -164,7 +165,7 @@ async def list_runs_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
-    user: TenantPrincipal = Depends(get_current_tenant_user),
+    user: TenantPrincipal = require_permission("run.list"),
 ) -> dict[str, Any]:
     try:
         return await _run_with_retry(
@@ -310,7 +311,7 @@ async def trigger_run(
     req: TriggerRunRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+    principal: TenantPrincipal = require_permission("run.trigger"),
 ) -> RunResponse:
     """Manually trigger a pipeline run.
 
@@ -407,7 +408,7 @@ async def trigger_run(
 async def get_run_stats_endpoint(
     period: str = Query(default="30d", pattern=r"^(7d|30d|90d)$"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("run.list"),
 ) -> dict[str, Any]:
     """Aggregated run stats for a period (7d|30d|90d)."""
     try:
@@ -443,7 +444,7 @@ async def get_run_stats_endpoint(
 async def get_run_heatmap_endpoint(
     year: int = Query(default=2026, ge=2020, le=2100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("run.list"),
 ) -> list[dict[str, Any]]:
     """Run counts per day for the given year (calendar heatmap)."""
     try:
@@ -478,7 +479,7 @@ async def get_run_heatmap_endpoint(
 async def get_run_status(
     run_id: uuid.UUID,
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
-    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+    principal: TenantPrincipal = require_permission("run.status"),
 ) -> RunResponse:
     try:
         run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
@@ -523,7 +524,7 @@ async def get_run_status(
 async def cancel_run(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("run.cancel"),
 ) -> dict[str, str]:
     """Request cancellation of a run.
 
@@ -637,7 +638,7 @@ class FixtureExportResponse(BaseModel):
 async def get_run_io_endpoint(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("run.output"),
 ) -> RunIOResponse:
     """Return per-node IO for a completed run, plus generated fixture_map."""
     try:
@@ -688,7 +689,7 @@ async def get_run_io_endpoint(
 async def export_run_fixture(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("run.output"),
 ) -> FixtureExportResponse:
     """Export run IO data as a StubModelBackend-compatible fixture.
 
@@ -764,7 +765,7 @@ async def export_run_fixture(
 async def get_run_workspace_lease(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("run.output"),
 ) -> dict[str, Any] | None:
     """Return the WorkspaceLease associated with a run, if any."""
     try:
@@ -822,7 +823,7 @@ async def get_run_workspace_lease(
 async def get_run_workspace_events(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("run.output"),
 ) -> list[dict[str, str]]:
     """Return workspace lifecycle events for a run as a timeline."""
     try:
@@ -917,7 +918,7 @@ async def get_run_node_output(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("run.output"),
 ) -> NodeOutputResponse:
     """Return a specific node's output from a completed pipeline run.
 
@@ -1381,7 +1382,7 @@ async def reveal_node_prompt(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("run.output"),
     settings: Settings = Depends(get_settings),
 ) -> PromptRevealResponse:
     """Reconstruct and reveal the exact prompt sent to the LLM for a node.
@@ -1529,7 +1530,7 @@ class NodeOutputDiffResponse(BaseModel):
 async def diff_node_output(
     req: NodeOutputDiffRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("run.output"),
 ) -> NodeOutputDiffResponse:
     """Diff a specific node's output across two runs.
 

@@ -2943,7 +2943,7 @@ Roles apply at two scopes: **org-level** (baseline for all resources) and **team
 |---|---|
 | `admin` | Full access to all resources in the org. Bypasses all team restrictions. Manages users, teams, connectors, model backends, secrets, system config, audit log. |
 | `operator` | Create/edit/run pipelines. Approve HITL. Import/export workflows. Cannot manage users or system config. |
-| `runner` | Trigger runs on existing accessible pipelines. Approve HITL on accessible gates. Cannot create/edit pipelines or connectors. |
+| `runner` | Trigger runs on existing accessible pipelines. Claim HITL gates on accessible pipelines (approval requires `operator` or `admin`). Cannot create/edit pipelines or connectors. |
 | `viewer` | Read-only. View accessible pipelines, runs, traces. Cannot trigger or approve. |
 
 `admin` is org-only — it cannot be a team role. Team roles are `operator`, `runner`, `viewer`.

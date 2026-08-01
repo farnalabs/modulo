@@ -121,7 +121,7 @@ class TestExportFixture:
         )
         snapshot = _make_snapshot(graph_json={"nodes": [{"id": "a"}], "edges": []})
 
-        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[run, snapshot])
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[None, run, snapshot])
 
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
 
@@ -146,7 +146,7 @@ class TestExportFixture:
         )
         snapshot = _make_snapshot()
 
-        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[run, snapshot])
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[None, run, snapshot])
 
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
         body = resp.json()
@@ -166,7 +166,7 @@ class TestExportFixture:
         )
         snapshot = _make_snapshot()
 
-        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[run, snapshot])
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[None, run, snapshot])
 
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
         body = resp.json()
@@ -194,7 +194,7 @@ class TestExportFixture:
         run = _make_run()
         snapshot = _make_snapshot(graph_json=expected_graph)
 
-        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[run, snapshot])
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[None, run, snapshot])
 
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
         body = resp.json()
