@@ -1,14 +1,49 @@
-"""Unit tests for Remy context tools — search_documentation, get_integration_status, get_org_config, get_available_features."""  # noqa: E501
+"""Unit tests for Remy MCP context tools.
 
-import json
-from unittest.mock import MagicMock
+Covers the MCP-tool wrappers (``search_documentation``, ``get_integration_status``,
+``get_org_config``, ``get_available_features``) and the ``_is_sensitive_key`` guard
+that redacts secrets from org-config output.
+"""
+
+import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from modulo.api.mcp_server import (
     SENSITIVE_CONFIG_KEYS,
+    _ctx_org_id,
     _get_doc_index,
     _is_sensitive_key,
+    get_available_features,
+    get_integration_status,
+    get_org_config,
+    search_documentation,
 )
 from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
+
+ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+def _mock_connector(**overrides: object) -> MagicMock:
+    c = MagicMock()
+    c.name = overrides.get("name", "Slack")
+    c.connector_type_id = overrides.get("connector_type_id", "slack_webhook")
+    c.status = overrides.get("status", "healthy")
+    c.last_health_check_at = overrides.get("last_health_check_at")
+    c.last_health_check_error = overrides.get("last_health_check_error", "")
+    return c
+
+
+def _mock_backend(**overrides: object) -> MagicMock:
+    b = MagicMock()
+    b.name = overrides.get("name", "Claude")
+    b.provider = overrides.get("provider", "anthropic")
+    b.model_id = overrides.get("model_id", "claude-sonnet-4")
+    b.credentials_ciphertext = overrides.get("credentials_ciphertext", b"cipher")
+    b.status = overrides.get("status", "active")
+    return b
 
 
 class TestSensitiveKeyDetection:
@@ -35,172 +70,333 @@ class TestSensitiveKeyDetection:
         assert _is_sensitive_key("Modulo_License_Key")
 
 
-class TestSearchDocumentation:
-    """Tests for search_documentation tool behavior."""
+class TestSearchDocumentationTool:
+    """Tests for the search_documentation MCP tool."""
 
-    def test_search_returns_formatted_results(self) -> None:
-        entries = [
-            DocEntry(
-                heading_path="Pipelines > Overview",
-                heading="Pipeline Overview",
-                first_paragraph="Pipelines are the core execution unit.",
-            ),
-            DocEntry(
-                heading_path="Pipelines > Config",
-                heading="Pipeline Config",
-                first_paragraph="Configure pipeline nodes.",
-            ),
-        ]
-        index = DocumentationIndex(entries=entries)
-        results = index.search("pipeline")
-        formatted = index.format_results(results)
-        assert "Pipelines > Overview" in formatted
-        assert "Pipeline Overview" in formatted
-        assert "---" in formatted
+    @pytest.fixture(autouse=True)
+    def _set_org(self) -> None:
+        token = _ctx_org_id.set(ORG_ID)
+        yield
+        _ctx_org_id.reset(token)
 
-    def test_search_no_results_returns_empty(self) -> None:
-        index = DocumentationIndex()
-        results = index.search("nonexistent")
-        assert len(results) == 0
+    async def test_returns_no_results_message_when_no_match(self) -> None:
+        index = DocumentationIndex(entries=[])
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._get_doc_index", return_value=index),
+        ):
+            result = await search_documentation("nonexistent-topic")
+        assert result == {"results": "No documentation found for query.", "count": 0}
 
-    def test_search_with_section_filter(self) -> None:
-        entries = [
-            DocEntry(heading_path="Pipelines > Overview", heading="Pipeline Overview", first_paragraph="Core."),
-            DocEntry(heading_path="Schemas > Types", heading="Schema Types", first_paragraph="Types."),
-        ]
-        index = DocumentationIndex(entries=entries)
-        results = index.search("overview", section="Pipelines")
-        assert len(results) == 1
-        assert results[0].heading == "Pipeline Overview"
+    async def test_returns_formatted_results(self) -> None:
+        index = DocumentationIndex(
+            entries=[
+                DocEntry(
+                    heading_path="Pipelines > Overview",
+                    heading="Pipeline Overview",
+                    first_paragraph="Pipelines are the core execution unit.",
+                ),
+                DocEntry(
+                    heading_path="Pipelines > Config",
+                    heading="Pipeline Config",
+                    first_paragraph="Configure pipeline nodes.",
+                ),
+            ]
+        )
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._get_doc_index", return_value=index),
+        ):
+            result = await search_documentation("pipeline")
+        assert result["count"] == 2
+        assert "Pipeline Overview" in result["results"]
+        assert "---" in result["results"]
 
-    def test_format_results_truncation(self) -> None:
-        long_para = "X" * 20_000
-        entries = [
-            DocEntry(heading_path="Big > Entry", heading="Big Entry", first_paragraph=long_para),
-            DocEntry(heading_path="Small > Entry", heading="Small Entry", first_paragraph="Small."),
-        ]
-        index = DocumentationIndex(entries=entries)
-        formatted = index.format_results(entries)
-        assert "*(truncated" in formatted
-        assert "Small Entry" not in formatted
+    async def test_section_filter_is_forwarded(self) -> None:
+        index = DocumentationIndex(
+            entries=[
+                DocEntry(heading_path="Pipelines > Overview", heading="Pipeline Overview", first_paragraph="Core."),
+                DocEntry(heading_path="Schemas > Types", heading="Schema Types", first_paragraph="Types."),
+            ]
+        )
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._get_doc_index", return_value=index),
+        ):
+            result = await search_documentation("overview", section="Pipelines")
+        assert result["count"] == 1
+        assert "Pipeline Overview" in result["results"]
+        assert "Schema Types" not in result["results"]
 
-    def test_format_results_takes_token_budget(self) -> None:
-        entries = [
-            DocEntry(heading_path="A", heading="A Heading", first_paragraph="A para."),
-            DocEntry(heading_path="B", heading="B Heading", first_paragraph="B para."),
-        ]
-        index = DocumentationIndex(entries=entries)
-        formatted = index.format_results(entries)
-        assert "A Heading" in formatted
-        assert "B Heading" in formatted
+    async def test_returns_auth_error_when_unauthenticated(self) -> None:
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
+            result = await search_documentation("pipeline")
+        assert result["error"] == "auth_expired"
+
+    async def test_returns_internal_error_on_failure(self) -> None:
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._get_doc_index", side_effect=RuntimeError("boom")),
+        ):
+            result = await search_documentation("pipeline")
+        assert result == {"error": "internal_error", "detail": "Failed to search documentation"}
 
 
 class TestGetIntegrationStatus:
-    """Tests for get_integration_status output formatting."""
+    """Tests for the get_integration_status MCP tool."""
 
-    def test_connector_table_format(self) -> None:
-        connector_lines = [
-            "| Name | Type | Status | Last Check | Error |",
-            "|------|------|--------|------------|-------|",
-            "| Slack | slack_webhook | healthy | 2025-06-01 | |",
-        ]
-        table = "\n".join(connector_lines)
-        assert "Slack" in table
-        assert "healthy" in table
+    @pytest.fixture(autouse=True)
+    def _set_org(self) -> None:
+        token = _ctx_org_id.set(ORG_ID)
+        yield
+        _ctx_org_id.reset(token)
 
-    def test_model_backend_table_format(self) -> None:
-        backend_lines = [
-            "| Name | Provider | Model | Has Credentials | Status |",
-            "|------|----------|-------|-----------------|--------|",
-            "| Claude | anthropic | claude-sonnet-4 | yes | active |",
-        ]
-        table = "\n".join(backend_lines)
-        assert "Claude" in table
-        assert "anthropic" in table
-        assert "yes" in table
+    async def test_empty_org_returns_placeholders(self) -> None:
+        connector_result = MagicMock()
+        connector_result.scalars.return_value.all.return_value = []
+        backend_result = MagicMock()
+        backend_result.scalars.return_value.all.return_value = []
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
 
-    def test_empty_connectors_handled(self) -> None:
-        lines = ["## Connectors (0)", "No connectors configured."]
-        result = "\n".join(lines)
-        assert "No connectors configured" in result
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[connector_result, backend_result, count_result])
+
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+        ):
+            mock_session.return_value.__aenter__.return_value = session
+            result = await get_integration_status()
+
+        assert "No connectors configured." in result["results"]
+        assert "No model backends configured." in result["results"]
+        assert "Total triggers: 0" in result["results"]
+        assert result["connectors"] == []
+        assert result["model_backends"] == []
+        assert result["trigger_count"] == 0
+
+    async def test_returns_connector_and_backend_rows(self) -> None:
+        connector = _mock_connector(
+            name="Slack",
+            connector_type_id="slack_webhook",
+            status="healthy",
+            last_health_check_at=None,
+            last_health_check_error="",
+        )
+        backend = _mock_backend(
+            name="Claude",
+            provider="anthropic",
+            model_id="claude-sonnet-4",
+            credentials_ciphertext=b"cipher",
+            status="active",
+        )
+        connector_result = MagicMock()
+        connector_result.scalars.return_value.all.return_value = [connector]
+        backend_result = MagicMock()
+        backend_result.scalars.return_value.all.return_value = [backend]
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 2
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[connector_result, backend_result, count_result])
+
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+        ):
+            mock_session.return_value.__aenter__.return_value = session
+            result = await get_integration_status()
+
+        assert "## Connectors (1)" in result["results"]
+        assert "| Slack | slack_webhook | healthy | never |" in result["results"]
+        assert "## Model Backends (1)" in result["results"]
+        assert "| Claude | anthropic | claude-sonnet-4 | yes | active |" in result["results"]
+        assert "Total triggers: 2" in result["results"]
+        assert result["connectors"][0]["name"] == "Slack"
+        assert result["connectors"][0]["last_check"] == "never"
+        assert result["model_backends"][0]["has_credentials"] is True
+
+    async def test_missing_credentials_reported_as_no(self) -> None:
+        backend = _mock_backend(credentials_ciphertext=None)
+        connector_result = MagicMock()
+        connector_result.scalars.return_value.all.return_value = []
+        backend_result = MagicMock()
+        backend_result.scalars.return_value.all.return_value = [backend]
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[connector_result, backend_result, count_result])
+
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+        ):
+            mock_session.return_value.__aenter__.return_value = session
+            result = await get_integration_status()
+
+        assert result["model_backends"][0]["has_credentials"] is False
+        assert "| Claude | anthropic | claude-sonnet-4 | no | active |" in result["results"]
+
+    async def test_returns_auth_error_when_unauthenticated(self) -> None:
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
+            result = await get_integration_status()
+        assert result["error"] == "auth_expired"
 
 
 class TestGetOrgConfig:
-    """Tests for get_org_config filtering logic."""
+    """Tests for the get_org_config MCP tool."""
 
-    def test_remy_section_filter_includes_remy_config(self) -> None:
+    @pytest.fixture(autouse=True)
+    def _set_org(self) -> None:
+        token = _ctx_org_id.set(ORG_ID)
+        yield
+        _ctx_org_id.reset(token)
+
+    def _config(self, key: str, value: object) -> MagicMock:
+        cfg = MagicMock()
+        cfg.key = key
+        cfg.value = value
+        return cfg
+
+    async def test_remy_section_filters_and_keeps_safe_keys(self) -> None:
         configs = [
-            MagicMock(key="remy_config:00000000-0000-0000-0000-000000000001", value={"system_prompt": "Helpful."}),
-            MagicMock(key="feature_flags", value={"remy_enabled": True}),
+            self._config(f"remy_config:{ORG_ID}", {"system_prompt": "Helpful."}),
+            self._config("feature_flags", {"remy_enabled": True}),
         ]
-        key_prefixes = ["remy_config:00000000-0000-0000-0000-000000000001", "remy_config"]
-        filtered = [c for c in configs if any(c.key.startswith(p) for p in key_prefixes)]
-        assert len(filtered) == 1
-        assert filtered[0].key.startswith("remy_config")
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch(
+                "modulo.db.crud.system_config.list_config",
+                new_callable=AsyncMock,
+                return_value=configs,
+            ) as mock_list,
+        ):
+            mock_session.return_value.__aenter__.return_value = AsyncMock()
+            result = await get_org_config(section="remy")
 
-    def test_section_filter_excludes_other_keys(self) -> None:
+        mock_list.assert_awaited_once()
+        assert result["count"] == 1
+        assert f"remy_config:{ORG_ID}" in result["results"]
+        assert "feature_flags" not in result["results"]
+
+    async def test_sensitive_keys_redacted(self) -> None:
         configs = [
-            MagicMock(key="remy_config:org-1", value={"a": 1}),
-            MagicMock(key="some_other_key", value={"b": 2}),
+            self._config("remy_config:org-1", {"a": 1}),
+            self._config("secret_key", "sensitive"),
+            self._config("database_url", "postgres://..."),
         ]
-        key_prefixes = ["remy_config"]
-        filtered = [c for c in configs if any(c.key.startswith(p) for p in key_prefixes)]
-        assert len(filtered) == 1
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=configs),
+        ):
+            mock_session.return_value.__aenter__.return_value = AsyncMock()
+            result = await get_org_config()
 
-    def test_sensitive_keys_filtered_out(self) -> None:
-        configs = [
-            MagicMock(key="remy_config:org-1", value={"a": 1}),
-            MagicMock(key="secret_key", value="sensitive"),
-            MagicMock(key="database_url", value="postgres://..."),
-        ]
-        visible = [c for c in configs if not _is_sensitive_key(c.key)]
-        assert len(visible) == 1
-        assert visible[0].key == "remy_config:org-1"
+        assert result["count"] == 1
+        assert "secret_key" not in result["results"]
+        assert "database_url" not in result["results"]
+        assert "remy_config:org-1" in result["results"]
 
-    def test_value_formatting_truncation(self) -> None:
-        config = MagicMock(key="remy_config:org-1", value={"long": "x" * 500})
-        val = config.value
-        val_str = json.dumps(val, default=str)
-        if len(val_str) > 200:
-            val_str = val_str[:200] + "..."
-        assert val_str.endswith("...")
+    async def test_long_values_truncated(self) -> None:
+        configs = [self._config("rate_limits", {"policy": "x" * 500})]
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=configs),
+        ):
+            mock_session.return_value.__aenter__.return_value = AsyncMock()
+            result = await get_org_config()
 
-    def test_value_formatting_dict_to_json(self) -> None:
-        config = MagicMock(key="test_key", value={"nested": {"key": "value"}})
-        val_str = json.dumps(config.value, default=str)
-        assert '"nested"' in val_str
+        assert result["count"] == 1
+        assert "..." in result["results"]
+        assert "x" * 500 not in result["results"]
+
+    async def test_dict_values_rendered_as_json(self) -> None:
+        configs = [self._config("rate_limits", {"nested": {"key": "value"}})]
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=configs),
+        ):
+            mock_session.return_value.__aenter__.return_value = AsyncMock()
+            result = await get_org_config()
+
+        assert '"nested"' in result["results"]
+        assert '"key"' in result["results"]
+
+    async def test_no_config_found_returns_count_zero(self) -> None:
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=[]),
+        ):
+            mock_session.return_value.__aenter__.return_value = AsyncMock()
+            result = await get_org_config(section="plan")
+
+        assert result["count"] == 0
+        assert "No configuration found" in result["results"]
+
+    async def test_invalid_section_returns_error(self) -> None:
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+            result = await get_org_config(section="bogus")
+        assert result["error"] == "invalid_section"
+        assert "remy" in result["detail"]
+
+    async def test_returns_auth_error_when_unauthenticated(self) -> None:
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
+            result = await get_org_config(section="remy")
+        assert result["error"] == "auth_expired"
 
 
 class TestGetAvailableFeatures:
-    """Tests for get_available_features output formatting."""
+    """Tests for the get_available_features MCP tool."""
 
-    def test_feature_table_format(self) -> None:
+    @pytest.fixture(autouse=True)
+    def _set_org(self) -> None:
+        token = _ctx_org_id.set(ORG_ID)
+        yield
+        _ctx_org_id.reset(token)
+
+    def _flag(self, name: str, tier: str, active: bool) -> SimpleNamespace:
+        return SimpleNamespace(name=name, tier=tier, currently_active=active)
+
+    def _plan_ctx(self, flags: list[SimpleNamespace], tier: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            tier=lambda: tier,
+            list_enabled_features=lambda: flags,
+        )
+
+    async def test_returns_feature_table_and_count(self) -> None:
         flags = [
-            MagicMock(name="remy_chat", tier="core", currently_active=True),
-            MagicMock(name="custom_skills", tier="enterprise", currently_active=False),
+            self._flag("remy_chat", "core", True),
+            self._flag("custom_skills", "enterprise", False),
         ]
-        lines = [
-            "| Feature | Required Tier | Available |",
-            "|---------|---------------|-----------|",
-        ]
-        for flag in flags:
-            available = "yes" if flag.currently_active else "no"
-            lines.append(f"| {flag.name} | {flag.tier} | {available} |")
-        table = "\n".join(lines)
-        assert "remy_chat" in table
-        assert "custom_skills" in table
-        assert "yes" in table
-        assert "no" in table
+        plan_ctx = self._plan_ctx(flags, "community")
 
-    def test_feature_count_and_tier(self) -> None:
-        [MagicMock(name="f1", tier="core", currently_active=True)]
-        result = {
-            "results": "| Feature | ... |",
-            "tier": "community",
-            "feature_count": 1,
-        }
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock),
+            patch("modulo.core.feature_flags.resolve_plan_context", new_callable=AsyncMock, return_value=plan_ctx),
+        ):
+            mock_session.return_value.__aenter__.return_value = AsyncMock()
+            result = await get_available_features()
+
         assert result["tier"] == "community"
-        assert result["feature_count"] == 1
+        assert result["feature_count"] == 2
+        assert "remy_chat" in result["results"]
+        assert "custom_skills" in result["results"]
+        assert "| remy_chat | core | yes |" in result["results"]
+        assert "| custom_skills | enterprise | no |" in result["results"]
+
+    async def test_returns_auth_error_when_unauthenticated(self) -> None:
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
+            result = await get_available_features()
+        assert result["error"] == "auth_expired"
 
 
 class TestDocIndexCache:
