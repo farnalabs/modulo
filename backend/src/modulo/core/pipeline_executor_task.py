@@ -217,10 +217,13 @@ class ExecuteRunTask(Task):  # type: ignore[misc]
     # giving an effective max of ~3635s incl. output-read + decorator-grace
     # buffers). The task-level limits must be >= the max effective node
     # timeout or Celery kills the whole run (task_failure) before the node
-    # can finish. Raised from 870/900 (15 min) to 3640/3660 (61 min) to cover
-    # the API's full 60-3600s timeout_seconds range.
-    soft_time_limit = 3640
-    hard_time_limit = 3660
+    # can finish. Raised from 870/900 (15 min) to cover the API's full
+    # 60-3600s timeout_seconds range. The soft/hard values (3720/3840) keep a
+    # comfortable margin above the 3635s max node timeout so run-level
+    # bookkeeping (finalize, broker events, DB writes) can complete even
+    # after a fully-saturated max-length node.
+    soft_time_limit = 3720
+    hard_time_limit = 3840
     track_started = True
     acks_late = True
     reject_on_worker_lost = True
