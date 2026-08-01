@@ -2983,6 +2983,12 @@ Each of the following entities carries `owner_team_id` (nullable) and `visibilit
 
 `owner_team_id = null` with `visibility: org` = accessible to all org members (legacy / unowned resources). Admin may reassign ownership.
 
+**Ownership / visibility transitions re-validate the team gate** (Phase-1 enforcement floor). Changing a resource's `visibility` or `owner_team_id` applies the RLS-parity membership-or-admin gate against the NEW values before the write is accepted:
+- Downgrading a team-private resource to `visibility: org`, or reassigning/clearing `owner_team_id`, requires membership of the CURRENT owner team (or org `admin`).
+- Reassigning `owner_team_id` to a team requires membership of the NEW team (or org `admin`).
+- Clearing `owner_team_id` while keeping `visibility: team` is rejected (a team-visible resource must have an owner team).
+- Org `admin` bypasses all team-transition gates (RLS parity).
+
 #### Stage Board and Team Filtering
 
 The Stage board respects team visibility. A user sees only the pipelines and stages they have access to. The board does not reveal the existence of team-private resources to non-members (no "N hidden" indicator — total absence, preventing resource enumeration).
