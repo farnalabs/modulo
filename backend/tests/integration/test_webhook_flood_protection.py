@@ -308,9 +308,9 @@ class TestWebhookFloodProtection:
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
                         "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id, trigger_id) "
+                        "langgraph_thread_id, trigger_id, run_number) "
                         "VALUES (:rid, :oid, :pid, :sid, 'webhook', 'running', "
-                        ":hash, :tid, :tid2)",
+                        ":hash, :tid, :tid2, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -320,6 +320,7 @@ class TestWebhookFloodProtection:
                         "hash": hashlib.sha256(f"{tag}-{i}".encode()).hexdigest(),
                         "tid": tid_str,
                         "tid2": str(test_trigger),
+                        "rn": int(run_id.int % 10**9) + 1,
                     },
                 )
 
