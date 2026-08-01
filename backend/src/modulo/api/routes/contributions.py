@@ -1,4 +1,4 @@
-"""Library contribution REST API â€” fixture contribution flow."""
+"""Library contribution REST API — fixture contribution flow."""
 
 import logging
 import uuid

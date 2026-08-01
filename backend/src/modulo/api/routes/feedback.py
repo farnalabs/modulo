@@ -1,15 +1,15 @@
 """Feedback system API endpoints.
 
 URLs:
-    POST   /api/v1/runs/{run_id}/feedback               â€” create a feedback record
-    GET    /api/v1/feedback                              â€” list feedback records
-    GET    /api/v1/feedback/{record_id}                  â€” get a feedback record
-    PATCH  /api/v1/feedback/{record_id}/status           â€” update feedback status
-    POST   /api/v1/feedback/{record_id}/detect-gap       â€” run eval gap detection
-    GET    /api/v1/feedback/inbox                        â€” feedback inbox with filters
-    GET    /api/v1/feedback/inbox/{record_id}             â€” single inbox item detail
-    POST   /api/v1/feedback/inbox/{record_id}/review     â€” review + optional correction run
-    GET    /api/v1/feedback/proposals                    â€” eval proposals queue
+    POST   /api/v1/runs/{run_id}/feedback               — create a feedback record
+    GET    /api/v1/feedback                              — list feedback records
+    GET    /api/v1/feedback/{record_id}                  — get a feedback record
+    PATCH  /api/v1/feedback/{record_id}/status           — update feedback status
+    POST   /api/v1/feedback/{record_id}/detect-gap       — run eval gap detection
+    GET    /api/v1/feedback/inbox                        — feedback inbox with filters
+    GET    /api/v1/feedback/inbox/{record_id}             — single inbox item detail
+    POST   /api/v1/feedback/inbox/{record_id}/review     — review + optional correction run
+    GET    /api/v1/feedback/proposals                    — eval proposals queue
 """
 
 import logging
@@ -614,7 +614,7 @@ async def review_feedback(
                 if not record.run_id:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail="Feedback has no associated run â€” cannot create correction run",
+                        detail="Feedback has no associated run — cannot create correction run",
                     )
 
                 try:

@@ -1,4 +1,4 @@
-"""Registry API â€” browse, publish, pull, and trust-verify registry primitives."""
+"""Registry API — browse, publish, pull, and trust-verify registry primitives."""
 
 from __future__ import annotations
 
@@ -345,7 +345,7 @@ async def download_registry_primitive_endpoint(
 
 
 # ---------------------------------------------------------------------------
-# Registry protocol v2 â€” publish / pull / verify
+# Registry protocol v2 — publish / pull / verify
 # ---------------------------------------------------------------------------
 
 
@@ -405,7 +405,7 @@ async def publish_primitive_v2(
 ) -> PublishResponseV2:
     """Publish a primitive to the registry (v2 protocol).
 
-    Accepts a signed payload â€” the client signs the primitive data with
+    Accepts a signed payload — the client signs the primitive data with
     their Ed25519 private key and sends the signature + public key.
     The server verifies the signature before accepting.
     """
@@ -426,7 +426,7 @@ async def publish_primitive_v2(
         if not crypto_pem_verify(req.public_key_pem, payload_bytes, req.signature):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Signature verification failed â€” payload does not match the provided public key",
+                detail="Signature verification failed — payload does not match the provided public key",
             )
 
         trust_anchor_ok = verify_trust_anchor(req.public_key_pem, req.signature)

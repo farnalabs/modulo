@@ -23,8 +23,8 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/settings/observability", tags=["observability"])
 
-_DB_TIMEOUT = 10  # seconds Ã”Ã‡Ã¶ max time for DB operations per request
-_CACHE_TTL = 60  # seconds Ã”Ã‡Ã¶ how long to serve stale cache after DB failure
+_DB_TIMEOUT = 10  # seconds — max time for DB operations per request
+_CACHE_TTL = 60  # seconds — how long to serve stale cache after DB failure
 
 _SENSITIVE_HEADER_KEYS = frozenset({"authorization", "x-api-key", "api-key", "x-otlp-token"})
 
@@ -281,12 +281,12 @@ async def test_otel_connection(
     except httpx.TimeoutException:
         return TestSpanResult(
             success=False,
-            message="Connection timed out Ã”Ã‡Ã¶ check endpoint URL and network",
+            message="Connection timed out — check endpoint URL and network",
         )
     except httpx.ConnectError:
         return TestSpanResult(
             success=False,
-            message="Connection refused Ã”Ã‡Ã¶ check endpoint URL and firewall",
+            message="Connection refused — check endpoint URL and firewall",
         )
     except Exception as exc:
         _log.exception("observability.test_otel_connection")

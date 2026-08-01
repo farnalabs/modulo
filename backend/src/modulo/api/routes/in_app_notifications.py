@@ -1,6 +1,6 @@
 """In-app notification CRUD routes.
 
-Endpoints for the in-app notification system Ã”Ã‡Ã¶ dashboard panel, full notification
+Endpoints for the in-app notification system — dashboard panel, full notification
 page, dismiss flow, and user preferences.
 """
 
