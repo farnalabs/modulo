@@ -58,12 +58,57 @@ def test_no_sensitive_data_in_logs():
     )
 
 
+#: Max characters of a sensitive value that a truncated prefix log may expose
+#: (e.g. ``token[:10]``) before it is treated as a leak. Truncated prefixes are
+#: a deliberate, well-known diagnostics idiom (e.g. JWT header bytes) and carry
+#: no usable secret material.
+_SAFE_PREFIX_CHARS = 12
+
+
+def _safe_truncated_prefix_names(expr: ast.expr) -> set[ast.Name]:
+    """Return Name nodes in ``expr`` used only as a small leading slice or single-char access.
+
+    A truncated-prefix log (``token[:10] + "..."``) intentionally exposes only
+    the first few characters of a value and is not a leak. A bare constant
+    index (e.g. ``token[3]``) exposes at most one character and is treated the
+    same way. Only the specific Name node used as the base of such a subscript
+    is safe; any other reference to the same variable in the expression (full
+    value, long slice, mid-string slice) is still flagged.
+    """
+    safe: set[ast.Name] = set()
+    for sub in ast.walk(expr):
+        if not isinstance(sub, ast.Subscript):
+            continue
+        if not isinstance(sub.value, ast.Name):
+            continue
+        lower = upper = None
+        if isinstance(sub.slice, ast.Slice):
+            lower, upper = sub.slice.lower, sub.slice.upper
+        elif isinstance(sub.slice, ast.Constant):
+            upper = sub.slice
+        if lower is not None and not (isinstance(lower, ast.Constant) and lower.value == 0):
+            continue
+        if not (
+            upper is not None
+            and isinstance(upper, ast.Constant)
+            and isinstance(upper.value, int)
+            and 0 <= upper.value <= _SAFE_PREFIX_CHARS
+        ):
+            continue
+        safe.add(sub.value)
+    return safe
+
+
 def _check_expr_for_sensitive_var(expr, path, lineno, violations):
     """Check if an expression references a sensitive variable name."""
+    # Only the specific Name nodes used as a truncated-prefix slice base are safe
+    safe_names = _safe_truncated_prefix_names(expr)
     # Look for ast.Name references
     for sub in ast.walk(expr):
         # Direct variable reference (e.g., logger.info(token))
         if isinstance(sub, ast.Name) and sub.id in SENSITIVE_VARS:
+            if sub in safe_names:
+                continue
             violations.append(
                 f"  {path.relative_to(SRC.parent.parent)}:{lineno}  Variable '{sub.id}' logged — "
                 "may contain sensitive data"

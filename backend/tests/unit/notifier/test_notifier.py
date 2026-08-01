@@ -584,6 +584,8 @@ def test_init_raises_on_invalid_fernet_key() -> None:
 async def test_close_noop_when_client_never_created() -> None:
     notifier_instance = Notifier(MagicMock(), _KEY)
     await notifier_instance.close()
+    # No client was ever created, so close must leave the client slot untouched.
+    assert notifier_instance._http_client is None
 
 
 async def test_close_acloses_http_client() -> None:
