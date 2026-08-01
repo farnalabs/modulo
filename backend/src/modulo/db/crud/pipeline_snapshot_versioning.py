@@ -122,8 +122,14 @@ async def rollback_to_snapshot(
     pipeline_id: uuid.UUID,
     target_snapshot_id: uuid.UUID,
     account_id: uuid.UUID | None = None,
+    *,
+    is_privileged: bool,
 ) -> PipelineSnapshot | None:
     """Create a new snapshot that restores the graph from a previous snapshot.
+
+    ADR 017 service-layer backstop: explicit is_privileged marks this write as
+    privileged-capable. The HITL gate guard (hitl-gate-removal-guard-plan.md)
+    consumes this to block gate-weakening by non-privileged callers.
 
     Does not affect in-flight runs (they continue on their original snapshot).
     Returns the new snapshot, or None if the target snapshot doesn't exist.

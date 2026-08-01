@@ -146,16 +146,34 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
     this is exactly why the auth dependency disables RLS for the prefix lookup
     before re-validating inside the key's org context.
     """
-    from sqlalchemy import select
+    from sqlalchemy import select, text
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from modulo.db.models.api_key import OrgApiKey
 
+    # Superusers always bypass row-level security regardless of FORCE ROW
+    # LEVEL SECURITY, so the testcontainer superuser connection cannot observe
+    # RLS filtering. Drop to a dedicated non-superuser probe role so the policy
+    # actually applies (same pattern as test_rls_isolation.py).
+    role = f"rls_probe_{uuid.uuid4().hex[:8]}"
     engine = create_async_engine(migrated_db_url, echo=False)
     try:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'CREATE ROLE "{role}"'))
+            await conn.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
+            await conn.execute(text(f'GRANT SELECT ON org_api_keys TO "{role}"'))
+
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:
+
+            await session.execute(text(f'SET LOCAL ROLE "{role}"'))
+
             result = await session.execute(select(OrgApiKey).where(OrgApiKey.lookup_prefix == org_api_key["prefix"]))
             assert result.scalar_one_or_none() is None
+
+        async with engine.begin() as conn:
+            await conn.execute(text(f'REVOKE ALL ON org_api_keys FROM "{role}"'))
+            await conn.execute(text(f'REVOKE ALL ON SCHEMA public FROM "{role}"'))
+            await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
     finally:
         await engine.dispose()

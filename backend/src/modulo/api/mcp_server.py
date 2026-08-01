@@ -48,6 +48,7 @@ from modulo.auth.oauth import (
     decode_oauth_access_token,
 )
 from modulo.auth.permissions import set_authz_enforce
+from modulo.auth.team_rbac import org_role_level
 from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
 
 # ContextVars populated by McpAuthMiddleware before each request.
@@ -777,6 +778,11 @@ async def update_pipeline_graph(
         except ValueError:
             return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
+        # ADR 017 service-layer backstop: operator+ is privileged (may weaken a
+        # HITL gate). Resolved from the live ContextVar role, NOT the
+        # kill-switched scope check, so the HITL guard stays live.
+        is_privileged = org_role_level(_ctx_role_val()) >= org_role_level("operator")
+
         # Validate graph structure using Pydantic models (same as REST endpoint)
         from pydantic import ValidationError as _PydanticValidationError
 
@@ -813,6 +819,7 @@ async def update_pipeline_graph(
                 org_id=org_id,
                 nodes=nodes,
                 edges=edges,
+                is_privileged=is_privileged,
             )
             if result is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}

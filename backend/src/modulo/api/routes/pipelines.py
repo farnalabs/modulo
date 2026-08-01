@@ -24,6 +24,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.reports.quality_report import (
@@ -79,6 +80,20 @@ router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 # DoS guard: reject graphs larger than these limits before any DB work.
 _MAX_GRAPH_NODES = 500
 _MAX_GRAPH_EDGES = 1000
+
+# ADR 017 service-layer backstop: operator+ is "privileged" (privilege is
+# required to weaken/remove an existing HITL gate via a graph write).
+_OPERATOR_LEVEL = org_role_level("operator")
+
+
+def _is_privileged(role: str | None) -> bool:
+    """Resolve the is_privileged flag from an org role (operator+ -> True).
+
+    Uses the flag-independent numeric hierarchy (team_rbac), NOT the
+    kill-switched assert_org_role path, so the HITL guard stays live even
+    when authz.enforce is disabled.
+    """
+    return org_role_level(role) >= _OPERATOR_LEVEL
 
 
 class PipelineCreate(BaseModel):
@@ -788,6 +803,7 @@ async def replace_pipeline_graph_endpoint(
                 org_id=principal.organisation_id,
                 nodes=node_data,
                 edges=edge_data,
+                is_privileged=_is_privileged(principal.org_role),
             )
             if graph is not None:
                 validation = await GraphValidator().validate_definition(
@@ -882,6 +898,7 @@ async def update_pipeline_endpoint(
                     org_id=principal.organisation_id,
                     nodes=node_data,
                     edges=edge_data,
+                    is_privileged=_is_privileged(principal.org_role),
                 )
                 if graph is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -1469,7 +1486,11 @@ async def rollback_snapshot_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             new_snapshot = await rollback_to_snapshot(
-                session, pipeline_id, snapshot_id, account_id=principal.account_id
+                session,
+                pipeline_id,
+                snapshot_id,
+                account_id=principal.account_id,
+                is_privileged=_is_privileged(principal.org_role),
             )
     except ProgrammingError:
         logger.exception("routes.pipelines")
@@ -1693,7 +1714,14 @@ async def convert_node_to_agent_endpoint(
                 },
             )
 
-            saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
+            saved = await _save_graph(
+                session,
+                pipeline_id,
+                principal.organisation_id,
+                nodes,
+                edges,
+                is_privileged=_is_privileged(principal.org_role),
+            )
     except ProgrammingError:
         logger.exception("routes.pipelines")
 
@@ -1789,7 +1817,14 @@ async def revert_node_to_manual_endpoint(
                 },
             )
 
-            saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
+            saved = await _save_graph(
+                session,
+                pipeline_id,
+                principal.organisation_id,
+                nodes,
+                edges,
+                is_privileged=_is_privileged(principal.org_role),
+            )
     except ProgrammingError:
         logger.exception("routes.pipelines")
 
@@ -1833,10 +1868,12 @@ async def _save_graph(
     org_id: uuid.UUID,
     nodes: list[dict[str, Any]],
     edges: list[Any],
+    is_privileged: bool,
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
     Accepts edges as either ORM model instances (PipelineEdge) or plain dicts.
+    Forwards is_privileged to the underlying graph write (ADR 017 backstop).
     """
     edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
     return await replace_pipeline_graph(
@@ -1845,4 +1882,5 @@ async def _save_graph(
         org_id=org_id,
         nodes=nodes,
         edges=edge_dicts,
+        is_privileged=is_privileged,
     )

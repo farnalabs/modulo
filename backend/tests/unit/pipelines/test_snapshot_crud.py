@@ -53,7 +53,7 @@ class TestRollbackToSnapshot:
         ) as mock_create:
             mock_create.return_value = new_snapshot
 
-            result = await rollback_to_snapshot(session, pid, target_sid)
+            result = await rollback_to_snapshot(session, pid, target_sid, is_privileged=True)
 
             assert result is not None
             assert result.tag == "rollback-v1"
@@ -74,7 +74,7 @@ class TestRollbackToSnapshot:
         result_mock.scalar_one_or_none.return_value = target
         session.execute = AsyncMock(return_value=result_mock)
 
-        result = await rollback_to_snapshot(session, pid, target_sid)
+        result = await rollback_to_snapshot(session, pid, target_sid, is_privileged=True)
         assert result is None
 
     async def test_rollback_to_snapshot_missing_target_returns_none(self):
@@ -86,7 +86,7 @@ class TestRollbackToSnapshot:
         result_mock.scalar_one_or_none.return_value = None
         session.execute = AsyncMock(return_value=result_mock)
 
-        result = await rollback_to_snapshot(session, pid, target_sid)
+        result = await rollback_to_snapshot(session, pid, target_sid, is_privileged=True)
         assert result is None
 
 
