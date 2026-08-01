@@ -33,6 +33,11 @@ from modulo.core.reports.quality_report import (
 from modulo.core.run_context.autonomy import (
     autonomy_change_payload,
 )
+from modulo.core.team_visibility import (
+    connector_team_mismatch_detail,
+    extract_connector_bindings,
+    find_connector_team_mismatches,
+)
 from modulo.db.crud.composite_template import create_composite_template
 from modulo.db.crud.pipeline import (
     archive_pipeline,
@@ -448,6 +453,31 @@ def _graph_response(
         ) from e
 
 
+async def _enforce_connector_team_bindings(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None,
+    connector_bindings: list[dict[str, Any]],
+) -> None:
+    """Block graph saves that bind a team-private connector to a different team's pipeline.
+
+    PRD §9.3: a connector with ``visibility: team`` is only usable within pipelines
+    owned by the same team. Violations raise 409 ``connector_team_mismatch`` at the
+    pipeline-save command layer.
+    """
+    mismatches = await find_connector_team_mismatches(
+        session,
+        org_id=org_id,
+        pipeline_owner_team_id=pipeline_owner_team_id,
+        connector_bindings=connector_bindings,
+    )
+    if mismatches:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=connector_team_mismatch_detail(mismatches),
+        )
+
+
 async def _resolve_graph_references(
     session: AsyncSession,
     nodes: list[PipelineGraphNode],
@@ -732,19 +762,21 @@ async def replace_pipeline_graph_endpoint(
             for edge in req.edges
         ],
     }
-    connector_bindings = [
-        {
-            "node_id": str(node.id),
-            "connector_instance_id": str(node.connector_binding.instance_id),
-        }
-        for node in req.nodes
-        if node.connector_binding is not None
-    ]
+    connector_bindings = extract_connector_bindings(node_data)
 
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            pipeline = await get_pipeline(session, pipeline_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+            await _enforce_connector_team_bindings(
+                session,
+                principal.organisation_id,
+                pipeline.owner_team_id,
+                connector_bindings,
+            )
             _schema_pins, model_backend_pins = await _resolve_graph_references(
                 session,
                 req.nodes,
@@ -834,6 +866,16 @@ async def update_pipeline_endpoint(
                     }
                     for edge in req.graph_json.edges
                 ]
+                graph_bindings = extract_connector_bindings(node_data)
+                existing = await get_pipeline(session, pipeline_id)
+                if existing is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                await _enforce_connector_team_bindings(
+                    session,
+                    principal.organisation_id,
+                    updates.get("owner_team_id", existing.owner_team_id),
+                    graph_bindings,
+                )
                 graph = await replace_pipeline_graph(
                     session,
                     pipeline_id=pipeline_id,
