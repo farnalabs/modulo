@@ -22,13 +22,11 @@ from modulo.api.dependencies import (
     _get_engine,
     _get_session_factory,
     get_db_session,
-    pg_connection_string,
 )
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
-from modulo.celery_app import get_celery_app as _get_celery_app
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from modulo.core.dispatch import dispatch_run
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     NodeAlreadyCompletedError,
@@ -394,14 +392,7 @@ async def trigger_run(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    _celery = _get_celery_app()
-    _celery.send_task(
-        "modulo.pipeline.execute_run",
-        args=[str(run_id), str(org_id)],
-        queue="runs_manual",
-        retry=True,
-        retry_policy={"max_retries": 3, "interval_start": 1, "interval_step": 2, "interval_max": 10},
-    )
+    await dispatch_run(str(run_id), str(org_id), queue="runs", celery_queue="runs_manual")
 
     return _build_run_response(run)
 
@@ -1120,7 +1111,6 @@ async def recover_run_node(
     node_id: str,
     req: NodeRecoverRequest,
     session: AsyncSession = Depends(get_db_session),
-    engine: AsyncEngine = Depends(_get_engine),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeRecoverResponse:
     """Recover a failed manual-input node.
@@ -1188,17 +1178,18 @@ async def recover_run_node(
         ) from None
     action = "skip" if req.input_data is None else "replay"
 
-    # Resume the graph with the recovery data.
+    # Resume the graph with the recovery data. In shadow mode the resume runs
+    # in-process inside dispatch_run (the SAQ worker is not wired in this
+    # slice), so a resume failure surfaces here as 500 (pre-B-1 behaviour)
+    # rather than fire-and-forget 200.
     resume_data: dict[str, Any] = {"action": action, "output": req.input_data}
 
-    executor = PipelineExecutor(
-        engine,
-        checkpointer_conn_string=pg_connection_string(str(engine.url)),
-    )
     try:
-        await executor.resume(
-            run_id=run_id,
-            org_id=principal.organisation_id,
+        outcome, _job_id = await dispatch_run(
+            str(run_id),
+            str(principal.organisation_id),
+            queue="runs",
+            job_type="resume_run",
             resume_data=resume_data,
         )
     except Exception as exc:
@@ -1207,6 +1198,15 @@ async def recover_run_node(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to resume pipeline after node recovery",
         ) from exc
+
+    # 'resumed' (shadow inline) and 'enqueued'/'deduped' (SAQ accepted) both
+    # leave the run resuming. 'deferred' means the resume was NOT actually
+    # dispatched — surface it instead of silently dropping the recovery.
+    if outcome == "deferred":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to enqueue pipeline resume after node recovery",
+        )
 
     return NodeRecoverResponse(
         run_id=run_id,

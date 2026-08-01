@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     #   (3) Celery beat fire gate — whether the entrypoint starts Celery beat.
     # The flag does NOT stop the SAQ workers.
     saq_enabled: bool = Field(default=False, alias="SAQ_ENABLED")
+    # SAQ runs queue name — 'runs' or 'staging-runs' (staging isolation, plan F1).
+    saq_runs_queue: str = Field(default="runs", alias="SAQ_RUNS_QUEUE")
     # Staleness gate for re-claiming a SAQ run whose heartbeat is stale. SAQ
     # runs only — legacy Celery keeps today's 180s window (see below).
     run_claim_stale_seconds: int = Field(default=450, alias="RUN_CLAIM_STALE_SECONDS", ge=1, le=3600)

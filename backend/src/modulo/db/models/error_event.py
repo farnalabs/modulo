@@ -12,7 +12,7 @@ class ErrorEvent(OrgScoped):
 
     __table_args__ = (
         CheckConstraint("level IN ('error', 'warning', 'critical')", name="ck_error_events_level"),
-        CheckConstraint("source IN ('backend', 'frontend', 'celery')", name="ck_error_events_source"),
+        CheckConstraint("source IN ('backend', 'frontend', 'celery', 'saq')", name="ck_error_events_source"),
         CheckConstraint("status IN ('new', 'acknowledged', 'resolved', 'archived')", name="ck_error_events_status"),
         Index("ix_error_events_org_fingerprint_created_at", "organisation_id", "fingerprint", "created_at"),
     )

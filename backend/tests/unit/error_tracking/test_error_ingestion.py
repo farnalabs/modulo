@@ -319,6 +319,7 @@ class TestErrorEventInputValidation:
             pytest.param(
                 {"level": "error", "message": "test", "source": "mobile"}, False, "Invalid source", id="invalid_source"
             ),
+            pytest.param({"level": "error", "message": "test", "source": "saq"}, True, None, id="saq_source_accepted"),
             pytest.param(
                 {
                     "level": "error",
