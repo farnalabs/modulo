@@ -620,7 +620,7 @@ class TestSaqSettingsDefaults:
         assert s.saq_reenqueue_window == 600
         assert s.saq_never_dispatched_window == 300
         assert s.saq_worker_lost_window == 600
-        assert s.saq_worker_db_pool_size == 2
+        assert s.saq_worker_db_pool_size == 10
         assert s.saq_redis_pool_size == 5
 
     def test_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -745,7 +745,7 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.runs_settings()
         assert settings["queue"].name == "runs"
-        assert settings["concurrency"] == 2
+        assert settings["concurrency"] == 10
         assert settings["shutdown_grace_period_s"] == 30
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
@@ -757,7 +757,7 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.system_settings()
         assert settings["queue"].name == "system"
-        assert settings["concurrency"] == 2
+        assert settings["concurrency"] == 10
         assert settings["shutdown_grace_period_s"] == 30
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5

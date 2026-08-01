@@ -71,6 +71,11 @@ def migrated_db_url(db_url: str) -> str:
     # backend path so integration tests also run from the repo root (the
     # pre-commit run-changed-tests hook invokes pytest from the repo root).
     config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    # Skip fileConfig (like main.py does) so env.py doesn't call
+    # logging.config.fileConfig, whose default disable_existing_loggers=True
+    # disables every module logger not listed in alembic.ini for the rest of
+    # the pytest session (breaks caplog assertions in later tests).
+    config.config_file_name = None
 
     async def _ensure_alembic_table() -> None:
         """Pre-create alembic_version with VARCHAR(255) to support branch migration IDs."""

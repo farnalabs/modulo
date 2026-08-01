@@ -102,8 +102,8 @@ fi
 # ---------------------------------------------------------------------------
 echo "=== Celery beat GATED OFF (SAQ system worker owns the scheduler) — exactly one scheduler in every mode ==="
 
-echo "=== Starting Celery worker (pipeline execution, concurrency=2) ==="
-celery -A modulo.cli_celery worker --loglevel=info --concurrency=2 --pidfile=/tmp/celery-worker.pid &
+echo "=== Starting Celery worker (pipeline execution, concurrency=6) ==="
+celery -A modulo.cli_celery worker --loglevel=info --concurrency=6 --pidfile=/tmp/celery-worker.pid &
 CELERY_WORKER_PID=$!
 
 # ---------------------------------------------------------------------------
