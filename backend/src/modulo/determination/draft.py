@@ -53,7 +53,10 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
     has_planning = any(f.category == "stage" and "Planning" in f.finding for f in findings)
     has_development = any(f.category == "stage" and "Development" in f.finding for f in findings)
     has_review = any(f.category == "stage" and "Code review" in f.finding for f in findings)
-    has_ci = any(f.category == "automation" and "CI/CD" in f.finding for f in findings)
+    has_ci = any(
+        f.category == "automation" and "CI/CD configuration detected in repository metadata" in f.finding
+        for f in findings
+    )
 
     start_node = DraftNode(id="start", node_type="placeholder", label="Start")
     nodes.append(start_node)
@@ -104,7 +107,6 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
             required_capabilities=[Capability.READ, Capability.CREATE_PR],
         )
         nodes.append(n)
-        stage_node_ids.append("review")
 
         if has_development:
             review_source = "development"
@@ -112,6 +114,7 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
             review_source = stage_node_ids[-1]
         else:
             review_source = "start"
+        stage_node_ids.append("review")
         edges.append(DraftEdge(source=review_source, target="review", hitl_gate=True))
 
         automation_suggestions.append(

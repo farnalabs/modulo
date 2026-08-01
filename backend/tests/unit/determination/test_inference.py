@@ -1,72 +1,90 @@
 """Unit tests for the Determination Inference Engine."""
 
 import uuid
+from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from modulo.connectors.base import ConnectorType
 from modulo.determination.inference import Finding, infer
-from modulo.determination.scanner import ScanSample
+
+from .helpers import make_sample
 
 
-def _sample(
-    resource: str,
-    records: list[dict],
-    connector_type: ConnectorType = ConnectorType.GITHUB,
-    error: str | None = None,
-) -> ScanSample:
-    return ScanSample(
-        connector_id=uuid.uuid4(),
-        connector_type=connector_type,
-        resource=resource,
-        records=records,
-        sample_count=len(records),
-        error=error,
-    )
+def _iso(delta_days: float) -> str:
+    """Return an ISO-8601 timestamp that many days in the past (deterministic across run dates)."""
+    return (datetime.now(UTC) - timedelta(days=delta_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def test_empty_samples_returns_findings() -> None:
     findings = infer([])
-    assert len(findings) >= 1
-    # Should indicate no data was available
     categories = {f.category for f in findings}
-    assert "automation" in categories
+    assert categories == {"automation", "overview"}
+    assert any(f.category == "automation" and "No CI/CD" in f.finding for f in findings)
+    assert any(f.category == "overview" and "No SDLC stages" in f.finding for f in findings)
 
 
 def test_repos_detect_development_stage() -> None:
-    samples = [_sample("repos", [{"name": "backend"}, {"name": "frontend"}])]
+    samples = [make_sample("repos", [{"name": "backend"}, {"name": "frontend"}])]
     findings = infer(samples)
     stages = [f for f in findings if f.category == "stage" and "Development" in f.finding]
-    assert len(stages) >= 1
+    assert len(stages) == 1
     assert "2 repositories" in stages[0].evidence
+    assert stages[0].confidence == "high"
 
 
 def test_pull_requests_detect_code_review() -> None:
-    samples = [_sample("pulls", [{"number": 1, "created_at": "2026-06-20T00:00:00Z"}])]
+    samples = [make_sample("pulls", [{"number": 1, "created_at": _iso(2)}])]
     findings = infer(samples)
     review = [f for f in findings if f.category == "stage" and "Code review" in f.finding]
     assert len(review) == 1
+    assert "1 open PRs/MRs" in review[0].evidence
 
 
 def test_stale_pr_bottleneck() -> None:
-    old_date = "2026-06-01T00:00:00Z"
-    recent_date = "2026-06-22T00:00:00Z"
     samples = [
-        _sample(
+        make_sample(
             "pulls",
             [
-                {"number": 1, "created_at": old_date},
-                {"number": 2, "created_at": recent_date},
+                {"number": 1, "created_at": _iso(10)},
+                {"number": 2, "created_at": _iso(2)},
             ],
         )
     ]
     findings = infer(samples)
     bottlenecks = [f for f in findings if f.category == "bottleneck"]
-    assert len(bottlenecks) >= 1
-    assert "bottleneck" in bottlenecks[0].finding.lower()
+    assert len(bottlenecks) == 1
+    assert "Potential review bottleneck: 1 PRs/MRs open for >5 days without merge" in bottlenecks[0].finding
+    assert "1/2 open for >5 days" in bottlenecks[0].evidence
+
+
+def test_no_stale_prs_when_all_recent() -> None:
+    samples = [
+        make_sample(
+            "pulls",
+            [
+                {"number": 1, "created_at": _iso(2)},
+                {"number": 2, "created_at": _iso(0.5)},
+            ],
+        )
+    ]
+    findings = infer(samples)
+    no_stale = [f for f in findings if f.category == "bottleneck" and "No stale PRs" in f.finding]
+    assert len(no_stale) == 1
+    assert "0/2 open for >5 days" in no_stale[0].evidence
+    assert no_stale[0].confidence == "low"
+
+
+def test_invalid_pr_date_ignored() -> None:
+    samples = [make_sample("pulls", [{"number": 1, "created_at": "not-a-date"}])]
+    findings = infer(samples)
+    assert not any(f.category == "bottleneck" for f in findings)
+    assert any(f.category == "stage" and "Code review" in f.finding for f in findings)
 
 
 def test_planning_stage_from_jira_issues() -> None:
     samples = [
-        _sample(
+        make_sample(
             "issues",
             records=[
                 {
@@ -93,7 +111,7 @@ def test_planning_stage_from_jira_issues() -> None:
 
 def test_planning_stage_from_linear_issues() -> None:
     samples = [
-        _sample(
+        make_sample(
             "issues",
             records=[
                 {"state": {"name": "Todo"}, "title": "Task 1"},
@@ -107,9 +125,25 @@ def test_planning_stage_from_linear_issues() -> None:
     assert len(planning) == 1
 
 
+def test_planning_stage_from_linear_plain_string_state() -> None:
+    samples = [
+        make_sample(
+            "issues",
+            records=[
+                {"state": "Todo", "title": "Task 1"},
+                {"state": "Done", "title": "Task 2"},
+            ],
+            connector_type=ConnectorType.LINEAR,
+        )
+    ]
+    findings = infer(samples)
+    planning = [f for f in findings if f.category == "stage" and "Planning" in f.finding]
+    assert len(planning) == 1
+
+
 def test_issue_lifecycle_transition() -> None:
     samples = [
-        _sample(
+        make_sample(
             "issues",
             records=[
                 {"fields": {"status": {"name": "Backlog"}, "summary": "T1"}},
@@ -121,24 +155,31 @@ def test_issue_lifecycle_transition() -> None:
     ]
     findings = infer(samples)
     transitions = [f for f in findings if f.category == "transition"]
-    assert len(transitions) >= 1
+    assert len(transitions) == 1
     assert "Issue lifecycle" in transitions[0].finding
+
+
+def test_ci_detected_from_repo_name() -> None:
+    samples = [make_sample("repos", [{"name": "azure-pipelines"}])]
+    findings = infer(samples)
+    ci = [f for f in findings if f.category == "automation" and "CI/CD configuration detected" in f.finding]
+    assert len(ci) == 1
 
 
 def test_confidence_levels_present() -> None:
     samples = [
-        _sample("repos", [{"name": "repo"}]),
-        _sample("pulls", [{"number": 1, "created_at": "2026-06-22T00:00:00Z"}]),
+        make_sample("repos", [{"name": "repo"}]),
+        make_sample("pulls", [{"number": 1, "created_at": _iso(2)}]),
     ]
     findings = infer(samples)
     confidences = {f.confidence for f in findings}
-    assert confidences.issubset({"high", "medium", "low"})
+    assert confidences == {"high", "medium", "low"}
 
 
 def test_each_finding_has_evidence() -> None:
     samples = [
-        _sample("repos", [{"name": "repo"}]),
-        _sample("issues", [{"fields": {"status": {"name": "Backlog"}}}], connector_type=ConnectorType.JIRA),
+        make_sample("repos", [{"name": "repo"}]),
+        make_sample("issues", [{"fields": {"status": {"name": "Backlog"}}}], connector_type=ConnectorType.JIRA),
     ]
     findings = infer(samples)
     for f in findings:
@@ -148,7 +189,7 @@ def test_each_finding_has_evidence() -> None:
 
 def test_linear_search_results() -> None:
     samples = [
-        _sample(
+        make_sample(
             "issues",
             records=[
                 {"state": {"name": "Todo"}, "title": "Bug fix"},
@@ -162,6 +203,13 @@ def test_linear_search_results() -> None:
     assert any("Planning" in s for s in stages)
 
 
+def test_error_samples_do_not_crash_inference() -> None:
+    samples = [make_sample("repos", [], error="GitHub API HTTP 500: boom")]
+    findings = infer(samples)
+    categories = {f.category for f in findings}
+    assert categories == {"automation", "overview"}
+
+
 def test_finding_model() -> None:
     f = Finding(
         category="stage",
@@ -173,6 +221,11 @@ def test_finding_model() -> None:
     assert f.category == "stage"
     assert f.confidence == "high"
     assert f.uncertainty == "Some uncertainty"
+
+
+def test_finding_invalid_confidence_raises() -> None:
+    with pytest.raises(ValueError):
+        Finding(category="stage", finding="Test", evidence="Ev", confidence="very-sure")
 
 
 def test_related_connector_in_finding() -> None:
