@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,13 +12,15 @@ from modulo.core.events.event_bus import EventBus, configure_event_bus, get_even
 
 
 @pytest.fixture(autouse=True)
-def _reset_singleton():
+def _reset_singleton() -> Iterator[None]:
     """Reset the module-level singleton before each test."""
     import modulo.core.events.event_bus as eb
 
     eb._event_bus = None
+    eb._background_tasks = set()
     yield
     eb._event_bus = None
+    eb._background_tasks = set()
 
 
 class TestEventBus:
@@ -81,7 +84,7 @@ class TestEventBus:
         # Fill the queue to its maxsize (default 0 = infinite).
         # Create a queue with maxsize=1 for slow-consumer test.
         bus._subscribers[org_id].remove(q)
-        limited_q: asyncio.Queue = asyncio.Queue(maxsize=1)
+        limited_q: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=1)
         bus._subscribers[org_id].append(limited_q)
 
         await bus.publish(org_id, "run", "r1", "created", version=0)
@@ -173,3 +176,141 @@ class TestEventBus:
             "resource:org-123",
             {"type": "run", "id": "r1", "action": "created", "version": 0, "org_id": "org-123"},
         )
+
+    async def test_remove_dead_queues_with_missing_org_is_noop(self) -> None:
+        bus = EventBus()
+        await bus._remove_dead_queues("missing-org", [asyncio.Queue[dict[str, object]](maxsize=0)])
+        assert bus._subscribers == {}
+
+    async def test_slow_consumer_removed_but_org_kept_for_others(self) -> None:
+        bus = EventBus()
+        org_id = "org-123"
+        healthy_q = await bus.subscribe(org_id)
+        limited_q: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=1)
+        bus._subscribers[org_id].append(limited_q)
+
+        await bus.publish(org_id, "run", "r1", "created", version=0)
+        await bus.publish(org_id, "run", "r2", "updated", version=1)
+
+        assert limited_q not in bus._subscribers[org_id]
+        assert healthy_q in bus._subscribers[org_id]
+        event = await asyncio.wait_for(healthy_q.get(), timeout=1.0)
+        assert event["id"] == "r1"
+
+    async def test_redis_broadcast_failure_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
+        mock_redis = MagicMock(spec=["publish"])
+
+        async def failing_publish(*_args: object, **_kwargs: object) -> None:
+            raise ConnectionError("redis down")
+
+        mock_redis.publish = failing_publish
+        await configure_event_bus(redis_broker=mock_redis)
+        bus = get_event_bus()
+
+        await bus.publish("org-123", "run", "r1", "created", version=0)
+        await asyncio.sleep(0.01)
+        assert "event_bus.redis_broadcast_failed" in caplog.text
+
+    async def test_redis_broadcast_cancellation_propagates(self) -> None:
+        import modulo.core.events.event_bus as eb
+
+        mock_redis = MagicMock(spec=["publish"])
+
+        async def blocking_publish(*_args: object, **_kwargs: object) -> None:
+            await asyncio.Event().wait()
+
+        mock_redis.publish = blocking_publish
+        await configure_event_bus(redis_broker=mock_redis)
+        bus = get_event_bus()
+
+        await bus.publish("org-123", "run", "r1", "created", version=0)
+        await asyncio.sleep(0.01)
+        assert eb._background_tasks, "broadcast task should be pending"
+        task = next(iter(eb._background_tasks))
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not eb._background_tasks
+
+    async def test_unsubscribe_unknown_org_is_noop(self) -> None:
+        bus = EventBus()
+        await bus.unsubscribe("missing-org", asyncio.Queue[dict[str, object]](maxsize=0))
+        assert bus._subscribers == {}
+
+    async def test_unsubscribe_unknown_queue_is_noop(self) -> None:
+        bus = EventBus()
+        q = await bus.subscribe("org-1")
+        await bus.unsubscribe("org-1", asyncio.Queue[dict[str, object]](maxsize=0))
+        assert q in bus._subscribers["org-1"]
+
+    async def test_unsubscribe_last_queue_removes_org_key(self) -> None:
+        bus = EventBus()
+        q = await bus.subscribe("org-1")
+        await bus.unsubscribe("org-1", q)
+        assert "org-1" not in bus._subscribers
+
+    async def test_configure_event_bus_closes_old_broker(self) -> None:
+        old_broker = MagicMock(spec=["publish"])
+        old_broker.publish = AsyncMock()
+        old_broker.close = AsyncMock()
+        new_broker = MagicMock(spec=["publish"])
+        new_broker.publish = AsyncMock()
+        new_broker.close = AsyncMock()
+
+        await configure_event_bus(redis_broker=old_broker)
+        await configure_event_bus(redis_broker=new_broker)
+
+        bus = get_event_bus()
+        assert bus._redis_broker is new_broker
+        old_broker.close.assert_awaited_once()
+
+    async def test_configure_event_bus_does_not_close_same_broker(self) -> None:
+        broker = MagicMock(spec=["publish"])
+        broker.publish = AsyncMock()
+        broker.close = AsyncMock()
+
+        await configure_event_bus(redis_broker=broker)
+        await configure_event_bus(redis_broker=broker)
+
+        assert get_event_bus()._redis_broker is broker
+        broker.close.assert_not_called()
+
+    async def test_configure_event_bus_logs_warning_when_old_broker_close_fails(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        old_broker = MagicMock(spec=["publish"])
+        old_broker.publish = AsyncMock()
+        old_broker.close = AsyncMock(side_effect=RuntimeError("close failed"))
+        new_broker = MagicMock(spec=["publish"])
+        new_broker.publish = AsyncMock()
+        new_broker.close = AsyncMock()
+
+        await configure_event_bus(redis_broker=old_broker)
+        await configure_event_bus(redis_broker=new_broker)
+
+        assert get_event_bus()._redis_broker is new_broker
+        assert "event_bus.close_old_broker_failed" in caplog.text
+
+    async def test_configure_event_bus_reraises_cancellation_when_closing_old_broker(self) -> None:
+        old_broker = MagicMock(spec=["publish"])
+        old_broker.publish = AsyncMock()
+        started = asyncio.Event()
+
+        async def blocking_close(*_args: object, **_kwargs: object) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        old_broker.close = blocking_close
+        new_broker = MagicMock(spec=["publish"])
+        new_broker.publish = AsyncMock()
+        new_broker.close = AsyncMock()
+
+        await configure_event_bus(redis_broker=old_broker)
+        task = asyncio.create_task(configure_event_bus(redis_broker=new_broker))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert get_event_bus()._redis_broker is new_broker
