@@ -701,10 +701,7 @@ class TestListAuditEvents:
                 return _scalar_result(10)
             # Return limit+1 items to trigger has_more
             return _scalars_result(
-                [
-                    _make_event(org_id=org_id, event_type="test.event", created_at_val=f"t{i}")
-                    for i in range(limit + 1)
-                ]
+                [_make_event(org_id=org_id, event_type="test.event", created_at_val=f"t{i}") for i in range(limit + 1)]
             )
 
         session.execute = _execute
@@ -818,6 +815,7 @@ class TestAppendAuditEventErrors:
 
     async def test_programming_error_propagates(self, session):
         """ProgrammingError (missing table) is logged and re-raised."""
+
         async def _execute(*a, **kw):
             raise ProgrammingError("stmt", {}, Exception("no such table: audit_events"))
 
@@ -828,6 +826,7 @@ class TestAppendAuditEventErrors:
 
     async def test_sqlalchemy_error_propagates(self, session):
         """Other SQLAlchemyError values are logged and re-raised."""
+
         async def _execute(*a, **kw):
             raise SQLAlchemyError("boom")
 
@@ -865,9 +864,7 @@ class TestExportEdgeCases:
         async def _execute(*a, **kw):
             r = MagicMock()
             r.scalars = MagicMock(
-                return_value=[
-                    _make_event(org_id=org_id, event_type="test.event", payload_json=large_payload)
-                ]
+                return_value=[_make_event(org_id=org_id, event_type="test.event", payload_json=large_payload)]
             )
             r.scalar = MagicMock(return_value=1)
             return r

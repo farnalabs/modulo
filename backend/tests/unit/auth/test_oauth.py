@@ -18,8 +18,12 @@ from modulo.auth.oauth import (
     _hash_secret,
     blacklist_oauth_token_family,
     check_oauth_token_family_valid,
+    clamp_oauth_role,
+    compute_pkce_challenge,
     consume_authorization_code,
+    consume_consent_state,
     create_authorization_code,
+    create_consent_state,
     create_oauth_access_token,
     create_oauth_client,
     create_oauth_token_family,
@@ -30,13 +34,19 @@ from modulo.auth.oauth import (
     list_oauth_clients,
     normalize_scopes,
     rotate_oauth_token_family,
+    scopes_required_role,
     validate_client_scopes,
     validate_client_secret,
+    validate_pkce_method,
+    verify_pkce,
 )
 
 _SECRET_KEY = "abcdefghijklmnopqrstuvwxyz0123456789ab"
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _OTHER_ORG = uuid.UUID("11111111-1111-1111-1111-111111111111")
+_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+_CODE_VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+_CODE_CHALLENGE = compute_pkce_challenge(_CODE_VERIFIER)
 
 
 def _make_session_mock() -> AsyncMock:
@@ -264,74 +274,160 @@ class TestAuthorizationCode:
             org_id=_ORG_ID,
             scopes="trigger:run",
             redirect_uri="http://localhost/callback",
+            account_id=_ACCOUNT_ID,
+            code_challenge=_CODE_CHALLENGE,
         )
         assert isinstance(code, str)
         assert len(code) > 0
+        assert session.add.called
+        created = session.add.call_args.args[0]
+        assert created.account_id == _ACCOUNT_ID
+        assert created.code_challenge == _CODE_CHALLENGE
+        assert created.code_challenge_method == "S256"
 
-    async def test_consume_valid_code(self) -> None:
-        secret = "validsecret"
-        hashed = _hash_secret(secret)
-        client = _make_oauth_client(client_secret_hash=hashed)
+    async def test_create_code_rejects_plain_pkce_method(self) -> None:
+        session = AsyncMock()
+        with pytest.raises(InvalidGrantError, match="S256"):
+            await create_authorization_code(
+                session,
+                client_id="cid",
+                org_id=_ORG_ID,
+                scopes="trigger:run",
+                redirect_uri="http://localhost/callback",
+                account_id=_ACCOUNT_ID,
+                code_challenge=_CODE_CHALLENGE,
+                code_challenge_method="plain",
+            )
 
+    async def test_create_code_rejects_empty_pkce_method(self) -> None:
+        session = AsyncMock()
+        with pytest.raises(InvalidGrantError, match="S256"):
+            await create_authorization_code(
+                session,
+                client_id="cid",
+                org_id=_ORG_ID,
+                scopes="trigger:run",
+                redirect_uri="http://localhost/callback",
+                account_id=_ACCOUNT_ID,
+                code_challenge=_CODE_CHALLENGE,
+                code_challenge_method="",
+            )
+
+    def _make_code_record(
+        self,
+        client: MagicMock,
+        *,
+        used: bool = False,
+        expired: bool = False,
+        challenge: str = _CODE_CHALLENGE,
+        method: str = "S256",
+    ) -> MagicMock:
         code_record = MagicMock()
         code_record.code = "authcode123"
         code_record.client_id = client.client_id
         code_record.redirect_uri = "http://localhost/callback"
-        code_record.used = False
-        code_record.expires_at = datetime.now(UTC) + timedelta(minutes=10)
+        code_record.used = used
+        code_record.code_challenge = challenge
+        code_record.code_challenge_method = method
+        code_record.expires_at = (
+            datetime.now(UTC) - timedelta(minutes=1) if expired else datetime.now(UTC) + timedelta(minutes=10)
+        )
+        return code_record
 
+    def _session_returning(self, client: MagicMock, code_record: MagicMock) -> AsyncMock:
         call_count = 0
 
         async def _execute(*args: object, **kwargs: object) -> MagicMock:
             nonlocal call_count
             result = MagicMock()
-            if call_count == 0:
-                result.scalar_one_or_none.return_value = client
-            else:
-                result.scalar_one_or_none.return_value = code_record
+            result.scalar_one_or_none.return_value = client if call_count == 0 else code_record
             call_count += 1
             return result
 
         session = _make_session_mock()
         session.execute = AsyncMock(side_effect=_execute)
         session.flush = AsyncMock()
+        return session
 
+    async def test_consume_valid_code_with_pkce(self) -> None:
+        secret = "validsecret"
+        hashed = _hash_secret(secret)
+        client = _make_oauth_client(client_secret_hash=hashed)
+        code_record = self._make_code_record(client)
+
+        session = self._session_returning(client, code_record)
         result = await consume_authorization_code(
             session,
             code="authcode123",
             client_id=client.client_id,
             redirect_uri="http://localhost/callback",
             client_secret=secret,
+            code_verifier=_CODE_VERIFIER,
         )
         assert result is code_record
         assert code_record.used is True
+
+    async def test_consume_missing_verifier_raises(self) -> None:
+        secret = "s"
+        hashed = _hash_secret(secret)
+        client = _make_oauth_client(client_secret_hash=hashed)
+        code_record = self._make_code_record(client)
+
+        session = self._session_returning(client, code_record)
+        with pytest.raises(InvalidGrantError, match="code_verifier"):
+            await consume_authorization_code(
+                session,
+                code="authcode123",
+                client_id=client.client_id,
+                redirect_uri="http://localhost/callback",
+                client_secret=secret,
+                code_verifier=None,
+            )
+        # PKCE failure must NOT consume the code — a legitimate retry stays possible.
+        assert code_record.used is False
+
+    async def test_consume_mismatched_verifier_raises(self) -> None:
+        secret = "s"
+        hashed = _hash_secret(secret)
+        client = _make_oauth_client(client_secret_hash=hashed)
+        code_record = self._make_code_record(client)
+
+        session = self._session_returning(client, code_record)
+        with pytest.raises(InvalidGrantError, match="PKCE"):
+            await consume_authorization_code(
+                session,
+                code="authcode123",
+                client_id=client.client_id,
+                redirect_uri="http://localhost/callback",
+                client_secret=secret,
+                code_verifier="completely-wrong-verifier-value",
+            )
+        assert code_record.used is False
+
+    async def test_consume_code_without_stored_challenge_raises(self) -> None:
+        secret = "s"
+        hashed = _hash_secret(secret)
+        client = _make_oauth_client(client_secret_hash=hashed)
+        code_record = self._make_code_record(client, challenge=None)
+
+        session = self._session_returning(client, code_record)
+        with pytest.raises(InvalidGrantError, match="code_challenge"):
+            await consume_authorization_code(
+                session,
+                code="authcode123",
+                client_id=client.client_id,
+                redirect_uri="http://localhost/callback",
+                client_secret=secret,
+                code_verifier=_CODE_VERIFIER,
+            )
 
     async def test_consume_expired_code(self) -> None:
         secret = "s"
         hashed = _hash_secret(secret)
         client = _make_oauth_client(client_secret_hash=hashed)
+        code_record = self._make_code_record(client, expired=True)
 
-        code_record = MagicMock()
-        code_record.client_id = client.client_id
-        code_record.redirect_uri = "http://localhost/callback"
-        code_record.used = False
-        code_record.expires_at = datetime.now(UTC) - timedelta(minutes=1)
-
-        call_count = 0
-
-        async def _execute(*args: object, **kwargs: object) -> MagicMock:
-            nonlocal call_count
-            result = MagicMock()
-            if call_count == 0:
-                result.scalar_one_or_none.return_value = client
-            else:
-                result.scalar_one_or_none.return_value = code_record
-            call_count += 1
-            return result
-
-        session = _make_session_mock()
-        session.execute = AsyncMock(side_effect=_execute)
-
+        session = self._session_returning(client, code_record)
         with pytest.raises(InvalidGrantError, match="expired"):
             await consume_authorization_code(
                 session,
@@ -339,34 +435,16 @@ class TestAuthorizationCode:
                 client_id=client.client_id,
                 redirect_uri="http://localhost/callback",
                 client_secret=secret,
+                code_verifier=_CODE_VERIFIER,
             )
 
     async def test_consume_already_used_code(self) -> None:
         secret = "s"
         hashed = _hash_secret(secret)
         client = _make_oauth_client(client_secret_hash=hashed)
+        code_record = self._make_code_record(client, used=True)
 
-        code_record = MagicMock()
-        code_record.client_id = client.client_id
-        code_record.redirect_uri = "http://localhost/callback"
-        code_record.used = True
-        code_record.expires_at = datetime.now(UTC) + timedelta(minutes=10)
-
-        call_count = 0
-
-        async def _execute(*args: object, **kwargs: object) -> MagicMock:
-            nonlocal call_count
-            result = MagicMock()
-            if call_count == 0:
-                result.scalar_one_or_none.return_value = client
-            else:
-                result.scalar_one_or_none.return_value = code_record
-            call_count += 1
-            return result
-
-        session = _make_session_mock()
-        session.execute = AsyncMock(side_effect=_execute)
-
+        session = self._session_returning(client, code_record)
         with pytest.raises(InvalidGrantError, match="already been used"):
             await consume_authorization_code(
                 session,
@@ -374,34 +452,17 @@ class TestAuthorizationCode:
                 client_id=client.client_id,
                 redirect_uri="http://localhost/callback",
                 client_secret=secret,
+                code_verifier=_CODE_VERIFIER,
             )
 
     async def test_consume_wrong_client_raises(self) -> None:
         secret = "s"
         hashed = _hash_secret(secret)
         client = _make_oauth_client(client_secret_hash=hashed)
-
-        code_record = MagicMock()
+        code_record = self._make_code_record(client)
         code_record.client_id = "other-client-id"
-        code_record.redirect_uri = "http://localhost/callback"
-        code_record.used = False
-        code_record.expires_at = datetime.now(UTC) + timedelta(minutes=10)
 
-        call_count = 0
-
-        async def _execute(*args: object, **kwargs: object) -> MagicMock:
-            nonlocal call_count
-            result = MagicMock()
-            if call_count == 0:
-                result.scalar_one_or_none.return_value = client
-            else:
-                result.scalar_one_or_none.return_value = code_record
-            call_count += 1
-            return result
-
-        session = _make_session_mock()
-        session.execute = AsyncMock(side_effect=_execute)
-
+        session = self._session_returning(client, code_record)
         with pytest.raises(InvalidGrantError, match="different client"):
             await consume_authorization_code(
                 session,
@@ -409,6 +470,7 @@ class TestAuthorizationCode:
                 client_id=client.client_id,
                 redirect_uri="http://localhost/callback",
                 client_secret=secret,
+                code_verifier=_CODE_VERIFIER,
             )
 
 
@@ -423,6 +485,7 @@ class TestOAuthAccessToken:
             "myclient",
             _SECRET_KEY,
             organisation_id=str(_ORG_ID),
+            account_id=str(_ACCOUNT_ID),
             scopes=["trigger:run", "hitl:review"],
             token_family="fam-1",
             token_sequence=0,
@@ -430,6 +493,7 @@ class TestOAuthAccessToken:
         claims = decode_oauth_access_token(token, _SECRET_KEY)
         assert claims.client_id == "myclient"
         assert claims.organisation_id == _ORG_ID
+        assert claims.account_id == _ACCOUNT_ID
         assert set(claims.scopes) == {"trigger:run", "hitl:review"}
         assert claims.token_family == "fam-1"
         assert claims.token_sequence == 0
@@ -439,6 +503,7 @@ class TestOAuthAccessToken:
             "c",
             _SECRET_KEY,
             organisation_id=str(_ORG_ID),
+            account_id=str(_ACCOUNT_ID),
             scopes=[],
             token_family="f",
             token_sequence=0,
@@ -452,6 +517,7 @@ class TestOAuthAccessToken:
             ({"purpose": "access"}, "purpose"),
             ({"sub": None}, "sub"),
             ({"org_id": None}, "org_id"),
+            ({"account_id": None}, "account_id"),
             ({"token_family": None}, "token_family"),
             ({"token_sequence": None}, "token_sequence"),
             ({"org_id": "not-a-uuid"}, "org_id"),
@@ -461,6 +527,7 @@ class TestOAuthAccessToken:
         base_claims: dict = {
             "sub": "c",
             "org_id": str(_ORG_ID),
+            "account_id": str(_ACCOUNT_ID),
             "scopes": "",
             "purpose": "oauth_access",
             "token_family": "f",
@@ -481,6 +548,7 @@ class TestOAuthAccessToken:
         claims = {
             "sub": "c",
             "org_id": str(_ORG_ID),
+            "account_id": str(_ACCOUNT_ID),
             "scopes": "",
             "purpose": "oauth_access",
             "token_family": "f",
@@ -496,12 +564,14 @@ class TestOAuthAccessToken:
         claims = OAuthAccessTokenClaims(
             client_id="cid",
             organisation_id=_ORG_ID,
+            account_id=_ACCOUNT_ID,
             scopes=["a", "b"],
             token_family="tf",
             token_sequence=1,
         )
         assert claims.client_id == "cid"
         assert claims.organisation_id == _ORG_ID
+        assert claims.account_id == _ACCOUNT_ID
         assert claims.scopes == ["a", "b"]
 
 
@@ -678,3 +748,136 @@ class TestValidateClientScopes:
         client = _make_oauth_client(scopes="trigger:run library:browse")
         result = validate_client_scopes(client, ["trigger:run", "hitl:review"])
         assert result == ["trigger:run"]
+
+
+# ---------------------------------------------------------------------------
+# PKCE (RFC 7636)
+# ---------------------------------------------------------------------------
+
+
+class TestPKCE:
+    def test_compute_challenge_matches_rfc7636_example(self) -> None:
+        # RFC 7636 §A.1/A.4 known test vector.
+        assert compute_pkce_challenge(_CODE_VERIFIER) == _CODE_CHALLENGE
+
+    def test_compute_challenge_is_urlsafe_and_unpadded(self) -> None:
+        challenge = compute_pkce_challenge("some-verifier-value")
+        assert challenge == challenge.rstrip("=")
+        assert all(c.isalnum() or c in "-_" for c in challenge)
+
+    def test_verify_pkce_matches(self) -> None:
+        verify_pkce(_CODE_VERIFIER, _CODE_CHALLENGE, "S256")
+
+    def test_verify_pkce_mismatch_raises(self) -> None:
+        with pytest.raises(InvalidGrantError, match="PKCE"):
+            verify_pkce("wrong-verifier", _CODE_CHALLENGE, "S256")
+
+    def test_verify_pkce_missing_verifier_raises(self) -> None:
+        with pytest.raises(InvalidGrantError, match="code_verifier"):
+            verify_pkce("", _CODE_CHALLENGE, "S256")
+
+    def test_verify_pkce_plain_method_raises(self) -> None:
+        with pytest.raises(InvalidGrantError, match="S256"):
+            verify_pkce(_CODE_VERIFIER, _CODE_CHALLENGE, "plain")
+
+    def test_verify_pkce_missing_challenge_raises(self) -> None:
+        with pytest.raises(InvalidGrantError, match="code_challenge"):
+            verify_pkce(_CODE_VERIFIER, "", "S256")
+
+    @pytest.mark.parametrize("method", ["plain", "", None, "  "])
+    def test_validate_pkce_method_rejects_non_s256(self, method: str | None) -> None:
+        with pytest.raises(InvalidGrantError, match="S256"):
+            validate_pkce_method(method)
+
+    def test_validate_pkce_method_accepts_s256_case_insensitive(self) -> None:
+        assert validate_pkce_method("s256") == "S256"
+
+
+# ---------------------------------------------------------------------------
+# Consent-state store
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestConsentState:
+    async def test_create_consent_state_persists_row(self) -> None:
+        session = AsyncMock()
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+
+        await create_consent_state(
+            session,
+            state="state-abc",
+            client_id="cid",
+            redirect_uri="http://localhost/callback",
+            scopes=["trigger:run"],
+            code_challenge=_CODE_CHALLENGE,
+            org_id=_ORG_ID,
+        )
+        assert session.add.called
+        row = session.add.call_args.args[0]
+        assert row.state == "state-abc"
+        assert row.client_id == "cid"
+        assert row.scopes == ["trigger:run"]
+        assert row.code_challenge == _CODE_CHALLENGE
+        assert row.account_id is None
+
+    async def test_consume_consent_state_claims_and_returns_row(self) -> None:
+        session = _make_session_mock()
+        state_row = MagicMock()
+        state_row.state = "state-abc"
+        state_row.redirect_uri = "http://localhost/callback"
+        state_row.client_id = "cid"
+        state_row.scopes = ["trigger:run"]
+        state_row.code_challenge = _CODE_CHALLENGE
+        state_row.organisation_id = _ORG_ID
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = state_row
+        session.execute = AsyncMock(return_value=result)
+
+        consumed = await consume_consent_state(
+            session,
+            state="state-abc",
+            org_id=_ORG_ID,
+            account_id=_ACCOUNT_ID,
+        )
+        assert consumed is state_row
+        # The atomic UPDATE must filter on unconsumed + unexpired.
+        statement = session.execute.call_args.args[0]
+        assert "consumed" in str(statement)
+
+    async def test_consume_consent_state_missing_returns_none(self) -> None:
+        session = _make_session_mock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=result)
+
+        assert await consume_consent_state(session, state="unknown", org_id=_ORG_ID, account_id=_ACCOUNT_ID) is None
+
+
+# ---------------------------------------------------------------------------
+# Scope → role helpers
+# ---------------------------------------------------------------------------
+
+
+class TestScopeRoleHelpers:
+    def test_hitl_review_requires_operator(self) -> None:
+        assert scopes_required_role(["hitl:review"]) == "operator"
+        assert scopes_required_role(["trigger:run", "hitl:review"]) == "operator"
+
+    def test_other_scopes_require_runner(self) -> None:
+        assert scopes_required_role(["trigger:run"]) == "runner"
+        assert scopes_required_role(["library:browse"]) == "runner"
+        assert scopes_required_role([]) == "runner"
+
+    def test_clamp_keeps_lower_role(self) -> None:
+        # live operator, scope runner → runner (token never exceeds its scopes)
+        assert clamp_oauth_role("runner", "operator") == "runner"
+        # live viewer, scope operator (demoted) → clamped to viewer
+        assert clamp_oauth_role("operator", "viewer") == "viewer"
+        # equal → unchanged
+        assert clamp_oauth_role("operator", "operator") == "operator"
+
+    def test_clamp_unknown_role_fails_to_live(self) -> None:
+        assert clamp_oauth_role("not-a-role", "operator") == "operator"
