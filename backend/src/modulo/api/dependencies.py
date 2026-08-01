@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from modulo.api.models.problem import ProblemException, ProblemType
+from modulo.api.team_scope import TeamScopeProvider, team_membership_exists
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.permissions import (
@@ -36,6 +37,7 @@ from modulo.auth.permissions import (
 )
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.feature_flags import PlanContext
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import Settings, get_settings
 
@@ -290,6 +292,94 @@ def require_target_org_role(permission: str, min_role: str) -> DependsParameter:
         permission=permission,
         permission_kind="scoped_hybrid",
         min_role=min_role,
+    )
+
+
+def require_team_membership_or_admin(resource_team_id_provider: TeamScopeProvider) -> Any:
+    """Team-scoped gate matching RLS visibility: membership (any role) OR org-admin.
+
+    Mirrors the DB team-visibility RLS policy (migration 0002:375-383,
+    0003:911-919) exactly:
+
+    .. code-block:: text
+
+       visibility='org' OR visibility IS NULL
+       OR owner_team_id IS NULL
+       OR membership (any team role)
+       OR org_role='admin'
+
+    ``admin`` bypasses before any DB work (RLS parity — the org-admin sees every
+    team-scoped row). Rows with ``visibility='org'`` or ``owner_team_id IS NULL``
+    are NOT team-gated (org-role floor only). The org-role floor itself is
+    enforced by ``require_permission`` on the same endpoint — this dependency
+    adds ONLY the membership-or-admin gate. Team *role* remains dead code until
+    Phase 3; any membership row qualifies.
+
+    ``resource_team_id_provider`` resolves the target row's ``owner_team_id``
+    and ``visibility`` from the request (path params + a DB lookup); see
+    ``modulo.api.team_scope``. ``runs`` is intentionally not team-gated — it has
+    no ``visibility`` column (org-role floor only, ADR 017 iteration-7 special).
+
+    .. code-block:: python
+
+       _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope)
+    """
+
+    async def _check(
+        request: Request,
+        principal: TenantPrincipal = Depends(get_current_tenant_user),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> TenantPrincipal:
+        if principal.org_role == "admin":
+            return principal
+        try:
+            # ONE transaction: RLS context (set_config ... is_local) is scoped
+            # to the transaction and reverts on COMMIT, so the provider read
+            # and the membership check MUST share a single session.begin() or
+            # the second query runs with an empty app.organisation_id and
+            # team_memberships RLS filters every row (hard 403 on Postgres).
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                await set_rls_user_context(session, principal.account_id, principal.org_role)
+                row = await resource_team_id_provider(request, session)
+                if row is not None and row.visibility not in ("org", None) and row.owner_team_id is not None:
+                    is_member = await team_membership_exists(
+                        session,
+                        account_id=principal.account_id,
+                        team_id=row.owner_team_id,
+                    )
+                else:
+                    is_member = True
+        except SQLAlchemyError:
+            logger.exception("permission.team_scope_read_failed")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database temporarily unavailable.",
+            ) from None
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+        if row.visibility == "org" or row.visibility is None or row.owner_team_id is None:
+            return principal
+        if not is_member:
+            logger.warning(
+                "permission.denied",
+                extra={
+                    "permission": "team.membership_or_admin",
+                    "required": "team_membership",
+                    "actual": principal.org_role,
+                    "owner_team_id": str(row.owner_team_id),
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not a member of the team that owns this resource",
+            )
+        return principal
+
+    return _tagged_dep(
+        Depends(_check),
+        permission="team.membership_or_admin",
+        permission_kind="team_scope",
     )
 
 
