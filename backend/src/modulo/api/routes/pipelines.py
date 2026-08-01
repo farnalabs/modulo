@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_team_membership_or_admin
-from modulo.api.team_scope import resolve_pipeline_team_scope
+from modulo.api.team_scope import resolve_pipeline_team_scope, team_membership_exists
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import org_role_level
@@ -839,6 +839,69 @@ async def replace_pipeline_graph_endpoint(
     return _graph_response(nodes, edges, validation_issues=issues)
 
 
+async def _assert_team_transition_allowed(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    current: Pipeline,
+    update_payload: dict[str, Any],
+) -> None:
+    """Re-validate the team gate against the NEW visibility/owner_team_id values.
+
+    The endpoint's ``require_team_membership_or_admin`` dependency checks the
+    CURRENT ``owner_team_id`` at request time, but the update can change
+    ``visibility`` or reassign/clear ``owner_team_id`` without re-checking the
+    team gate against the NEW values — a member could downgrade a team-private
+    pipeline to org-visible or hand it to a team they don't belong to
+    (task-authz-b-visibility-guard). Re-runs the RLS-parity membership-or-admin
+    gate inside the same transaction (RLS context is transaction-scoped).
+    """
+    # Org-admin bypass applies throughout (RLS parity).
+    if principal.org_role == "admin":
+        return
+
+    changes_visibility = "visibility" in update_payload
+    changes_owner_team = "owner_team_id" in update_payload
+    if not changes_visibility and not changes_owner_team:
+        return  # No-op: the team boundary is unchanged.
+
+    new_visibility = update_payload.get("visibility", current.visibility)
+    new_owner_team_id = update_payload.get("owner_team_id", current.owner_team_id)
+
+    # A team-visible pipeline must keep an owner team.
+    if new_visibility == "team" and new_owner_team_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="owner_team_id is required when visibility is 'team'",
+        )
+
+    # Current team gate (if the pipeline is currently team-private): the caller
+    # must be a member of the CURRENT team (or admin).
+    if current.visibility not in ("org", None) and current.owner_team_id is not None:
+        is_current_member = await team_membership_exists(
+            session,
+            account_id=principal.account_id,
+            team_id=current.owner_team_id,
+        )
+        if not is_current_member:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not a member of the team that owns this resource",
+            )
+
+    # New team gate: reassigning to a team requires membership of the NEW team.
+    if new_owner_team_id is not None and new_owner_team_id != current.owner_team_id:
+        is_new_member = await team_membership_exists(
+            session,
+            account_id=principal.account_id,
+            team_id=new_owner_team_id,
+        )
+        if not is_new_member:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot reassign a pipeline to a team you are not a member of",
+            )
+
+
 @router.patch("/{pipeline_id}", response_model=PipelineResponse)
 @handle_db_errors("pipelines.update")
 async def update_pipeline_endpoint(
@@ -855,6 +918,10 @@ async def update_pipeline_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            current = await get_pipeline(session, pipeline_id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+            await _assert_team_transition_allowed(session, principal, current, updates)
             if "default_autonomy_level" in updates:
                 previous = await get_pipeline(session, pipeline_id)
                 prev_level = previous.default_autonomy_level if previous else None

@@ -789,6 +789,7 @@ def test_update_pipeline_returns_200(client: TestClient) -> None:
 
     with (
         patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
@@ -842,6 +843,7 @@ def test_update_pipeline_autonomy_level_unchanged_no_audit(client: TestClient) -
 def test_update_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.pipelines.update_pipeline", return_value=None),
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=None)),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
@@ -892,6 +894,7 @@ def test_update_pipeline_accepts_stale_run_timeout(client: TestClient) -> None:
 
     with (
         patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline) as update,
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
