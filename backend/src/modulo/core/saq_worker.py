@@ -2,9 +2,9 @@
 
 Two worker processes (plan F1/F2):
 
-* ``runs_settings`` — queue ``runs``, concurrency 2, no web UI. Executes
+* ``runs_settings`` — queue ``runs``, concurrency 10, no web UI. Executes
   ``execute_run``/``resume_run`` jobs (wired in PR B).
-* ``system_settings`` — queue ``system``, concurrency 2, web UI on 8081 bound
+* ``system_settings`` — queue ``system``, concurrency 10, web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set.
 
@@ -41,7 +41,11 @@ from saq.queue.redis import RedisQueue
 from modulo.settings import get_settings
 
 # Shared worker lifecycle knobs (plan F2).
-_WORKER_CONCURRENCY = 2
+# SAQ runs asyncio jobs in a single process sharing one engine, so raising
+# concurrency does NOT multiply DB connection pools the way Celery prefork
+# does. Sandbox-agent runs spend most of their time awaiting external E2B
+# sandboxes; 10 concurrent jobs is cheap. Bumped from 2 on 2026-08-01.
+_WORKER_CONCURRENCY = 10
 _SHUTDOWN_GRACE_PERIOD_S = 30
 _CANCELLATION_HARD_DEADLINE_S = 60
 _DEQUEUE_TIMEOUT = 5

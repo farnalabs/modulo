@@ -72,8 +72,8 @@ start_beat() {
 start_beat &
 BEAT_PID=$!
 
-echo "=== Starting Celery worker (pipeline execution, concurrency=2) ==="
-.venv/bin/celery -A modulo.cli_celery worker --loglevel=info --concurrency=2 --pidfile=/tmp/celery-worker.pid &
+echo "=== Starting Celery worker (pipeline execution, concurrency=6) ==="
+.venv/bin/celery -A modulo.cli_celery worker --loglevel=info --concurrency=6 --pidfile=/tmp/celery-worker.pid &
 CELERY_WORKER_PID=$!
 
 echo "=== Admin user seeding handled by backend lifespan startup ==="
