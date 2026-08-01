@@ -2971,6 +2971,8 @@ For any resource, a user's effective access is determined by:
 4. **Multiple team memberships**: a user in two teams has independent access to each team's resources under their respective team roles. Roles from one team do not bleed into another team's resources.
 5. **Org role does not override team visibility**: an org-level `operator` cannot see or act on `team`-visibility resources unless they are a member of the owning team (or an admin). This is intentional — team visibility is a privacy boundary, not just a presentation filter.
 
+> **Phase-1 enforcement floor (ADR 017 DECISION 2)**: team-*role* levels described above are **deferred to Phase 3**. As of Phase 1 the REST team gate enforces the RLS-parity formula — `visibility='org' OR owner_team_id IS NULL OR membership (any team role) OR org_role='admin'` — composed with the org-role floor on the same endpoint. Any team membership row qualifies regardless of the stored team role; org `admin` bypasses the team gate entirely; rows with `visibility: org` or `owner_team_id = null` are governed by the org-role floor only. `runs` are org-role-floor-only (they carry `owner_team_id` but no `visibility` column, so a team gate would regress org members who are not on the owning team).
+
 #### Resource Ownership
 
 Each of the following entities carries `owner_team_id` (nullable) and `visibility` (`org` | `team`):
