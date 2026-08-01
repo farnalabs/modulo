@@ -3,13 +3,15 @@
 POST /api/v1/mcp/oauth/clients         — Register a new OAuth client
 GET  /api/v1/mcp/oauth/clients          — List OAuth clients
 DELETE /api/v1/mcp/oauth/clients/{id}   — Delete an OAuth client
+POST /api/v1/mcp/oauth/consent/approve  — Approve a pending browser consent
 
-The protocol endpoints (POST /mcp/oauth/authorize, POST /mcp/oauth/token)
-live in the MCP sub-app at ``mcp_server.py``.
+The protocol endpoints (GET /mcp/oauth/authorize, POST /mcp/oauth/token,
+POST /mcp/oauth/refresh) live in the MCP sub-app at ``mcp_server.py``.
 """
 
 import asyncio
 import logging
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -22,6 +24,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.oauth import (
     InvalidScopeError,
+    create_authorization_code,
     create_oauth_client,
     delete_oauth_client,
     list_oauth_clients,
@@ -123,8 +126,8 @@ async def register_oauth_client(
         ) from None
     except asyncio.CancelledError:
         raise
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        raise exc
     except Exception as e:
         _log.exception(
             "mcp_oauth.register_oauth_client.unexpected_error", extra={"org_id": str(principal.organisation_id)}
@@ -168,8 +171,8 @@ async def list_oauth_clients_endpoint(
         ) from None
     except asyncio.CancelledError:
         raise
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        raise exc
     except Exception as e:
         _log.exception(
             "mcp_oauth.list_oauth_clients.unexpected_error", extra={"org_id": str(principal.organisation_id)}
@@ -220,8 +223,8 @@ async def remove_oauth_client(
         ) from None
     except asyncio.CancelledError:
         raise
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        raise exc
     except Exception as e:
         _log.exception(
             "mcp_oauth.remove_oauth_client.unexpected_error",
@@ -238,3 +241,96 @@ async def remove_oauth_client(
             detail="OAuth client not found",
         )
     return DeleteOAuthClientResponse(deleted=True)
+
+
+# ---------------------------------------------------------------------------
+# Consent approve — the ONLY authenticated endpoint in the OAuth flow
+# ---------------------------------------------------------------------------
+
+
+class ConsentApproveRequest(BaseModel):
+    state: str = Field(min_length=1, max_length=128)
+
+
+class ConsentApproveResponse(BaseModel):
+    redirect_url: str
+
+
+@handle_db_errors("mcp_oauth.approve_consent")
+@router.post("/consent/approve", response_model=ConsentApproveResponse)
+async def approve_consent(
+    req: ConsentApproveRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> ConsentApproveResponse:
+    """Approve a pending OAuth consent (ADR 017 DECISION 1 — the approve POST IS the consent).
+
+    The authenticated approve POST is the human approval: the Bearer principal
+    IS the consenting account. There is deliberately NO consent page / deny
+    affordance (deferred until an interactive customer exists). ``state`` is a
+    client-chosen correlation/replay-binding nonce — the Bearer requirement is
+    the consent-CSRF control (a cross-origin auto-POST cannot attach a
+    localStorage Bearer).
+
+    Security properties:
+    - ``state`` must be single-use, unexpired, and in the approver's org (RLS).
+    - ``redirect_uri`` comes from the state row ONLY — never client-supplied.
+    - The code is minted from the state row's scopes + code_challenge ONLY, so
+      a tampered display can never escalate the granted scope (display is
+      never authoritative).
+    - The returned ``redirect_url`` is server-derived: ``redirect_uri?code=..&state=..``.
+    """
+    from modulo.auth.oauth import consume_consent_state
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            state_row = await consume_consent_state(
+                session,
+                state=req.state,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+            )
+            if state_row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Unknown, expired, or already-used consent state",
+                )
+
+            code = await create_authorization_code(
+                session,
+                client_id=state_row.client_id,
+                org_id=state_row.organisation_id,
+                scopes=" ".join(state_row.scopes),
+                redirect_uri=state_row.redirect_uri,
+                account_id=principal.account_id,
+                code_challenge=state_row.code_challenge,
+                code_challenge_method="S256",
+            )
+    except ProgrammingError:
+        _log.exception("mcp_oauth.approve_consent")
+        _log.warning("mcp_oauth.approve_consent.programming_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("mcp_oauth.approve_consent")
+        _log.warning("mcp_oauth.approve_consent.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again.",
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except HTTPException as exc:
+        raise exc
+    except Exception as e:
+        _log.exception("mcp_oauth.approve_consent.unexpected_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
+
+    redirect_url = f"{state_row.redirect_uri}?code={quote(code)}&state={quote(req.state)}"
+    return ConsentApproveResponse(redirect_url=redirect_url)
