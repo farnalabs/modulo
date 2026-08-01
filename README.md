@@ -37,11 +37,13 @@ product-map entry and tests before relying on a capability.
 
 The shortest local evaluation uses Docker Desktop and Docker Compose:
 
-```powershell
+```bash
 git clone https://github.com/farnalabs/modulo.git
-Set-Location modulo
+cd modulo
 docker compose up -d
 ```
+
+On Windows, use PowerShell with `Set-Location modulo` instead of `cd modulo`.
 
 After the services become healthy, open <http://localhost:5173> and sign in
 with the local demo credentials `admin` / `admin`. These credentials and the
