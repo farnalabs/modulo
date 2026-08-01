@@ -85,14 +85,12 @@ def test_check_node_config_default_timeout_fails(tmp_path):
     assert "timeout_seconds is 600" in fail.call_args.args[0]
 
 
-def test_check_node_config_env_vars_extra_after_token_ok(tmp_path):
-    # env_vars_extra intentionally sits AFTER system env vars so pipelines can
-    # override GITHUB_TOKEN for identity separation (commit b0c4bde97).
+def test_check_node_config_env_vars_extra_after_token_fails(tmp_path):
     node = _good_node()
     node["envs"] = {"GITHUB_TOKEN": "t", "env_vars_extra": {"EXTRA": "1"}}
     with patch.object(vpc, "_fail") as fail:
         vpc._check_node_config(Path(tmp_path), node)
-    fail.assert_not_called()
+    assert "env_vars_extra" in fail.call_args.args[0]
 
 
 def test_check_node_config_env_vars_extra_first_ok(tmp_path):
@@ -129,13 +127,13 @@ def test_check_node_config_recurses_into_children(tmp_path):
     assert "agent_prompt is empty" in fail.call_args.args[0]
 
 
-def test_check_node_config_uses_env_vars_alias_after_token_ok(tmp_path):
+def test_check_node_config_uses_env_vars_alias(tmp_path):
     node = _good_node()
     node.pop("envs")
     node["env_vars"] = {"GITHUB_TOKEN": "t", "env_vars_extra": {"EXTRA": "1"}}
     with patch.object(vpc, "_fail") as fail:
         vpc._check_node_config(Path(tmp_path), node)
-    fail.assert_not_called()
+    assert "env_vars_extra" in fail.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -143,22 +141,22 @@ def test_check_node_config_uses_env_vars_alias_after_token_ok(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_scan_node_runner_does_not_flag_timeout_600_default(tmp_path):
-    # node_runner's fallback defaults are deliberate last-resort values; the
-    # opencode/1200 guidance is enforced on pipeline config files instead.
+def test_scan_node_runner_flags_timeout_600_default(tmp_path):
     src = tmp_path / "node_runner.py"
     src.write_text('node_def.get("timeout_seconds", 600)\n')
     with patch.object(vpc, "_fail") as fail:
         vpc._scan_node_runner(src)
-    fail.assert_not_called()
+    fail.assert_called_once()
+    assert "timeout_seconds defaults to 600" in fail.call_args.args[0]
 
 
-def test_scan_node_runner_does_not_flag_template_base_default(tmp_path):
+def test_scan_node_runner_flags_template_base_default(tmp_path):
     src = tmp_path / "node_runner.py"
     src.write_text('node_def.get("template_id", "base")\n')
     with patch.object(vpc, "_fail") as fail:
         vpc._scan_node_runner(src)
-    fail.assert_not_called()
+    fail.assert_called_once()
+    assert "template_id defaults to 'base'" in fail.call_args.args[0]
 
 
 def test_scan_node_runner_ok_on_good_defaults(tmp_path):
@@ -169,14 +167,13 @@ def test_scan_node_runner_ok_on_good_defaults(tmp_path):
     fail.assert_not_called()
 
 
-def test_scan_node_runner_does_not_flag_env_vars_extra_line(tmp_path):
-    # env_vars_extra is intentionally the LAST entry (commit b0c4bde97) so
-    # pipelines can override GITHUB_TOKEN for identity separation.
+def test_scan_node_runner_flags_env_vars_extra_line(tmp_path):
     src = tmp_path / "node_runner.py"
     src.write_text('envs = {\n    "GITHUB_TOKEN": "x",\n    **env_vars_extra\n}\n')
     with patch.object(vpc, "_fail") as fail:
         vpc._scan_node_runner(src)
-    fail.assert_not_called()
+    fail.assert_called_once()
+    assert "**env_vars_extra` must precede system env vars" in fail.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -272,9 +269,7 @@ def test_scan_pipeline_config_files_flags_bad_json(monkeypatch, tmp_path):
     assert "timeout_seconds is 600" in messages
 
 
-def test_scan_pipeline_config_files_env_vars_extra_order_ok(monkeypatch, tmp_path):
-    # env_vars_extra AFTER system env vars is the intended identity-separation
-    # ordering (commit b0c4bde97) — not a failure.
+def test_scan_pipeline_config_files_flags_env_vars_extra_order(monkeypatch, tmp_path):
     pipeline_dir = tmp_path / "pipelines"
     pipeline_dir.mkdir()
     bad = {
@@ -290,11 +285,12 @@ def test_scan_pipeline_config_files_env_vars_extra_order_ok(monkeypatch, tmp_pat
     }
     import json
 
-    (pipeline_dir / "ok.json").write_text(json.dumps(bad))
+    (pipeline_dir / "bad.json").write_text(json.dumps(bad))
     monkeypatch.chdir(tmp_path)
     with patch.object(vpc, "_fail") as fail:
         vpc._scan_pipeline_config_files()
-    fail.assert_not_called()
+    fail.assert_called_once()
+    assert "env_vars_extra" in fail.call_args.args[0]
 
 
 def test_scan_pipeline_config_files_ignores_good_json(monkeypatch, tmp_path):
