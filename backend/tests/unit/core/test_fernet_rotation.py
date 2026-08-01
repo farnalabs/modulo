@@ -433,6 +433,9 @@ class TestRotateCheckpointWrites:
 
 
 class TestRotateAllEncryptedData:
+    # "observability_config" is the logical label for _rotate_otel_config,
+    # which re-encrypts the langsmith key stored in the "organisations"
+    # table (column otel_config_json).
     _TABLES: ClassVar[list[str]] = [
         "secrets",
         "connector_instances",
