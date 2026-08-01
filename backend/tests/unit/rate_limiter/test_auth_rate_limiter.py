@@ -447,7 +447,7 @@ class TestAuthRateLimiterCore:
     def test_compute_backoff_caps_at_3600(self, count, expected):
         assert AuthRateLimiterCls._compute_backoff(count) == expected
 
-    def test_compute_backoff_respects_max_attempts_boundary(self):
+    def test_compute_backoff_tier_boundaries(self):
         assert AuthRateLimiterCls._compute_backoff(10) == 60
         assert AuthRateLimiterCls._compute_backoff(11) == 60
         assert AuthRateLimiterCls._compute_backoff(19) == 60

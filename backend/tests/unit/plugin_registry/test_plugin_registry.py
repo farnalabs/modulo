@@ -715,13 +715,17 @@ def test_empty_registry(method, args, expected):
 
 
 def test_reset_plugin_registry_invalidates_singleton():
+    from modulo.core import plugin_registry as registry_mod
+
     before = get_plugin_registry()
     reset_plugin_registry()
     try:
         after = get_plugin_registry()
         assert before is not after
     finally:
-        reset_plugin_registry()
+        # Restore the original singleton instance so tests running in the same
+        # process that cached get_plugin_registry() are not left with a fresh one.
+        registry_mod._DISCOVERED = before
 
 
 # ---------------------------------------------------------------------------
