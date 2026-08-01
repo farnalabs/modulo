@@ -429,7 +429,7 @@
                     <option :value="undefined"></option>
                     <option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
                   </select>
-                  <span v-else class="text-xs text-muted-foreground">â€”</span>
+                  <span v-else class="text-xs text-muted-foreground">—</span>
                 </div>
                 <button
                   class="mt-1 text-xs text-indigo-500 hover:text-indigo-400"
@@ -807,7 +807,7 @@
                 :key="s.id"
                 :value="s.id"
               >
-                v{{ s.snapshot_version }}{{ s.tag ? ` â€” ${s.tag}` : '' }}
+                v{{ s.snapshot_version }}{{ s.tag ? ` — ${s.tag}` : '' }}
               </SelectItem>
             </SelectContent>
           </Select>

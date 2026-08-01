@@ -334,4 +334,4 @@ try:
     _celery_app.register_task(ExecuteRunTask())
     _celery_app.register_task(StaleRunRecoveryTask())
 except Exception:
-    _log.warning("Could not register Celery tasks â€” Celery may not be configured")
+    _log.warning("Could not register Celery tasks — Celery may not be configured")

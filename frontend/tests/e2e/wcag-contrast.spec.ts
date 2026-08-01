@@ -9,14 +9,14 @@ function filterViolations(violations: { id: string }[]) {
   return violations.filter(v => !ACCEPTABLE_VIOLATIONS.includes(v.id))
 }
 
-test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression" }, () => {
+test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, () => {
   const pages = [
     { path: '/login', name: 'login page' },
     { path: '/', name: 'root page' },
   ]
 
   for (const { path, name } of pages) {
-    test(`${name} â€” light mode has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page }) => {
+    test(`${name} — light mode has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page }) => {
       await page.goto(path)
       await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
@@ -51,7 +51,7 @@ test.describe('WCAG AA audit (CI â€” Vite dev server)', { tag: "@regression
       expect(violations).toEqual([])
     })
 
-    test(`${name} â€” dark mode has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page }) => {
+    test(`${name} — dark mode has no unexpected WCAG AA violations`, { tag: "@regression" }, async ({ page }) => {
       await page.goto(path)
       await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
