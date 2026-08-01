@@ -14,6 +14,7 @@ from modulo.api.mcp_server import (
     _ctx_auth_type,
     _ctx_org_id,
     _ctx_role,
+    _ctx_user_id,
     copy_library_primitive,
     get_run_output,
     get_run_status,
@@ -54,6 +55,9 @@ def _reset_ctx() -> None:
     _ctx_role.set(None)
     _ctx_auth_token.set(None)
     _ctx_auth_type.set(None)
+    from modulo.api.mcp_server import _live_role_cache
+
+    _live_role_cache.clear()
 
 
 def _make_mock_session() -> AsyncMock:
@@ -76,14 +80,17 @@ class TestValidateCurrentAuth:
     def teardown_method(self) -> None:
         _reset_ctx()
 
+    @patch("modulo.api.mcp_server.resolve_role_from_membership")
     @patch("modulo.api.mcp_server.validate_api_key")
     @patch("modulo.api.mcp_server._session")
     async def test_returns_true_for_valid_api_key(
         self,
         mock_session: AsyncMock,
         mock_validate_api_key: AsyncMock,
+        mock_resolve_role: AsyncMock,
     ) -> None:
         mock_validate_api_key.return_value = MagicMock(role="operator", id=uuid.uuid4())
+        mock_resolve_role.return_value = "operator"
         mock_cm = AsyncMock()
         mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_cm.__aexit__ = AsyncMock(return_value=False)
@@ -93,6 +100,7 @@ class TestValidateCurrentAuth:
         _ctx_role.set("operator")
         _ctx_auth_token.set(_API_KEY)
         _ctx_auth_type.set("api_key")
+        _ctx_user_id.set(uuid.uuid4())
 
         result = await validate_current_auth()
         assert result is True
@@ -403,6 +411,7 @@ class TestMcpAuthMiddlewareContext:
     def teardown_method(self) -> None:
         _reset_ctx()
 
+    @patch("modulo.api.mcp_server.resolve_role_from_membership")
     @patch("modulo.api.mcp_server.validate_api_key")
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.api.mcp_server._get_session_factory")
@@ -411,9 +420,11 @@ class TestMcpAuthMiddlewareContext:
         mock_get_factory: MagicMock,
         mock_session: AsyncMock,
         mock_validate_api_key: AsyncMock,
+        mock_resolve_role: AsyncMock,
     ) -> None:
         """Verify the middleware flow sets _ctx_auth_token and _ctx_auth_type."""
         mock_validate_api_key.return_value = MagicMock(role="operator", id=uuid.uuid4())
+        mock_resolve_role.return_value = "operator"
         mock_cm = AsyncMock()
         mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_cm.__aexit__ = AsyncMock(return_value=False)
