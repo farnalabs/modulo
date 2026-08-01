@@ -572,7 +572,9 @@ class PipelineExecutor:
                 graph_json,
                 session_factory=self._session_factory,
                 org_id=org_id,
+                pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
             ),
+            pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
         )
 
         config = {"configurable": {"thread_id": thread_id}}
@@ -774,7 +776,9 @@ class PipelineExecutor:
                     eval_definitions_by_node=eval_defs_by_node,
                     session_factory=self._session_factory,
                     org_id=org_id,
+                    pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
                 ),
+                pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
             )
 
             initial_state = _seed_state(snapshot, input_payload)

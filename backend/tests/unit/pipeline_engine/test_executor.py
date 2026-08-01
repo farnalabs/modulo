@@ -524,7 +524,7 @@ async def test_execute_passes_hash_to_cache():
     registry = _mock_registry()
     captured_args: list[Any] = []
 
-    def fake_get_or_compile(pipeline_id: Any, snapshot_id: Any, factory_fn: Any) -> Any:
+    def fake_get_or_compile(pipeline_id: Any, snapshot_id: Any, factory_fn: Any, **kwargs: Any) -> Any:
         captured_args.extend([pipeline_id, snapshot_id])
         return _mock_compiled()
 

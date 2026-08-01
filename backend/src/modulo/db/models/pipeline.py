@@ -41,7 +41,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
     lock_wait_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
     node_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
-    max_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=3600, server_default="3600")
     max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
     token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

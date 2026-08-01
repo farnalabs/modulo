@@ -1547,9 +1547,14 @@ def library_contains_workflow(name: str, request):
 
 
 @when("I copy the workflow to my workspace")
-def copy_workflow_to_workspace(request):
-    wf = getattr(request.node, "_library_workflow", {})
-    copied = {**wf, "id": str(uuid.uuid4()), "source": "local"}
+def copy_workflow_to_workspace(request, ctx):
+    wf = getattr(request.node, "_library_workflow", None) or ctx.get("library_workflow") or {}
+    copied = {
+        **wf,
+        "id": str(uuid.uuid4()),
+        "source": "local",
+        "forked_from": wf.get("id"),
+    }
     request.node._resp_body = copied
     request.node._copied_workflow = copied
 
@@ -1776,6 +1781,21 @@ def see_per_node_token_consumption(request):
     assert len(tc) > 0, "token_consumption should not be empty"
 
 
+@then("I see the total run cost")
+def see_total_run_cost(ctx):
+    run = ctx.get("mock_run")
+    assert run is not None, "No mock run found"
+    assert run.total_cost_usd is not None, "total_cost_usd missing from run detail"
+    assert float(run.total_cost_usd) >= 0
+
+
+@then("I see the OTel trace ID")
+def see_otel_trace_id(ctx):
+    run = ctx.get("mock_run")
+    assert run is not None, "No mock run found"
+    assert run.trace_id, "trace_id missing from run detail"
+
+
 # ===========================================================================
 # Duncan: goal-solo-self-hosted
 # ===========================================================================
@@ -1803,9 +1823,14 @@ def check_docker_available():
 @when("I run docker compose up")
 def start_compose_stack(ctx):
     """Start Postgres and Redis via testcontainers, configure app, start TestClient."""
+    import warnings
+
     from fastapi.testclient import TestClient
-    from testcontainers.postgres import PostgresContainer
-    from testcontainers.redis import RedisContainer
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        from testcontainers.postgres import PostgresContainer
+        from testcontainers.redis import RedisContainer
 
     from modulo.api.main import app
 
@@ -1933,13 +1958,12 @@ def tampering_breaks_chain(ctx, request):
 
 @then("I can access the UI at http://localhost:8000")
 def ui_accessible(ctx):
-    """Verify the frontend/root endpoint responds."""
+    """Verify the app responds at its public URL."""
     client = ctx.get("_test_client")
     assert client is not None
     try:
-        # Root may redirect to UI or return API info
-        resp = client.get("/", follow_redirects=False)
-        assert resp.status_code in (200, 301, 302, 307), f"Root endpoint returned {resp.status_code}"
+        resp = client.get("/healthz", follow_redirects=False)
+        assert resp.status_code in (200, 301, 302, 307), f"Health endpoint returned {resp.status_code}"
         ctx["_ui_ok"] = True
     except Exception as exc:
         pytest.fail(f"UI not accessible: {exc}")

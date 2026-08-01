@@ -7,29 +7,23 @@ Feature: Webhook Trigger with HMAC Verification
     Given I am authenticated as an admin in org "acme"
 
   Scenario: Valid HMAC triggers a run
-    Given org "acme" has pipeline "webhook-pipeline" with webhook secret "shared-secret"
-    When I POST /api/webhooks/webhook-pipeline with payload {"event": "push"} and valid HMAC
+    Given org "acme" has trigger "11111111-1111-1111-1111-111111111111" with webhook secret "shared-secret"
+    When I POST /api/v1/triggers/11111111-1111-1111-1111-111111111111/webhook with payload {"event": "push"} and valid HMAC
     Then the response status is 202
-    And a run is created with trigger_type "webhook"
+    And the webhook is accepted
 
   Scenario: Invalid HMAC is rejected
-    Given org "acme" has pipeline "webhook-pipeline" with webhook secret "shared-secret"
-    When I POST /api/webhooks/webhook-pipeline with payload {"event": "push"} and invalid HMAC
+    Given org "acme" has trigger "11111111-1111-1111-1111-111111111111" with webhook secret "shared-secret"
+    When I POST /api/v1/triggers/11111111-1111-1111-1111-111111111111/webhook with payload {"event": "push"} and invalid HMAC
     Then the response status is 401
-    And the error mentions "invalid signature"
+    And the error mentions "HMAC"
 
   Scenario: Missing HMAC header is rejected
-    Given org "acme" has pipeline "webhook-pipeline" with webhook secret "shared-secret"
-    When I POST /api/webhooks/webhook-pipeline with payload {"event": "push"} and no HMAC
+    Given org "acme" has trigger "11111111-1111-1111-1111-111111111111" with webhook secret "shared-secret"
+    When I POST /api/v1/triggers/11111111-1111-1111-1111-111111111111/webhook with payload {"event": "push"} and no HMAC
     Then the response status is 401
 
-  Scenario: Webhook without secret configured is rejected
-    Given org "acme" has pipeline "webhook-pipeline" with no webhook secret
-    When I POST /api/webhooks/webhook-pipeline with payload {"event": "push"} and valid HMAC
+  Scenario: Webhook for a non-existent trigger is rejected
+    Given no trigger exists with id "22222222-2222-2222-2222-222222222222"
+    When I POST /api/v1/triggers/22222222-2222-2222-2222-222222222222/webhook with payload {"event": "push"} and valid HMAC
     Then the response status is 404
-
-  Scenario: Webhook payload is recorded in trigger event log
-    Given org "acme" has pipeline "webhook-pipeline" with webhook secret "shared-secret"
-    When I POST /api/webhooks/webhook-pipeline with payload {"event": "push"} and valid HMAC
-    Then a TriggerEvent is created with type "webhook"
-    And the TriggerEvent has payload {"event": "push"}

@@ -680,6 +680,33 @@ def test_update_pipeline_rejects_null_stale_run_timeout(client: TestClient) -> N
     assert resp.status_code == 422
 
 
+def test_update_pipeline_rejects_null_max_duration(client: TestClient) -> None:
+    resp = client.patch(
+        f"/api/v1/pipelines/{_PIPELINE_ID}",
+        json={"max_duration_seconds": None},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_update_pipeline_rejects_null_node_timeout(client: TestClient) -> None:
+    resp = client.patch(
+        f"/api/v1/pipelines/{_PIPELINE_ID}",
+        json={"node_timeout_seconds": None},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_update_pipeline_rejects_null_lock_wait_timeout(client: TestClient) -> None:
+    resp = client.patch(
+        f"/api/v1/pipelines/{_PIPELINE_ID}",
+        json={"lock_wait_timeout_seconds": None},
+    )
+
+    assert resp.status_code == 422
+
+
 def test_update_pipeline_accepts_stale_run_timeout(client: TestClient) -> None:
     pipeline = _make_pipeline()
     pipeline.stale_run_timeout_minutes = 45
