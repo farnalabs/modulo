@@ -87,12 +87,11 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
                 issues.extend(s.records)
                 for iss in s.records:
                     fields = iss.get("fields") or {}
-                    status = (
-                        fields.get("status", {}).get("name")
-                        or iss.get("state", {}).get("name")
-                        or iss.get("state")
-                        or ""
-                    )
+                    status_obj = fields.get("status")
+                    status = status_obj.get("name") if isinstance(status_obj, dict) else (status_obj or "")
+                    if not status:
+                        state = iss.get("state")
+                        status = state.get("name") if isinstance(state, dict) else (state or "")
                     if status:
                         issue_statuses.append(status.lower())
 

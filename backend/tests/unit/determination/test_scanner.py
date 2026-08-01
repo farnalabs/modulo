@@ -10,6 +10,7 @@ import httpx
 import respx
 from cryptography.fernet import Fernet
 
+from modulo.connectors.base import ConnectorQuery, ConnectorType
 from modulo.core.connector_hub import ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.determination.scanner import run_scan
@@ -220,6 +221,9 @@ async def test_connector_query_error_returns_error_in_sample() -> None:
         samples = await run_scan(hub)
     errored = [s for s in samples if s.error]
     assert len(errored) == 1
+    assert errored[0].resource == "repos"
+    assert errored[0].records == []
+    assert errored[0].sample_count == 0
     assert "500" in errored[0].error
 
 
@@ -266,3 +270,41 @@ async def test_all_health_checks_fail_returns_error_samples() -> None:
         samples = await run_scan(hub)
     assert len(samples) > 0
     assert any(s.error for s in samples)
+
+
+@respx.mock
+async def test_connector_whose_health_check_raises_is_skipped() -> None:
+    from types import SimpleNamespace
+
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
+    broken_id = uuid.uuid4()
+    healthy_id = uuid.uuid4()
+
+    class _ExplodingConnector:
+        connector_type = ConnectorType.GITHUB
+
+        async def health_check(self) -> None:
+            raise RuntimeError("health check exploded")
+
+        async def query(self, query: ConnectorQuery) -> None:  # pragma: no cover - never reached
+            raise AssertionError("query should not be called on a broken connector")
+
+    class _HealthyConnector:
+        connector_type = ConnectorType.GITHUB
+
+        async def health_check(self) -> None:
+            return None
+
+        async def query(self, query: ConnectorQuery) -> SimpleNamespace:
+            return SimpleNamespace(records=[])
+
+    hub._connectors = {broken_id: _ExplodingConnector(), healthy_id: _HealthyConnector()}
+    hub._initialised = True
+
+    samples = await run_scan(hub)
+    # The broken connector must not crash the scan or produce samples;
+    # the healthy connector's repos sample must still be collected.
+    assert len(samples) == 1
+    assert samples[0].connector_id == healthy_id
+    assert samples[0].resource == "repos"
+    assert samples[0].error is None
