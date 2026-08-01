@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar, Token
 
-from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 
 # Per-request, tenancy-bounded authorization kill switch (ADR 017 DECISION 3).
 # ``None`` means enforcement is ON (fail-closed default); ``False`` fail-opens
@@ -228,6 +228,29 @@ def assert_org_role(
             actual_role=role,
             reason="insufficient",
         )
+
+
+def _clamp_role(minted_role: str, live_role: str | None) -> str:
+    """Return the effective API-key role = min(minted, live) per the role hierarchy.
+
+    Never escalates: a demoted operator's key degrades to the live role.
+    ``live_role=None`` (owner removed/deactivated) returns ``""`` — the
+    sentinel DENIAL marker the caller must reject (the key dies, ADR 017).
+    Unknown roles also return ``""`` so the caller can deny (fail-closed).
+
+    Pure function: no DB access, unit-testable in isolation.
+    """
+    if live_role is None:
+        return ""
+    minted_level = org_role_level(minted_role)
+    live_level = org_role_level(live_role)
+    if minted_level < 0 or live_level < 0:
+        return ""
+    effective_level = min(minted_level, live_level)
+    for role, level in ORG_ROLE_HIERARCHY.items():
+        if level == effective_level:
+            return role
+    return ""
 
 
 # Import-time validation: every value must resolve to a known org role.

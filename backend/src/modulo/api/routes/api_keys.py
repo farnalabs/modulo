@@ -13,9 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, update_api_key
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.dependencies import get_current_tenant_user, resolve_role_from_membership
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+from modulo.auth.permissions import PermissionDenied, assert_org_role
+from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
@@ -78,6 +79,64 @@ def _require_admin(principal: TenantPrincipal) -> None:
         )
 
 
+def _require_runner(principal: TenantPrincipal, permission: str) -> None:
+    """Gate api-key CRUD at the ``runner`` minimum (ADR 017 DECISION 4).
+
+    ``api_key.create``/``api_key.update``/``api_key.revoke`` all require the
+    ``runner`` org role. Uses the shared registry comparison so the gate stays
+    consistent with the MCP scope matrix.
+    """
+    try:
+        assert_org_role(principal.org_role, "runner", permission)
+    except PermissionDenied as exc:
+        logger.warning(
+            "permission.denied",
+            extra={
+                "permission": permission,
+                "required": "runner",
+                "actual": principal.org_role,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{permission}' requires 'runner' role",
+        ) from exc
+
+
+async def _enforce_mint_cap(session: AsyncSession, principal: TenantPrincipal, requested_role: str) -> None:
+    """Enforce the API-key role-cap: never mint above the caller's LIVE role.
+
+    ``get_current_tenant_user`` already re-reads the live membership role
+    (ADR 017), but this explicit ``resolve_role_from_membership`` read is the
+    cap's own authoritative source — a runner cannot mint an operator key, an
+    operator can mint operator/runner, and a removed/deactivated member's live
+    role is None so minting is denied outright.
+    """
+    live_role = await resolve_role_from_membership(
+        session,
+        str(principal.account_id),
+        str(principal.organisation_id),
+    )
+    if live_role is None:
+        logger.warning(
+            "permission.api_key_role_cap",
+            extra={"requested_role": requested_role, "live_role": None},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Active organisation membership required to manage API keys",
+        )
+    if org_role_level(requested_role) > org_role_level(live_role):
+        logger.warning(
+            "permission.api_key_role_cap",
+            extra={"requested_role": requested_role, "live_role": live_role},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(f"Cannot use role '{requested_role}' for an API key while your live role is '{live_role}'"),
+        )
+
+
 @handle_db_errors("api_keys.create_api_key_endpoint")
 @router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key_endpoint(
@@ -86,6 +145,7 @@ async def create_api_key_endpoint(
     principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> ApiKeyCreatedResponse:
+    _require_runner(principal, "api_key.create")
     if req.role not in ("operator", "runner"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -103,6 +163,7 @@ async def create_api_key_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _enforce_mint_cap(session, principal, req.role)
             key, full_key = await create_api_key(
                 session,
                 org_id=principal.organisation_id,
@@ -193,6 +254,7 @@ async def update_api_key_endpoint(
     principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
+    _require_runner(principal, "api_key.update")
     if req.role is not None and req.role not in ("operator", "runner"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -210,6 +272,8 @@ async def update_api_key_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            if req.role is not None:
+                await _enforce_mint_cap(session, principal, req.role)
             key = await update_api_key(
                 session,
                 key_id,
@@ -267,6 +331,7 @@ async def revoke_api_key_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ApiKeyRevokeResponse:
+    _require_runner(principal, "api_key.revoke")
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

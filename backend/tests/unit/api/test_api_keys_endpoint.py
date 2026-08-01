@@ -73,7 +73,8 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    yield TestClient(app)
+    with patch("modulo.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="admin")):
+        yield TestClient(app)
     app.dependency_overrides.clear()
 
 
@@ -106,7 +107,8 @@ def operator_client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    yield TestClient(app)
+    with patch("modulo.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="operator")):
+        yield TestClient(app)
     app.dependency_overrides.clear()
 
 

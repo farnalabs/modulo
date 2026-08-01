@@ -381,6 +381,10 @@ class TestApiKeyEndpointSchemas:
                 return_value=(key_mock, "mk_test_full_key"),
             ),
             patch("modulo.api.routes.api_keys.set_rls_org"),
+            patch(
+                "modulo.api.routes.api_keys.resolve_role_from_membership",
+                new=AsyncMock(return_value="admin"),
+            ),
         ):
             resp = client.post("/api/v1/api-keys", json={"name": "Test Key"})
 
