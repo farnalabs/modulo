@@ -442,6 +442,9 @@ async def seed_examples(
                 org_id=principal.organisation_id,
                 nodes=nodes,
                 edges=[],
+                # Intentional: onboarding seeds a freshly created pipeline with no
+                # pre-existing HITL gates to weaken. Do not cargo-cult is_privileged=True
+                # into tenant graph-write paths (see ADR 017 A1a).
                 is_privileged=True,
             )
 
@@ -536,6 +539,9 @@ async def create_starter_pipeline(
             org_id=principal.organisation_id,
             nodes=nodes,
             edges=edges,
+            # Intentional: onboarding creates a fresh pipeline with no pre-existing
+            # HITL gates to weaken. Do not cargo-cult is_privileged=True into tenant
+            # graph-write paths (see ADR 017 A1a).
             is_privileged=True,
         )
 
