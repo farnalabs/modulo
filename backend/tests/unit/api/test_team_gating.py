@@ -293,6 +293,10 @@ class TestApiKeyTeamGating:
             patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test")),
             patch("modulo.api.routes.api_keys.set_rls_org"),
             patch("modulo.api.routes.api_keys.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.api_keys.resolve_role_from_membership",
+                new=AsyncMock(return_value="admin"),
+            ),
         ):
             resp = free_client.post("/api/v1/api-keys", json={"name": "basic-key"})
         assert resp.status_code == 201
