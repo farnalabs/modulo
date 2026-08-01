@@ -151,6 +151,20 @@ class PipelineUpdate(BaseModel):
             raise ValueError("max_duration_seconds cannot be set to null. Use a value >= 1.")
         return v
 
+    @field_validator("node_timeout_seconds", mode="before")
+    @classmethod
+    def reject_null_node_timeout(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("node_timeout_seconds cannot be set to null. Use a value >= 1.")
+        return v
+
+    @field_validator("lock_wait_timeout_seconds", mode="before")
+    @classmethod
+    def reject_null_lock_wait_timeout(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("lock_wait_timeout_seconds cannot be set to null. Use a value >= 30.")
+        return v
+
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> PipelineUpdate:
         if self.visibility == "team" and self.owner_team_id is None:
