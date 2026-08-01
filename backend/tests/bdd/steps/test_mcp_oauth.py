@@ -1,4 +1,4 @@
-"""BDD step definitions: MCP OAuth 2.0 authorization code flow."""
+"""BDD step definitions: MCP OAuth 2.0 authorization code flow (ADR 017 A1b)."""
 
 import contextlib
 import json
@@ -8,10 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.auth.dependencies import get_current_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.oauth import InvalidGrantError, OAuthAccessTokenClaims
 from modulo.core.rate_limiter import RateLimiterRegistry
-from tests.bdd.conftest import ORG_ID, USER_ID
+from tests.bdd.conftest import ORG_ID, USER_ID, make_mock_session, make_settings
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/mcp/mcp_oauth.feature")
@@ -37,6 +38,25 @@ def _store_resp(request, resp):
     request.node._resp = resp
 
 
+def _make_oauth_settings():
+    from modulo.settings import Settings
+
+    base = make_settings()
+    return Settings(
+        **{
+            **base.model_dump(),
+            "modulo_public_url": "https://modulo.example.com",
+        }
+    )
+
+
+def _override_oauth_settings():
+    from modulo.api.main import app
+    from modulo.settings import get_settings
+
+    app.dependency_overrides[get_settings] = _make_oauth_settings
+
+
 def _make_mock_client(
     client_id: str = "oauth_client_1",
     name: str = "My MCP App",
@@ -59,17 +79,20 @@ def _make_mock_auth_code(
     scopes: str = "trigger:run",
     redirect_uri: str = "https://app.example.com/callback",
     used: bool = False,
-    code_challenge: str | None = None,
+    code_challenge: str | None = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    account_id: uuid.UUID = USER_ID,
 ) -> MagicMock:
     from datetime import UTC, datetime, timedelta
 
     c = MagicMock()
     c.code = code
     c.client_id = client_id
+    c.account_id = account_id
     c.scopes = scopes
     c.redirect_uri = redirect_uri
     c.used = used
     c.code_challenge = code_challenge
+    c.code_challenge_method = "S256"
     c.expires_at = datetime.now(UTC) + timedelta(minutes=5)
     return c
 
@@ -81,11 +104,6 @@ def _make_mock_auth_code(
 
 @given(parsers.parse('an OAuth client exists with id "{client_id}"'))
 def oauth_client_exists(client_id: str, request):
-    # Imported app fixture shared by all BDD tests — override auth for
-    # viewer scenarios by setting state on request.node so the When
-    # step can decide which principal to use.
-    request.node._oauth_client_id = client_id
-
     request.node._oauth_client_id = client_id
     request.node._oauth_client = _make_mock_client(client_id=client_id)
 
@@ -109,13 +127,6 @@ def auth_code_exists(code: str, client_id: str, request):
     request.node._auth_code = _make_mock_auth_code(code=code, client_id=client_id)
 
 
-@given(parsers.parse('a token family "{family_id}" at sequence {seq:d} for client "{client_id}"'))
-def token_family_exists(family_id: str, seq: int, client_id: str, request):
-    request.node._token_family_id = family_id
-    request.node._token_family_seq = seq
-    request.node._oauth_client_id = client_id
-
-
 @given(parsers.parse('an authorization code "{code}" was created with code_challenge "{challenge}"'))
 def auth_code_with_pkce(code: str, challenge: str, request):
     request.node._auth_code = _make_mock_auth_code(code=code, code_challenge=challenge)
@@ -126,6 +137,77 @@ def used_auth_code_exists(code: str, client_id: str, request):
     request.node._auth_code = _make_mock_auth_code(code=code, client_id=client_id, used=True)
 
 
+@given(parsers.parse('a pending consent state "{state}" for client "{client_id}"'))
+def pending_consent_state(state: str, client_id: str, request):
+    request.node._consent_state = _make_mock_consent_state(state=state, client_id=client_id)
+
+
+@given(parsers.parse('an already-consumed consent state "{state}"'))
+def consumed_consent_state(state: str, request):
+    request.node._consent_state_consumed = True
+
+
+def _make_mock_consent_state(state: str = "state-xyz", client_id: str = "oauth_client_1") -> MagicMock:
+    s = MagicMock()
+    s.state = state
+    s.client_id = client_id
+    s.scopes = ["trigger:run"]
+    s.redirect_uri = "https://app.example.com/callback"
+    s.code_challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+    s.organisation_id = ORG_ID
+    s.consumed = False
+    return s
+
+
+def _make_mock_session_factory() -> MagicMock:
+    session = make_mock_session()
+    factory = MagicMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    factory.return_value = cm
+    return factory
+
+
+@given("I am not authenticated")
+def not_authenticated(request):
+    """Flag the scenario as unauthenticated. The approve When step drops the
+    authenticated-principal overrides right before the POST (the client fixture
+    is instantiated lazily at the first When step, which would otherwise
+    re-install the admin principal AFTER this Given ran)."""
+    request.node._unauth = True
+
+
+@given(parsers.parse('a refresh token "{rt}" for client "{client_id}" with scopes {scopes}'))
+def refresh_token_exists(rt: str, client_id: str, scopes: str, request):
+    request.node._refresh_claims = OAuthAccessTokenClaims(
+        client_id=client_id,
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
+        scopes=json.loads(scopes),
+        token_family="family_1",
+        token_sequence=0,
+    )
+    request.node._refresh_demoted = False
+
+
+@given(
+    parsers.parse(
+        'a refresh token "{rt}" for client "{client_id}" with scopes {scopes} issued to an account demoted to viewer'
+    )
+)
+def refresh_token_demoted(rt: str, client_id: str, scopes: str, request):
+    request.node._refresh_claims = OAuthAccessTokenClaims(
+        client_id=client_id,
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
+        scopes=json.loads(scopes),
+        token_family="family_1",
+        token_sequence=0,
+    )
+    request.node._refresh_demoted = True
+
+
 # --------------------------------------------------------------------------
 # When steps
 # --------------------------------------------------------------------------
@@ -133,7 +215,6 @@ def used_auth_code_exists(code: str, client_id: str, request):
 
 @when(parsers.parse('I POST /api/v1/mcp/oauth/clients with name "{name}" and redirect_uris {uris} and scopes {scopes}'))
 def register_oauth_client(name: str, uris: str, scopes: str, client, request):
-
     uri_list = json.loads(uris)
     scope_list = json.loads(scopes)
     mock_client = MagicMock()
@@ -158,8 +239,16 @@ def register_oauth_client(name: str, uris: str, scopes: str, client, request):
             org_role="admin",
         )
     from modulo.api.main import app
+    from modulo.auth.jwt import TenantPrincipal
 
     app.dependency_overrides[get_current_user] = lambda: auth_principal
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username=auth_principal.username,
+        organisation_id=auth_principal.organisation_id,
+        account_id=auth_principal.account_id,
+        org_role=auth_principal.org_role,
+    )
+    _override_oauth_settings()
 
     with (
         patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
@@ -180,23 +269,23 @@ def register_oauth_client(name: str, uris: str, scopes: str, client, request):
 
 @when(
     parsers.parse(
-        "I POST /mcp/oauth/authorize with response_type "
-        '"{rt}" and client_id "{cid}" and redirect_uri "{ru}" '
-        'and scope "{scope}" and code_challenge "{cc}" and '
-        'code_challenge_method "{ccm}" and state "{state}"'
+        "I GET /mcp/oauth/authorize with client_id "
+        '"{cid}" and redirect_uri "{ru}" and scope "{scope}" '
+        'and code_challenge "{cc}" and code_challenge_method "{ccm}" and state "{state}"'
     )
 )
-def authorize_pkce(rt: str, cid: str, ru: str, scope: str, cc: str, ccm: str, state: str, client, request):
+def authorize_get(cid: str, ru: str, scope: str, cc: str, ccm: str, state: str, client, request):
+    client_mock = getattr(request.node, "_oauth_client", None) or _make_mock_client(client_id=cid, redirect_uris=ru)
     with (
-        patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
-        patch("modulo.auth.oauth.create_authorization_code") as mock_create_code,
+        patch("modulo.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
+        patch("modulo.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
+        patch("modulo.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=client_mock)),
+        patch("modulo.auth.oauth.create_consent_state", new=AsyncMock()) as mock_create_state,
     ):
-        mock_get.return_value = _make_mock_client(client_id=cid, redirect_uris=ru)
-        mock_create_code.return_value = "generated_auth_code"
-        resp = client.post(
+        resp = client.get(
             "/mcp/oauth/authorize",
-            json={
-                "response_type": rt,
+            params={
+                "response_type": "code",
                 "client_id": cid,
                 "redirect_uri": ru,
                 "scope": scope,
@@ -204,27 +293,43 @@ def authorize_pkce(rt: str, cid: str, ru: str, scope: str, cc: str, ccm: str, st
                 "code_challenge_method": ccm,
                 "state": state,
             },
+            follow_redirects=False,
         )
+        if mock_create_state.await_count:
+            request.node._consent_state_kwargs = mock_create_state.call_args.kwargs
     _store_resp(request, resp)
 
 
-@when(parsers.parse('I POST /mcp/oauth/authorize with client_id "{cid}" and redirect_uri "{ru}"'))
-def authorize_invalid_redirect(cid: str, ru: str, client, request):
-    with patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get:
-        mock_get.return_value = _make_mock_client(
-            client_id=cid,
-            redirect_uris="https://app.example.com/callback",
-        )
+@when(parsers.parse('I POST /api/v1/mcp/oauth/consent/approve with state "{state}"'))
+def approve_consent(state: str, client, request):
+    _override_oauth_settings()
+    consumed = getattr(request.node, "_consent_state_consumed", False)
+    is_unauth = getattr(request.node, "_unauth", False)
+    consent_state = getattr(request.node, "_consent_state", _make_mock_consent_state(state=state))
+    if is_unauth:
+        # Drop the authenticated-principal overrides so the real HTTPBearer
+        # dependency (auto_error=True) rejects the approve POST.
+        from modulo.api.main import app
+
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_current_tenant_user, None)
+    with (
+        patch(
+            "modulo.auth.oauth.consume_consent_state",
+            new=AsyncMock(return_value=None if consumed else consent_state),
+        ),
+        patch(
+            "modulo.api.routes.mcp_oauth.create_authorization_code",
+            new=AsyncMock(return_value="code-abc"),
+        ) as mock_code,
+        patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+    ):
         resp = client.post(
-            "/mcp/oauth/authorize",
-            json={
-                "response_type": "code",
-                "client_id": cid,
-                "redirect_uri": ru,
-                "scope": "trigger:run",
-                "state": "xyz",
-            },
+            "/api/v1/mcp/oauth/consent/approve",
+            json={"state": state},
         )
+    if mock_code.await_count:
+        request.node._approve_code_kwargs = mock_code.call_args.kwargs
     _store_resp(request, resp)
 
 
@@ -237,17 +342,21 @@ def authorize_invalid_redirect(cid: str, ru: str, client, request):
     )
 )
 def token_exchange(gt: str, code: str, cid: str, secret: str, ru: str, cv: str, client, request):
-    from modulo.auth.oauth import InvalidClientError, InvalidGrantError
+    from modulo.auth.oauth import InvalidClientError
 
     auth_code = getattr(request.node, "_auth_code", None)
     is_used = auth_code is not None and auth_code.used
     is_unknown = cid == "unknown_client"
     with (
+        patch("modulo.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
+        patch("modulo.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
         patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
         patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
         patch("modulo.auth.oauth.consume_authorization_code") as mock_consume,
-        patch("modulo.auth.oauth.create_oauth_token_family") as mock_create_family,
-        patch("modulo.auth.oauth.create_oauth_access_token") as mock_create_token,
+        patch("modulo.auth.oauth.verify_live_role_covers_scopes", new=AsyncMock(return_value="admin")),
+        patch("modulo.auth.oauth.create_oauth_token_family", new=AsyncMock(return_value=("family_uuid", 0))),
+        patch("modulo.auth.oauth.create_oauth_access_token", return_value="jwt_access_token_abc"),
+        patch("modulo.auth.oauth.create_oauth_refresh_token", return_value="jwt_refresh_token_abc"),
     ):
         if is_unknown:
             mock_validate.side_effect = InvalidClientError("Unknown client_id")
@@ -259,8 +368,6 @@ def token_exchange(gt: str, code: str, cid: str, secret: str, ru: str, cv: str, 
             mock_consume.side_effect = InvalidGrantError("Authorization code has already been used")
         elif not is_unknown:
             mock_consume.return_value = _make_mock_auth_code(code=code, client_id=cid, scopes="trigger:run")
-        mock_create_family.return_value = ("family_uuid", 0)
-        mock_create_token.return_value = "jwt_access_token_abc"
         resp = client.post(
             "/mcp/oauth/token",
             data={
@@ -274,66 +381,48 @@ def token_exchange(gt: str, code: str, cid: str, secret: str, ru: str, cv: str, 
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
     request.node._access_token = "jwt_access_token_abc" if not is_used and not is_unknown else None
-    request.node._refresh_token = "refresh_token_abc" if not is_used and not is_unknown else None
-    _store_resp(request, resp)
-
-
-@when(parsers.parse('the client requests a token with scope "{scope}"'))
-def token_with_restricted_scope(scope: str, client, request):
-    cid = getattr(request.node, "_oauth_client_id", "limited_client")
-    with (
-        patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
-        patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
-    ):
-        mock_get.return_value = _make_mock_client(client_id=cid, scopes="trigger:run")
-        mock_validate.return_value = _make_mock_client(client_id=cid, scopes="trigger:run")
-        resp = client.post(
-            "/mcp/oauth/token",
-            data={
-                "grant_type": "authorization_code",
-                "code": "code_xyz",
-                "client_id": cid,
-                "client_secret": "secret",
-                "redirect_uri": "https://app.example.com/callback",
-                "scope": scope,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
+    request.node._refresh_token = "jwt_refresh_token_abc" if not is_used and not is_unknown else None
     _store_resp(request, resp)
 
 
 @when(
     parsers.parse(
-        "I POST /mcp/oauth/token with grant_type "
-        '"refresh_token" and refresh_token "{rt}" and '
+        "I POST /mcp/oauth/refresh with grant_type "
+        '"{gt}" and refresh_token "{rt}" and '
         'client_id "{cid}" and client_secret "{secret}"'
     )
 )
-def refresh_token_flow(rt: str, cid: str, secret: str, client, request):
-    family_id = getattr(request.node, "_token_family_id", "family_1")
-    seq = getattr(request.node, "_token_family_seq", 0)
-    with (
-        patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
-        patch("modulo.auth.oauth.decode_oauth_access_token") as mock_decode,
-        patch("modulo.auth.oauth.rotate_oauth_token_family") as mock_rotate,
-        patch("modulo.auth.oauth.create_oauth_access_token") as mock_create_token,
-        patch("modulo.auth.oauth.check_oauth_token_family_valid") as mock_check,
-    ):
-        mock_validate.return_value = _make_mock_client(client_id=cid)
-        mock_check.return_value = True
-        mock_rotate.return_value = (family_id, seq + 1)
-        mock_create_token.return_value = "jwt_access_token_def"
-        mock_decode.return_value = MagicMock(
+def refresh_token_flow(gt: str, rt: str, cid: str, secret: str, client, request):
+    claims = getattr(request.node, "_refresh_claims", None)
+    demoted = getattr(request.node, "_refresh_demoted", False)
+    if claims is None:
+        claims = OAuthAccessTokenClaims(
             client_id=cid,
             organisation_id=ORG_ID,
+            account_id=USER_ID,
             scopes=["trigger:run"],
-            token_family=family_id,
-            token_sequence=seq,
+            token_family="family_1",
+            token_sequence=0,
         )
+    with (
+        patch("modulo.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
+        patch("modulo.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
+        patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
+        patch("modulo.auth.oauth.decode_oauth_refresh_token") as mock_decode,
+        patch("modulo.auth.oauth.verify_live_role_covers_scopes") as mock_verify,
+        patch("modulo.auth.oauth.create_oauth_access_token", return_value="jwt_access_token_def"),
+        patch("modulo.auth.oauth.create_oauth_refresh_token", return_value="jwt_refresh_token_def"),
+    ):
+        mock_validate.return_value = _make_mock_client(client_id=cid)
+        mock_decode.return_value = claims
+        if demoted:
+            mock_verify.side_effect = InvalidGrantError("Account role does not cover the granted scopes")
+        else:
+            mock_verify.return_value = "admin"
         resp = client.post(
-            "/mcp/oauth/token",
+            "/mcp/oauth/refresh",
             data={
-                "grant_type": "refresh_token",
+                "grant_type": gt,
                 "refresh_token": rt,
                 "client_id": cid,
                 "client_secret": secret,
@@ -341,22 +430,24 @@ def refresh_token_flow(rt: str, cid: str, secret: str, client, request):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
     request.node._access_token = "jwt_access_token_def"
-    request.node._refresh_token = "refresh_token_def"
+    request.node._refresh_token = "jwt_refresh_token_def"
     _store_resp(request, resp)
 
 
 @when(parsers.parse('I POST /mcp/oauth/token with authorization code "{code}" and no code_verifier'))
 def token_exchange_no_verifier(code: str, client, request):
     with (
+        patch("modulo.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
+        patch("modulo.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
         patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
         patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
-        patch("modulo.auth.oauth.consume_authorization_code") as mock_consume,
+        patch(
+            "modulo.auth.oauth.consume_authorization_code",
+            new=AsyncMock(side_effect=InvalidGrantError("PKCE code_verifier is required")),
+        ),
     ):
-        mock_get.return_value = _make_mock_client(
-            client_id="oauth_client_1",
-        )
+        mock_get.return_value = _make_mock_client(client_id="oauth_client_1")
         mock_validate.return_value = _make_mock_client(client_id="oauth_client_1")
-        mock_consume.side_effect = ValueError("PKCE code_verifier required")
         resp = client.post(
             "/mcp/oauth/token",
             data={
@@ -405,16 +496,28 @@ def resp_has_name(expected: str, request):
     assert data["name"] == expected
 
 
-@then("the response contains a code parameter")
-def resp_contains_code(request):
-    data = request.node._resp.json()
-    assert "code" in data, f"Response missing 'code' field: {data}"
+@then("the response redirects to the SPA consent route")
+def resp_redirects_to_spa(request):
+    resp = request.node._resp
+    location = resp.headers.get("Location", "")
+    assert location.startswith("http") and "/oauth/authorize?" in location
 
 
-@then(parsers.parse('the response contains the state "{expected}"'))
-def resp_contains_state(expected: str, request):
+@then("the consent-state row was created with the code_challenge")
+def consent_state_created(request):
+    kwargs = getattr(request.node, "_consent_state_kwargs", None)
+    assert kwargs is not None, "create_consent_state was never called"
+    assert kwargs["code_challenge"] == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+    assert kwargs["scopes"] == ["trigger:run"]
+
+
+@then("the response returns a server-derived redirect URL")
+def resp_returns_redirect_url(request):
     data = request.node._resp.json()
-    assert data.get("state") == expected, f"Expected state={expected}, got: {data}"
+    assert "redirect_url" in data
+    assert "code=" in data["redirect_url"]
+    assert "state=" in data["redirect_url"]
+    assert data["redirect_url"].startswith("https://app.example.com/callback")
 
 
 @then("the response contains an access_token")
@@ -458,11 +561,6 @@ def resp_contains_new_access_token(request):
 def resp_contains_new_refresh_token(request):
     data = request.node._resp.json()
     assert "refresh_token" in data or getattr(request.node, "_refresh_token", None) is not None
-
-
-@then("the old refresh token is no longer valid")
-def old_refresh_invalid(request):
-    pass
 
 
 @then("the response indicates the client is deleted")

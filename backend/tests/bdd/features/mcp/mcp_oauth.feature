@@ -13,15 +13,29 @@ Feature: MCP OAuth 2.0 Authorization
     And the response contains client_secret
     And the response has name "My MCP App"
 
-  @awaiting-implementation
-  Scenario: Authorization request with PKCE
+  Scenario: Authorization request with PKCE redirects the browser to the consent route
     Given an OAuth client exists with id "oauth_client_1"
-    When I POST /mcp/oauth/authorize with response_type "code" and client_id "oauth_client_1" and redirect_uri "https://app.example.com/callback" and scope "trigger:run" and code_challenge "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" and code_challenge_method "S256" and state "xyz"
-    Then the response status is 200
-    And the response contains a code parameter
-    And the response contains the state "xyz"
+    When I GET /mcp/oauth/authorize with client_id "oauth_client_1" and redirect_uri "https://app.example.com/callback" and scope "trigger:run" and code_challenge "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" and code_challenge_method "S256" and state "xyz"
+    Then the response status is 302
+    And the response redirects to the SPA consent route
+    And the consent-state row was created with the code_challenge
 
-  @awaiting-implementation
+  Scenario: Approving the consent mints an account-bound code
+    Given a pending consent state "state-xyz" for client "oauth_client_1"
+    When I POST /api/v1/mcp/oauth/consent/approve with state "state-xyz"
+    Then the response status is 200
+    And the response returns a server-derived redirect URL
+
+  Scenario: Approving without an authenticated session is denied
+    Given I am not authenticated
+    When I POST /api/v1/mcp/oauth/consent/approve with state "state-xyz"
+    Then the response status is 401
+
+  Scenario: Approving an unknown or consumed consent state is denied
+    Given an already-consumed consent state "state-consumed"
+    When I POST /api/v1/mcp/oauth/consent/approve with state "state-consumed"
+    Then the response status is 400
+
   Scenario: Token exchange exchanges authorization code for tokens
     Given an authorization code "auth_code_abc" exists for client "oauth_client_1"
     When I POST /mcp/oauth/token with grant_type "authorization_code" and code "auth_code_abc" and client_id "oauth_client_1" and client_secret "correct_secret" and redirect_uri "https://app.example.com/callback" and code_verifier "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
@@ -41,33 +55,36 @@ Feature: MCP OAuth 2.0 Authorization
     Then the response status is 400
     And the error indicates "invalid_grant"
 
-  Scenario: Token is scoped to the registered scope set
+  Scenario: Authorize rejects a scope outside the client's allowed set
     Given an OAuth client exists with id "limited_client" and scopes ["trigger:run"]
-    When the client requests a token with scope "hitl:review"
+    When I GET /mcp/oauth/authorize with client_id "limited_client" and redirect_uri "https://app.example.com/callback" and scope "hitl:review" and code_challenge "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" and code_challenge_method "S256" and state "xyz"
     Then the response status is 400
     And the error indicates "invalid_scope"
 
   Scenario: Invalid redirect_uri is rejected during authorization
     Given an OAuth client exists with id "oauth_client_1" and redirect_uris ["https://app.example.com/callback"]
-    When I POST /mcp/oauth/authorize with client_id "oauth_client_1" and redirect_uri "https://evil.com/phish"
+    When I GET /mcp/oauth/authorize with client_id "oauth_client_1" and redirect_uri "https://evil.com/phish" and scope "trigger:run" and code_challenge "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" and code_challenge_method "S256" and state "xyz"
     Then the response status is 400
     And the error indicates "redirect_uri not allowed"
 
-  @awaiting-implementation
-  Scenario: Refresh token rotation issues a new pair
-    Given a token family "family_1" at sequence 0 for client "oauth_client_1"
-    When I POST /mcp/oauth/token with grant_type "refresh_token" and refresh_token "rt1" and client_id "oauth_client_1" and client_secret "correct_secret"
+  Scenario: Refresh token issues a new pair
+    Given a refresh token "rt1" for client "oauth_client_1" with scopes ["trigger:run"]
+    When I POST /mcp/oauth/refresh with grant_type "refresh_token" and refresh_token "rt1" and client_id "oauth_client_1" and client_secret "correct_secret"
     Then the response status is 200
     And the response contains a new access_token
     And the response contains a new refresh_token
-    And the old refresh token is no longer valid
 
-  @awaiting-implementation
+  Scenario: A demoted account cannot refresh a token whose scopes exceed its live role
+    Given a refresh token "rt_operator" for client "oauth_client_1" with scopes ["hitl:review"] issued to an account demoted to viewer
+    When I POST /mcp/oauth/refresh with grant_type "refresh_token" and refresh_token "rt_operator" and client_id "oauth_client_1" and client_secret "correct_secret"
+    Then the response status is 400
+    And the error indicates "invalid_grant"
+
   Scenario: PKCE code verifier is required on token exchange
     Given an authorization code "auth_code_pkce" was created with code_challenge "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
     When I POST /mcp/oauth/token with authorization code "auth_code_pkce" and no code_verifier
     Then the response status is 400
-    And the error indicates "code_verifier required"
+    And the error indicates "invalid_grant"
 
   Scenario: Admin revokes an OAuth client
     Given an OAuth client exists with id "oauth_client_1"
