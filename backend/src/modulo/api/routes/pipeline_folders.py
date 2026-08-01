@@ -10,8 +10,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.pipeline_folder import (
     create_folder,
@@ -57,7 +56,7 @@ class FolderResponse(BaseModel):
 @handle_db_errors("pipeline_folders.list")
 async def list_folders_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline_folder.list"),
 ) -> list[FolderResponse]:
     try:
         async with session.begin():
@@ -78,7 +77,7 @@ async def list_folders_endpoint(
 async def create_folder_endpoint(
     req: FolderCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline_folder.create"),
 ) -> FolderResponse:
     try:
         async with session.begin():
@@ -106,7 +105,7 @@ async def update_folder_endpoint(
     folder_id: uuid.UUID,
     req: FolderUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline_folder.update"),
 ) -> FolderResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -130,7 +129,7 @@ async def update_folder_endpoint(
 async def delete_folder_endpoint(
     folder_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline_folder.delete"),
 ) -> None:
     try:
         async with session.begin():
@@ -153,7 +152,7 @@ async def reorder_folder_endpoint(
     folder_id: uuid.UUID,
     req: FolderMove,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline_folder.update"),
 ) -> FolderResponse:
     updates = {"sort_order": req.sort_order}
     try:

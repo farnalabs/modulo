@@ -39,6 +39,7 @@ def client() -> Generator[TestClient, None, None]:
         organisation_id="00000000-0000-0000-0000-000000000001",
         account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin",
+        is_system_admin=True,
     )
     yield TestClient(app)
     app.dependency_overrides.clear()

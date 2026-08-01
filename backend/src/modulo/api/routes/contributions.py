@@ -1,4 +1,4 @@
-"""Library contribution REST API — fixture contribution flow."""
+"""Library contribution REST API â€” fixture contribution flow."""
 
 import logging
 import uuid
@@ -9,9 +9,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.routes.library import LibraryPrimitiveResponse
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service import (
     ContributionInvalidTransitionError,
@@ -61,7 +60,7 @@ class ContributionStatusResponse(BaseModel):
 async def create_contribution(
     req: ContributeFixtureRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("contribution.create"),
 ) -> ContributeFixtureResponse:
     """Submit a test fixture contribution (stored as draft).
 
@@ -118,7 +117,7 @@ async def create_contribution(
 async def submit_for_review(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("contribution.submit"),
 ) -> ContributionStatusResponse:
     """Move a draft contribution to the review queue."""
     try:
@@ -166,19 +165,12 @@ async def submit_for_review(
 async def publish_contribution_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("contribution.publish"),
 ) -> ContributionStatusResponse:
     """Publish a reviewed fixture contribution to the community library.
 
-    Only org admins may publish contributions.  This endpoint requires the
-    user to have org_role='admin'.
+    Only org admins may publish contributions (``contribution.publish``).
     """
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only org admins may publish contributions",
-        )
-
     try:
         prim = await publish_contribution(
             session,
@@ -239,7 +231,7 @@ async def submit_contribution_version_endpoint(
     primitive_id: uuid.UUID,
     req: ContributeFixtureRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("contribution.version"),
 ) -> ContributeFixtureResponse:
     """Submit a new version of an existing published fixture contribution.
 
@@ -301,7 +293,7 @@ async def submit_contribution_version_endpoint(
 async def list_contribution_versions_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("contribution.list"),
 ) -> VersionListResponse:
     """List all versions for a fixture contribution."""
     try:
@@ -355,7 +347,7 @@ async def list_contributions_endpoint(
     page_size: int = Query(20, ge=1, le=100),
     contribution_status: str | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("contribution.list"),
 ) -> dict[str, object]:
     """List fixture contributions visible to the current org."""
     try:

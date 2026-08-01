@@ -43,12 +43,19 @@ def _make_scan_response(category: str = "orphan_secrets", entity_type: str = "se
     return CategoryResult(category=category, candidates=[_make_candidate(entity_type=entity_type)])
 
 
+def _authz_result() -> MagicMock:
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=True)
+    return result
+
+
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(return_value=_authz_result())
     return session
 
 
@@ -238,7 +245,6 @@ class TestPerformCleanup:
         body = resp.json()
         assert body["deleted_count"] == 0
         assert body["errors"] == [{"entity_type": "does_not_exist", "error": "Unknown entity type: does_not_exist"}]
-        session.execute.assert_not_awaited()
 
     def test_integrity_error_does_not_block_other_types(self, client: TestClient) -> None:
         with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
@@ -252,7 +258,9 @@ class TestPerformCleanup:
             begin_nested_calls = [_make_begin_nested(raise_on_enter=False), _make_begin_nested()]
 
             session.begin_nested = MagicMock(side_effect=begin_nested_calls)
-            session.execute = AsyncMock(side_effect=[first, second])
+            authz_result = MagicMock()
+            authz_result.scalar_one_or_none = MagicMock(return_value=True)
+            session.execute = AsyncMock(side_effect=[authz_result, first, second])
             session.delete = AsyncMock(side_effect=[IntegrityError("stmt", {}, Exception("fk violation")), None])
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:

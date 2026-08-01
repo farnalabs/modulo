@@ -11,8 +11,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
@@ -20,14 +19,6 @@ from modulo.db.rls import set_rls_org
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/trigger-events", tags=["admin-trigger-events"])
-
-
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required",
-        )
 
 
 class TriggerEventItem(BaseModel):
@@ -56,9 +47,8 @@ async def list_trigger_events(
     cursor: str | None = Query(None, description="Cursor: createdAt_id"),
     limit: int = Query(25, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.trigger_events"),
 ) -> TriggerEventListResponse:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

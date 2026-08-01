@@ -13,7 +13,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session, require_feature
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.models.error_forwarder_config import (
     ForwarderConfigResponse,
     ForwarderConfigUpdate,
@@ -44,14 +44,6 @@ _FORWARDER_DISPLAY_NAMES: dict[str, str] = {
 }
 
 _FORWARDER_TYPES = list(_FORWARDER_DISPLAY_NAMES)
-
-
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required to manage error forwarders",
-        )
 
 
 def _is_configured(forwarder_type: str, config_json: dict[str, Any] | None) -> bool:
@@ -137,7 +129,7 @@ async def configure_forwarder(
     forwarder_type: str,
     req: ForwarderConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("error_forwarder.manage"),
 ) -> ForwarderConfigResponse:
     org_id = principal.organisation_id
     if org_id is None:
@@ -148,8 +140,6 @@ async def configure_forwarder(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown forwarder type: {forwarder_type}",
         )
-
-    _require_admin(principal)
 
     try:
         async with session.begin():
@@ -335,7 +325,7 @@ async def test_forwarder(
 async def delete_forwarder(
     forwarder_type: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("error_forwarder.manage"),
 ) -> None:
     org_id = principal.organisation_id
     if org_id is None:
@@ -346,8 +336,6 @@ async def delete_forwarder(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown forwarder type: {forwarder_type}",
         )
-
-    _require_admin(principal)
 
     try:
         async with session.begin():
@@ -394,7 +382,7 @@ async def delete_forwarder(
 async def restore_forwarder(
     forwarder_type: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("error_forwarder.manage"),
 ) -> ForwarderConfigResponse:
     org_id = principal.organisation_id
     if org_id is None:
@@ -405,8 +393,6 @@ async def restore_forwarder(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown forwarder type: {forwarder_type}",
         )
-
-    _require_admin(principal)
 
     try:
         async with session.begin():

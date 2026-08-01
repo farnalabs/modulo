@@ -11,8 +11,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.parameter_schema import (
     create_schema,
@@ -167,7 +166,7 @@ async def list_parameter_schemas_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.list"),
 ) -> SchemaListResponse:
     try:
         async with session.begin():
@@ -213,7 +212,7 @@ async def list_parameter_schemas_endpoint(
 async def create_parameter_schema_endpoint(
     req: SchemaCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.create"),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -261,7 +260,7 @@ async def create_parameter_schema_endpoint(
 async def get_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.list"),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -305,7 +304,7 @@ async def update_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     req: SchemaUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.update"),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -358,7 +357,7 @@ async def update_parameter_schema_endpoint(
 async def delete_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.delete"),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -401,7 +400,7 @@ async def delete_parameter_schema_endpoint(
 async def restore_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.update"),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -440,7 +439,7 @@ async def diff_parameter_schema_endpoint(
     from_version: int = Query(..., description="Source version"),
     to_version: int = Query(..., description="Target version"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.list"),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -501,7 +500,7 @@ async def diff_parameter_schema_endpoint(
 async def get_parameter_schema_references_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.list"),
 ) -> SchemaReferencesResponse:
     try:
         async with session.begin():
@@ -540,7 +539,7 @@ async def validate_parameter_values_endpoint(
     schema_id: uuid.UUID,
     req: ValidateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.validate"),
 ) -> ValidateResponse:
     try:
         async with session.begin():
@@ -625,7 +624,7 @@ async def validate_parameter_values_endpoint(
 async def list_parameter_sets_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.list"),
 ) -> list[SetResponse]:
     try:
         async with session.begin():
@@ -678,7 +677,7 @@ async def create_parameter_set_endpoint(
     schema_id: uuid.UUID,
     req: SetCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.set.create"),
 ) -> SetResponse:
     try:
         async with session.begin():
@@ -732,7 +731,7 @@ async def get_parameter_set_endpoint(
     schema_id: uuid.UUID,
     set_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.list"),
 ) -> SetResponse:
     try:
         async with session.begin():
@@ -777,7 +776,7 @@ async def update_parameter_set_endpoint(
     set_id: uuid.UUID,
     req: SetUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.set.update"),
 ) -> SetResponse:
     try:
         async with session.begin():
@@ -837,7 +836,7 @@ async def delete_parameter_set_endpoint(
     schema_id: uuid.UUID,
     set_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.set.delete"),
 ) -> SetResponse:
     try:
         async with session.begin():
@@ -886,7 +885,7 @@ async def restore_parameter_set_endpoint(
     schema_id: uuid.UUID,
     set_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.set.update"),
 ) -> SetResponse:
     try:
         async with session.begin():
@@ -931,7 +930,7 @@ async def restore_parameter_set_endpoint(
 async def get_parameter_set_references_endpoint(
     set_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("parameter_schema.list"),
 ) -> dict[str, list[uuid.UUID]]:
     try:
         async with session.begin():

@@ -15,8 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.runtime_provider import RuntimeProvider, create_default_hub
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
@@ -163,7 +162,7 @@ async def list_profiles(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment.list"),
 ) -> ProfileListResponse:
     try:
         async with session.begin():
@@ -212,7 +211,7 @@ async def list_profiles(
 async def create_profile(
     req: ProfileCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment.create"),
 ) -> ProfileResponse:
     try:
         async with session.begin():
@@ -267,7 +266,7 @@ async def create_profile(
 async def get_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment.list"),
 ) -> ProfileResponse:
     try:
         async with session.begin():
@@ -307,7 +306,7 @@ async def update_profile(
     profile_id: uuid.UUID,
     req: ProfileUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment.update"),
 ) -> ProfileResponse:
     updates = req.model_dump(exclude_unset=True)
     if "capabilities" in updates:
@@ -360,7 +359,7 @@ async def update_profile(
 async def delete_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment.delete"),
 ) -> None:
     try:
         async with session.begin():
@@ -494,7 +493,7 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
 async def test_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment.test"),
 ) -> StreamingResponse:
     """Provision a sandbox from the profile, run echo, destroy it — stream events."""
     try:

@@ -1,4 +1,4 @@
-"""Registry API — browse, publish, pull, and trust-verify registry primitives."""
+"""Registry API â€” browse, publish, pull, and trust-verify registry primitives."""
 
 from __future__ import annotations
 
@@ -17,8 +17,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.registry import (
     get_publisher_status,
@@ -225,7 +224,7 @@ async def get_registry_primitive_endpoint(
 )
 async def publish_primitive_endpoint(
     req: PublishRequest,
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("registry.publish"),
 ) -> RegistryEntryResponse:
     """Publish a new primitive to the registry (in-memory for alpha)."""
     try:
@@ -262,7 +261,7 @@ async def publish_primitive_endpoint(
 async def download_registry_primitive_endpoint(
     slug: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("registry.pull"),
 ) -> PullResponse:
     """Download a primitive from the registry into the org's local library.
 
@@ -346,7 +345,7 @@ async def download_registry_primitive_endpoint(
 
 
 # ---------------------------------------------------------------------------
-# Registry protocol v2 — publish / pull / verify
+# Registry protocol v2 â€” publish / pull / verify
 # ---------------------------------------------------------------------------
 
 
@@ -402,11 +401,11 @@ class VerifyResponseV2(BaseModel):
 @router.post("/publish", response_model=PublishResponseV2, status_code=status.HTTP_201_CREATED)
 async def publish_primitive_v2(
     req: PublishRequestV2,
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("registry.publish"),
 ) -> PublishResponseV2:
     """Publish a primitive to the registry (v2 protocol).
 
-    Accepts a signed payload — the client signs the primitive data with
+    Accepts a signed payload â€” the client signs the primitive data with
     their Ed25519 private key and sends the signature + public key.
     The server verifies the signature before accepting.
     """
@@ -427,7 +426,7 @@ async def publish_primitive_v2(
         if not crypto_pem_verify(req.public_key_pem, payload_bytes, req.signature):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Signature verification failed — payload does not match the provided public key",
+                detail="Signature verification failed â€” payload does not match the provided public key",
             )
 
         trust_anchor_ok = verify_trust_anchor(req.public_key_pem, req.signature)
@@ -531,7 +530,7 @@ async def verify_registry_primitive_v2(
     public_key_hex: str | None = None,
     public_key_pem: str | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("registry.pull"),
 ) -> VerifyResponseV2:
     """Verify a published primitive's signature (v2 protocol).
 
@@ -646,7 +645,7 @@ async def verify_registry_primitive_v2(
 @router.post("/publishers", status_code=status.HTTP_201_CREATED)
 async def register_publisher_endpoint(
     req: RegisterPublisherRequest,
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("registry.publisher.manage"),
 ) -> dict[str, str]:
     """Register a verified publisher (admin operation)."""
     pub = register_publisher(
@@ -662,7 +661,7 @@ async def register_publisher_endpoint(
 @router.post("/publishers/{fingerprint_hex}/revoke")
 async def revoke_publisher_endpoint(
     fingerprint_hex: str,
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("registry.publisher.manage"),
 ) -> dict[str, str]:
     """Revoke a publisher's trust status."""
     ok = revoke_publisher(fingerprint_hex)

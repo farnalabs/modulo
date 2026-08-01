@@ -12,8 +12,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -53,6 +53,9 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    authz_result = MagicMock()
+    authz_result.scalar_one_or_none = MagicMock(return_value=True)
+    session.execute = AsyncMock(return_value=authz_result)
     return session
 
 
@@ -94,6 +97,9 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -127,6 +133,9 @@ def operator_client() -> Generator[TestClient, None, None]:
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
         org_role="operator",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="operator"
     )
     yield TestClient(app)
     app.dependency_overrides.clear()

@@ -7,11 +7,10 @@ Plugin management (install, uninstall, upgrade) is done via pip — not through 
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from modulo.api.dependencies import require_feature
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import PluginHealth, PluginManifest, get_plugin_registry
 
@@ -50,7 +49,7 @@ def _to_response(manifest: PluginManifest, health: PluginHealth) -> PluginRespon
 
 @router.get("", response_model=list[PluginResponse], dependencies=[require_feature("plugin_management")])
 async def list_plugins_endpoint(
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("plugin.list"),
 ) -> list[PluginResponse]:
     try:
         registry = get_plugin_registry()
@@ -70,7 +69,7 @@ async def list_plugins_endpoint(
 @router.get("/{plugin_id}/health", dependencies=[require_feature("plugin_management")])
 async def plugin_health_endpoint(
     plugin_id: str,
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("plugin.list"),
 ) -> PluginHealth:
     try:
         registry = get_plugin_registry()

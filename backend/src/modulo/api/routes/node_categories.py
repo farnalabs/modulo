@@ -10,8 +10,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.node_category import (
     create_node_category,
@@ -72,7 +71,7 @@ async def list_node_categories_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("node_category.list"),
 ) -> NodeCategoryListResponse:
     try:
         async with session.begin():
@@ -122,7 +121,7 @@ async def list_node_categories_endpoint(
 async def create_node_category_endpoint(
     req: NodeCategoryCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("node_category.create"),
 ) -> NodeCategoryResponse:
     try:
         async with session.begin():
@@ -174,7 +173,7 @@ async def create_node_category_endpoint(
 async def get_node_category_endpoint(
     category_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("node_category.list"),
 ) -> NodeCategoryResponse:
     try:
         async with session.begin():
@@ -220,7 +219,7 @@ async def update_node_category_endpoint(
     category_id: uuid.UUID,
     req: NodeCategoryUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("node_category.update"),
 ) -> NodeCategoryResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -266,7 +265,7 @@ async def update_node_category_endpoint(
 async def delete_node_category_endpoint(
     category_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("node_category.delete"),
 ) -> None:
     try:
         async with session.begin():
@@ -310,7 +309,7 @@ async def delete_node_category_endpoint(
 async def restore_node_category_endpoint(
     category_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("node_category.create"),
 ) -> NodeCategoryResponse:
     try:
         async with session.begin():

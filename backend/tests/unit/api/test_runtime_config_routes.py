@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -28,12 +28,32 @@ def _make_settings() -> Settings:
 def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
+    from unittest.mock import AsyncMock
+
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    authz_result = MagicMock()
+    authz_result.scalar_one_or_none = MagicMock(return_value=True)
+    session.execute = AsyncMock(return_value=authz_result)
+
+    async def override_session() -> Generator[AsyncMock, None, None]:
+        yield session
+
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    app.dependency_overrides[get_db_session] = lambda: MagicMock()
+    app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
+        organisation_id="00000000-0000-0000-0000-000000000001",
+        account_id="00000000-0000-0000-0000-000000000002",
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="tenant",
         organisation_id="00000000-0000-0000-0000-000000000001",
         account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin",

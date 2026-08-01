@@ -13,10 +13,10 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature
+from modulo.api.dependencies import get_db_session, require_feature, require_permission, require_system_or_org_admin
 from modulo.auth.api_key import revoke_api_key
 from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import detect_regressions
@@ -1555,7 +1555,7 @@ class QueueMetricsResponse(BaseModel):
 @handle_db_errors("admin.queue_metrics")
 @router.get("/queues/metrics", response_model=QueueMetricsResponse)
 async def admin_queue_metrics(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("admin.queue_metrics"),
 ) -> QueueMetricsResponse:
     """LLEN of both configured SAQ queues (runs + system), PREFIX-AWARE.
 
@@ -1569,7 +1569,6 @@ async def admin_queue_metrics(
 
     from modulo.settings import get_settings
 
-    _require_org_admin(current_user)
     settings = get_settings()
     runs_queue = settings.saq_runs_queue
     system_queue = runs_queue.replace("runs", "system") if "runs" in runs_queue else "system"
@@ -1692,16 +1691,6 @@ async def admin_billing_overview(
 # ── Org Deletion ─────────────────────────────────────────────────────
 
 
-def _require_org_admin(principal: AuthenticatedPrincipal) -> None:
-    if principal.is_system_admin:
-        return
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only org admins can manage organisation deletion",
-        )
-
-
 class DeletionRequestResponse(BaseModel):
     message: str
     token: str
@@ -1716,11 +1705,9 @@ class DeletionRequestResponse(BaseModel):
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def request_org_deletion(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> DeletionRequestResponse:
-    _require_org_admin(current_user)
-
     from modulo.core.audit_logger import append_audit_event
     from modulo.db.crud.org_deletion import request_org_deletion as _request_deletion
 
@@ -1801,11 +1788,9 @@ class ConfirmDeletionResponse(BaseModel):
 @router.post("/org/deletion-confirm", response_model=ConfirmDeletionResponse)
 async def confirm_org_deletion(
     req: ConfirmDeletionRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
-    _require_org_admin(current_user)
-
     from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_deletion
 
     try:
@@ -1859,11 +1844,9 @@ class OrgExportResponse(BaseModel):
 @handle_db_errors("admin.cancel_org_deletion")
 @router.patch("/org/deletion-cancel", response_model=CancelDeletionResponse)
 async def cancel_org_deletion(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> CancelDeletionResponse:
-    _require_org_admin(current_user)
-
     from modulo.db.crud.org_deletion import cancel_org_deletion as _cancel
 
     try:
@@ -1898,11 +1881,9 @@ async def cancel_org_deletion(
 @handle_db_errors("admin.export_org_data")
 @router.get("/org/export", response_model=OrgExportResponse)
 async def export_org_data(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgExportResponse:
-    _require_org_admin(current_user)
-
     from modulo.db.crud.org_deletion import export_org_data as _export
 
     try:
@@ -1948,11 +1929,9 @@ async def export_org_data(
 @handle_db_errors("admin.delete_org_immediate")
 @router.delete("/org", response_model=ConfirmDeletionResponse)
 async def delete_org_immediate(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
-    _require_org_admin(current_user)
-
     from modulo.core.audit_logger import append_audit_event
     from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_deletion
     from modulo.db.crud.org_deletion import request_org_deletion as _request_deletion

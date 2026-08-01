@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
@@ -26,11 +26,6 @@ from modulo.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
-
-
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
-    if not principal.is_system_admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
 
 
 async def _resolve_tier(settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal) -> str:
@@ -281,7 +276,7 @@ async def toggle_feature_flag(
     req: ToggleFlagRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
@@ -341,10 +336,9 @@ async def toggle_feature_flag(
 @router.get("/{flag_name}/org-override", response_model=None)
 async def get_org_flag_override(
     flag_name: str,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    _require_admin(current_user)
     assert current_user.organisation_id is not None
     try:
         async with session.begin():
@@ -395,10 +389,9 @@ async def get_org_flag_override(
 async def set_org_flag_override(
     flag_name: str,
     req: ToggleFlagRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    _require_admin(current_user)
     assert current_user.organisation_id is not None
     try:
         async with session.begin():
@@ -453,10 +446,9 @@ async def set_org_flag_override(
 @router.delete("/{flag_name}/org-override", response_model=None)
 async def clear_org_flag_override(
     flag_name: str,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    _require_admin(current_user)
     assert current_user.organisation_id is not None
     try:
         async with session.begin():

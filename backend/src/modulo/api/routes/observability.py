@@ -12,9 +12,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session, require_feature
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.observability import get_otel_config, update_otel_config
 from modulo.db.rls import set_rls_org
@@ -24,8 +23,8 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/settings/observability", tags=["observability"])
 
-_DB_TIMEOUT = 10  # seconds — max time for DB operations per request
-_CACHE_TTL = 60  # seconds — how long to serve stale cache after DB failure
+_DB_TIMEOUT = 10  # seconds Ã”Ã‡Ã¶ max time for DB operations per request
+_CACHE_TTL = 60  # seconds Ã”Ã‡Ã¶ how long to serve stale cache after DB failure
 
 _SENSITIVE_HEADER_KEYS = frozenset({"authorization", "x-api-key", "api-key", "x-otlp-token"})
 
@@ -138,7 +137,7 @@ def _build_degraded_response(org_id: str) -> OtelSettingsResponse:
 @router.get("", response_model=OtelSettingsResponse, dependencies=[require_feature("observability")])
 async def get_observability_settings(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("observability.view"),
 ) -> OtelSettingsResponse:
     try:
         async with asyncio.timeout(_DB_TIMEOUT):
@@ -169,7 +168,7 @@ async def get_observability_settings(
 async def update_observability_settings(
     req: OtelSettingsUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("observability.view"),
     settings: Settings = Depends(get_settings),
 ) -> OtelSettingsResponse:
     updates: dict[str, Any] = {}
@@ -228,7 +227,7 @@ async def update_observability_settings(
 @router.post("/test", response_model=TestSpanResult, dependencies=[require_feature("observability")])
 async def test_otel_connection(
     req: TestOtelConfig,
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("observability.view"),
 ) -> TestSpanResult:
     endpoint = req.otlp_endpoint.rstrip("/")
     if not endpoint:
@@ -282,12 +281,12 @@ async def test_otel_connection(
     except httpx.TimeoutException:
         return TestSpanResult(
             success=False,
-            message="Connection timed out — check endpoint URL and network",
+            message="Connection timed out Ã”Ã‡Ã¶ check endpoint URL and network",
         )
     except httpx.ConnectError:
         return TestSpanResult(
             success=False,
-            message="Connection refused — check endpoint URL and firewall",
+            message="Connection refused Ã”Ã‡Ã¶ check endpoint URL and firewall",
         )
     except Exception as exc:
         _log.exception("observability.test_otel_connection")
@@ -297,7 +296,7 @@ async def test_otel_connection(
 @router.get("/preview", response_model=ExportPreviewResponse, dependencies=[require_feature("observability")])
 async def get_export_preview(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("observability.view"),
 ) -> ExportPreviewResponse:
     try:
         async with asyncio.timeout(_DB_TIMEOUT):

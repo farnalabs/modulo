@@ -49,11 +49,16 @@ def mock_session():
 
 @pytest.fixture
 def client_admin(mock_session):
+    class _FakeResult:
+        def scalar_one_or_none(self):
+            return "admin"
+
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: ADMIN_PRINCIPAL
+    mock_session.execute = AsyncMock(return_value=_FakeResult())
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url="http://test")
     yield client
@@ -62,11 +67,16 @@ def client_admin(mock_session):
 
 @pytest.fixture
 def client_viewer(mock_session):
+    class _FakeResult:
+        def scalar_one_or_none(self):
+            return None
+
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: VIEWER_PRINCIPAL
+    mock_session.execute = AsyncMock(return_value=_FakeResult())
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url="http://test")
     yield client
