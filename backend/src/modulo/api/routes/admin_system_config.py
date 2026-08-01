@@ -17,8 +17,6 @@ from modulo.db.crud.system_config import delete_config, list_config, set_config
 
 logger = logging.getLogger(__name__)
 
-_log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/v1/system-admin/config", tags=["admin-system-config"])
 
 

@@ -42,8 +42,6 @@ from modulo.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-_log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/v1", tags=["hitl"])
 
 

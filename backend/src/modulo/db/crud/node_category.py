@@ -4,7 +4,6 @@ All functions assume the caller has set the RLS org context via set_rls_org()
 before calling. The session must be within an active transaction.
 """
 
-import logging
 import uuid
 from typing import Any
 
@@ -14,8 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.node_category import NodeCategory
-
-_log = logging.getLogger(__name__)
 
 
 async def create_node_category(

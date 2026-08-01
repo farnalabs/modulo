@@ -1,13 +1,9 @@
 """API changelog endpoint — lists version history for the Modulo API."""
 
-import logging
-
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from modulo.api.db_error_handling import handle_db_errors
-
-_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/changelog", tags=["changelog"])
 

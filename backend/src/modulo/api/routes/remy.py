@@ -67,8 +67,6 @@ from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-_log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/v1/remy", tags=["remy"])
 
 # ── Provider → backend class mapping ──────────────────────────────────────

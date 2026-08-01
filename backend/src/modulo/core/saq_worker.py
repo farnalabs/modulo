@@ -30,7 +30,6 @@ and maps ``SAQ_AUTH_USERNAME`` to the ``AUTH_USER`` env var SAQ's web reads
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import signal
 from typing import Any
@@ -40,8 +39,6 @@ from saq import Worker
 from saq.queue.redis import RedisQueue
 
 from modulo.settings import get_settings
-
-_log = logging.getLogger(__name__)
 
 # Shared worker lifecycle knobs (plan F2).
 _WORKER_CONCURRENCY = 2
