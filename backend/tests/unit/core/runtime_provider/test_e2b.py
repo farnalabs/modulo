@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -512,6 +513,45 @@ async def test_create_workspace_clone_failure_propagates(
         labels={"repo_url": "https://github.com/user/repo.git"},
     )
     with pytest.raises(RuntimeError, match="Repo clone failed"):
+        await provider.create_workspace(spec)
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_clone_failure_not_masked_by_kill_timeout(
+    mock_sandbox_cls: MagicMock,
+    mock_sandbox: MagicMock,
+) -> None:
+    result = MagicMock()
+    result.exit_code = 128
+    result.stderr = "Host key verification failed"
+    mock_sandbox.commands.run.return_value = result
+    mock_sandbox.kill = AsyncMock(side_effect=TimeoutError("sandbox.kill timed out"))
+
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        labels={"repo_url": "https://github.com/user/repo.git"},
+    )
+    with pytest.raises(RuntimeError, match="Repo clone failed"):
+        await provider.create_workspace(spec)
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_cancellation_not_masked_by_kill_failure(
+    mock_sandbox_cls: MagicMock,
+    mock_sandbox: MagicMock,
+) -> None:
+    mock_sandbox.commands.run = AsyncMock(side_effect=asyncio.CancelledError())
+    mock_sandbox.kill = AsyncMock(side_effect=TimeoutError("sandbox.kill timed out"))
+
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        labels={"repo_url": "https://github.com/user/repo.git"},
+    )
+    with pytest.raises(asyncio.CancelledError):
         await provider.create_workspace(spec)
 
 
