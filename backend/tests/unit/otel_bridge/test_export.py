@@ -4,6 +4,7 @@ Uses OTel's InMemorySpanExporter to verify the global TracerProvider is
 configured correctly without needing real OTLP or stdout I/O.
 """
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -36,8 +37,12 @@ def test_setup_otel_uses_default_service_name() -> None:
 
 def test_setup_otel_creates_tracer_with_service_name() -> None:
     setup_otel(service_name="my-modulo")
-    tracer = trace.get_tracer("test")
+    provider = trace.get_tracer_provider()
+    assert isinstance(provider, TracerProvider)
+    # The requested service name must be reflected in the provider resource.
+    assert provider.resource.attributes.get("service.name") == "my-modulo"
     # The tracer should be functional — creating a span should not raise.
+    tracer = trace.get_tracer("test")
     with tracer.start_as_current_span("test-span") as span:
         span.set_attribute("test", True)
 
@@ -112,12 +117,15 @@ def test_shutdown_otel_multi_call_safe() -> None:
     shutdown_otel()  # Second call — should be a no-op, not raise
 
 
-def test_shutdown_otel_handles_provider_shutdown_failure() -> None:
+def test_shutdown_otel_handles_provider_shutdown_failure(caplog) -> None:
     """A provider whose shutdown() raises must not propagate the exception."""
     bad_provider = MagicMock()
     bad_provider.shutdown.side_effect = RuntimeError("shutdown failed")
     trace.set_tracer_provider(bad_provider)
-    shutdown_otel()  # should log and swallow the error
+    with caplog.at_level(logging.ERROR):
+        shutdown_otel()  # should log and swallow the error
+    # The failure path must be exercised and surfaced, not silently skipped.
+    assert any("Failed to shut down OTel provider" in r.message for r in caplog.records)
 
 
 def test_shutdown_otel_with_plain_proxy_provider() -> None:

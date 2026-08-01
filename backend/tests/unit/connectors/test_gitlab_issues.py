@@ -1,5 +1,7 @@
 """Extended unit tests for GitLabConnector — issues, labels, milestones, notes, CI."""
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -485,8 +487,8 @@ async def test_write_pipeline_run(connector):
 @respx.mock
 async def test_write_pipeline_run_with_variables(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/pipeline")
-    route.mock(return_value=httpx.Response(200, json={"id": 100, "ref": "main"}))
-    await connector.write(
+    route.mock(return_value=httpx.Response(200, json={"id": 100, "ref": "main", "status": "pending"}))
+    result = await connector.write(
         ConnectorPayload(
             resource="pipeline_run",
             data={
@@ -496,6 +498,12 @@ async def test_write_pipeline_run_with_variables(connector):
             },
         )
     )
+    assert result["id"] == 100
+    assert result["ref"] == "main"
+    assert result["status"] == "pending"
+    # The declared variables must actually be forwarded in the trigger payload.
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["variables"] == [{"key": "VAR", "value": "val"}]
 
 
 # ---------------------------------------------------------------------------

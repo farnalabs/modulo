@@ -114,94 +114,107 @@ def _(client: TestClient) -> None:
     pass
 
 
-@when("I request GET /api/v1/dashboard/trends?days=7")
-def _(client: TestClient) -> None:
-    _request_trends(client, 7)
-
-
-@when("I request GET /api/v1/dashboard/trends?days=30")
-def _(client: TestClient) -> None:
-    _request_trends(client, 30)
-
-
-@when("I request GET /api/v1/dashboard/trends?days=0")
-def _(client: TestClient) -> None:
-    _request_trends(client, 0)
-
-
-@pytest.fixture()
-def _trend_response(client: TestClient) -> dict:
-    return _request_trends(client, 7)
-
-
 def _request_trends(client: TestClient, days: int) -> dict:
     response = client.get(f"/api/v1/dashboard/trends?days={days}")
     return {"status_code": response.status_code, "body": response.json()}
 
 
-@then("the response status is 200")
+# Most recent trends response, shared between the @when (request) and @then
+# (assertion) steps. Previously the request result was discarded, so the then
+# steps could not observe it and were no-op placeholders.
+_last_trend_response: dict[str, object] | None = None
+
+
+@when("I request GET /api/v1/dashboard/trends?days=7")
 def _(client: TestClient) -> None:
-    assert True
+    global _last_trend_response
+    _last_trend_response = _request_trends(client, 7)
 
 
-@then("the response status is 422")
+@when("I request GET /api/v1/dashboard/trends?days=30")
 def _(client: TestClient) -> None:
-    assert True
+    global _last_trend_response
+    _last_trend_response = _request_trends(client, 30)
 
 
-@then("the response contains hitl_volume with 7 entries")
+@when("I request GET /api/v1/dashboard/trends?days=0")
 def _(client: TestClient) -> None:
-    pass
+    global _last_trend_response
+    _last_trend_response = _request_trends(client, 0)
+
+
+def _assert_trend_response() -> dict[str, object]:
+    assert _last_trend_response is not None, "No trends response captured by the preceding @when step"
+    return _last_trend_response
+
+
+def _assert_body() -> dict:
+    body = _assert_trend_response()["body"]
+    assert isinstance(body, dict), f"Expected a JSON object body, got {type(body)}"
+    return body
+
+
+@then("the response status is {status:d}")
+def _(status: int) -> None:
+    assert _assert_trend_response()["status_code"] == status
+
+
+@then("the response contains {key} with {count:d} entries")
+def _(key: str, count: int) -> None:
+    body = _assert_body()
+    assert key in body, f"Expected key '{key}' in response body, got {sorted(body)}"
+    entries = body[key]
+    assert isinstance(entries, list), f"Expected '{key}' to be a list, got {type(entries)}"
+    assert len(entries) == count, f"Expected {count} '{key}' entries, got {len(entries)}"
 
 
 @then(
     "each hitl_volume entry has total_decisions, approved_count,"
     " rejected_count, rejection_rate, and avg_time_to_approve_ms"
 )
-def _(client: TestClient) -> None:
-    pass
-
-
-@then("the response contains rejection_trend with 7 entries")
-def _(client: TestClient) -> None:
-    pass
+def _() -> None:
+    for entry in _assert_body()["hitl_volume"]:
+        for field in (
+            "date",
+            "total_decisions",
+            "approved_count",
+            "rejected_count",
+            "rejection_rate",
+            "avg_time_to_approve_ms",
+        ):
+            assert field in entry, f"hitl_volume entry missing '{field}': {entry}"
 
 
 @then("each rejection_trend entry has rolling_rejection_rate and raw_rejection_rate")
-def _(client: TestClient) -> None:
-    pass
-
-
-@then("the response contains correlation with 30 entries")
-def _(client: TestClient) -> None:
-    pass
-
-
-@then("the response contains correlation with 7 entries")
-def _(client: TestClient) -> None:
-    pass
+def _() -> None:
+    for entry in _assert_body()["rejection_trend"]:
+        for field in ("date", "rolling_rejection_rate", "raw_rejection_rate"):
+            assert field in entry, f"rejection_trend entry missing '{field}': {entry}"
 
 
 @then("each correlation entry has rejection_rate and eval_pass_rate")
-def _(client: TestClient) -> None:
-    pass
-
-
-@then("the response contains feedback_volume with 7 entries")
-def _(client: TestClient) -> None:
-    pass
+def _() -> None:
+    for entry in _assert_body()["correlation"]:
+        for field in ("date", "rejection_rate", "eval_pass_rate"):
+            assert field in entry, f"correlation entry missing '{field}': {entry}"
 
 
 @then("each feedback_volume entry has feedback_count, resolved_count, and correcting_count")
-def _(client: TestClient) -> None:
-    pass
+def _() -> None:
+    for entry in _assert_body()["feedback_volume"]:
+        for field in ("date", "feedback_count", "resolved_count", "correcting_count"):
+            assert field in entry, f"feedback_volume entry missing '{field}': {entry}"
 
 
 @then("hitl_volume, rejection_trend, correlation, and feedback_volume all have the same length")
-def _(client: TestClient) -> None:
-    pass
+def _() -> None:
+    body = _assert_body()
+    lengths = {key: len(body[key]) for key in ("hitl_volume", "rejection_trend", "correlation", "feedback_volume")}
+    assert len(set(lengths.values())) == 1, f"Trend arrays are not aligned: {lengths}"
 
 
 @then("every hitl_volume entry has total_decisions=0 and rejection_rate=0.0")
-def _(client: TestClient) -> None:
-    pass
+def _() -> None:
+    for entry in _assert_body()["hitl_volume"]:
+        assert entry["total_decisions"] == 0, f"Expected zero decisions, got {entry}"
+        assert entry["rejection_rate"] == 0.0, f"Expected zero rejection rate, got {entry}"

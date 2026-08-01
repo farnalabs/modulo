@@ -264,10 +264,12 @@ class TestMarkComplete:
         assert not hasattr(run, "completed_at")
 
     async def test_noop_when_run_missing(self) -> None:
+        run_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
         with (
-            patch.object(pe, "get_run", AsyncMock(return_value=None)),
+            patch.object(pe, "get_run", AsyncMock(return_value=None)) as mock_get_run,
             patch.object(pe, "async_sessionmaker") as mock_factory,
-            patch.object(pe, "set_rls_org", AsyncMock()),
+            patch.object(pe, "set_rls_org", AsyncMock()) as mock_set_rls,
         ):
             session = MagicMock()
             session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -278,9 +280,13 @@ class TestMarkComplete:
             mock_factory.return_value = factory
 
             engine = MagicMock()
-            await pe.mark_complete(engine, str(uuid.uuid4()), str(uuid.uuid4()))  # type: ignore[arg-type]
+            await pe.mark_complete(engine, run_id, org_id)  # type: ignore[arg-type]
 
-        # get_run returned None -> nothing to assert beyond no exception.
+        # The run lookup is still performed with the right identifiers…
+        mock_set_rls.assert_awaited_once()
+        mock_get_run.assert_awaited_once()
+        args = mock_get_run.await_args.args
+        assert args[1] == uuid.UUID(run_id)
 
 
 # ---------------------------------------------------------------------------

@@ -57,9 +57,11 @@ class TestAssertTeamTransitionAllowed:
     @pytest.mark.asyncio
     async def test_member_downgrades_own_team_private_pipeline_allowed(self, monkeypatch) -> None:
         """visibility 'team'→'org' on a team the caller belongs to is allowed."""
-        _stub_membership(monkeypatch, {_TEAM_A})
+        stub = _stub_membership(monkeypatch, {_TEAM_A})
         current = _pipeline(owner_team_id=_TEAM_A, visibility="team")
         await _assert_team_transition_allowed(AsyncMock(), _tenant("operator"), current, {"visibility": "org"})
+        # The current-team gate must have run and approved membership once.
+        stub.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_member_downgrades_different_teams_pipeline_denied(self, monkeypatch) -> None:
@@ -82,9 +84,11 @@ class TestAssertTeamTransitionAllowed:
     @pytest.mark.asyncio
     async def test_member_reassign_to_own_team_allowed(self, monkeypatch) -> None:
         """Reassigning owner_team_id to a team the caller belongs to is allowed."""
-        _stub_membership(monkeypatch, {_TEAM_A})
+        stub = _stub_membership(monkeypatch, {_TEAM_A})
         current = _pipeline(owner_team_id=None, visibility="org")
         await _assert_team_transition_allowed(AsyncMock(), _tenant("operator"), current, {"owner_team_id": _TEAM_A})
+        # The new-team gate must have run and approved membership once.
+        stub.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_clear_owner_team_with_team_visibility_rejected(self, monkeypatch) -> None:
@@ -98,11 +102,13 @@ class TestAssertTeamTransitionAllowed:
     @pytest.mark.asyncio
     async def test_clear_owner_team_while_switching_to_org_allowed(self, monkeypatch) -> None:
         """Clearing owner_team_id while ALSO switching visibility to 'org' is valid."""
-        _stub_membership(monkeypatch, {_TEAM_A})
+        stub = _stub_membership(monkeypatch, {_TEAM_A})
         current = _pipeline(owner_team_id=_TEAM_A, visibility="team")
         await _assert_team_transition_allowed(
             AsyncMock(), _tenant("operator"), current, {"visibility": "org", "owner_team_id": None}
         )
+        # Only the current-team gate runs (owner_team_id is cleared, not reassigned).
+        stub.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_org_admin_can_do_all_transitions(self, monkeypatch) -> None:
@@ -143,4 +149,5 @@ class TestAssertTeamTransitionAllowed:
         await _assert_team_transition_allowed(
             AsyncMock(), _tenant("operator"), current, {"name": "renamed", "max_concurrent_runs": 3}
         )
+        # No boundary change -> the membership check must not run at all.
         stub.assert_not_awaited()
