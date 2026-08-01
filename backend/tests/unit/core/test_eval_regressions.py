@@ -264,6 +264,58 @@ class TestDetectRegressionsDirect:
         assert len(alerts) == 1
         assert alerts[0].affected_run_ids == []
 
+    # ── recent_window_ratio ──────────────────────────────────────────────
+
+    async def test_default_ratio_matches_legacy_days_div_4(self) -> None:
+        """Default ratio 0.25 yields recent window of max(days // 4, 1) days."""
+        session = _make_mock_session()
+        session.execute.return_value = _make_result(all_value=[])
+
+        await detect_regressions(session, _ORG_ID, days=28, threshold=0.15)
+
+        recent_start = session.execute.call_args[0][1]["recent_start"]
+        baseline_start = session.execute.call_args[0][1]["baseline_start"]
+        assert (recent_start - baseline_start).days == 28 - 7
+
+    async def test_custom_ratio_changes_recent_window(self) -> None:
+        """ratio=0.5 halves the baseline and doubles the recent window."""
+        session = _make_mock_session()
+        session.execute.return_value = _make_result(all_value=[])
+
+        await detect_regressions(session, _ORG_ID, days=28, threshold=0.15, recent_window_ratio=0.5)
+
+        recent_start = session.execute.call_args[0][1]["recent_start"]
+        baseline_start = session.execute.call_args[0][1]["baseline_start"]
+        assert (recent_start - baseline_start).days == 28 - 14
+
+    async def test_small_ratio_clamps_to_min_one_day(self) -> None:
+        """A tiny ratio still leaves at least a 1-day recent window."""
+        session = _make_mock_session()
+        session.execute.return_value = _make_result(all_value=[])
+
+        await detect_regressions(session, _ORG_ID, days=28, threshold=0.15, recent_window_ratio=0.01)
+
+        recent_start = session.execute.call_args[0][1]["recent_start"]
+        baseline_start = session.execute.call_args[0][1]["baseline_start"]
+        assert (recent_start - baseline_start).days == 28 - 1
+
+    async def test_ratio_one_triggers_fallback_half_period(self) -> None:
+        """ratio=1.0 would make the recent window equal the period — falls back to half."""
+        session = _make_mock_session()
+        session.execute.return_value = _make_result(all_value=[])
+
+        await detect_regressions(session, _ORG_ID, days=7, threshold=0.15, recent_window_ratio=1.0)
+
+        recent_start = session.execute.call_args[0][1]["recent_start"]
+        baseline_start = session.execute.call_args[0][1]["baseline_start"]
+        assert (recent_start - baseline_start).days == 7 - 3
+
+    @pytest.mark.parametrize("ratio", [0.0, -0.1, 1.5])
+    async def test_invalid_ratio_raises_value_error(self, ratio: float) -> None:
+        session = _make_mock_session()
+        with pytest.raises(ValueError, match="recent_window_ratio"):
+            await detect_regressions(session, _ORG_ID, days=7, threshold=0.15, recent_window_ratio=ratio)
+
 
 # ── API endpoint tests ────────────────────────────────────────────────────
 
@@ -365,9 +417,16 @@ class TestRegressionAlertsEndpoint:
     def test_returns_regression_alerts(self, client: TestClient) -> None:
         resp = client.get(self.URL)
         data = resp.json()
-        assert set(data.keys()) == {"alerts", "total_regressions", "threshold", "lookback_days"}
+        assert set(data.keys()) == {
+            "alerts",
+            "total_regressions",
+            "threshold",
+            "recent_window_ratio",
+            "lookback_days",
+        }
         assert data["total_regressions"] == 1
         assert data["threshold"] == 0.15
+        assert data["recent_window_ratio"] == 0.25
         assert data["lookback_days"] == 7
 
     def test_alert_shape(self, client: TestClient) -> None:
@@ -423,6 +482,50 @@ class TestRegressionAlertsEndpoint:
         data = resp.json()
         assert data["lookback_days"] == 14
         assert data["threshold"] == 0.1
+
+    def test_custom_recent_window_ratio(self) -> None:
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(all_value=[]),  # regression query
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+        resp = TestClient(app).get(self.URL + "?days=28&recent_window_ratio=0.5")
+        data = resp.json()
+        assert data["recent_window_ratio"] == 0.5
+        assert data["lookback_days"] == 28
+
+        # The regression query params must reflect the wider recent window.
+        recent_start = mock_session.execute.call_args_list[1][0][1]["recent_start"]
+        baseline_start = mock_session.execute.call_args_list[1][0][1]["baseline_start"]
+        assert (recent_start - baseline_start).days == 14
+
+    @pytest.mark.parametrize("ratio", ["0", "1.5", "-0.5"])
+    def test_invalid_recent_window_ratio_returns_422(self, ratio: str) -> None:
+        mock_session = _make_mock_session()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+        resp = TestClient(app).get(self.URL + f"?recent_window_ratio={ratio}")
+        assert resp.status_code == 422
 
     # ── Empty ─────────────────────────────────────────────────────────
 
