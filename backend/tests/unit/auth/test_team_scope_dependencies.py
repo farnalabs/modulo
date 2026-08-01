@@ -119,8 +119,9 @@ class TestRequireTeamMembershipOrAdmin:
         the same endpoint before the team gate matters.
         """
         dep_org = require_permission("pipeline.update")
+        session = _make_team_session(member=False)
         with pytest.raises(HTTPException) as excinfo:
-            await dep_org.dependency(principal=_tenant("viewer"))
+            await dep_org.dependency(principal=_tenant("viewer"), session=session)
         assert excinfo.value.status_code == 403
         assert "pipeline.update" in excinfo.value.detail
 
