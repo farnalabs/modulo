@@ -333,6 +333,7 @@ def test_replace_pipeline_graph_returns_soft_validation_issues(client: TestClien
             "modulo.api.routes.pipelines._resolve_graph_references",
             return_value=(schema_pins, backend_pins),
         ),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
@@ -396,6 +397,7 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
             "modulo.api.routes.pipelines._resolve_graph_references",
             return_value=([], []),
         ),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
     ):
@@ -485,6 +487,183 @@ def test_replace_pipeline_graph_rejects_node_type_conflicts(client: TestClient, 
     )
 
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Cross-team connector binding enforcement (PRD §9.3)
+# ---------------------------------------------------------------------------
+
+
+def _graph_node_with_connector_binding(connector_id: uuid.UUID, node_id: uuid.UUID | None = None) -> dict[str, object]:
+    return {
+        "id": str(node_id or uuid.uuid4()),
+        "node_type": "agent",
+        "agent_id": str(uuid.uuid4()),
+        "position": {"x": 10, "y": 20},
+        "connector_binding": {"type": "test", "instance_id": str(connector_id)},
+    }
+
+
+def test_replace_graph_blocks_cross_team_connector_binding(client: TestClient) -> None:
+    connector_id = uuid.uuid4()
+    team_a = uuid.uuid4()
+    team_b = uuid.uuid4()
+    pipeline = _make_pipeline()
+    pipeline.owner_team_id = team_a
+    node = _graph_node_with_connector_binding(connector_id)
+    mismatch = MagicMock(
+        connector_id=connector_id,
+        connector_name="eng-db",
+        connector_owner_team_id=team_b,
+        pipeline_owner_team_id=team_a,
+        node_id=str(node["id"]),
+    )
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[mismatch]),
+        ) as find_mismatches,
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph") as replace_graph,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": [node], "edges": []},
+        )
+
+    assert resp.status_code == 409
+    assert "connector_team_mismatch" in resp.json()["detail"]
+    replace_graph.assert_not_awaited()
+    assert find_mismatches.await_args.kwargs["pipeline_owner_team_id"] == team_a
+
+
+def test_replace_graph_allows_same_team_connector_binding(client: TestClient) -> None:
+    connector_id = uuid.uuid4()
+    team_a = uuid.uuid4()
+    pipeline = _make_pipeline()
+    pipeline.owner_team_id = team_a
+    node = _graph_node_with_connector_binding(connector_id)
+    validation = MagicMock(issues=[])
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
+        patch(
+            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            return_value=validation,
+        ),
+        patch(
+            "modulo.api.routes.pipelines._resolve_graph_references",
+            return_value=([], []),
+        ),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": [node], "edges": []},
+        )
+
+    assert resp.status_code == 200
+
+
+def test_replace_graph_missing_pipeline_returns_404(client: TestClient) -> None:
+    connector_id = uuid.uuid4()
+    node = _graph_node_with_connector_binding(connector_id)
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph") as replace_graph,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": [node], "edges": []},
+        )
+
+    assert resp.status_code == 404
+    replace_graph.assert_not_awaited()
+
+
+def test_update_pipeline_with_graph_blocks_cross_team_connector_binding(client: TestClient) -> None:
+    connector_id = uuid.uuid4()
+    team_a = uuid.uuid4()
+    team_b = uuid.uuid4()
+    pipeline = _make_pipeline()
+    pipeline.owner_team_id = team_a
+    node = _graph_node_with_connector_binding(connector_id)
+    mismatch = MagicMock(
+        connector_id=connector_id,
+        connector_name="eng-db",
+        connector_owner_team_id=team_b,
+        pipeline_owner_team_id=team_a,
+        node_id=str(node["id"]),
+    )
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[mismatch]),
+        ),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph") as replace_graph,
+        patch("modulo.api.routes.pipelines.update_pipeline") as update_pipeline,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"graph_json": {"nodes": [node], "edges": []}},
+        )
+
+    assert resp.status_code == 409
+    assert "connector_team_mismatch" in resp.json()["detail"]
+    replace_graph.assert_not_awaited()
+    update_pipeline.assert_not_awaited()
+
+
+def test_update_pipeline_with_graph_uses_effective_owner_team(client: TestClient) -> None:
+    connector_id = uuid.uuid4()
+    team_a = uuid.uuid4()
+    team_b = uuid.uuid4()
+    pipeline = _make_pipeline()
+    pipeline.owner_team_id = team_a
+    node = _graph_node_with_connector_binding(connector_id)
+    validation = MagicMock(issues=[])
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[]),
+        ) as find_mismatches,
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
+        patch(
+            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            return_value=validation,
+        ),
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={
+                "owner_team_id": str(team_b),
+                "graph_json": {"nodes": [node], "edges": []},
+            },
+        )
+
+    assert resp.status_code == 200
+    assert find_mismatches.await_args.kwargs["pipeline_owner_team_id"] == team_b
 
 
 @pytest.mark.asyncio

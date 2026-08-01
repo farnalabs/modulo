@@ -19,10 +19,15 @@ code:
   - backend/src/modulo/db/models/team_membership.py
   - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
   - backend/src/modulo/db/migrations/versions/0003_v2_pipeline_runtime.py
+  - backend/src/modulo/core/team_visibility.py
+  - backend/src/modulo/api/routes/pipelines.py
 unit-tests:
   - backend/tests/integration/test_rls_isolation.py
   - backend/tests/integration/test_cross_tenant_isolation.py
   - backend/tests/integration/crud/test_team_isolation.py
+  - backend/tests/unit/core/test_team_visibility.py
+  - backend/tests/unit/api/test_pipelines_endpoint.py
+  - backend/tests/bdd/steps/test_cross_team_isolation.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -68,7 +73,7 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 - [x] Cross-org pipeline run POST returns 404 (resource non-existence, not 403)
 - [x] Non-admin using `view_as_team` parameter returns 403
 - [x] Team deletion blocked (`team_has_resources` error) when owned resources exist
-- [ ] Connector binding across teams returns `connector_team_mismatch` error (BDD scenario exists but real enforcement not implemented)
+- [x] Connector binding across teams returns `connector_team_mismatch` error (PRD 9.3 named error, enforced at pipeline-save command layer — `core/team_visibility.py`)
 - [x] Team member grant with role exceeding the granting user's role is blocked (privilege escalation prevention)
 - [x] HITL gate with `required_team_id` — non-member attempting claim raises `NotTeamMemberError` (DB-live check in hitl_manager)
 
@@ -111,7 +116,7 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 - [x] `MembershipResponse.user_id` returns the value of `account_id` column (cosmetic — field name mismatches column name)
 ## Known Gaps
 
-- **connector_team_mismatch not implemented in backend code** — BDD scenario exists at `tests/bdd/features/teams/cross_team_isolation.feature` but is mocked (MagicMock). Real enforcement at pipeline-save time (checking connector.owner_team_id vs pipeline.owner_team_id) does not exist yet.
+- **connector_team_mismatch not implemented in backend code** — ~~BDD scenario exists at `tests/bdd/features/teams/cross_team_isolation.feature` but is mocked (MagicMock). Real enforcement at pipeline-save time (checking connector.owner_team_id vs pipeline.owner_team_id) does not exist yet.~~ **RESOLVED (2026-08-01)** — `connector_team_mismatch` is now enforced at the pipeline-save command layer and on both MCP binding paths. `core/team_visibility.py` implements the rule (team-private connectors only bindable to pipelines owned by the same team; org-wide connectors always allowed) and `api/routes/pipelines.py` raises HTTP 409 `connector_team_mismatch` on `PATCH /pipelines/{id}/graph` and `PATCH /pipelines/{id}` (with `graph_json`); `api/mcp_server.py` returns the named error from `update_pipeline_graph` and `bind_connector_to_node`. Covered by 16 core unit tests (`tests/unit/core/test_team_visibility.py`), 5 route tests, 5 MCP tests, and the `cross_team_isolation.feature` BDD scenarios now exercise the real rule (feature/steps fixed — previously 5 scenarios failed on unmatched step text).
 - **view_as_team enforcement uses JWT org_role not live DB check** — The `view_as_team` admin guard in `viewmodel.py:250` checks `current_user.org_role` (JWT claim) instead of querying the current role from `org_memberships`. A demoted admin can still use `view_as_team` until their JWT expires. The BDD scenario "Admin can still use view_as_team after being demoted" (`view_as_team_non_admin_rejected.feature`) is mocked and returns 403, but the real code would return 200 until JWT refresh.
 - **stage_team_mismatch not implemented** — No validation exists to block cross-team pipeline assignment to a team-stage. Documented in feat-teams-team-ownership product map.
 
@@ -130,7 +135,12 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 - Added stage_team_mismatch gap to Known Gaps.
 - Added QA History section for 2026-07-09.
 
-**Status:** partial (3 known gaps remain — connector_team_mismatch, view_as_team JWT enforcement, stage_team_mismatch).
+**Status:** partial (2 known gaps remain — view_as_team JWT enforcement, stage_team_mismatch).
+
+### 2026-08-01 — improve-architecture (connector_team_mismatch enforcement)
+
+- **RESOLVED** known gap: cross-team connector binding is now blocked at the pipeline-save command layer and on MCP binding paths with the named error `connector_team_mismatch` (PRD 9.3). New `core/team_visibility.py` module (pure rule + async DB check), wired into `PATCH /pipelines/{id}/graph`, `PATCH /pipelines/{id}` (with `graph_json`), and MCP `update_pipeline_graph`/`bind_connector_to_node` → HTTP 409 / named error. Marked behaviour `[x]`.
+- Added 16 core unit tests, 5 route tests, 5 MCP tests, and fixed the previously-broken `cross_team_isolation.feature` BDD suite (5 scenarios now pass; binding step uses the real `connector_team_mismatch()` rule).
 
 ### 2026-07-31 — improve-architecture (product-map walk)
 

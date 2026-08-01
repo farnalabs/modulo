@@ -742,6 +742,12 @@ async def update_pipeline_graph(
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
+        from modulo.core.team_visibility import (
+            CONNECTOR_TEAM_MISMATCH,
+            connector_team_mismatch_detail,
+            extract_connector_bindings,
+            find_connector_team_mismatches,
+        )
         from modulo.db.crud.pipeline import replace_pipeline_graph
 
         org_id = _ctx_org_id_val()
@@ -764,6 +770,22 @@ async def update_pipeline_graph(
             }
 
         async with _session(org_id) as s:
+            from modulo.db.crud.pipeline import get_pipeline
+
+            pipeline = await get_pipeline(s, pid)
+            if pipeline is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            mismatches = await find_connector_team_mismatches(
+                s,
+                org_id=org_id,
+                pipeline_owner_team_id=pipeline.owner_team_id,
+                connector_bindings=extract_connector_bindings(nodes),
+            )
+            if mismatches:
+                return {
+                    "error": CONNECTOR_TEAM_MISMATCH,
+                    "detail": connector_team_mismatch_detail(mismatches),
+                }
             result = await replace_pipeline_graph(
                 s,
                 pipeline_id=pid,
@@ -843,6 +865,21 @@ async def bind_connector_to_node(
             ).scalar_one_or_none()
             if pipeline is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+
+            from modulo.core.team_visibility import (
+                CONNECTOR_TEAM_MISMATCH,
+                connector_team_mismatch,
+            )
+
+            if connector_team_mismatch(connector.visibility, connector.owner_team_id, pipeline.owner_team_id):
+                return {
+                    "error": CONNECTOR_TEAM_MISMATCH,
+                    "detail": (
+                        f"connector_team_mismatch: connector '{connector.name}' (id={cid}) is team-private "
+                        f"(owner team {connector.owner_team_id}) but pipeline is owned by team "
+                        f"{pipeline.owner_team_id}"
+                    ),
+                }
 
             nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
             target = None
