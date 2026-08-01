@@ -59,7 +59,7 @@ def _get_engine() -> Any:
                     get_settings().database_url,
                     pool_pre_ping=True,
                     pool_recycle=300,
-                    connect_timeout=10,
+                    connect_args={"timeout": 10},
                 )
     return _engine
 
