@@ -728,9 +728,7 @@ class GraphValidator:
 
         if out_type and in_type and out_type != in_type:
             promotable = {"integer": ["number"]}
-            if in_type in promotable.get(out_type, []):
-                pass
-            else:
+            if in_type not in promotable.get(out_type, []):
                 errors.append(f"{path}: type mismatch '{out_type}' -> '{in_type}'")
 
         # Check additionalProperties

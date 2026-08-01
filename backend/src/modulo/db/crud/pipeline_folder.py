@@ -4,7 +4,6 @@ All functions assume the caller has set the RLS org context via set_rls_org()
 before calling. The session must be within an active transaction.
 """
 
-import logging
 import uuid
 from typing import Any
 
@@ -14,8 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.base import apply_updates
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_folder import PipelineFolder
-
-_log = logging.getLogger(__name__)
 
 _MAX_FOLDER_DEPTH = 8
 

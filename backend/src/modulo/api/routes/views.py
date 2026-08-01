@@ -26,8 +26,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
 
-_log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/v1/views", tags=["views"])
 
 _VALID_VIEW_TYPES = {"run_list", "pipeline_list", "audit_log"}

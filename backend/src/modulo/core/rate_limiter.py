@@ -7,13 +7,10 @@ Redis is required — no in-memory fallback.
 
 from __future__ import annotations
 
-import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
-
-_log = logging.getLogger(__name__)
 
 WINDOW_SECONDS = 60
 

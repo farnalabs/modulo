@@ -55,8 +55,6 @@ _PROVIDER_LABELS: dict[str, str] = {
     "custom": "Custom",
 }
 
-_log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/v1/admin/remy", tags=["admin-remy"])
 
 
