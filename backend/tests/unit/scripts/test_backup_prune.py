@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-import importlib
 import sys
 from datetime import date
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 for parent in Path(__file__).resolve().parents:
-    if (parent / "scripts" / "backup-prune.py").exists():
-        sys.path.insert(0, str(parent))
+    script_path = parent / "scripts" / "backup-prune.py"
+    if script_path.exists():
         break
 else:
     raise RuntimeError("Could not find repo root (scripts/backup-prune.py)")
 
-prune = importlib.import_module("scripts.backup-prune")
+_prune_loader = SourceFileLoader("backup_prune", str(script_path))
+prune = module_from_spec(spec_from_loader("backup_prune", _prune_loader))
+_prune_loader.exec_module(prune)
 
 BackupFile = prune.BackupFile
 BackupFiles = list[BackupFile]

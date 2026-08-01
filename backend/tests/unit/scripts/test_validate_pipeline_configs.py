@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 for parent in Path(__file__).resolve().parents:
-    if (parent / "scripts" / "validate_pipeline_configs.py").exists():
-        sys.path.insert(0, str(parent))
+    script_path = parent / "scripts" / "validate_pipeline_configs.py"
+    if script_path.exists():
         break
 else:
     raise RuntimeError("Could not find repo root (scripts/validate_pipeline_configs.py)")
 
-vpc = importlib.import_module("scripts.validate_pipeline_configs")
+_vpc_loader = SourceFileLoader("validate_pipeline_configs", str(script_path))
+vpc = module_from_spec(spec_from_loader("validate_pipeline_configs", _vpc_loader))
+_vpc_loader.exec_module(vpc)
 
 
 @pytest.fixture(autouse=True)

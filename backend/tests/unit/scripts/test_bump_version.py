@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
-import importlib
 import sys
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 for parent in Path(__file__).resolve().parents:
-    if (parent / "scripts" / "bump-version.py").exists():
-        sys.path.insert(0, str(parent))
+    script_path = parent / "scripts" / "bump-version.py"
+    if script_path.exists():
         break
 else:
     raise RuntimeError("Could not find repo root (scripts/bump-version.py)")
 
-bv = importlib.import_module("scripts.bump-version")
+_bv_loader = SourceFileLoader("bump_version", str(script_path))
+bv = module_from_spec(spec_from_loader("bump_version", _bv_loader))
+_bv_loader.exec_module(bv)
 
 
 # ---------------------------------------------------------------------------
