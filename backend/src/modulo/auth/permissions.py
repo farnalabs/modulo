@@ -22,7 +22,7 @@ from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 _authz_enforce_ctx: ContextVar[bool | None] = ContextVar("authz_enforce", default=None)
 
 
-def set_authz_enforce(value: bool) -> Token:
+def set_authz_enforce(value: bool) -> Token[bool | None]:
     """Set the per-request authz-enforce flag; return a token for reset.
 
     ``True``/unset means enforcement is ON. ``False`` fail-opens the org-role
@@ -32,7 +32,7 @@ def set_authz_enforce(value: bool) -> Token:
     return _authz_enforce_ctx.set(bool(value))
 
 
-def reset_authz_enforce(token: Token) -> None:
+def reset_authz_enforce(token: Token[bool | None]) -> None:
     """Restore the authz-enforce ContextVar to its pre-request value."""
     _authz_enforce_ctx.reset(token)
 

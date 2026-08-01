@@ -81,7 +81,7 @@ def require_permission(permission: str) -> DependsParameter:
         principal: TenantPrincipal = Depends(get_current_tenant_user),
         session: AsyncSession = Depends(get_db_session),
     ) -> TenantPrincipal:
-        token: Token | None = None
+        token: Token[bool | None] | None = None
         try:
             if principal.organisation_id is not None:
                 async with session.begin():
@@ -251,7 +251,7 @@ def require_target_org_role(permission: str, min_role: str) -> DependsParameter:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid org_id path parameter",
             ) from None
-        token: Token | None = None
+        token: Token[bool | None] | None = None
         try:
             try:
                 async with session.begin():

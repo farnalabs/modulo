@@ -2,10 +2,12 @@
 
 import logging
 import uuid
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -592,8 +594,11 @@ async def admin_set_org_authz_enforce(
     affected = 0
     try:
         async with session.begin():
-            result = await session.execute(
-                update(Organisation).where(Organisation.id == org_id).values(authz_enforce=req.enforce)
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(Organisation).where(Organisation.id == org_id).values(authz_enforce=req.enforce)
+                ),
             )
             affected = result.rowcount or 0
     except ProgrammingError as exc:
