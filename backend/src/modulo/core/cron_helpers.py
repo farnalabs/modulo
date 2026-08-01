@@ -807,8 +807,19 @@ def _atomic_advance_stmt() -> Any:
     )
 
 
-async def _advance_cron_next_fire(session: AsyncSession, trigger_id: uuid.UUID, cron_expression: str) -> bool:
-    nf = compute_next_fire(cron_expression, after=datetime.now(UTC))
+async def _advance_cron_next_fire(
+    session: AsyncSession,
+    trigger_id: uuid.UUID,
+    cron_expression: str,
+    cron_timezone: str | None = None,
+) -> bool:
+    """Atomically advance a cron trigger's ``next_fire_at`` (multi-machine).
+
+    The next fire is computed in the trigger's configured timezone
+    (``cron_timezone``), matching the legacy ``CronFireTask`` behaviour; a
+    non-UTC trigger must not fire on UTC schedules.
+    """
+    nf = compute_next_fire(cron_expression, after=datetime.now(UTC), timezone=cron_timezone or "UTC")
     r = await session.execute(
         _atomic_advance_stmt(),
         {"nf": nf, "tid": str(trigger_id), "ttype": "cron"},
@@ -901,6 +912,7 @@ async def fire_due_triggers() -> dict[str, Any]:
                                 Trigger.pipeline_id,
                                 Trigger.config_json,
                                 Trigger.cron_expression,
+                                Trigger.cron_timezone,
                             ).where(
                                 Trigger.trigger_type == "cron",
                                 Trigger.active.is_(True),
@@ -937,7 +949,7 @@ async def fire_due_triggers() -> dict[str, Any]:
                 for row in cron_rows:
                     summary["cron_due"] += 1
                     try:
-                        if not await _advance_cron_next_fire(session, row.id, row.cron_expression):
+                        if not await _advance_cron_next_fire(session, row.id, row.cron_expression, row.cron_timezone):
                             continue  # another machine advanced this epoch
                     except asyncio.CancelledError:
                         raise
@@ -1146,23 +1158,31 @@ def _resolve_snapshot_id(row: Any, latest_snapshots: dict[uuid.UUID, uuid.UUID])
 async def dispatcher_reconcile() -> dict[str, Any]:
     """System cron — re-dispatch runs whose SAQ job is missing (every 60s).
 
-    Predicate (plan F3c): ``dispatcher='saq'`` AND status IN
-    ('pending','running','awaiting_human','claimed') AND ``queue.job(run:{id})``
-    IS None AND staleness:
+    Predicate (plan F3c): status IN ('pending','running') AND
+    ``queue.job(run:{id})`` IS None AND staleness:
 
-      * pending + dispatched_at IS NULL: NO staleness gate (capacity-deferred ->
-        re-dispatch immediately when capacity frees).
-      * pending + dispatched_at set: stale by the re-enqueue window.
-      * running/awaiting_human/claimed: heartbeat stale by 2*SAQ_JOB_HEARTBEAT.
+      * pending + dispatched_at IS NULL: capacity-deferred — matched on the
+        run's CREATION path (SAQ mode only), NOT ``dispatcher='saq'``, because
+        ``dispatch_run`` returns deferred BEFORE recording dispatched_at/
+        dispatcher. NO staleness gate (re-dispatch when capacity frees).
+      * pending + dispatched_at set: ``dispatcher='saq'``, stale by the
+        re-enqueue window.
+      * running: ``dispatcher='saq'``, heartbeat stale by 2*SAQ_JOB_HEARTBEAT.
+
+    ``awaiting_human``/``claimed`` are NEVER re-dispatched (F6a review): a
+    waiting run's ``execute_run`` job COMPLETED normally at the gate (its TTL
+    expiry + stale heartbeat are the NORMAL waiting state), and the HITL
+    approve/reject endpoints dispatch ``resume_run`` themselves when a human
+    acts. Re-dispatching here would resume with an empty decision and silently
+    auto-approve the gate (executor.aupdate_state({"_hitl_decision": {}})).
 
     On match: verify the Redis read, then PARTIAL-EVICTION repair — DEL the
     abort key, ZREM the incomplete zset, LREM queued/active (all keys derived
     from the configured queue name), then a normal ``queue.enqueue()``. The
     enqueue return is gated: a still-deduped result logs + alerts, never loops.
 
-    Re-dispatch discriminator (F6a): awaiting_human/claimed -> ``resume_run``;
-    pending/running -> ``execute_run``. Capacity-deferred runs are re-dispatched
-    only when their pipeline has free capacity.
+    Re-dispatch type: pending/running -> ``execute_run``. Capacity-deferred
+    runs are re-dispatched only when their pipeline has free capacity.
     """
     from sqlalchemy import and_, or_
 
@@ -1191,6 +1211,29 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     )
     try:
         q = RedisQueue(redis_client, name=queue_name)
+        # Capacity-deferred branch: pending + never dispatched. dispatch_run
+        # returns deferred BEFORE recording dispatched_at/dispatcher, so these
+        # rows carry dispatcher NULL and must be matched on their creation path
+        # (F3c) — but ONLY in SAQ mode, where every dispatch goes through
+        # dispatch_run's capacity gate. In shadow mode a pending+undispatched
+        # run is a not-yet-sent Celery dispatch, not a SAQ capacity deferral.
+        capacity_deferred = and_(
+            Run.status == "pending",
+            Run.dispatched_at.is_(None),
+        )
+        re_dispatch_predicate = or_(
+            *([capacity_deferred] if bool(settings.saq_enabled) else []),
+            and_(
+                Run.status == "pending",
+                Run.dispatcher == "saq",
+                Run.dispatched_at < func_now_minus(reenqueue_window),
+            ),
+            and_(
+                Run.status == "running",
+                Run.dispatcher == "saq",
+                Run.heartbeat_at < func_now_minus(stale_window),
+            ),
+        )
         for org_id in org_ids:
             async with factory() as session, session.begin():
                 await _set_rls_org(session, org_id)
@@ -1205,26 +1248,8 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 Run.heartbeat_at,
                             ).where(
                                 Run.organisation_id == org_id,
-                                Run.dispatcher == "saq",
-                                Run.status.in_(("pending", "running", "awaiting_human", "claimed")),
-                                and_(
-                                    or_(
-                                        # pending + never dispatched: capacity-deferred,
-                                        # NO staleness gate (F3c).
-                                        and_(Run.status == "pending", Run.dispatched_at.is_(None)),
-                                        # pending + dispatched: stale by re-enqueue window.
-                                        and_(
-                                            Run.status == "pending",
-                                            Run.dispatched_at < func_now_minus(reenqueue_window),
-                                        ),
-                                        # running/awaiting_human/claimed: heartbeat stale
-                                        # by 2*SAQ_JOB_HEARTBEAT.
-                                        and_(
-                                            Run.status.in_(("running", "awaiting_human", "claimed")),
-                                            Run.heartbeat_at < func_now_minus(stale_window),
-                                        ),
-                                    )
-                                ),
+                                Run.status.in_(("pending", "running")),
+                                re_dispatch_predicate,
                             )
                         )
                     ).all()
@@ -1236,6 +1261,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
 
                 for row in rows:
                     summary["scanned"] += 1
+                    if row.status in ("awaiting_human", "claimed"):
+                        # Defense-in-depth — the predicate already excludes these
+                        # (F6a): never re-dispatch a run waiting on a human.
+                        summary["skipped"] += 1
+                        continue
                     job_key = f"run:{row.id}"
                     job_id = q.job_id(job_key)
                     try:
@@ -1296,7 +1326,10 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                         )
                         continue
 
-                    job_type = "resume_run" if row.status in ("awaiting_human", "claimed") else "execute_run"
+                    # Only pending/running rows reach here (awaiting_human/claimed
+                    # are excluded by the predicate) — both re-dispatch as
+                    # execute_run (F6a).
+                    job_type = "execute_run"
                     try:
                         outcome, new_job_id = await _re_enqueue_run(q.name, str(row.id), str(org_id), job_type)
                         if outcome == "enqueued":

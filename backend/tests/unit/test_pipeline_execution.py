@@ -729,6 +729,7 @@ class TestCountActiveRuns:
 
 def _saq_settings(**overrides: object) -> MagicMock:
     base = {
+        "saq_runs_queue": "runs",
         "redis_url": "redis://localhost:6379/0",
         "saq_auth_password": "hunter2",
         "saq_auth_username": "modulo-saq",
@@ -778,7 +779,8 @@ class TestSaqWorkerSettings:
     def test_staging_queue_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import modulo.core.saq_worker as sw
 
-        monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
+        # Staging sets SAQ_RUNS_QUEUE=staging-runs; workers derive their queues.
+        monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings(saq_runs_queue="staging-runs"))
         assert sw.staging_runs_settings()["queue"].name == "staging-runs"
         assert sw.staging_system_settings()["queue"].name == "staging-system"
 

@@ -2,7 +2,10 @@
 
 Positive path: a staled dispatched run whose SAQ job hash was evicted is
 re-dispatched by reconcile (DEL abort key + ZREM incomplete + LREM queued +
-normal enqueue). Re-dispatch discriminator: awaiting_human -> resume_run.
+normal enqueue). F6a review: awaiting_human/claimed runs are NEVER
+auto-redispatched (re-dispatch would resume with an empty decision and
+auto-approve the HITL gate). F4: capacity-deferred runs (pending, dispatched_at
+NULL, dispatcher NULL) are re-dispatched when capacity frees.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ async def _seed_saq_run(
     status: str = "running",
     heartbeat_stale: bool = True,
     dispatched: bool = True,
+    dispatcher: str | None = "saq",
 ) -> tuple[uuid.UUID, uuid.UUID]:
     pipeline_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
@@ -63,7 +67,7 @@ async def _seed_saq_run(
                     "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, account_id, trigger_type, "
                     "status, input_hash, langgraph_thread_id, run_number, dispatcher, claim_count, "
                     "heartbeat_at, dispatched_at, saq_job_id, claim_token) "
-                    "VALUES (:id, :oid, :pid, :sid, :uid, 'manual', :status, 'hash', :thread, :rn, 'saq', 1, "
+                    "VALUES (:id, :oid, :pid, :sid, :uid, 'manual', :status, 'hash', :thread, :rn, :disp, 1, "
                     "CASE WHEN :stale THEN now() - interval '30 minutes' ELSE now() END, "
                     "CASE WHEN :dispatched THEN now() - interval '30 minutes' ELSE NULL END, "
                     ":job_id, 'token-a')"
@@ -79,6 +83,7 @@ async def _seed_saq_run(
                     "rn": run_number,
                     "stale": heartbeat_stale,
                     "dispatched": dispatched,
+                    "disp": dispatcher,
                     "job_id": f"saq:job:runs:run:{run_id}",
                 },
             )
@@ -130,9 +135,17 @@ async def test_staled_running_run_with_evicted_job_is_redistpatched(
 
 
 @pytest.mark.asyncio
-async def test_awaiting_human_evicted_job_redispatch_as_resume(
+async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(
     saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """F6a review: a waiting HITL run is NEVER auto-redispatched by reconcile.
+
+    Its ``execute_run`` job COMPLETED normally at the gate — TTL expiry + stale
+    heartbeat are the NORMAL waiting state, not a lost job. Re-dispatching as
+    ``resume_run`` with an empty decision would silently AUTO-APPROVE the gate
+    (executor.aupdate_state({'_hitl_decision': {}}) -> approved). A human acts
+    via the HITL approve/reject endpoint, which dispatches ``resume_run`` itself.
+    """
     monkeypatch.setenv("SAQ_ENABLED", "true")
     from redis import asyncio as aioredis
     from saq.queue.redis import RedisQueue
@@ -147,7 +160,11 @@ async def test_awaiting_human_evicted_job_redispatch_as_resume(
         await redis_client.aclose()
 
     summary = await ch.dispatcher_reconcile()
-    assert summary["repaired"] == 1
+    assert summary["repaired"] == 0
+
+    # The run must NOT be re-dispatched — no job appears and the claim token is
+    # untouched (the gate stays pending on a human).
+    assert not await _job_exists(saq_settings_env, f"run:{run_id}")
 
     from sqlalchemy import NullPool
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -156,13 +173,53 @@ async def test_awaiting_human_evicted_job_redispatch_as_resume(
     try:
         async with eng.connect() as conn:
             row = (
-                await conn.execute(text("SELECT claim_token, saq_job_id FROM runs WHERE id=:rid"), {"rid": str(run_id)})
+                await conn.execute(text("SELECT claim_token, status FROM runs WHERE id=:rid"), {"rid": str(run_id)})
             ).first()
     finally:
         await eng.dispose()
-    # A fresh dispatch rotates the claim token (deterministic saq_job_id stays the same).
-    assert row[0] != "token-a"
+    assert row[0] == "token-a"  # claim token not rotated
+    assert row[1] == "awaiting_human"  # still waiting on the human
+
+
+@pytest.mark.asyncio
+async def test_capacity_deferred_run_redispatched_when_capacity_frees(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F4 review: a capacity-deferred run (pending, dispatched_at NULL,
+    dispatcher NULL) must be re-dispatched when capacity frees. dispatch_run
+    returns deferred BEFORE recording dispatched_at/dispatcher, so the
+    capacity-deferred branch must match on the creation path, not
+    dispatcher='saq'."""
+    monkeypatch.setenv("SAQ_ENABLED", "true")
+    run_id, _ = await _seed_saq_run(
+        db_engine,
+        test_org,
+        test_user,
+        status="pending",
+        dispatched=False,
+        dispatcher=None,
+    )
+
+    summary = await ch.dispatcher_reconcile()
+    assert summary["repaired"] == 1
+
+    # A fresh dispatch records dispatcher='saq' + a fresh claim token, and the
+    # deterministic job key now exists.
     assert await _job_exists(saq_settings_env, f"run:{run_id}")
+
+    from sqlalchemy import NullPool
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
+    try:
+        async with eng.connect() as conn:
+            row = (
+                await conn.execute(text("SELECT dispatcher, claim_token FROM runs WHERE id=:rid"), {"rid": str(run_id)})
+            ).first()
+    finally:
+        await eng.dispose()
+    assert row[0] == "saq"
+    assert row[1] != "token-a"
 
 
 @pytest.mark.asyncio

@@ -89,6 +89,7 @@ def _run_row(run_id: uuid.UUID, status: str, *, dispatched: bool = True, stale: 
 
 def _settings(**overrides: object) -> MagicMock:
     base: dict[str, object] = {
+        "saq_enabled": True,
         "saq_runs_queue": "runs",
         "saq_reenqueue_window": 600,
         "saq_job_heartbeat": 300,
@@ -182,12 +183,65 @@ class TestReconcilePredicateMatrix:
         assert reenqueue.await_args.args[3] == "execute_run"
 
     @pytest.mark.asyncio
-    async def test_awaiting_human_stale_redispatch_resume(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _, _ = await _run_reconcile(
+    async def test_awaiting_human_never_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F6a review: a waiting HITL run must NEVER be re-dispatched — its
+        execute_run job COMPLETED normally at the gate, and re-dispatching as
+        resume_run with an empty decision would auto-approve the gate."""
+        summary, reenqueue, ingest, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)]
         )
+        assert summary["repaired"] == 0
+        assert summary["skipped"] == 1
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_claimed_never_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        summary, reenqueue, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_AWAITING, "claimed", stale=True)])
+        assert summary["repaired"] == 0
+        assert summary["skipped"] == 1
+        reenqueue.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_capacity_deferred_redispatched_in_saq_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Capacity-deferred runs (pending, dispatched_at NULL, dispatcher NULL)
+        must be reachable and re-dispatched when capacity frees (F3c)."""
+        summary, reenqueue, ingest, _ = await _run_reconcile(
+            monkeypatch,
+            [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)],
+            capacity_free=True,
+        )
         assert summary["repaired"] == 1
-        assert reenqueue.await_args.args[3] == "resume_run"
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "execute_run"
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_pending_undispatched_not_redispatched_in_shadow_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """In shadow mode a pending+undispatched run is a not-yet-sent Celery
+        dispatch, not a SAQ capacity deferral — reconcile must not touch it."""
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG]), _rows_result([])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings(saq_enabled=False)),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock) as reenqueue,
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["repaired"] == 0
+        assert summary["scanned"] == 0
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_job_still_exists_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:

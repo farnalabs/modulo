@@ -17,6 +17,7 @@ import modulo.core.saq_worker as sw
 
 def _settings(**overrides: object) -> MagicMock:
     base: dict[str, object] = {
+        "saq_runs_queue": "runs",
         "saq_redis_pool_size": 5,
         "redis_url": "redis://localhost:6379/0",
         "database_url": "postgresql+asyncpg://localhost/test",
@@ -110,9 +111,31 @@ class TestFailClosedAuth:
 
 class TestStagingQueueNames:
     def test_staging_workers_use_dedicated_queues(self) -> None:
-        with patch.object(sw, "get_settings", return_value=_settings()):
+        # Staging configures SAQ_RUNS_QUEUE=staging-runs; the workers derive
+        # their queue names from it (never a hardcoded literal).
+        with patch.object(sw, "get_settings", return_value=_settings(saq_runs_queue="staging-runs")):
             assert sw.staging_runs_settings()["queue"].name == "staging-runs"
             assert sw.staging_system_settings()["queue"].name == "staging-system"
+
+
+class TestQueueDerivation:
+    def test_non_default_saq_runs_queue_used_by_workers(self) -> None:
+        # A non-default SAQ_RUNS_QUEUE must drive the runs worker (dispatch /
+        # fire_due_triggers / health enqueue to the same name).
+        with patch.object(sw, "get_settings", return_value=_settings(saq_runs_queue="my-runs")):
+            assert sw.runs_settings()["queue"].name == "my-runs"
+
+    def test_system_queue_derives_from_runs_queue(self) -> None:
+        # health._configured_queues derives the system queue as
+        # runs_queue.replace("runs", "system") — the worker must match.
+        with patch.object(sw, "get_settings", return_value=_settings(saq_runs_queue="my-runs")):
+            assert sw.system_settings()["queue"].name == "my-system"
+        with patch.object(sw, "get_settings", return_value=_settings(saq_runs_queue="runs")):
+            assert sw.system_settings()["queue"].name == "system"
+
+    def test_system_queue_falls_back_without_runs_substring(self) -> None:
+        with patch.object(sw, "get_settings", return_value=_settings(saq_runs_queue="queue-alpha")):
+            assert sw.system_settings()["queue"].name == "system"
 
 
 class TestSystemWebRunner:
