@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.rate_limiter import RateLimiterRegistry, RedisSlidingWindowRateLimiter
+from modulo.core.rate_limiter import (
+    WINDOW_SECONDS,
+    RateLimiterRegistry,
+    RateLimitRule,
+    RedisSlidingWindowRateLimiter,
+)
 
 
 @pytest.fixture
@@ -22,7 +27,7 @@ def mock_redis():
 
 
 class TestRedisSlidingWindowRateLimiter:
-    @pytest.mark.parametrize("zcard_value,expected", [(1, True), (5, True), (6, False)])
+    @pytest.mark.parametrize("zcard_value,expected", [(0, True), (1, True), (5, True), (6, False)])
     async def test_check_limit(self, mock_redis, zcard_value, expected):
         mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, zcard_value, True))
         limiter = RedisSlidingWindowRateLimiter(mock_redis)
@@ -38,15 +43,33 @@ class TestRedisSlidingWindowRateLimiter:
         assert redis_key == "rl:mykey"
         pipe.zremrangebyscore.assert_called_once()
         assert pipe.zremrangebyscore.call_args[0][0] == "rl:mykey"
+        pipe.zcard.assert_called_once()
+        assert pipe.zcard.call_args[0][0] == "rl:mykey"
+        pipe.expire.assert_called_once()
+        assert pipe.expire.call_args[0][0] == "rl:mykey"
 
-    async def test_uses_custom_window(self, mock_redis):
+    async def test_pipeline_created_transactional(self, mock_redis):
+        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+        await limiter.check("k", max_requests=5)
+        mock_redis.pipeline.assert_called_once_with(transaction=True)
+
+    async def test_prunes_entries_older_than_window(self, mock_redis):
         limiter = RedisSlidingWindowRateLimiter(mock_redis)
         await limiter.check("k", max_requests=5, window_s=120)
         pipe = mock_redis.pipeline.return_value
         pipe.zremrangebyscore.assert_called_once()
-        _, _, cutoff = pipe.zremrangebyscore.call_args[0]
+        _, lower_bound, cutoff = pipe.zremrangebyscore.call_args[0]
+        assert lower_bound == 0
         now = time.time()
         assert abs(cutoff - (now - 120)) < 2
+
+    async def test_uses_default_window(self, mock_redis):
+        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+        await limiter.check("k", max_requests=5)
+        pipe = mock_redis.pipeline.return_value
+        _, _, cutoff = pipe.zremrangebyscore.call_args[0]
+        now = time.time()
+        assert abs(cutoff - (now - WINDOW_SECONDS)) < 2
 
     async def test_expires_key_at_double_window(self, mock_redis):
         limiter = RedisSlidingWindowRateLimiter(mock_redis)
@@ -68,6 +91,13 @@ class TestRedisSlidingWindowRateLimiter:
         assert ts == str(score)
 
 
+class TestRateLimitRule:
+    def test_default_window_and_no_key_fn(self):
+        rule = RateLimitRule(path_prefix="/api/v1/runs", max_requests=60)
+        assert rule.window_s == WINDOW_SECONDS
+        assert rule.key_fn is None
+
+
 class TestRateLimiterRegistry:
     @pytest.mark.parametrize(
         "redis_result,expected",
@@ -81,6 +111,14 @@ class TestRateLimiterRegistry:
         mock_redis.pipeline.return_value.execute = AsyncMock(return_value=redis_result)
         registry = RateLimiterRegistry(redis_client=mock_redis)
         assert await registry.check("k", max_requests=5) is expected
+
+    async def test_registry_forwards_window(self, mock_redis):
+        registry = RateLimiterRegistry(redis_client=mock_redis)
+        await registry.check("k", max_requests=5, window_s=90)
+        pipe = mock_redis.pipeline.return_value
+        _, _, cutoff = pipe.zremrangebyscore.call_args[0]
+        now = time.time()
+        assert abs(cutoff - (now - 90)) < 2
 
     def test_requires_redis_client(self):
         with pytest.raises(ValueError, match="requires a Redis client"):
