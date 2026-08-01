@@ -26,7 +26,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
+from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent

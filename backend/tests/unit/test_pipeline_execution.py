@@ -756,7 +756,18 @@ class TestSaqWorkerSettings:
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
         assert settings["timers"] == {"schedule": 5, "worker_info": 89, "sweep": 60, "abort": 1}
-        assert settings["cron_jobs"] == []
+        # PR B-2: system crons wired (fire_due_triggers, reconcile, claim-expiry,
+        # retention, webhook-dedup, stale recovery).
+        cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
+        assert cron_names == {
+            "fire_due_triggers",
+            "dispatcher_reconcile",
+            "claim_expiry",
+            "retention_cleanup",
+            "webhook_dedup_cleanup",
+            "stale_run_recovery",
+        }
+        assert settings["after_process"] is not None
 
     def test_staging_queue_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import modulo.core.saq_worker as sw
@@ -789,6 +800,6 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         monkeypatch.setattr(sw.aioredis, "from_url", _fake_from_url)
         sw.runs_settings()
-        assert captured["connection_timeout"] == 10
+        assert captured["socket_connect_timeout"] == 10
         assert captured["socket_keepalive"] is True
         assert captured["max_connections"] == 5

@@ -30,12 +30,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.orm import Session
 
 from modulo.db.crud.run import get_run
 
@@ -57,11 +59,71 @@ RUN_COMPLETE_STATUS = "complete"
 
 _DEFAULT_CLAIM_CAP = 5
 
+# SAQ run claim cap (plan F6a) — distinct per-claim value; SAQ retries reuse the
+# same saq_job_id, so the cap bounds re-claims on an at-most-once boundary.
+SAQ_RUN_CLAIM_CAP = 20
+
 
 def get_settings() -> Any:
     from modulo.settings import get_settings as _get_settings
 
     return _get_settings()
+
+
+class SchedulerDBError(Exception):
+    """Raised when a scheduler DB query fails transiently.
+
+    Relocated from ``modulo.core.pipeline_executor_task`` (PR B-2, plan F1) so
+    the SAQ scheduler modules never import the Celery task module that PR C
+    deletes.
+    """
+
+    pass
+
+
+def _make_sync_url(database_url: str) -> str:
+    """Convert async DB URL to sync by replacing async driver with sync equivalent."""
+    return (
+        database_url.replace("+asyncpg", "+psycopg").replace("+aiomysql", "+mysqldb").replace("+aiosqlite", "+pysqlite")
+    )
+
+
+_sync_beat_engine: Any = None
+_sync_beat_lock = threading.Lock()
+
+
+def get_beat_sync_session() -> Session:
+    """Return a sync SQLAlchemy session for the Celery beat scheduler.
+
+    Uses a dedicated engine separate from the worker's sync pool to avoid
+    contention between beat polling and task execution. Relocated from
+    ``modulo.core.pipeline_executor_task`` (PR B-2, plan F1).
+    """
+    global _sync_beat_engine
+    if _sync_beat_engine is None:
+        with _sync_beat_lock:
+            if _sync_beat_engine is None:
+                s = get_settings()
+                sync_url = _make_sync_url(str(s.database_url))
+                _sync_beat_engine = create_engine(
+                    sync_url,
+                    pool_size=s.modulo_celery_db_pool_sync_size,
+                    max_overflow=s.modulo_celery_db_pool_sync_overflow,
+                    pool_pre_ping=True,
+                    pool_recycle=300,
+                    pool_use_lifo=False,
+                    pool_timeout=s.modulo_celery_db_pool_sync_timeout,
+                )
+    from sqlalchemy.orm import sessionmaker
+
+    return sessionmaker(bind=_sync_beat_engine)()
+
+
+def dispose_beat_sync_engine() -> None:
+    global _sync_beat_engine
+    if _sync_beat_engine is not None:
+        _sync_beat_engine.dispose()
+        _sync_beat_engine = None
 
 
 def _resolve_claim_stale_seconds(*, legacy: bool, stale_seconds: int | None) -> int:
@@ -377,3 +439,114 @@ async def stale_run_recovery_sweep(
             "worker_lost_swept": 0,
             "error": "sweep_failed",
         }
+
+
+# ---------------------------------------------------------------------------
+# HITL resume (plan F6a) — resume_run claim variant + execution
+# ---------------------------------------------------------------------------
+
+
+def build_resume_claim_update(*, stale_seconds: int, claim_cap: int = SAQ_RUN_CLAIM_CAP) -> Any:
+    """Build the atomic claim UPDATE for a resumed HITL run.
+
+    Claimable rows (plan F6a):
+
+      * ``status IN ('awaiting_human', 'claimed')`` — the gate decision has
+        already been committed by the caller, the run is waiting to resume.
+      * ``status = 'running'`` with a stale heartbeat — a mid-resume crash left
+        the run running but the worker died.
+
+    The single ``UPDATE ... WHERE ... RETURNING id`` claims atomically
+    (no check-then-act window); a concurrent claimer loses because the row
+    transitions out of the claimable state in the same statement.
+    """
+    return text(
+        "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
+        "WHERE id=:rid AND organisation_id=:oid "
+        "AND (status IN ('awaiting_human', 'claimed') "
+        "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
+        "AND claim_count < :claim_cap "
+        "RETURNING id"
+    )
+
+
+def _resume_claim_params(run_id: str, org_id: str, stale_seconds: int, claim_cap: int) -> dict[str, object]:
+    return {"rid": run_id, "oid": org_id, "stale_seconds": stale_seconds, "claim_cap": claim_cap}
+
+
+async def claim_resume_run_async(
+    aengine: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    claim_cap: int = SAQ_RUN_CLAIM_CAP,
+) -> bool:
+    """Claim an awaiting_human/claimed (or stale-running) run for resume.
+
+    Idempotent: a second claimer finds the row already ``running`` with a fresh
+    heartbeat and loses the atomic UPDATE. The gate decision itself is committed
+    by the caller (HITL endpoints / recover-node) before dispatch.
+    """
+    stale_seconds = int(get_settings().run_claim_stale_seconds)
+    try:
+        async with aengine.connect() as c, c.begin():
+            result = await c.execute(
+                build_resume_claim_update(stale_seconds=stale_seconds, claim_cap=claim_cap),
+                _resume_claim_params(run_id, org_id, stale_seconds, claim_cap),
+            )
+            return result.fetchone() is not None
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.resume_claim_failed run=%s", run_id)
+        return False
+
+
+async def resume_run(
+    *,
+    async_engine: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    resume_data: dict[str, Any] | None = None,
+    job: Any = None,
+    claim_cap: int = SAQ_RUN_CLAIM_CAP,
+) -> dict[str, Any]:
+    """Resume an interrupted HITL run (SAQ ``resume_run`` job).
+
+    Claims the run via :func:`claim_resume_run_async`, loads the executor, and
+    streams the graph from the checkpoint with *resume_data* as the gate
+    decision (plan F6a). Mirrors :func:`execute_run`'s cancellation-safe
+    heartbeat/complete structure: the heartbeat loop is cancelled in ``finally``
+    and completion is written by :func:`mark_complete` (genuine completion only).
+    """
+    rid = uuid.UUID(run_id)
+    oid = uuid.UUID(org_id)
+
+    claimed = await claim_resume_run_async(async_engine, str(rid), str(oid), claim_cap=claim_cap)
+    if not claimed:
+        _log.warning("resume_run: run %s not claimed (wrong state or claim cap)", rid)
+        return {"status": "not_claimed"}
+
+    run, executor = await load_and_setup(async_engine, rid, oid)
+    if run is None:
+        return {"status": "missing"}
+
+    heartbeat_task: asyncio.Task[Any] | None = None
+    try:
+        heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
+            heartbeat_loop(async_engine, str(rid), str(oid), job=job),
+            name=f"resume-heartbeat-{rid}",
+        )
+        await executor.resume(run_id=rid, org_id=oid, resume_data=resume_data or {})
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("resume_run failed for run %s", rid)
+    finally:
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+    await mark_complete(async_engine, str(rid), str(oid))
+    return {"status": "complete"}

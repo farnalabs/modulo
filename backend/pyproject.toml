@@ -95,7 +95,7 @@ dependencies = [
     "tqdm>=4.68.3",
     "langchain-ibm>=1.1.0",
     "redis>=6.4.0,<6.5",
-    "saq==0.26.4",
+    "saq[web]==0.26.4",
 ]
 
 [project.urls]

@@ -1545,6 +1545,60 @@ async def admin_dashboard_summary(
     return await _dashboard_summary(session=session, principal=current_user)
 
 
+# ── SAQ Queue Metrics (API-only, plan F7) ─────────────────────────────────
+
+
+class QueueMetricsResponse(BaseModel):
+    queues: dict[str, int]
+
+
+@handle_db_errors("admin.queue_metrics")
+@router.get("/queues/metrics", response_model=QueueMetricsResponse)
+async def admin_queue_metrics(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+) -> QueueMetricsResponse:
+    """LLEN of both configured SAQ queues (runs + system), PREFIX-AWARE.
+
+    Queue names derive from ``SAQ_RUNS_QUEUE`` (``runs`` or ``staging-runs``);
+    the system queue is derived the same way the workers derive it. API-only —
+    no frontend card in this PR.
+    """
+    import contextlib
+
+    import redis.asyncio as aioredis
+
+    from modulo.settings import get_settings
+
+    _require_org_admin(current_user)
+    settings = get_settings()
+    runs_queue = settings.saq_runs_queue
+    system_queue = runs_queue.replace("runs", "system") if "runs" in runs_queue else "system"
+    queues: dict[str, int] = {runs_queue: 0, system_queue: 0}
+    r: aioredis.Redis | None = None
+    try:
+        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
+        for qname in queues:
+            try:
+                # LLEN via execute_command — redis stubs type llen() as a
+                # non-awaitable union, which breaks strict mypy.
+                val = await r.execute_command("LLEN", f"saq:{qname}:queued")
+                queues[qname] = int(val or 0)
+            except Exception:
+                logger.warning("admin.queue_metrics.llen_failed queue=%s", qname)
+    except Exception as exc:
+        logger.warning("admin.queue_metrics.redis_failed: %s", exc)
+        err = HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redis unavailable for queue metrics",
+        )
+        raise err from exc
+    finally:
+        if r is not None:
+            with contextlib.suppress(Exception):
+                await r.aclose()
+    return QueueMetricsResponse(queues=queues)
+
+
 # ── Billing Overview ─────────────────────────────────────────
 
 

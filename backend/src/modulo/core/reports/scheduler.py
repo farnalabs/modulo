@@ -33,7 +33,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.pipeline_executor_task import SchedulerDBError
+from modulo.core.pipeline_execution import SchedulerDBError
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.settings import get_settings
 
@@ -545,7 +545,7 @@ class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does n
         try:
             from datetime import UTC, datetime
 
-            from modulo.core.pipeline_executor_task import SchedulerDBError, get_beat_sync_session
+            from modulo.core.pipeline_execution import SchedulerDBError, get_beat_sync_session
             from modulo.db.models.scheduled_report import ScheduledReport
 
             session = get_beat_sync_session()

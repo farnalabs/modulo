@@ -169,7 +169,7 @@ def test_due_selection_requires_active_non_null_due_time() -> None:
     session.execute.return_value = result
     scheduler = object.__new__(DatabaseReportScheduler)
 
-    with patch("modulo.core.pipeline_executor_task.get_beat_sync_session", return_value=session):
+    with patch("modulo.core.pipeline_execution.get_beat_sync_session", return_value=session):
         assert scheduler._fetch_due_reports() == []
 
     statement = session.execute.call_args[0][0]
