@@ -57,6 +57,11 @@ SAQ_JOB_HEARTBEAT = 300
 # db/models/run.py:ck_runs_status.
 RUN_COMPLETE_STATUS = "complete"
 
+# Durable backstop for capacity-blocked pending runs. Sized to exceed the
+# worst-case queue wait: (max_concurrent - 1) * node timeout, with margin for
+# the 120->600s exponential retry backoff plus worker restarts.
+CAPACITY_TIMEOUT_TTL_MINUTES = 120
+
 _DEFAULT_CLAIM_CAP = 5
 
 # SAQ run claim cap (plan F6a) — distinct per-claim value; SAQ retries reuse the
@@ -402,11 +407,31 @@ async def stale_run_recovery_sweep(
                     "SET status = 'failed', error_code = 'never_dispatched', completed_at = now() "
                     "WHERE status = 'pending' "
                     "AND created_at < now() - (:nd_window * interval '1 second') "
-                    "AND dispatched_at IS NULL"
+                    "AND dispatched_at IS NULL "
+                    "AND cancellation_requested = false "
+                    "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity'))"
                 ),
                 {"nd_window": nd_window},
             )
             never_count = never_result.rowcount
+
+            # Durable backstop for capacity-blocked runs. The in-process retry
+            # accelerator (PipelineExecutor._retry_pending) handles normal slot
+            # pickup; this branch terminal-fails reason-marked pending runs that
+            # outlived the TTL (e.g. stranded by a worker restart). Anchored on
+            # created_at — the re-dispatch cycle rewrites updated_at/last marker.
+            capacity_timeout_result = await conn.execute(
+                text(
+                    "UPDATE runs "
+                    "SET status = 'failed', error_code = 'capacity_timeout', completed_at = now() "
+                    "WHERE status = 'pending' "
+                    "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+                    "AND created_at < now() - (:ttl * interval '1 minute') "
+                    "AND cancellation_requested = false"
+                ),
+                {"ttl": CAPACITY_TIMEOUT_TTL_MINUTES},
+            )
+            capacity_timeout_count = capacity_timeout_result.rowcount
 
             lost_result = await conn.execute(
                 text(
@@ -420,15 +445,17 @@ async def stale_run_recovery_sweep(
             )
             lost_count = lost_result.rowcount
 
-        if never_count or lost_count:
+        if never_count or lost_count or capacity_timeout_count:
             _log.info(
-                "Stale run recovery: %d never-dispatched, %d worker-lost runs swept",
+                "Stale run recovery: %d never-dispatched, %d capacity-timeout, %d worker-lost runs swept",
                 never_count,
+                capacity_timeout_count,
                 lost_count,
             )
         return {
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
+            "capacity_timeout_swept": capacity_timeout_count,
         }
     except asyncio.CancelledError:
         raise
@@ -437,6 +464,7 @@ async def stale_run_recovery_sweep(
         return {
             "never_dispatched_swept": 0,
             "worker_lost_swept": 0,
+            "capacity_timeout_swept": 0,
             "error": "sweep_failed",
         }
 

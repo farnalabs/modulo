@@ -36,7 +36,11 @@ from modulo.db.crud.publisher import (
 from modulo.db.crud.publisher import (
     update_publisher as crud_update_publisher,
 )
-from modulo.db.crud.run import batch_delete_old_terminal_runs, purge_runs
+from modulo.db.crud.run import (
+    batch_delete_old_terminal_runs,
+    get_sandbox_concurrency_limit,
+    purge_runs,
+)
 from modulo.db.crud.team import create_team, delete_team, get_team_by_name, list_teams
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
@@ -3080,6 +3084,161 @@ async def admin_update_retention(
         },
     )
     return RetentionConfigResponse(retention_days=req.retention_days)
+
+
+# ── Org Sandbox Concurrency Limit ─────────────────────────────────────────
+# Org self-service route: principal's own org only (never from path/body), so
+# cross-org writes are structurally impossible.
+
+
+class SandboxConcurrencyResponse(BaseModel):
+    sandbox_concurrency_limit: int | None = None
+
+
+class UpdateSandboxConcurrencyRequest(BaseModel):
+    sandbox_concurrency_limit: int | None = Field(default=None, ge=1, le=100)
+
+
+@router.get("/org/sandbox-concurrency", response_model=SandboxConcurrencyResponse)
+async def admin_get_sandbox_concurrency(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> SandboxConcurrencyResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can view sandbox concurrency",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            limit = await get_sandbox_concurrency_limit(session, current_user.organisation_id)
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        logger.exception("admin.admin_get_sandbox_concurrency")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+
+    return SandboxConcurrencyResponse(sandbox_concurrency_limit=limit)
+
+
+@router.put("/org/sandbox-concurrency", response_model=SandboxConcurrencyResponse, status_code=status.HTTP_200_OK)
+async def admin_update_sandbox_concurrency(
+    req: UpdateSandboxConcurrencyRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> SandboxConcurrencyResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can update sandbox concurrency",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+            settings = dict(org.settings_json) if org.settings_json else {}
+            settings["sandbox_concurrency_limit"] = req.sandbox_concurrency_limit
+            org.settings_json = settings
+            await session.flush()
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        logger.exception("admin.admin_update_sandbox_concurrency")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+
+    from modulo.core.audit_logger import append_audit_event
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="org.sandbox_concurrency_updated",
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={"sandbox_concurrency_limit": req.sandbox_concurrency_limit},
+            )
+    except IntegrityError:
+        logger.exception("admin.admin_update_sandbox_concurrency.audit")
+    except ProgrammingError:
+        logger.warning(
+            "sandbox_concurrency audit event ProgrammingError — limit was updated",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "sandbox_concurrency_limit": req.sandbox_concurrency_limit,
+            },
+        )
+    except SQLAlchemyError:
+        logger.warning(
+            "sandbox_concurrency audit event SQLAlchemyError — limit was updated",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "sandbox_concurrency_limit": req.sandbox_concurrency_limit,
+            },
+        )
+
+    logger.info(
+        "sandbox_concurrency.updated",
+        extra={
+            "org_id": str(current_user.organisation_id),
+            "sandbox_concurrency_limit": req.sandbox_concurrency_limit,
+        },
+    )
+    return SandboxConcurrencyResponse(sandbox_concurrency_limit=req.sandbox_concurrency_limit)
 
 
 @handle_db_errors("admin.admin_get_storage")
