@@ -23,6 +23,18 @@ routes:
         deprecated: false
         exact: true
 
+    /oauth/authorize:
+        name: oauth-authorize
+        breadcrumb: Authorize
+        parent:
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: page
+        <<: *community
+        deprecated: false
+        exact: true
+
     /library/:id/create-pipeline:
         name: library-pipeline-wizard
         breadcrumb: Create Pipeline

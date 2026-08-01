@@ -131,6 +131,18 @@ wheels = [
 ]
 
 [[package]]
+name = "aiohttp-basicauth"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/02/53/8dbcc0ab82c8b5cd33b0e74633b3819848552a3b8d62b0bb15cc0df80c96/aiohttp_basicauth-1.2.0.tar.gz", hash = "sha256:cc489f3fae191c1eca5bead09a152a23b57527bb74774e6d410aaeadb7cc63bb", size = 7925, upload-time = "2026-06-05T12:58:21.147Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/54/f2e5d09f65092b6a5e964ab10b807edb3b605a8589a67c798fb9c31c2a4a/aiohttp_basicauth-1.2.0-py3-none-any.whl", hash = "sha256:2a30373b0b799987eb61c215db3b62e4b4900a718d4a2b2170a15ee946854e71", size = 7487, upload-time = "2026-06-05T12:58:19.918Z" },
+]
+
+[[package]]
 name = "aiomysql"
 version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1212,7 +1224,7 @@ dependencies = [
     { name = "python3-saml" },
     { name = "pyyaml" },
     { name = "redis" },
-    { name = "saq" },
+    { name = "saq", extra = ["web"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "starlette" },
     { name = "tenacity" },
@@ -1361,7 +1373,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'dev'", specifier = ">=2.31.0" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
-    { name = "saq", specifier = "==0.26.4" },
+    { name = "saq", extras = ["web"], specifier = "==0.26.4" },
     { name = "schemathesis", marker = "extra == 'dev'", specifier = ">=3.30.0" },
     { name = "semgrep", marker = "extra == 'dev'", specifier = ">=1.70.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
@@ -5395,6 +5407,12 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/da/b3/38c164b8766e6ac92e9faf961f4dd1103580227edbd95da18f08c07233de/saq-0.26.4.tar.gz", hash = "sha256:e29a3c8b7df722c28f6b8db9566571fc0bbdb32d0fcccbaa3af9517f46a6011c", size = 75417, upload-time = "2026-05-21T15:00:55.144Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7e/82/cf178bee890a1b7e17950c778c752b7dc342c93f254bc3143a4375378a52/saq-0.26.4-py3-none-any.whl", hash = "sha256:7a1f81ae2a95b6c34b170bc9b8cf84423052d9612f62cf0ec426c1fd27e35b2c", size = 63222, upload-time = "2026-05-21T15:00:53.503Z" },
+]
+
+[package.optional-dependencies]
+web = [
+    { name = "aiohttp" },
+    { name = "aiohttp-basicauth" },
 ]
 
 [[package]]

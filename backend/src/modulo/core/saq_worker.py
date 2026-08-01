@@ -3,10 +3,13 @@
 Two worker processes (plan F1/F2):
 
 * ``runs_settings`` — queue ``runs``, concurrency 10, no web UI. Executes
-  ``execute_run``/``resume_run`` jobs (wired in PR B).
+  ``execute_run``/``resume_run`` jobs and the per-item fire jobs
+  (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``).
 * ``system_settings`` — queue ``system``, concurrency 10, web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
-  ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set.
+  ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
+  crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
+  webhook-dedup cleanup, stale_run_recovery.
 
 Staging uses the SAME workers on dedicated queue names so a staging worker can
 never dequeue production system jobs: ``staging_runs_settings`` (queue
@@ -16,13 +19,16 @@ SAQ 0.26.4 CLI invocation (no ``worker`` subcommand — the settings path is the
 only positional arg)::
 
     python -m saq core.saq_worker.runs_settings
-    python -m saq core.saq_worker.system_settings --web --port 8081
 
-The plain ``--web`` CLI binds 0.0.0.0 (aiohttp ``run_app`` has no ``host``
-flag). The system worker therefore ships a CUSTOM RUNNER
-(:func:`run_system_web`) that calls ``aiohttp.web.run_app(host="127.0.0.1")``
-and maps ``SAQ_AUTH_USERNAME`` to the ``AUTH_USER`` env var SAQ's web reads
-(``saq/web/aiohttp.py``). Run it instead of the CLI::
+The ``runs`` worker has no web UI and uses the plain CLI. The ``system`` worker
+MUST NOT use ``python -m saq core.saq_worker.system_settings --web`` — the plain
+``--web`` CLI binds 0.0.0.0 (aiohttp ``run_app`` has no ``host`` flag) and does
+NOT set the ``AUTH_PASSWORD``/``AUTH_USER`` env vars that ``saq/web/aiohttp.py``
+requires for BasicAuth. The system worker therefore ships a CUSTOM RUNNER
+(:func:`run_system_web`) that runs the worker (queue=system, crons + functions)
+and the web app in the same process, calling ``aiohttp.web.run_app(host=
+"127.0.0.1")`` and mapping ``SAQ_AUTH_USERNAME``/``SAQ_AUTH_PASSWORD`` to the
+``AUTH_USER``/``AUTH_PASSWORD`` env vars SAQ's web reads. Run it instead::
 
     python -m modulo.core.saq_worker
 """
@@ -30,15 +36,21 @@ and maps ``SAQ_AUTH_USERNAME`` to the ``AUTH_USER`` env var SAQ's web reads
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 import os
 import signal
+import uuid
 from typing import Any
 
 from redis import asyncio as aioredis
-from saq import Worker
+from saq import CronJob, Worker
 from saq.queue.redis import RedisQueue
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from modulo.settings import get_settings
+
+_log = logging.getLogger(__name__)
 
 # Shared worker lifecycle knobs (plan F2).
 # SAQ runs asyncio jobs in a single process sharing one engine, so raising
@@ -56,32 +68,380 @@ _TIMERS: dict[str, float] = {"schedule": 5, "worker_info": 89, "sweep": 60, "abo
 _SYSTEM_WEB_HOST = "127.0.0.1"
 _SYSTEM_WEB_PORT = 8081
 
+# Job function names — must match the strings enqueued by dispatch_run
+# (modulo.core.dispatch) and fire_due_triggers (modulo.core.cron_helpers).
+_RUNS_FUNCTIONS: list[tuple[str, Any]] = []
+
+# Engine for run execution (SAQ path) — per-worker DB pool (plan F4).
+_ASYNC_ENGINE: AsyncEngine | None = None
+
+
+def _get_async_engine() -> AsyncEngine:
+    global _ASYNC_ENGINE
+    if _ASYNC_ENGINE is None:
+        settings = get_settings()
+        kw: dict[str, Any] = {"url": settings.database_url}
+        if settings.modulo_db.lower() == "postgres":
+            kw["connect_args"] = {"timeout": 10, "ssl": False}
+            kw["pool_size"] = settings.saq_worker_db_pool_size
+            kw["max_overflow"] = 0
+        _ASYNC_ENGINE = create_async_engine(**kw)
+    return _ASYNC_ENGINE
+
 
 def _build_queue(queue_name: str) -> RedisQueue:
     """Build an SAQ RedisQueue with the Upstash-pinned client knobs (F2)."""
     settings = get_settings()
     redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
         settings.redis_url,
-        connection_timeout=10,
+        socket_connect_timeout=10,
         socket_keepalive=True,
         max_connections=settings.saq_redis_pool_size,
     )
-    return RedisQueue(redis=redis_client, name=queue_name)
+    return RedisQueue(redis_client, name=queue_name)
 
 
-def _base_worker_settings(queue_name: str) -> dict[str, Any]:
+# ---------------------------------------------------------------------------
+# Job functions — execute / resume (plan F4 / F6a)
+# ---------------------------------------------------------------------------
+
+
+async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[str, Any]:
+    """SAQ ``execute_run`` job — claim + execute + complete (SAQ claim window)."""
+    from modulo.core.pipeline_execution import (
+        claim_run_async,
+        heartbeat_loop,
+        load_and_setup,
+        mark_complete,
+    )
+
+    aeng = _get_async_engine()
+    rid = uuid.UUID(run_id)
+    oid = uuid.UUID(org_id)
+    job = ctx.get("job")
+
+    claimed = await claim_run_async(aeng, run_id, org_id, legacy=False)
+    if not claimed:
+        _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
+        return {"status": "not_claimed"}
+
+    run, executor = await load_and_setup(aeng, rid, oid)
+    if run is None:
+        return {"status": "missing"}
+
+    heartbeat_task: asyncio.Task[Any] | None = None
+    try:
+        heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
+            heartbeat_loop(aeng, run_id, org_id, job=job),
+            name=f"saq-heartbeat-{rid}",
+        )
+        await executor.execute(run_id=rid, org_id=oid, input_payload=run.input_payload or {})
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("SAQ execute_run failed for run %s", rid)
+    finally:
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+    await mark_complete(aeng, run_id, org_id)
+    return {"status": "complete"}
+
+
+async def resume_run(
+    ctx: dict[str, Any],
+    *,
+    run_id: str,
+    org_id: str,
+    resume_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """SAQ ``resume_run`` job — claim (awaiting_human/claimed or stale-running) + resume."""
+    from modulo.core.pipeline_execution import resume_run as resume_run_core
+
+    aeng = _get_async_engine()
+    return await resume_run_core(
+        async_engine=aeng,
+        run_id=run_id,
+        org_id=org_id,
+        resume_data=resume_data,
+        job=ctx.get("job"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Job functions — per-item fire jobs (plan F1)
+# ---------------------------------------------------------------------------
+
+
+async def fire_cron_trigger(
+    ctx: dict[str, Any],
+    *,
+    trigger_id: str,
+    org_id: str,
+    pipeline_id: str,
+    cron_expression: str,
+    snapshot_id: str = "",
+) -> dict[str, Any]:
+    """Per-item cron fire job — fire + dispatch the created run (SAQ)."""
+    from modulo.core import cron_helpers as _ch
+    from modulo.core.dispatch import dispatch_run
+
+    result = await _ch.fire_cron_trigger(
+        trigger_id=uuid.UUID(trigger_id),
+        org_id=uuid.UUID(org_id),
+        pipeline_id=uuid.UUID(pipeline_id),
+        cron_expression=cron_expression,
+        snapshot_id=uuid.UUID(snapshot_id) if snapshot_id else None,
+    )
+    if result.get("status") == "fired" and result.get("run_id"):
+        try:
+            outcome, job_id = await dispatch_run(result["run_id"], org_id, queue=get_settings().saq_runs_queue)
+            result["dispatch"] = outcome
+            result["job_id"] = job_id
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("fire_cron_trigger: dispatch failed for run %s", result["run_id"])
+    return result
+
+
+async def fire_polling_trigger(
+    ctx: dict[str, Any],
+    *,
+    trigger_id: str,
+    org_id: str,
+    pipeline_id: str,
+    connector_instance_id: str,
+    poll_query: str,
+    condition_expression: str | None = None,
+) -> dict[str, Any]:
+    """Per-item polling fire job — fire + dispatch the created run (SAQ)."""
+    from modulo.core import cron_helpers as _ch
+    from modulo.core.dispatch import dispatch_run
+
+    result = await _ch.fire_polling_trigger(
+        trigger_id=uuid.UUID(trigger_id),
+        org_id=uuid.UUID(org_id),
+        pipeline_id=uuid.UUID(pipeline_id),
+        connector_instance_id=uuid.UUID(connector_instance_id),
+        poll_query=poll_query,
+        condition_expression=condition_expression,
+    )
+    if result.get("status") == "fired" and result.get("run_id"):
+        try:
+            outcome, job_id = await dispatch_run(result["run_id"], org_id, queue=get_settings().saq_runs_queue)
+            result["dispatch"] = outcome
+            result["job_id"] = job_id
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("fire_polling_trigger: dispatch failed for run %s", result["run_id"])
+    return result
+
+
+async def fire_report_trigger(ctx: dict[str, Any], *, report_id: str, org_id: str) -> dict[str, Any]:
+    """Per-item report fire job — generate + deliver (SAQ bounded job)."""
+    from modulo.core import cron_helpers as _ch
+
+    return await _ch.fire_report_trigger(report_id=uuid.UUID(report_id), org_id=uuid.UUID(org_id))
+
+
+# ---------------------------------------------------------------------------
+# Job functions — system worker (plan F1 / F3c / PR B step 6)
+# ---------------------------------------------------------------------------
+
+
+async def fire_due_triggers(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — read due rows, atomic next_fire_at advance, enqueue fire jobs."""
+    from modulo.core import cron_helpers as _ch
+
+    return await _ch.fire_due_triggers()
+
+
+async def dispatcher_reconcile(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — re-dispatch runs whose SAQ job is missing (every 60s)."""
+    from modulo.core import cron_helpers as _ch
+
+    return await _ch.dispatcher_reconcile()
+
+
+async def claim_expiry(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — expire stale HITL claims (SAQ SOLE writer/notifier, F1)."""
+    from modulo.core.hitl_manager.expiry_job import expire_stale_claims
+    from modulo.core.notifier import Notifier
+
+    settings = get_settings()
+    factory = _make_session_factory()
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(_get_async_engine(), settings.fernet_key)
+    except Exception:
+        _log.exception("claim_expiry: notifier init failed — DB expiry still runs")
+    expired = await expire_stale_claims(factory, notifier=notifier)
+    return {"expired": len(expired)}
+
+
+async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — batch-delete terminal runs older than the retention window."""
+    from modulo.db.crud.run import batch_delete_old_terminal_runs
+
+    async with _make_session_factory()() as session, session.begin():
+        deleted = await batch_delete_old_terminal_runs(session)
+    if deleted:
+        _log.info("saq.retention_cleanup.deleted_old_runs", extra={"count": deleted})
+    return {"deleted": deleted}
+
+
+async def webhook_dedup_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — purge old webhook trigger events (30-day retention)."""
+    from modulo.core.cleanup_jobs.webhook_dedup_cleanup import cleanup_old_webhook_events
+
+    total = 0
+    async with _make_session_factory()() as session:
+        while True:
+            deleted = await cleanup_old_webhook_events(session)
+            total += deleted
+            if deleted < 1000:
+                break
+    return {"deleted": total}
+
+
+async def stale_run_recovery(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — legacy stale-run sweep, scoped to non-SAQ rows (F1)."""
+    from modulo.core.pipeline_execution import stale_run_recovery_sweep
+
+    return await stale_run_recovery_sweep(_get_async_engine())
+
+
+# ---------------------------------------------------------------------------
+# Worker settings
+# ---------------------------------------------------------------------------
+
+_HOSTNAME = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
+
+
+def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, Any]:
     return {
         "queue": _build_queue(queue_name),
-        # SAQ job functions (execute_run, resume_run, fire_*, report,
-        # dispatcher_reconcile) are wired in PR B. An empty list keeps the
-        # Worker constructible during PR A.
-        "functions": [],
+        "functions": functions,
         "concurrency": _WORKER_CONCURRENCY,
         "shutdown_grace_period_s": _SHUTDOWN_GRACE_PERIOD_S,
         "cancellation_hard_deadline_s": _CANCELLATION_HARD_DEADLINE_S,
         "dequeue_timeout": _DEQUEUE_TIMEOUT,
         "timers": dict(_TIMERS),
+        "after_process": _after_process_hook,
+        # Machine-scoped worker metadata for /healthz/ready (plan F7).
+        "metadata": {"hostname": _HOSTNAME},
     }
+
+
+async def _after_process_hook(ctx: dict[str, Any]) -> None:
+    from modulo.core.error_tracking.saq_hooks import after_process
+
+    await after_process(ctx)
+
+
+def _make_session_factory() -> Any:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=False)
+
+
+def _runs_functions() -> list[tuple[str, Any]]:
+    """Functions registered on the ``runs`` worker.
+
+    Names match the strings enqueued by dispatch_run and fire_due_triggers.
+    """
+    return [
+        ("modulo.core.saq_worker.execute_run", execute_run),
+        ("modulo.core.saq_worker.resume_run", resume_run),
+        ("modulo.core.saq_worker.fire_cron_trigger", fire_cron_trigger),
+        ("modulo.core.saq_worker.fire_polling_trigger", fire_polling_trigger),
+        ("modulo.core.saq_worker.fire_report_trigger", fire_report_trigger),
+    ]
+
+
+def _system_functions() -> list[Any]:
+    """Functions registered on the ``system`` worker (under their ``__qualname__``,
+    which is the name SAQ's cron scheduler uses when enqueueing)."""
+    return [
+        fire_due_triggers,
+        dispatcher_reconcile,
+        claim_expiry,
+        retention_cleanup,
+        webhook_dedup_cleanup,
+        stale_run_recovery,
+    ]
+
+
+def _system_cron_jobs() -> list[CronJob[Any]]:
+    """System cron jobs (plan F1) — all knobs explicit."""
+    return [
+        # fire_due_triggers: every 30s; the atomic next_fire_at advance makes
+        # multi-machine ticks safe (unique=True only prevents overlap).
+        CronJob(
+            fire_due_triggers,
+            cron="*/30 * * * * *",
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=3,
+            ttl=300,
+        ),
+        # dispatcher_reconcile: every 60s (timeout=120 per plan F1).
+        CronJob(
+            dispatcher_reconcile,
+            cron="0 * * * * *",
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=3,
+            ttl=300,
+        ),
+        # claim-expiry: every 60s — SAQ cron is the SOLE writer/notifier (F1).
+        CronJob(
+            claim_expiry,
+            cron="0 * * * * *",
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # retention: hourly (matches the in-process _run_retention_loop cadence).
+        CronJob(
+            retention_cleanup,
+            cron="0 0 * * * *",
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # webhook-dedup cleanup: hourly (matches _CLEANUP_INTERVAL_SECONDS).
+        CronJob(
+            webhook_dedup_cleanup,
+            cron="0 0 * * * *",
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # stale_run_recovery: every 5 min (legacy beat cadence, scoped to
+        # non-SAQ rows in the sweep itself).
+        CronJob(
+            stale_run_recovery,
+            cron="0 */5 * * * *",
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+    ]
 
 
 def _assert_system_auth_configured() -> None:
@@ -99,30 +459,24 @@ def _assert_system_auth_configured() -> None:
 
 def runs_settings() -> dict[str, Any]:
     """WorkerSettings for the ``runs`` worker (no web UI)."""
-    return _base_worker_settings("runs")
+    return _base_worker_settings("runs", _runs_functions())
 
 
 def system_settings() -> dict[str, Any]:
-    """WorkerSettings for the ``system`` worker (web UI, FAIL-CLOSED auth).
-
-    ``cron_jobs`` is an empty list for now — the crons (fire_due_triggers,
-    dispatcher_reconcile, retention, claim-expiry) arrive in PR B. The
-    structure is declared here so the Worker accepts the key and PR B can fill
-    it without changing the settings shape.
-    """
+    """WorkerSettings for the ``system`` worker (web UI, FAIL-CLOSED auth, crons)."""
     _assert_system_auth_configured()
-    return {**_base_worker_settings("system"), "cron_jobs": []}
+    return {**_base_worker_settings("system", _system_functions()), "cron_jobs": _system_cron_jobs()}
 
 
 def staging_runs_settings() -> dict[str, Any]:
     """Staging ``runs`` worker — dedicated queue ``staging-runs``."""
-    return _base_worker_settings("staging-runs")
+    return _base_worker_settings("staging-runs", _runs_functions())
 
 
 def staging_system_settings() -> dict[str, Any]:
     """Staging ``system`` worker — dedicated queue ``staging-system``."""
     _assert_system_auth_configured()
-    return {**_base_worker_settings("staging-system"), "cron_jobs": []}
+    return {**_base_worker_settings("staging-system", _system_functions()), "cron_jobs": _system_cron_jobs()}
 
 
 def run_system_web() -> None:

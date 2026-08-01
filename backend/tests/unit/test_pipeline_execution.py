@@ -264,10 +264,12 @@ class TestMarkComplete:
         assert not hasattr(run, "completed_at")
 
     async def test_noop_when_run_missing(self) -> None:
+        run_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
         with (
-            patch.object(pe, "get_run", AsyncMock(return_value=None)),
+            patch.object(pe, "get_run", AsyncMock(return_value=None)) as mock_get_run,
             patch.object(pe, "async_sessionmaker") as mock_factory,
-            patch.object(pe, "set_rls_org", AsyncMock()),
+            patch.object(pe, "set_rls_org", AsyncMock()) as mock_set_rls,
         ):
             session = MagicMock()
             session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -278,9 +280,13 @@ class TestMarkComplete:
             mock_factory.return_value = factory
 
             engine = MagicMock()
-            await pe.mark_complete(engine, str(uuid.uuid4()), str(uuid.uuid4()))  # type: ignore[arg-type]
+            await pe.mark_complete(engine, run_id, org_id)  # type: ignore[arg-type]
 
-        # get_run returned None -> nothing to assert beyond no exception.
+        # The run lookup is still performed with the right identifiers…
+        mock_set_rls.assert_awaited_once()
+        mock_get_run.assert_awaited_once()
+        args = mock_get_run.await_args.args
+        assert args[1] == uuid.UUID(run_id)
 
 
 # ---------------------------------------------------------------------------
@@ -756,7 +762,18 @@ class TestSaqWorkerSettings:
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
         assert settings["timers"] == {"schedule": 5, "worker_info": 89, "sweep": 60, "abort": 1}
-        assert settings["cron_jobs"] == []
+        # PR B-2: system crons wired (fire_due_triggers, reconcile, claim-expiry,
+        # retention, webhook-dedup, stale recovery).
+        cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
+        assert cron_names == {
+            "fire_due_triggers",
+            "dispatcher_reconcile",
+            "claim_expiry",
+            "retention_cleanup",
+            "webhook_dedup_cleanup",
+            "stale_run_recovery",
+        }
+        assert settings["after_process"] is not None
 
     def test_staging_queue_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import modulo.core.saq_worker as sw
@@ -789,6 +806,6 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         monkeypatch.setattr(sw.aioredis, "from_url", _fake_from_url)
         sw.runs_settings()
-        assert captured["connection_timeout"] == 10
+        assert captured["socket_connect_timeout"] == 10
         assert captured["socket_keepalive"] is True
         assert captured["max_connections"] == 5

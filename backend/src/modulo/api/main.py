@@ -112,7 +112,6 @@ from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
 from modulo.core.logging_config import configure_logging
-from modulo.core.scheduler import run_scheduler
 from modulo.core.seed_data.catalog import FLAGS, TIERS
 from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
@@ -915,16 +914,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     get_runtime_config_store()
 
-    # RUNNING ALONGSIDE Celery beat during Phase 1 transition.
-    # TODO: Remove in Phase 2 (after beat is confirmed healthy).
-    _scheduler_stop = asyncio.Event()
-    _scheduler_task = asyncio.create_task(run_scheduler(_scheduler_stop))
-    _scheduler_task.add_done_callback(
-        lambda t: (
-            _log.error("Cron scheduler exited", exc_info=t.exception()) if not t.cancelled() and t.exception() else None
-        )
-    )
-    logger.info("startup.cron_scheduler_started")
+    # NOTE: the in-process cron scheduler (run_scheduler) is intentionally NOT
+    # started here. Plan F1 "single scheduler at a time": the SAQ system worker's
+    # fire_due_triggers cron is the scheduler in both shadow and SAQ_ENABLED
+    # modes, and Celery beat is gated off by the entrypoint. Running the
+    # in-process loop alongside SAQ would double-fire cron triggers.
 
     # Initialise the graceful shutdown manager with the configured timeout.
     # Two session factories exist:
@@ -980,12 +974,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     session_manager._task_group = _mcp_tg
 
     yield
-
-    # Shutdown cron scheduler.
-    _scheduler_stop.set()
-    _scheduler_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await _scheduler_task
 
     await _mcp_tg.__aexit__(None, None, None)
     retention_task.cancel()

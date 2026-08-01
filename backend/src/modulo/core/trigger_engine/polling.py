@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorResult
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.dispatch import dispatch_run_sync
-from modulo.core.pipeline_executor_task import SchedulerDBError
+from modulo.core.pipeline_execution import SchedulerDBError
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -575,7 +575,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
             import uuid
             from datetime import UTC, datetime, timedelta
 
-            from modulo.core.pipeline_executor_task import SchedulerDBError, get_beat_sync_session
+            from modulo.core.pipeline_execution import SchedulerDBError, get_beat_sync_session
             from modulo.db.models.trigger import Trigger
             from modulo.db.models.trigger_event import TriggerEvent
 

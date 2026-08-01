@@ -23,6 +23,7 @@ import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import quote
 
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
@@ -33,7 +34,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -46,10 +47,12 @@ from modulo.auth.api_key import ApiKeyInvalidError, validate_api_key
 from modulo.auth.dependencies import resolve_role_from_membership
 from modulo.auth.oauth import (
     check_oauth_token_family_valid,
+    clamp_oauth_role,
     decode_oauth_access_token,
+    scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, set_authz_enforce
-from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
+from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 
 # ContextVars populated by McpAuthMiddleware before each request.
 # Propagation: this server runs FastMCP in stateless HTTP mode, where each request
@@ -363,12 +366,25 @@ async def validate_current_auth() -> bool:
                 _ctx_role.set(live_role)
                 return True
             async with _session(claims.organisation_id) as s:
-                return await check_oauth_token_family_valid(
+                if not await check_oauth_token_family_valid(
                     s,
                     family_id=claims.token_family,
                     client_id=claims.client_id,
                     org_id=claims.organisation_id,
-                )
+                ):
+                    return False
+            # ADR 017: re-resolve the account's LIVE role (TTL-bounded per
+            # connection) and re-apply the scope→live clamp so a demoted
+            # operator loses scope mid-stream too.
+            live_role = await _revalidate_live_role(
+                token,
+                claims.account_id,
+                claims.organisation_id,
+            )
+            if live_role is None:
+                return False
+            _ctx_role.set(clamp_oauth_role(scopes_required_role(claims.scopes), live_role))
+            return True
 
         return False
     except (ApiKeyInvalidError, JWTError):
@@ -590,26 +606,43 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
-        # Resolve role from scopes (highest scope wins).
-        scope_set = set(claims.scopes)
-        if "hitl:review" in scope_set:
-            role = "operator"
-        elif "trigger:run" in scope_set or "library:browse" in scope_set:
-            role = "runner"
-        else:
-            role = "runner"
+        # Resolve role from scopes (highest scope wins) — ADR 017: the scope
+        # grant is then CLAMPED to the account's LIVE org role so a demoted
+        # operator loses scope on the very next call. Fail-closed: a DB read
+        # failure or missing/deactivated membership denies.
+        scope_role = scopes_required_role(claims.scopes)
+        try:
+            async with _session(claims.organisation_id) as s:
+                live_role = await resolve_role_from_membership(
+                    s,
+                    str(claims.account_id),
+                    str(claims.organisation_id),
+                )
+        except SQLAlchemyError:
+            _log.warning("permission.live_role_read_failed", exc_info=True)
+            return Response(
+                '{"error":"unauthorized","detail":"Role validation failed"}',
+                status_code=401,
+                media_type="application/json",
+            )
+        if live_role is None:
+            return Response(
+                '{"error":"forbidden","detail":"Organisation membership required"}',
+                status_code=403,
+                media_type="application/json",
+            )
+        role = clamp_oauth_role(scope_role, live_role)
 
         _ctx_org_id.set(claims.organisation_id)
         _ctx_role.set(role)
         _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
-        oauth_actor_id = uuid.uuid5(uuid.NAMESPACE_URL, f"modulo-oauth-client:{claims.client_id}")
-        _ctx_user_id.set(oauth_actor_id)
+        _ctx_user_id.set(claims.account_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("oauth")
         request.scope["auth_principal"] = {
             "type": "user",
             "org_id": str(claims.organisation_id),
-            "user_id": str(claims.client_id),
+            "user_id": str(claims.account_id),
         }
 
         await _set_authz_enforce(claims.organisation_id)
@@ -3274,40 +3307,70 @@ async def _mcp_healthz(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-async def _oauth_authorize(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/authorize — issue authorization code."""
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "Request body must be JSON"},
-            status_code=400,
-        )
+def _frontend_url(settings: Any) -> str:
+    """Derive the SPA base URL from CORS_ORIGINS (first origin)."""
+    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    return origins[0] if origins else "http://localhost:5173"
 
-    response_type = body.get("response_type", "")
+
+async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
+    """GET /mcp/oauth/authorize — thin 302 to the SPA consent route.
+
+    Anonymous (the browser is not yet authenticated against the SPA). Validates
+    the request (client exists, exact-match redirect_uri, S256-only PKCE), then
+    persists an ``oauth_consent_states`` row (account_id NULL until approve)
+    and redirects the browser to ``/oauth/authorize?...`` on the SPA. The
+    ``Referrer-Policy: no-referrer`` header keeps the client's query params
+    from leaking to any third-party referer. The old POST handler that minted
+    codes directly (anonymous, unbound) is DELETED — codes are only minted by
+    the authenticated consent approve endpoint (ADR 017 DECISION 1).
+    """
+    params = request.query_params
+    response_type = params.get("response_type", "")
     if response_type != "code":
-        return JSONResponse(
-            {"error": "unsupported_response_type"},
-            status_code=400,
-        )
+        return JSONResponse({"error": "unsupported_response_type"}, status_code=400)
 
-    client_id = body.get("client_id", "")
-    redirect_uri = body.get("redirect_uri", "")
-    scope = body.get("scope", "")
-    state = body.get("state", "")
+    client_id = params.get("client_id", "")
+    redirect_uri = params.get("redirect_uri", "")
+    scope = params.get("scope", "")
+    state = params.get("state", "")
+    code_challenge = params.get("code_challenge", "")
+    code_challenge_method = params.get("code_challenge_method", "")
 
     if not client_id or not redirect_uri:
         return JSONResponse(
             {"error": "invalid_request", "detail": "client_id and redirect_uri required"},
             status_code=400,
         )
+    if not state:
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "state parameter required"},
+            status_code=400,
+        )
 
     from modulo.auth.oauth import (
-        create_authorization_code,
+        InvalidGrantError,
+        create_consent_state,
         get_oauth_client_by_client_id,
         normalize_scopes,
         validate_client_scopes,
+        validate_pkce_method,
     )
+
+    # S256-only (RFC 7636) — the challenge is verified at token exchange, so
+    # rejecting plain/empty here keeps every stored challenge verifiable.
+    try:
+        validate_pkce_method(code_challenge_method)
+    except InvalidGrantError as exc:
+        return JSONResponse(
+            {"error": "invalid_request", "detail": str(exc)},
+            status_code=400,
+        )
+    if not code_challenge or not code_challenge.strip():
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "code_challenge parameter required"},
+            status_code=400,
+        )
 
     settings = get_settings()
     if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
@@ -3345,12 +3408,14 @@ async def _oauth_authorize(request: Request) -> JSONResponse:
 
             # Set RLS context for the client's org before creating records.
             await set_rls_org(s, client.organisation_id)
-            code = await create_authorization_code(
+            await create_consent_state(
                 s,
+                state=state,
                 client_id=client_id,
-                org_id=client.organisation_id,
-                scopes=" ".join(valid_scopes),
                 redirect_uri=redirect_uri,
+                scopes=valid_scopes,
+                code_challenge=code_challenge,
+                org_id=client.organisation_id,
             )
     except ProgrammingError:
         _log.warning("mcp_oauth.authorize.programming_error", extra={"client_id": client_id})
@@ -3371,30 +3436,78 @@ async def _oauth_authorize(request: Request) -> JSONResponse:
             status_code=500,
         )
 
-    return JSONResponse({"code": code, "state": state})
+    consent_url = (
+        f"{_frontend_url(settings)}/oauth/authorize"
+        f"?client_id={quote(client_id)}"
+        f"&redirect_uri={quote(redirect_uri)}"
+        f"&state={quote(state)}"
+        f"&code_challenge={quote(code_challenge)}"
+    )
+    redirect = RedirectResponse(consent_url, status_code=302)
+    redirect.headers["Referrer-Policy"] = "no-referrer"
+    return redirect
 
 
 async def _oauth_token(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/token — exchange code for access token."""
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
+    """POST /mcp/oauth/token — exchange code for access token.
+
+    RFC 6749 wire format: form-urlencoded bodies (``request.form()``) with JSON
+    bodies accepted for backwards compatibility; anything else is
+    ``invalid_request``. The PKCE ``code_verifier`` is required and verified
+    against the stored S256 challenge (RFC 7636 §4.5/§4.6). ``client_secret``
+    may arrive in the form body OR an HTTP Basic Authorization header. The
+    consenting account's LIVE org role is re-verified against the granted
+    scopes — a demoted account is denied a token (ADR 017).
+    """
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if content_type == "application/x-www-form-urlencoded":
+        form = await request.form()
+        params: dict[str, str] = {k: (str(v) if v is not None else "") for k, v in form.items()}
+    elif content_type == "application/json":
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse(
+                {"error": "invalid_request", "detail": "Request body must be JSON"},
+                status_code=400,
+            )
+        params = {k: str(v) if v is not None else "" for k, v in body.items()}
+    else:
         return JSONResponse(
-            {"error": "invalid_request", "detail": "Request body must be JSON"},
+            {"error": "invalid_request", "detail": "Content-Type must be application/x-www-form-urlencoded"},
             status_code=400,
         )
 
-    grant_type = body.get("grant_type", "")
+    grant_type = params.get("grant_type", "")
     if grant_type != "authorization_code":
         return JSONResponse(
             {"error": "unsupported_grant_type"},
             status_code=400,
         )
 
-    code = body.get("code", "")
-    redirect_uri = body.get("redirect_uri", "")
-    client_id = body.get("client_id", "")
-    client_secret = body.get("client_secret", "")
+    code = params.get("code", "")
+    redirect_uri = params.get("redirect_uri", "")
+    client_id = params.get("client_id", "")
+    code_verifier = params.get("code_verifier", "")
+
+    # client_secret may come from the body (RFC 6749) OR Basic auth.
+    client_secret = params.get("client_secret", "")
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Basic "):
+        import base64 as _base64
+
+        try:
+            decoded = _base64.b64decode(auth_header[len("Basic ") :]).decode("utf-8")
+            basic_id, _, basic_secret = decoded.partition(":")
+            if not client_secret:
+                client_secret = basic_secret
+            if not client_id:
+                client_id = basic_id
+        except Exception:
+            return JSONResponse(
+                {"error": "invalid_request", "detail": "Malformed Basic Authorization header"},
+                status_code=400,
+            )
 
     if not code or not redirect_uri or not client_id or not client_secret:
         return JSONResponse(
@@ -3410,6 +3523,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
         create_oauth_refresh_token,
         create_oauth_token_family,
         validate_client_secret,
+        verify_live_role_covers_scopes,
     )
 
     settings = get_settings()
@@ -3428,16 +3542,26 @@ async def _oauth_token(request: Request) -> JSONResponse:
             # Step 2: Set RLS context for the client's org.
             await set_rls_org(s, client.organisation_id)
 
-            # Step 3: Consume the authorization code.
+            # Step 3: Consume the authorization code (PKCE verified inside).
             auth_code = await consume_authorization_code(
                 s,
                 code=code,
                 client_id=client_id,
                 redirect_uri=redirect_uri,
                 client_secret=client_secret,
+                code_verifier=code_verifier,
             )
 
-            # Step 4: Create a new token family.
+            # Step 4: The consenting account's LIVE role must still cover the
+            # granted scopes — a demoted/removed account is denied (ADR 017).
+            await verify_live_role_covers_scopes(
+                s,
+                account_id=auth_code.account_id,
+                org_id=client.organisation_id,
+                scopes=auth_code.scopes.split(),
+            )
+
+            # Step 5: Create a new token family.
             family_id, sequence = await create_oauth_token_family(
                 s,
                 client_id=client_id,
@@ -3449,6 +3573,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
                 client_id,
                 settings.secret_key,
                 organisation_id=str(client.organisation_id),
+                account_id=str(auth_code.account_id),
                 scopes=scopes_list,
                 token_family=family_id,
                 token_sequence=sequence,
@@ -3457,6 +3582,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
                 client_id,
                 settings.secret_key,
                 organisation_id=str(client.organisation_id),
+                account_id=str(auth_code.account_id),
                 scopes=scopes_list,
                 token_family=family_id,
                 token_sequence=sequence,
@@ -3510,62 +3636,113 @@ async def _oauth_token(request: Request) -> JSONResponse:
 async def _oauth_refresh(request: Request) -> JSONResponse:
     """POST /mcp/oauth/refresh — exchange refresh token for new access token.
 
-    Stateless validation of the refresh token JWT. The refresh token carries
-    all claims needed (client_id, org_id, scopes, token_family, token_sequence)
-    so a new access token can be issued without a DB round-trip.
-
-    The refresh token itself is rotated: a new refresh token is issued with
-    an incremented sequence, invalidating the old one if presented again.
+    Form-urlencoded per RFC 6749 with JSON compat, mirroring ``_oauth_token``.
+    Re-verifies the client secret (body or Basic auth) and the consenting
+    account's LIVE org role against the token's scopes — if the account was
+    demoted (or removed) since the token was issued, the refresh is DENIED
+    (ADR 017 demote-then-refresh). The refresh token is rotated: a new pair is
+    issued with an incremented sequence, invalidating the old refresh token.
     """
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if content_type == "application/x-www-form-urlencoded":
+        form = await request.form()
+        params: dict[str, str] = {k: (str(v) if v is not None else "") for k, v in form.items()}
+    elif content_type == "application/json":
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse(
+                {"error": "invalid_request", "detail": "Request body must be JSON"},
+                status_code=400,
+            )
+        params = {k: str(v) if v is not None else "" for k, v in body.items()}
+    else:
         return JSONResponse(
-            {"error": "invalid_request", "detail": "Request body must be JSON"},
+            {"error": "invalid_request", "detail": "Content-Type must be application/x-www-form-urlencoded"},
             status_code=400,
         )
 
-    grant_type = body.get("grant_type", "")
+    grant_type = params.get("grant_type", "")
     if grant_type != "refresh_token":
         return JSONResponse(
             {"error": "unsupported_grant_type"},
             status_code=400,
         )
 
-    refresh_token_value = body.get("refresh_token", "")
-    if not refresh_token_value:
+    refresh_token_value = params.get("refresh_token", "")
+    client_id = params.get("client_id", "")
+    client_secret = params.get("client_secret", "")
+
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Basic "):
+        import base64 as _base64
+
+        try:
+            decoded = _base64.b64decode(auth_header[len("Basic ") :]).decode("utf-8")
+            basic_id, _, basic_secret = decoded.partition(":")
+            if not client_secret:
+                client_secret = basic_secret
+            if not client_id:
+                client_id = basic_id
+        except Exception:
+            return JSONResponse(
+                {"error": "invalid_request", "detail": "Malformed Basic Authorization header"},
+                status_code=400,
+            )
+
+    if not refresh_token_value or not client_id or not client_secret:
         return JSONResponse(
-            {"error": "invalid_request", "detail": "refresh_token is required"},
+            {"error": "invalid_request", "detail": "refresh_token, client_id and client_secret are required"},
             status_code=400,
         )
 
     settings = get_settings()
     try:
         from modulo.auth.oauth import (
+            InvalidClientError,
+            InvalidGrantError,
             create_oauth_access_token,
             create_oauth_refresh_token,
             decode_oauth_refresh_token,
+            validate_client_secret,
+            verify_live_role_covers_scopes,
         )
 
-        claims = decode_oauth_refresh_token(refresh_token_value, settings.secret_key)
+        session_factory = _get_session_factory()
+        async with session_factory() as s, s.begin():
+            client = await validate_client_secret(s, client_id, client_secret)
+            await set_rls_org(s, client.organisation_id)
 
-        new_sequence = claims.token_sequence + 1
-        new_access_token = create_oauth_access_token(
-            claims.client_id,
-            settings.secret_key,
-            organisation_id=str(claims.organisation_id),
-            scopes=claims.scopes,
-            token_family=claims.token_family,
-            token_sequence=new_sequence,
-        )
-        new_refresh_token = create_oauth_refresh_token(
-            claims.client_id,
-            settings.secret_key,
-            organisation_id=str(claims.organisation_id),
-            scopes=claims.scopes,
-            token_family=claims.token_family,
-            token_sequence=new_sequence,
-        )
+            claims = decode_oauth_refresh_token(refresh_token_value, settings.secret_key)
+
+            # ADR 017: the consenting account's LIVE role must still cover the
+            # scopes — a demoted/removed account is denied a fresh token.
+            await verify_live_role_covers_scopes(
+                s,
+                account_id=claims.account_id,
+                org_id=claims.organisation_id,
+                scopes=claims.scopes,
+            )
+
+            new_sequence = claims.token_sequence + 1
+            new_access_token = create_oauth_access_token(
+                claims.client_id,
+                settings.secret_key,
+                organisation_id=str(claims.organisation_id),
+                account_id=str(claims.account_id),
+                scopes=claims.scopes,
+                token_family=claims.token_family,
+                token_sequence=new_sequence,
+            )
+            new_refresh_token = create_oauth_refresh_token(
+                claims.client_id,
+                settings.secret_key,
+                organisation_id=str(claims.organisation_id),
+                account_id=str(claims.account_id),
+                scopes=claims.scopes,
+                token_family=claims.token_family,
+                token_sequence=new_sequence,
+            )
 
         return JSONResponse(
             {
@@ -3576,10 +3753,32 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
                 "scope": " ".join(claims.scopes),
             }
         )
+    except (InvalidGrantError, InvalidClientError):
+        return JSONResponse(
+            {"error": "invalid_grant", "detail": "Refresh token exchange failed"},
+            status_code=400,
+        )
     except (ValueError, JWTError) as exc:
         return JSONResponse(
             {"error": "invalid_grant", "detail": str(exc)},
             status_code=400,
+        )
+    except StarletteHTTPException as e:
+        return JSONResponse(
+            {"error": "server_error" if e.status_code >= 500 else "invalid_request", "detail": e.detail},
+            status_code=e.status_code,
+        )
+    except ProgrammingError:
+        _log.warning("mcp_oauth.refresh.programming_error", extra={"client_id": client_id})
+        return JSONResponse(
+            {"error": "server_error", "detail": "Feature is not available. Run database migrations to enable it."},
+            status_code=501,
+        )
+    except SQLAlchemyError:
+        _log.warning("mcp_oauth.refresh.sqlalchemy_error", extra={"client_id": client_id})
+        return JSONResponse(
+            {"error": "temporarily_unavailable", "detail": "Database error occurred. Please try again."},
+            status_code=503,
         )
     except Exception:
         _log.exception("mcp_oauth.refresh.unexpected_error")
@@ -3626,8 +3825,9 @@ def build_mcp_asgi_app() -> Starlette:
     health_route = Route("/healthz", _mcp_healthz, methods=["GET"])
 
     # OAuth protocol endpoints — placed before auth middleware so they
-    # don't require a Bearer token (they use client_id + client_secret).
-    oauth_authorize_route = Route("/oauth/authorize", _oauth_authorize, methods=["POST"])
+    # don't require a Bearer token (authorize is an anonymous browser 302;
+    # token/refresh authenticate via client_id + client_secret).
+    oauth_authorize_route = Route("/oauth/authorize", _oauth_authorize, methods=["GET"])
     oauth_token_route = Route("/oauth/token", _oauth_token, methods=["POST"])
     oauth_refresh_route = Route("/oauth/refresh", _oauth_refresh, methods=["POST"])
 

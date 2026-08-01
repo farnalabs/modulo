@@ -424,7 +424,7 @@ class TestDatabasePollingScheduler:
         # Avoid DatabasePollingScheduler.__init__ which opens a real DB session.
         scheduler = DatabasePollingScheduler.__new__(DatabasePollingScheduler)
         with (
-            patch("modulo.core.pipeline_executor_task.get_beat_sync_session", return_value=session),
+            patch("modulo.core.pipeline_execution.get_beat_sync_session", return_value=session),
             patch("modulo.core.trigger_engine.polling._log.warning") as mock_warning,
         ):
             rows = scheduler._fetch_due_triggers()
@@ -455,7 +455,7 @@ class TestDatabasePollingScheduler:
         session.execute.return_value = result
 
         scheduler = DatabasePollingScheduler.__new__(DatabasePollingScheduler)
-        with patch("modulo.core.pipeline_executor_task.get_beat_sync_session", return_value=session):
+        with patch("modulo.core.pipeline_execution.get_beat_sync_session", return_value=session):
             rows = scheduler._fetch_due_triggers()
 
         assert rows == [
