@@ -123,7 +123,8 @@ def user_requests_connector(username: str, connector_name: str, request, ctx) ->
     connector = ctx["connectors"].get(connector_name)
     user_team_id = ctx["memberships"].get(username, {}).get("team_id")
     allowed = connector and (
-        connector.get("visibility") == "org" or (user_team_id and connector.get("owner_team_id") == user_team_id)
+        connector.get("visibility") == "org"
+        or (user_team_id and connector.get("owner_team_id") == user_team_id)
     )
 
     resp = MagicMock()
@@ -138,14 +139,10 @@ def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, 
     connector = ctx["connectors"].get(connector_name)
     pipeline = ctx["pipelines"].get(pipeline_name)
 
-    if (
-        connector
-        and pipeline
-        and connector_team_mismatch(
-            connector.get("visibility"),
-            connector.get("owner_team_id"),
-            pipeline.get("owner_team_id"),
-        )
+    if connector and pipeline and connector_team_mismatch(
+        connector.get("visibility"),
+        connector.get("owner_team_id"),
+        pipeline.get("owner_team_id"),
     ):
         resp = MagicMock()
         resp.status_code = 409

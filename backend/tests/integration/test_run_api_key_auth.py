@@ -165,6 +165,7 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
         await conn.execute(text("COMMIT"))
 
     try:
+
         engine = create_async_engine(migrated_db_url, echo=False)
         try:
             factory = async_sessionmaker(engine, expire_on_commit=False)
