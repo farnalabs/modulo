@@ -288,9 +288,7 @@ async def test_exec_command_captures_stderr_and_exit_code(
     )
     stream = mock_docker_client.containers.get.return_value.exec.return_value.start.return_value
     stream.read_out = AsyncMock(side_effect=[(None, b"boom"), None])
-    mock_docker_client.containers.get.return_value.exec.return_value.inspect = AsyncMock(
-        return_value={"ExitCode": 1}
-    )
+    mock_docker_client.containers.get.return_value.exec.return_value.inspect = AsyncMock(return_value={"ExitCode": 1})
 
     result = await provider.exec_command(ref, ["false"])
 

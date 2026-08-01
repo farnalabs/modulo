@@ -47,6 +47,7 @@ from modulo.auth.oauth import (
     check_oauth_token_family_valid,
     decode_oauth_access_token,
 )
+from modulo.auth.permissions import set_authz_enforce
 from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
 
 # ContextVars populated by McpAuthMiddleware before each request.
@@ -87,6 +88,7 @@ from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -135,6 +137,22 @@ def _ctx_user_id_val() -> uuid.UUID:
 def _ctx_role_val() -> str | None:
     """Get role from the request context (None if unset — scope checks then fail closed)."""
     return _ctx_role.get(None)
+
+
+async def _set_authz_enforce(org_id: uuid.UUID) -> None:
+    """Resolve the per-org authz-enforce kill-switch flag into the ContextVar.
+
+    ``check_tool_scope`` reads it via ``assert_org_role``. Fail-closed: on any
+    read error the flag defaults to enforcement ON (True) and the failure is
+    logged under the structured kill-switch key. ADR 017 DECISION 3.
+    """
+    try:
+        async with _session(org_id) as s:
+            enforce = await resolve_authz_enforce(s, org_id)
+    except Exception:
+        _log.warning("permission.kill_switch_read_failed", exc_info=True)
+        enforce = True
+    set_authz_enforce(enforce)
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -367,6 +385,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     media_type="application/json",
                 )
+            await _set_authz_enforce(org_id)
             resp3: Response = await call_next(request)
             return resp3
 
@@ -432,6 +451,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 "org_id": str(principal.organisation_id) if principal.organisation_id else "",
                 "user_id": str(principal.account_id) if principal.account_id else "",
             }
+            await _set_authz_enforce(principal.organisation_id)
             resp4: Response = await call_next(request)
             return resp4
 
@@ -480,6 +500,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             "user_id": str(claims.client_id),
         }
 
+        await _set_authz_enforce(claims.organisation_id)
         return await call_next(request)
 
 
