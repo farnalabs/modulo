@@ -731,6 +731,42 @@ class TestCountActiveRuns:
 
 
 # ---------------------------------------------------------------------------
+# count_active_sandbox_runs_for_org — only sandbox-agent graph runs count
+# ---------------------------------------------------------------------------
+
+
+class TestCountActiveSandboxRuns:
+    async def _count(self, graphs: list[dict[str, Any] | None]) -> int:
+        from modulo.db.crud.run import count_active_sandbox_runs_for_org
+
+        class _ScalarResult:
+            def scalars(self) -> _ScalarResult:
+                return self
+
+            def __iter__(self):
+                return iter(graphs)
+
+        class _FakeAsyncSession:
+            async def execute(self, stmt: object) -> _ScalarResult:
+                return _ScalarResult()
+
+        session = _FakeAsyncSession()
+        return await count_active_sandbox_runs_for_org(session, uuid.uuid4())  # type: ignore[arg-type]
+
+    async def test_counts_only_running_sandbox_agent_runs(self) -> None:
+        sandbox = {"nodes": [{"id": "s", "node_type": "sandbox_agent"}]}
+        plain = {"nodes": [{"id": "a", "node_type": "agent"}]}
+        assert await self._count([sandbox, sandbox, plain, plain, None]) == 2
+
+    async def test_zero_when_no_sandbox_graphs(self) -> None:
+        plain = {"nodes": [{"id": "a", "node_type": "agent"}]}
+        assert await self._count([plain, {"nodes": []}, {}]) == 0
+
+    async def test_zero_when_no_running_runs(self) -> None:
+        assert await self._count([]) == 0
+
+
+# ---------------------------------------------------------------------------
 # saq_worker — worker settings structure + fail-closed auth + queue knobs
 # ---------------------------------------------------------------------------
 

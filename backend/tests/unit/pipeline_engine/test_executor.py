@@ -1185,6 +1185,37 @@ async def test_check_capacity_admission_clears_marker():
     assert run.error_code is None
 
 
+@pytest.mark.parametrize("terminal_status", ["complete", "failed", "cancelled", "eval_failed"])
+async def test_check_capacity_never_resurrects_terminal_run(terminal_status: str):
+    """A run that went terminal while a retry backed off must stay terminal."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run(status=terminal_status)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=5),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == terminal_status, "terminal run must not be re-admitted"
+    assert calls == [], "no status update may be issued for a terminal run"
+
+
 async def test_check_capacity_fail_open_when_settings_read_raises():
     session = _make_capacity_session()
     executor = _make_capacity_executor(session)

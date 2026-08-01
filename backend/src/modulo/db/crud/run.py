@@ -21,6 +21,7 @@ from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 
 _log = logging.getLogger(__name__)
@@ -287,20 +288,39 @@ async def count_active_runs_for_pipeline(
     return int(result.scalar_one_or_none() or 0)
 
 
+def _graph_contains_sandbox_agent(graph_json: dict[str, Any] | None) -> bool:
+    """Top-level scan for any ``sandbox_agent`` node in a snapshot graph.
+
+    Fail-open: ``None``, non-dicts, and missing ``nodes`` return ``False``
+    (treat as non-sandbox, never block). Only the top-level ``nodes`` list is
+    scanned — composite ``composite_ref`` → ``sub_pipeline_graph_json`` is
+    deliberately not recursed (composite pipelines are not compilable today).
+    """
+    if not isinstance(graph_json, dict):
+        return False
+    nodes = graph_json.get("nodes")
+    if not isinstance(nodes, list):
+        return False
+    return any(isinstance(n, dict) and n.get("node_type") == "sandbox_agent" for n in nodes)
+
+
 async def count_active_sandbox_runs_for_org(
     session: AsyncSession,
     org_id: uuid.UUID,
     exclude_run_id: uuid.UUID | None = None,
 ) -> int:
-    """Count ``running`` runs for an organisation (the sandbox capacity pool).
+    """Count ``running`` sandbox-agent runs for an organisation.
 
-    Only ``running`` counts — it is the sole executing state; pending,
-    awaiting_human, and claimed runs hold no live sandbox. The explicit
-    ``organisation_id`` filter makes the query cross-tenant safe on top of RLS.
+    Only ``running`` runs whose snapshot graph contains a ``sandbox_agent``
+    node count against the org sandbox cap. It is the sole executing state;
+    pending, awaiting_human, and claimed runs hold no live sandbox — and
+    neither do non-sandbox pipelines, so they must not consume a slot (B5).
+    The explicit ``organisation_id`` filter makes the query cross-tenant safe
+    on top of RLS; the snapshots join runs under the same RLS context.
     """
     stmt = (
-        select(func.count())
-        .select_from(Run)
+        select(PipelineSnapshot.graph_json)
+        .join(Run, Run.snapshot_id == PipelineSnapshot.id)
         .where(
             Run.organisation_id == org_id,
             Run.status == "running",
@@ -309,8 +329,8 @@ async def count_active_sandbox_runs_for_org(
     )
     if exclude_run_id is not None:
         stmt = stmt.where(Run.id != exclude_run_id)
-    result = await session.execute(stmt)
-    return int(result.scalar_one_or_none() or 0)
+    rows = (await session.execute(stmt)).scalars()
+    return sum(1 for graph_json in rows if _graph_contains_sandbox_agent(graph_json))
 
 
 async def get_sandbox_concurrency_limit(session: AsyncSession, org_id: uuid.UUID) -> int | None:

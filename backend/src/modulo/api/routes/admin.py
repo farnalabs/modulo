@@ -3230,6 +3230,16 @@ async def admin_update_sandbox_concurrency(
                 "sandbox_concurrency_limit": req.sandbox_concurrency_limit,
             },
         )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "admin.admin_update_sandbox_concurrency.audit",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "sandbox_concurrency_limit": req.sandbox_concurrency_limit,
+            },
+        )
 
     logger.info(
         "sandbox_concurrency.updated",

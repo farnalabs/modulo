@@ -398,6 +398,75 @@ async def test_non_sandbox_graph_bypasses_org_cap(
     assert code_b == "pipeline_capacity"
 
 
+async def test_non_sandbox_running_runs_do_not_consume_sandbox_slots(
+    db_engine: AsyncEngine,
+):
+    """A non-sandbox pipeline running in the org must not consume a sandbox slot.
+
+    Regression for the reviewer finding: ``count_active_sandbox_runs_for_org``
+    used to count ALL ``running`` runs, so org cap=1 + one non-sandbox run
+    running would wrongly block a sandbox run with ``org_capacity_limited``.
+    """
+    org_id, user_id = await _seed_org_account(db_engine, "MixedCap", cap=1)
+    plain_pipe = await _seed_pipeline(db_engine, org_id, "PlainPipe", user_id)
+    sandbox_pipe = await _seed_pipeline(db_engine, org_id, "SandboxPipe", user_id)
+    plain_snap = await _seed_snapshot(
+        db_engine, org_id, plain_pipe, {"nodes": [{"id": "a", "node_type": "agent"}], "edges": []}
+    )
+    sandbox_snap = await _seed_snapshot(db_engine, org_id, sandbox_pipe, _SANDBOX_GRAPH)
+
+    # One non-sandbox run is already executing.
+    plain_running = await _seed_run(db_engine, org_id, plain_pipe, plain_snap, status="running")
+
+    sandbox_run = await _seed_run(db_engine, org_id, sandbox_pipe, sandbox_snap)
+    executor = _make_executor(db_engine)
+    await executor._check_capacity(
+        run_id=sandbox_run,
+        org_id=org_id,
+        pipeline_id=sandbox_pipe,
+        max_concurrent=_PIPELINE_CAP,
+        graph_json=_SANDBOX_GRAPH,
+        snapshot_id=sandbox_snap,
+    )
+
+    status, code = await _run_state(db_engine, org_id, sandbox_run)
+    assert status == "running", "a non-sandbox run must not consume a sandbox slot"
+    assert code is None
+
+    # The non-sandbox run is untouched.
+    status_plain, _ = await _run_state(db_engine, org_id, plain_running)
+    assert status_plain == "running"
+
+
+async def test_running_non_sandbox_run_leaves_sandbox_cap_to_sandbox_runs(
+    db_engine: AsyncEngine,
+):
+    """Cap=1: a running non-sandbox run + a running sandbox run saturate the
+    sandbox slot — a second sandbox run must be demoted."""
+    org_id, user_id = await _seed_org_account(db_engine, "MixedCap2", cap=1)
+    sandbox_pipe = await _seed_pipeline(db_engine, org_id, "SandboxPipe2", user_id)
+    sandbox_snap = await _seed_snapshot(db_engine, org_id, sandbox_pipe, _SANDBOX_GRAPH)
+
+    running_sandbox = await _seed_run(db_engine, org_id, sandbox_pipe, sandbox_snap, status="running")
+    blocked = await _seed_run(db_engine, org_id, sandbox_pipe, sandbox_snap)
+
+    executor = _make_executor(db_engine)
+    await executor._check_capacity(
+        run_id=blocked,
+        org_id=org_id,
+        pipeline_id=sandbox_pipe,
+        max_concurrent=_PIPELINE_CAP,
+        graph_json=_SANDBOX_GRAPH,
+        snapshot_id=sandbox_snap,
+    )
+
+    status, code = await _run_state(db_engine, org_id, blocked)
+    assert status == "pending"
+    assert code == "org_capacity_limited"
+    status_running, _ = await _run_state(db_engine, org_id, running_sandbox)
+    assert status_running == "running"
+
+
 # ---------------------------------------------------------------------------
 # Stale-run sweep: durable capacity-timeout backstop
 # ---------------------------------------------------------------------------

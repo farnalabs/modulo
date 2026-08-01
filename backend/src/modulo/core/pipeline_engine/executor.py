@@ -67,6 +67,7 @@ from modulo.db.crud.run import (
     ERROR_CODE_CAPACITY_TIMEOUT,
     ERROR_CODE_ORG_CAPACITY_LIMITED,
     ERROR_CODE_PIPELINE_CAPACITY,
+    _graph_contains_sandbox_agent,
     count_active_runs_for_pipeline,
     count_active_sandbox_runs_for_org,
     get_run,
@@ -84,6 +85,12 @@ from modulo.otel_bridge import LangGraphOtelBridge
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
 _RETRY_SEMAPHORE: asyncio.Semaphore | None = None
+
+# Statuses a run may still be admitted from when a retry's backoff elapses.
+# Any terminal status (complete/failed/cancelled/eval_failed) means the run
+# was already finalised while the retry loop slept — it must never be
+# resurrected back to ``running``.
+_ADMISSIBLE_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
 
 _SANDBOX_AGENT_CACHE: OrderedDict[str, bool] = OrderedDict()
 _SANDBOX_AGENT_CACHE_MAX = 512
@@ -188,22 +195,6 @@ async def _checkpointer_scope(
         fernet_key=fernet_key,
     ) as saver:
         yield saver
-
-
-def _graph_contains_sandbox_agent(graph_json: dict[str, Any] | None) -> bool:
-    """Top-level scan for any ``sandbox_agent`` node in a snapshot graph.
-
-    Fail-open: ``None``, non-dicts, and missing ``nodes`` return ``False``
-    (treat as non-sandbox, never block). Only the top-level ``nodes`` list is
-    scanned — composite ``composite_ref`` → ``sub_pipeline_graph_json`` is
-    deliberately not recursed (composite pipelines are not compilable today).
-    """
-    if not isinstance(graph_json, dict):
-        return False
-    nodes = graph_json.get("nodes")
-    if not isinstance(nodes, list):
-        return False
-    return any(isinstance(n, dict) and n.get("node_type") == "sandbox_agent" for n in nodes)
 
 
 def _sandbox_agent_for_snapshot(snapshot_id: uuid.UUID, graph_json: dict[str, Any] | None) -> bool:
@@ -351,6 +342,11 @@ class PipelineExecutor:
                     org_capacity_ok = org_count < org_sandbox_cap
 
             if pipeline_capacity_ok and org_capacity_ok:
+                if run.status not in _ADMISSIBLE_STATUSES:
+                    # The run went terminal (or hold) while a retry was backing
+                    # off — never resurrect it. Return it untouched so the
+                    # caller does not resume execution.
+                    return run
                 await update_run_status(
                     session,
                     run_id,
