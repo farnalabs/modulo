@@ -93,6 +93,8 @@ def _is_privileged(role: str | None) -> bool:
     kill-switched assert_org_role path, so the HITL guard stays live even
     when authz.enforce is disabled.
     """
+    if role is None:
+        return False
     return org_role_level(role) >= _OPERATOR_LEVEL
 
 

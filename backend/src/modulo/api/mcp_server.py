@@ -781,7 +781,8 @@ async def update_pipeline_graph(
         # ADR 017 service-layer backstop: operator+ is privileged (may weaken a
         # HITL gate). Resolved from the live ContextVar role, NOT the
         # kill-switched scope check, so the HITL guard stays live.
-        is_privileged = org_role_level(_ctx_role_val()) >= org_role_level("operator")
+        _ctx_role = _ctx_role_val()
+        is_privileged = _ctx_role is not None and org_role_level(_ctx_role) >= org_role_level("operator")
 
         # Validate graph structure using Pydantic models (same as REST endpoint)
         from pydantic import ValidationError as _PydanticValidationError
