@@ -66,13 +66,14 @@ _SAFE_PREFIX_CHARS = 12
 
 
 def _safe_truncated_prefix_names(expr: ast.expr) -> set[ast.Name]:
-    """Return Name nodes in ``expr`` used only as a small leading slice (``name[:N]``/``name[0:N]``).
+    """Return Name nodes in ``expr`` used only as a small leading slice or single-char access.
 
     A truncated-prefix log (``token[:10] + "..."``) intentionally exposes only
-    the first few characters of a value and is not a leak. Only the specific
-    Name node used as the base of such a slice is safe; any other reference to
-    the same variable in the expression (full value, long slice, mid-string
-    slice) is still flagged.
+    the first few characters of a value and is not a leak. A bare constant
+    index (e.g. ``token[3]``) exposes at most one character and is treated the
+    same way. Only the specific Name node used as the base of such a subscript
+    is safe; any other reference to the same variable in the expression (full
+    value, long slice, mid-string slice) is still flagged.
     """
     safe: set[ast.Name] = set()
     for sub in ast.walk(expr):
