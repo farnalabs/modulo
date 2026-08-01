@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     saq_never_dispatched_window: int = Field(default=300, alias="SAQ_NEVER_DISPATCHED_WINDOW", ge=1, le=3600)
     saq_worker_lost_window: int = Field(default=600, alias="SAQ_WORKER_LOST_WINDOW", ge=1, le=3600)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
-    saq_worker_db_pool_size: int = Field(default=2, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
+    saq_worker_db_pool_size: int = Field(default=10, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
     # SAQ Redis client pool size (Upstash connection budget — F2).
     saq_redis_pool_size: int = Field(default=5, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
 
