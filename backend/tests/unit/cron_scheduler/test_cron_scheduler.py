@@ -382,6 +382,10 @@ class TestFireCronTrigger:
         assert event_kwargs["trigger"] is trigger
         assert event_kwargs["org_id"] == org_id
 
+        # Implementation-coupled assertion: inspecting ``_values`` reaches into
+        # SQLAlchemy's update internals (Column -> BindParameter). This is fine
+        # for a unit test pinned to the lockfile, but will need revisiting if
+        # the fire path stops using ``session.execute(update(...))``.
         update_stmt = session._execute_mock.await_args.args[0]
         assert isinstance(update_stmt, Update)
         bound = {col.name: val.value for col, val in update_stmt._values.items()}
