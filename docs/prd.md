@@ -358,6 +358,10 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents.
 
 **API key role set**: valid roles for an API key are `operator` and `runner`. `admin` role keys are not permitted — admin actions (team management, settings changes, user management) must be performed by an authenticated human session. `viewer` role is not yet defined as an org role and is also not valid. A `runner`-scoped key can trigger runs and call read endpoints only; it cannot approve HITL gates, access connector settings, or modify pipelines. An `operator`-scoped key can trigger runs, approve HITL gates (subject to `human_only` and `required_team_id` constraints on the gate), and access all read endpoints. The `role` field is enforced at the ViewModel command layer — same enforcement path as user JWT roles.
 
+**Role-cap on minting** (ADR 017 DECISION 4): API keys are created at the caller's *live* org role, never above it. A caller cannot mint a key with a role higher than their current live membership role — a `runner` cannot mint an `operator` key, and only members at `runner` or above can create keys at all (`viewer` cannot mint any key). The minting cap uses the caller's live org membership role re-read at request time, so a demoted user immediately loses the ability to mint higher-role keys.
+
+**Live re-validation**: every MCP call re-checks the key owner's live org role. If the key owner has been demoted, the key's effective scope degrades on the next call to the live role (never persisted — the stored key role is unchanged, so a later promotion restores full scope automatically). If the key owner is removed or deactivated from the org, the key stops working (401) immediately.
+
 **Format**: `mk_<lookup_prefix>_<random_secret>` where `lookup_prefix` is the first 8 chars of the key ID (enables fast DB index lookup without full scan).
 
 **Storage**: SHA-256 hash of the full key. API keys are high-entropy random strings — bcrypt's brute-force protection buys nothing and adds 50–200ms per validation. SHA-256 is fast and sufficient.
