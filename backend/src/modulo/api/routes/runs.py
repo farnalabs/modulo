@@ -1178,16 +1178,35 @@ async def recover_run_node(
         ) from None
     action = "skip" if req.input_data is None else "replay"
 
-    # Resume the graph with the recovery data.
+    # Resume the graph with the recovery data. In shadow mode the resume runs
+    # in-process inside dispatch_run (the SAQ worker is not wired in this
+    # slice), so a resume failure surfaces here as 500 (pre-B-1 behaviour)
+    # rather than fire-and-forget 200.
     resume_data: dict[str, Any] = {"action": action, "output": req.input_data}
 
-    await dispatch_run(
-        str(run_id),
-        str(principal.organisation_id),
-        queue="runs",
-        job_type="resume_run",
-        resume_data=resume_data,
-    )
+    try:
+        outcome, _job_id = await dispatch_run(
+            str(run_id),
+            str(principal.organisation_id),
+            queue="runs",
+            job_type="resume_run",
+            resume_data=resume_data,
+        )
+    except Exception as exc:
+        _log.exception("run.recover_node.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after node recovery",
+        ) from exc
+
+    # 'resumed' (shadow inline) and 'enqueued'/'deduped' (SAQ accepted) both
+    # leave the run resuming. 'deferred' means the resume was NOT actually
+    # dispatched — surface it instead of silently dropping the recovery.
+    if outcome == "deferred":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to enqueue pipeline resume after node recovery",
+        )
 
     return NodeRecoverResponse(
         run_id=run_id,

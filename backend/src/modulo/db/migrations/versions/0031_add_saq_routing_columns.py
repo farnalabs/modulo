@@ -1,6 +1,6 @@
 """Add SAQ routing columns to runs + 'saq' error source (PR B).
 
-Revision ID: 0030_add_saq_routing_columns
+Revision ID: 0031_add_saq_routing_columns
 Revises: 0029_fix_stale_run_timeout_non_null
 Create Date: 2026-07-31
 
@@ -18,7 +18,7 @@ symmetric migration hygiene, matching the existing constraint.
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0030_add_saq_routing_columns"
+revision = "0031_add_saq_routing_columns"
 down_revision = "0029_fix_stale_run_timeout_non_null"
 
 

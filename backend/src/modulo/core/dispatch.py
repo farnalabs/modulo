@@ -5,8 +5,9 @@ Every run dispatch flows through :func:`dispatch_run` (plan F3e). In SAQ mode
 SAQ runs queue with per-job knobs from Settings and records the ``dispatcher``
 column. In shadow mode (``SAQ_ENABLED=false``) ``execute_run`` routes to Celery
 via the existing Celery dispatch (``dispatcher`` stays NULL) while ``resume_run``
-always routes to SAQ (``dispatcher='saq'`` — the F6a carve-out; there is no
-Celery resume path).
+runs IN-PROCESS (no enqueue — there is no Celery resume path and the SAQ worker
+wiring lands in a later PR slice, so queueing a resume in shadow would silently
+drop the recovery).
 
 The dispatcher column reflects WHERE THE JOB ACTUALLY WENT:
 ``'saq'`` iff enqueued to SAQ; NULL iff routed to Celery.
@@ -145,6 +146,32 @@ async def _expire_webhook_dedup(session: AsyncSession, run_id: uuid.UUID) -> Non
     )
 
 
+def _pg_conn_string(database_url: str) -> str:
+    """Strip the SQLAlchemy prefix for a psycopg-compatible checkpointer URL."""
+    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
+        "postgresql+psycopg://", "postgresql://"
+    )
+
+
+async def _resume_inline(
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    resume_data: dict[str, Any] | None,
+) -> None:
+    """Resume a run in-process (shadow mode) — no queue, no worker.
+
+    PR B-1 lands the dispatch routing BEFORE the SAQ worker wiring, so in
+    shadow mode (``SAQ_ENABLED=false``) a node recovery must NOT be enqueued to
+    a queue no worker consumes. Replay the pre-B-1 ``recover_run_node`` path
+    (``PipelineExecutor.resume``) directly so recovery can never silently drop.
+    """
+    from modulo.core.pipeline_engine.executor import PipelineExecutor
+
+    engine = _get_engine()
+    executor = PipelineExecutor(engine, checkpointer_conn_string=_pg_conn_string(str(engine.url)))
+    await executor.resume(run_id=run_id, org_id=org_id, resume_data=resume_data or {})
+
+
 async def _enqueue_saq(
     run_id: str,
     org_id: str,
@@ -200,14 +227,24 @@ async def dispatch_run(
 
       * ``('enqueued', job_id)``  — job is on the SAQ queue (or sent to Celery).
       * ``('deduped', job_id)``   — a SAQ job with the same key already exists.
+      * ``('resumed', None)``     — shadow-mode ``resume_run`` executed in-process
+        (no enqueue).
       * ``('deferred', None)``    — capacity-blocked (no enqueue, no dispatched_at)
         or enqueue failed.
     """
     settings = get_settings()
     rid = uuid.UUID(str(run_id))
     oid = uuid.UUID(str(org_id))
-    use_saq = bool(settings.saq_enabled) or job_type == "resume_run"
+    use_saq = bool(settings.saq_enabled)
     queue_name = queue or settings.saq_runs_queue
+
+    # Shadow-mode resume: the SAQ worker is not wired in this slice and there is
+    # no Celery resume path, so enqueuing a resume would silently drop the
+    # recovery (the run would stay stuck). Resume inline in-process — exactly the
+    # pre-B-1 recover_run_node behaviour — and never touch dispatched_at or SAQ.
+    if not use_saq and job_type == "resume_run":
+        await _resume_inline(rid, oid, resume_data)
+        return ("resumed", None)
 
     # Capacity check FIRST (plan F3b/F3e). The run itself is excluded from the
     # count so a resume never counts against its own slot; a capacity-deferred

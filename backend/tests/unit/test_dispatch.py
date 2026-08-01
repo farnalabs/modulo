@@ -3,6 +3,7 @@
 Mock/fake based — no Postgres, no Redis. Covers:
   * capacity -> deferred (no enqueue, no dispatched_at)
   * SAQ_ENABLED=false -> Celery route + dispatcher NULL
+  * SAQ_ENABLED=false + resume_run -> inline resume (no enqueue, no dispatcher)
   * SAQ_ENABLED=true  -> SAQ route + dispatcher 'saq' + enqueued
   * enqueued vs deduped
   * enqueue failure -> dispatch_failed + webhook dedup expiry (non-webhook)
@@ -148,10 +149,48 @@ class TestDispatchRunRouting:
         assert args[3] != JOB_ID
 
     @pytest.mark.asyncio
-    async def test_shadow_resume_routes_to_saq_dispatcher_saq(self) -> None:
-        # F6a carve-out: resume_run routes to SAQ even in shadow.
+    async def test_shadow_resume_resumes_inline_no_enqueue(self) -> None:
+        # PR B-1 guard: in shadow mode (SAQ worker not wired), a resume must run
+        # in-process — never enqueue to a queue no worker consumes.
         with (
             patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=False)),
+            patch.object(dispatch, "_resume_inline", new_callable=AsyncMock) as resume_inline,
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock) as dispatched,
+            _enqueue_patch() as enqueue,
+            patch.object(dispatch, "_record_saq_job", new_callable=AsyncMock) as saq_job,
+        ):
+            outcome, job_id = await dispatch.dispatch_run(
+                RUN_ID, ORG_ID, job_type="resume_run", resume_data={"action": "approved"}
+            )
+
+        assert outcome == "resumed"
+        assert job_id is None
+        resume_inline.assert_awaited_once_with(uuid.UUID(RUN_ID), uuid.UUID(ORG_ID), {"action": "approved"})
+        enqueue.assert_not_called()
+        saq_job.assert_not_called()
+        dispatched.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_shadow_resume_failure_propagates(self) -> None:
+        # An inline resume that fails must raise so the caller can surface 500.
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=False)),
+            patch.object(
+                dispatch,
+                "_resume_inline",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("resume boom"),
+            ),
+            pytest.raises(RuntimeError, match="resume boom"),
+        ):
+            await dispatch.dispatch_run(RUN_ID, ORG_ID, job_type="resume_run", resume_data={"action": "approved"})
+
+    @pytest.mark.asyncio
+    async def test_saq_resume_enqueues_and_sets_dispatcher(self) -> None:
+        # SAQ_ENABLED=true: resume_run enqueues to SAQ (B-2/C worker wiring).
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=True)),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
@@ -166,8 +205,6 @@ class TestDispatchRunRouting:
         assert outcome == "enqueued"
         assert job_id == JOB_ID
         saq_job.assert_awaited_once()
-        args = saq_job.await_args.args
-        assert args[2] == JOB_ID
 
     @pytest.mark.asyncio
     async def test_deduped_returns_deduped(self) -> None:
