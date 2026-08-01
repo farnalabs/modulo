@@ -36,19 +36,37 @@ def _credentials(token: str) -> HTTPAuthorizationCredentials:
 @pytest.fixture(autouse=True)
 def _reset_engine_globals() -> Generator[None, None, None]:
     """Point the auth dependency's process-global engine at this test's DB."""
+    import asyncio
+
     import modulo.api.dependencies as deps
 
     deps._engine = None
     deps._session_factory = None
     yield
+    engine = deps._engine
     deps._engine = None
     deps._session_factory = None
+    if engine is not None:
+        # Dispose the engine this test created. Without this, the asyncpg
+        # pool stays bound to the closed event loop and its connections are
+        # GC'd later, surfacing as ResourceWarning (pytest filterwarnings
+        # promotes those to errors) when other test files run afterwards.
+        try:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and not loop.is_closed():
+            if loop.is_running():
+                loop.create_task(engine.dispose())
+            else:
+                loop.run_until_complete(engine.dispose())
 
 
 @pytest_asyncio.fixture
 async def auth_settings(db_url: str) -> Settings:
     return Settings(
         database_url=db_url,
+        modulo_db="postgres",
         secret_key="a" * 32,
         fernet_key="a" * 32,
         modulo_auth_rate_limit_enabled=False,
