@@ -286,7 +286,7 @@ class TestMarkComplete:
         mock_set_rls.assert_awaited_once()
         mock_get_run.assert_awaited_once()
         args = mock_get_run.await_args.args
-        assert uuid.UUID(args[1]) == uuid.UUID(run_id)
+        assert args[1] == uuid.UUID(run_id)
 
 
 # ---------------------------------------------------------------------------
