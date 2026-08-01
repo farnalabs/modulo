@@ -275,6 +275,7 @@ def test_refresh_removed_member_returns_401_without_advancing_sequence(mock_sess
 
     # Build a valid refresh token for the test user
     from modulo.auth.jwt import create_refresh_token
+
     settings = _make_settings()
     refresh_token = create_refresh_token(
         str(_USER_ID),
