@@ -102,8 +102,6 @@ import SchemaJsonPreview from '../components/schema/SchemaJsonPreview.vue'
 
 const { t } = useI18n()
 
-let fieldKeyCounter = 0
-
 const route = useRoute()
 
 const schemas = ref<SchemaItem[]>([])
@@ -224,7 +222,7 @@ async function loadLatestVersion(schemaId: string) {
     if (data.items && data.items.length > 0) {
       const latest = data.items[0]
       schemaVersion.value = latest.version
-      fields.value = parseDefinitionToFields(latest.definition_json, () => ++fieldKeyCounter)
+      fields.value = parseDefinitionToFields(latest.definition_json)
     }
   } catch (e) {
     console.warn('Failed to load schema', e)
@@ -378,7 +376,7 @@ async function saveSchema() {
 
 async function restoreVersion(version: SchemaVersion) {
   schemaVersion.value = version.version
-  fields.value = parseDefinitionToFields(version.definition_json, () => ++fieldKeyCounter)
+  fields.value = parseDefinitionToFields(version.definition_json)
 }
 
 async function copyJsonPreview() {

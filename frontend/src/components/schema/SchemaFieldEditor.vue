@@ -29,8 +29,8 @@
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label for="schemaeditorview-field-5" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_name') }}</label>
-            <input id="schemaeditorview-field-5"
+            <label :for="`schema-editor-field-${field._key}-name`" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_name') }}</label>
+            <input :id="`schema-editor-field-${field._key}-name`"
               :value="field.name"
               type="text"
               data-testid="schema-editor-field-name"
@@ -40,9 +40,9 @@
             />
           </div>
           <div>
-            <label for="schemaeditorview-field-type" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
+            <label :for="`schema-editor-field-${field._key}-type`" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
             <Select :model-value="field.type" @update:model-value="update({ type: String($event) })">
-              <SelectTrigger id="schemaeditorview-field-type" class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('views.SchemaEditorView.field_type_aria')" data-testid="schema-editor-field-type">
+              <SelectTrigger :id="`schema-editor-field-${field._key}-type`" class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('views.SchemaEditorView.field_type_aria')" data-testid="schema-editor-field-type">
                 <SelectValue :placeholder="$t('views.SchemaEditorView.select_type')" />
               </SelectTrigger>
               <SelectContent>
@@ -58,8 +58,8 @@
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label for="schemaeditorview-field-3" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_description') }}</label>
-            <input id="schemaeditorview-field-3"
+            <label :for="`schema-editor-field-${field._key}-description`" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_description') }}</label>
+            <input :id="`schema-editor-field-${field._key}-description`"
               :value="field.description"
               type="text"
               data-testid="schema-editor-field-description"
@@ -69,8 +69,8 @@
             />
           </div>
           <div>
-            <label for="schemaeditorview-field-2" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.default_value') }}</label>
-            <input id="schemaeditorview-field-2"
+            <label :for="`schema-editor-field-${field._key}-default`" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.default_value') }}</label>
+            <input :id="`schema-editor-field-${field._key}-default`"
               :value="field.defaultValue"
               type="text"
               data-testid="schema-editor-field-default"
@@ -82,8 +82,8 @@
         </div>
 
         <div class="flex items-center gap-4">
-          <label for="schemaeditorview-field-1" class="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <input id="schemaeditorview-field-1"
+          <label :for="`schema-editor-field-${field._key}-required`" class="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <input :id="`schema-editor-field-${field._key}-required`"
               :checked="field.required"
               type="checkbox"
               data-testid="schema-editor-field-required"
