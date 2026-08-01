@@ -570,7 +570,7 @@ async def _seed_demo_data(settings: Settings) -> None:
                 account_id=demo_account.id,
                 name="Stub Model (Demo)",
                 display_name="Stub Model (Demo)",
-                provider="stub",
+                provider="custom",
                 model_id="demo-model",
                 credentials_ciphertext=b"demo-encrypted",
             )
