@@ -1,5 +1,5 @@
 <template>
-  <BackLink to="/admin/errors" label="Back to Error Dashboard" />
+  <BackLink to="/admin/errors" :label="$t('views.AdminErrorDetailView.back_to_error_dashboard')" />
   <div class="page-wide">
     <header class="flex items-center justify-between">
       <div class="flex items-center gap-3">
@@ -7,7 +7,8 @@
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
           @click="goBack"
         >
-          &larr; Back
+          <ArrowLeft class="mr-1 inline-block h-4 w-4" />
+          {{ $t('views.AdminErrorDetailView.back') }}
         </button>
         <PageHeader :title="$t('views.AdminErrorDetailView.error_group_detail')" :subtitle="group ? shortId(group.fingerprint) : undefined" />
       </div>
@@ -54,27 +55,27 @@
             :disabled="group.status === 'acknowledged'"
             @click="updateStatus('acknowledged')"
           >
-            Acknowledge
+            {{ $t('views.AdminErrorDetailView.acknowledge') }}
           </button>
           <button
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
             :disabled="group.status === 'resolved'"
             @click="updateStatus('resolved')"
           >
-            Resolve
+            {{ $t('views.AdminErrorDetailView.resolve') }}
           </button>
           <button
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
             :disabled="group.status === 'archived'"
             @click="updateStatus('archived')"
           >
-            Archive
+            {{ $t('views.AdminErrorDetailView.archive') }}
           </button>
             <div class="ml-auto flex items-center gap-2">
             <label for="assignee-select" class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</label>
-            <Select v-model="assigneeId" aria-label="Assign to" @update:model-value="updateAssignee">
-              <SelectTrigger id="assignee-select" aria-label="Assign to" class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                <SelectValue placeholder="Unassigned" />
+            <Select v-model="assigneeId" :aria-label="$t('views.AdminErrorDetailView.assign_to')" @update:model-value="updateAssignee">
+              <SelectTrigger id="assignee-select" :aria-label="$t('views.AdminErrorDetailView.assign_to')" class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                <SelectValue :placeholder="$t('views.AdminErrorDetailView.unassigned')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem v-for="user in users" :key="user.id" :value="user.id">
@@ -106,7 +107,7 @@
             >
               <path d="m9 18 6-6-6-6" />
             </svg>
-            Stacktrace
+            {{ $t('views.AdminErrorDetailView.stacktrace') }}
           </button>
           <pre v-if="showStacktrace" class="mt-2 max-h-96 overflow-auto rounded-lg bg-muted p-3 text-xs leading-relaxed"><code>{{ sampleEvent.stacktrace }}</code></pre>
         </div>
@@ -127,7 +128,7 @@
             >
               <path d="m9 18 6-6-6-6" />
             </svg>
-            Context JSON
+            {{ $t('views.AdminErrorDetailView.context_json') }}
           </button>
           <pre v-if="showContext" class="mt-2 max-h-64 overflow-auto rounded-lg bg-muted p-3 text-xs"><code>{{ JSON.stringify(sampleEvent.context_json, null, 2) }}</code></pre>
         </div>
@@ -153,10 +154,10 @@
       </div>
 
       <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">Raw Events ({{ eventsTotal }})</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminErrorDetailView.raw_events', { count: eventsTotal }) }}</h2>
         <LoadingSpinner v-if="eventsLoading" />
         <div v-else-if="events.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-          No raw events loaded.
+          {{ $t('views.AdminErrorDetailView.no_raw_events_loaded') }}
         </div>
         <template v-else>
           <div class="divide-y">
@@ -179,7 +180,7 @@
           </div>
           <div class="mt-3 flex items-center justify-between border-t pt-3">
             <span class="text-sm text-muted-foreground">
-              {{ events.length }} of {{ eventsTotal }} events
+              {{ $t('views.AdminErrorDetailView.events_of', { count: events.length, total: eventsTotal }) }}
             </span>
             <div class="flex gap-2">
               <button
@@ -187,14 +188,14 @@
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-30"
                 @click="loadEvents(eventsOffset - eventsLimit)"
               >
-                Previous
+                {{ $t('views.AdminErrorDetailView.previous') }}
               </button>
               <button
                 :disabled="eventsOffset + eventsLimit >= eventsTotal"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-30"
                 @click="loadEvents(eventsOffset + eventsLimit)"
               >
-                Next
+                {{ $t('views.AdminErrorDetailView.next') }}
               </button>
             </div>
           </div>
@@ -208,6 +209,8 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { ArrowLeft } from '@lucide/vue'
 import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, type ErrorGroupDetail, type ErrorEventDetail } from '../lib/api/errors'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -220,6 +223,7 @@ import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 const errorId = route.params.id as string
 
 const showStacktrace = ref(false)
@@ -237,7 +241,7 @@ const eventsLimit = 20
 const { data: groupData, loading, error, load: loadDetail } = useDataFetch(
   () => fetchErrorGroup(errorId).then(
     d => ({ data: d }),
-    e => ({ error: { detail: `Failed to load error group: ${formatApiError(e)}` } }),
+    e => ({ error: { detail: `${t('views.AdminErrorDetailView.failed_to_load_error_group')} ${formatApiError(e)}` } }),
   ),
   { initialValue: null as ErrorGroupDetail | null }
 )
@@ -283,7 +287,7 @@ async function updateStatus(status: string) {
     await updateErrorGroup(errorId, { status })
     await loadDetail()
   } catch (e: unknown) {
-    error.value = `Failed to update status: ${formatApiError(e)}`
+    error.value = `${t('views.AdminErrorDetailView.failed_to_update_status')} ${formatApiError(e)}`
   }
 }
 
@@ -291,7 +295,7 @@ async function updateAssignee() {
   try {
     await updateErrorGroup(errorId, { assigned_to: assigneeId.value || undefined })
   } catch (e: unknown) {
-    error.value = `Failed to update assignee: ${formatApiError(e)}`
+    error.value = `${t('views.AdminErrorDetailView.failed_to_update_assignee')} ${formatApiError(e)}`
   }
 }
 
@@ -303,7 +307,7 @@ async function loadEvents(offset?: number) {
     events.value = data.items
     eventsTotal.value = data.total
   } catch (e: unknown) {
-    error.value = `Failed to load events: ${formatApiError(e)}`
+    error.value = `${t('views.AdminErrorDetailView.failed_to_load_events')} ${formatApiError(e)}`
   } finally {
     eventsLoading.value = false
   }

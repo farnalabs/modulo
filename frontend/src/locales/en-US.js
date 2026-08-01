@@ -261,7 +261,20 @@ export default {
       "message": "Message",
       "source": "Source",
       "environment": "Environment",
-      "version": "Version"
+      "version": "Version",
+      "back": "Back",
+      "back_to_error_dashboard": "Back to Error Dashboard",
+      "acknowledge": "Acknowledge",
+      "resolve": "Resolve",
+      "archive": "Archive",
+      "unassigned": "Unassigned",
+      "stacktrace": "Stacktrace",
+      "context_json": "Context JSON",
+      "raw_events": "Raw Events ({count})",
+      "no_raw_events_loaded": "No raw events loaded.",
+      "events_of": "{count} of {total} events",
+      "previous": "Previous",
+      "next": "Next"
     },
     "AdminCostControlsView": {
       "failed_to_save_currency": "Failed to save currency",

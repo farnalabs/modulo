@@ -9,35 +9,25 @@
 `frontend/src/views/SchemaEditorView.vue:1-770`
 This file is 770 lines and mixes sidebar (schema list), form editor, JSON preview, version history, and validation logic. Should be split into at least: `SchemaEditorSidebar.vue`, `SchemaEditorForm.vue`, `SchemaVersionHistory.vue`, and `SchemaJsonPreview.vue`.
 
-### 2. Massive template duplication — LibraryView.vue
-`frontend/src/views/LibraryView.vue:91-275`
-Three nearly-identical grid sections (native primitives, preview primitives, community primitives) with ~80 lines each — card structure (badge, name, description, tags, action buttons) duplicated 3x. Extract to a `LibraryPrimitiveCard.vue` component.
+### 2. ~~Massive template duplication — LibraryView.vue~~ **FIXED**
+`LibraryView.vue` now renders all three sections (native primitives, preview primitives, community primitives) through the shared `LibraryPrimitiveCard.vue` component.
 
-### 3. Mixed API patterns — SchemaEditorView.vue
-`frontend/src/views/SchemaEditorView.vue:529,561,602,651,687`
-Uses both the typed `api` client (`api.GET`, `api.POST`) and raw `fetch()` with manual `getAccessToken()` auth header. Two API access patterns in the same file increases cognitive load and risks token-handling inconsistencies.
+### 3. ~~Mixed API patterns — SchemaEditorView.vue~~ **FIXED**
+`SchemaEditorView.vue` now uses only the typed `api` client (`api.GET`, `api.POST`, `api.PATCH`) — no raw `fetch()` calls remain.
 
-### 4. Hardcoded English not using i18n — multiple files
-Several views have hardcoded English strings not wrapped in `$t()` / `t()`:
+### 4. ~~Hardcoded English not using i18n~~ **FIXED**
+All previously-listed views (`SettingsHitlReviewView`, `SettingsErrorForwardersView`, `SchemaListView`, `SchemaEditorView`, `LibraryPipelineWizard`, `EvalEditorView`, and `AdminErrorDetailView`) now wrap user-facing strings in `$t()` / `t()`.
 
-- **SettingsHitlReviewView.vue** — title, subtitle, all filter labels, option text, button text, empty-state text, status text. Nearly every user-facing string is hardcoded.
-- **SettingsErrorForwardersView.vue** — most form labels, placeholders, button text, status text (only the title uses `$t()`).
-- **SchemaListView.vue** — tab labels, page title, column headers, status badges, action buttons.
-- **SchemaEditorView.vue** — tab labels, page title, button text, section headings, field labels, empty-state text. The `PageTabs` labels are hardcoded, unlike SchemaInferenceView which uses `$t()` for the same tabs.
-- **LibraryPipelineWizard.vue** — heading, subtitle, labels, button text, empty states. No `$t()` usage at all.
-- **EvalEditorView.vue** — `PageTabs` labels, eval type `<option>` text are hardcoded.
-
-### 5. Type safety bypassed with `as any` casts — SettingsErrorForwardersView.vue
-`frontend/src/views/SettingsErrorForwardersView.vue:315,355,384`
-Three API calls cast the typed `api` client to `any` to bypass path/parameter type checking. Error-prone: if the API signatures change, these calls won't fail at compile time.
+### 5. ~~Type safety bypassed with `as any` casts — SettingsErrorForwardersView.vue~~ **FIXED**
+The three API calls no longer cast the typed `api` client to `any`.
 
 ## Minor
 
-### 6. Empty catch blocks — 4 files
-- `frontend/src/views/SettingsHitlReviewView.vue:404` — `catch {}` with comment "Non-critical"
-- `frontend/src/views/MyProfileView.vue:116-118` — `catch {}` with fallback assignment
-- `frontend/src/views/SchemaEditorView.vue:553-555` — `catch {}` with comment "silently ignore"
-- `frontend/src/views/SchemaEditorView.vue:752-754` — `catch {}` with comment "clipboard not available"
+### 6. ~~Empty catch blocks~~ **FIXED**
+All previously-silent empty catch blocks now log via `console.warn()`:
+- `SchemaEditorView.vue` (loadVersions / formatDate) — added `console.warn`
+- `RunDetailView.vue` (fetchHitlGates) — added `console.warn`
+- `ParameterSchemasView.vue` (loadPickers) — added `console.warn`
 
 Empty catches hide failures and make debugging impossible. At minimum `console.warn()`.
 
@@ -65,11 +55,11 @@ error.value = `${t(...)} ${formatApiError(e)}`
 ```
 In the `catch` block, `e` is a thrown `Error` object, not an API response. `formatApiError` expects `ProblemDetail | unknown` and its error-detail extraction logic may not produce a useful message from a bare `Error`.
 
-### 13. HTML entity `&larr;` — LibraryPipelineWizard.vue:11
-Uses `&larr;` for the back arrow instead of an SVG icon or the `<BackLink>` component's built-in styling. Inconsistent with the rest of the codebase which uses Lucide SVGs.
+### 13. ~~HTML entity `&larr;`~~ **FIXED**
+`LibraryPipelineWizard.vue` and `AdminErrorDetailView.vue` now use the Lucide `ArrowLeft` icon instead of the `&larr;` HTML entity.
 
-### 14. `$router` vs `router` inconsistency — LibraryView.vue
-The template uses `$router` (line 8 injected by Vue Router), but script uses `router` from `useRouter()` (line 338). Different naming for the same thing across template and script.
+### 14. ~~`$router` vs `router` inconsistency~~ **FIXED**
+`LibraryView.vue` and `LibraryPipelineWizard.vue` now consistently use `router` from `useRouter()` across both template and script.
 
 ### 15. ~~Legacy `useApi` composable — MyProfileView.vue:78~~ **FIXED**
 Migrated to the typed `api` client (`api.GET('/api/v1/me')`, `api.PUT('/api/v1/me/password')`); the unit spec was updated to mock the client module.
