@@ -1,5 +1,6 @@
 """Unit tests for DockerRuntimeProvider."""
 
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,6 +8,12 @@ import pytest
 
 from modulo.core.runtime_provider import ExecResult, WorkspaceSpec
 from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+
+_DEFAULT_MEMORY_MB = 512
+
+
+class _FakeDockerError(Exception):
+    """Stand-in for aiodocker.exceptions.DockerError used in error paths."""
 
 
 @pytest.fixture()
@@ -83,6 +90,16 @@ def test_supports_other_hint(provider: DockerRuntimeProvider) -> None:
     assert provider.supports(profile) is False
 
 
+def test_supports_docker_hint_case_insensitive(provider: DockerRuntimeProvider) -> None:
+    profile = MagicMock(provider_hint="Docker")
+    assert provider.supports(profile) is True
+
+
+def test_supports_image_ref_case_insensitive(provider: DockerRuntimeProvider) -> None:
+    profile = MagicMock(provider_hint="", image_ref="My-Docker-Image:latest")
+    assert provider.supports(profile) is True
+
+
 # ------------------------------------------------------------------
 # create_workspace
 # ------------------------------------------------------------------
@@ -140,6 +157,93 @@ async def test_create_workspace_default_image(
     assert config["Image"] == "python:3.13-slim"
 
 
+async def test_create_workspace_strips_image_ref_whitespace(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        image_ref="  python:3.13-slim  ",
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert config["Image"] == "python:3.13-slim"
+
+
+async def test_create_workspace_invalid_memory_falls_back_to_default(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        resource_limits={"memory_mb": "lots"},
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert config["HostConfig"]["Memory"] == _DEFAULT_MEMORY_MB * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    ("memory_mb", "expected_mb"),
+    [
+        (1, 4),
+        (131072, 131072),
+        (1000000, 131072),
+    ],
+)
+async def test_create_workspace_clamps_memory(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+    memory_mb: int,
+    expected_mb: int,
+) -> None:
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        resource_limits={"memory_mb": memory_mb},
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert config["HostConfig"]["Memory"] == expected_mb * 1024 * 1024
+
+
+async def test_create_workspace_skips_env_control_characters(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        labels={"OK": "fine", "BAD": "bad\nvalue", "CARRIAGE": "x\ry", "NUL": "z\0w"},
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert config["Env"] == ["OK=fine"]
+
+
+async def test_create_workspace_propagates_container_failure(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    mock_docker_client.containers.create.side_effect = RuntimeError("docker down")
+
+    with pytest.raises(RuntimeError, match="docker down"):
+        await provider.create_workspace(
+            WorkspaceSpec(
+                environment_profile_id=uuid.uuid4(),
+                organisation_id=uuid.uuid4(),
+            )
+        )
+
+    assert provider._workspaces == {}
+
+
 # ------------------------------------------------------------------
 # exec_command
 # ------------------------------------------------------------------
@@ -174,6 +278,73 @@ async def test_exec_command_unknown_ref(provider: DockerRuntimeProvider) -> None
         await provider.exec_command("nonexistent", ["echo"])
 
 
+async def test_exec_command_captures_stderr_and_exit_code(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    stream = mock_docker_client.containers.get.return_value.exec.return_value.start.return_value
+    stream.read_out = AsyncMock(side_effect=[(None, b"boom"), None])
+    mock_docker_client.containers.get.return_value.exec.return_value.inspect = AsyncMock(
+        return_value={"ExitCode": 1}
+    )
+
+    result = await provider.exec_command(ref, ["false"])
+
+    assert result.exit_code == 1
+    assert result.stderr == "boom"
+    assert result.stdout == ""
+
+
+async def test_exec_command_timeout_returns_timeout_result(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+
+    async def _hang() -> None:
+        await asyncio.Event().wait()
+
+    stream = mock_docker_client.containers.get.return_value.exec.return_value.start.return_value
+    stream.read_out = AsyncMock(side_effect=_hang)
+
+    result = await provider.exec_command(ref, ["sleep", "100"], cmd_timeout=0.05)
+
+    assert result.exit_code == -1
+    assert result.stderr == "Command timed out"
+    assert result.stdout == ""
+    assert result.duration_ms is not None
+    assert result.duration_ms >= 0
+
+
+async def test_exec_command_decodes_invalid_utf8_with_replacement(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    stream = mock_docker_client.containers.get.return_value.exec.return_value.start.return_value
+    stream.read_out = AsyncMock(side_effect=[(b"\xff\xfe\xff", None), None])
+
+    result = await provider.exec_command(ref, ["cat", "binary"])
+
+    assert result.stdout == "\ufffd\ufffd\ufffd"
+
+
 # ------------------------------------------------------------------
 # destroy_workspace
 # ------------------------------------------------------------------
@@ -201,6 +372,44 @@ async def test_destroy_workspace_unknown(
 ) -> None:
     result = await provider.destroy_workspace("nonexistent")
     assert result is None
+
+
+async def test_destroy_workspace_swallows_docker_error(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    mock_container.stop.side_effect = _FakeDockerError("no such container")
+
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        await provider.destroy_workspace(ref)
+
+    assert ref not in provider._workspaces
+
+
+async def test_destroy_workspace_removes_ref_on_generic_error(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    mock_container.stop.side_effect = RuntimeError("connection reset")
+
+    await provider.destroy_workspace(ref)
+
+    assert ref not in provider._workspaces
 
 
 # ------------------------------------------------------------------
@@ -248,6 +457,27 @@ async def test_get_workspace_status_fallback_on_error(
     assert status == "unknown"
 
 
+async def test_get_workspace_status_docker_error_returns_terminated(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    mock_container.show.side_effect = _FakeDockerError("no such container")
+
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        status = await provider.get_workspace_status(ref)
+
+    assert status == "terminated"
+
+
 # ------------------------------------------------------------------
 # close
 # ------------------------------------------------------------------
@@ -263,3 +493,36 @@ async def test_close_idempotent(provider: DockerRuntimeProvider) -> None:
     await provider.close()
     await provider.close()
     assert provider._client is None
+
+
+async def test_close_destroys_all_workspaces(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    assert len(provider._workspaces) == 2
+
+    await provider.close()
+
+    assert provider._client is None
+    assert provider._workspaces == {}
+    assert mock_container.stop.await_count == 2
+
+
+async def test_get_client_returns_cached_client(provider: DockerRuntimeProvider, mock_docker_client: MagicMock) -> None:
+    first = await provider._get_client()
+    second = await provider._get_client()
+
+    assert first is mock_docker_client
+    assert second is mock_docker_client
