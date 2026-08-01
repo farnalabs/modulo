@@ -46,31 +46,57 @@ async def _seed_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
 
 
 async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid.UUID:
-    account_id = uuid.uuid4()
+    """Create an account + org membership, or reuse an existing account by email.
+
+    The fixed test emails (``admin-a@test.local`` / ``admin-b@test.local``) are
+    seeded by multiple integration modules. Under pytest-xdist (`-n 2`) the
+    modules run against a shared Postgres, so the second INSERT violates the
+    unique ``accounts.email`` constraint. Reusing an existing account keeps the
+    seeding idempotent while preserving the fixed emails the tests depend on.
+    """
     async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, "
-                "auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')",
-            ),
-            {
-                "id": str(account_id),
-                "email": email,
-                "name": f"Admin {email}",
-            },
+        existing = await conn.execute(
+            text("SELECT id FROM accounts WHERE email = :email"),
+            {"email": email},
         )
-        await conn.execute(
+        row = existing.first()
+        if row is not None:
+            account_id = uuid.UUID(str(row[0]))
+        else:
+            account_id = uuid.uuid4()
+            await conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, display_name, "
+                    "auth_provider, active, password_hash) "
+                    "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                ),
+                {
+                    "id": str(account_id),
+                    "email": email,
+                    "name": f"Admin {email}",
+                },
+            )
+
+        # The account may already exist from another module's seeding (possibly
+        # in a different org). Ensure it has an org_membership for THIS org.
+        membership = await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "SELECT id FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid",
             ),
-            {
-                "mid": str(uuid.uuid4()),
-                "aid": str(account_id),
-                "oid": str(org_id),
-            },
+            {"aid": str(account_id), "oid": str(org_id)},
         )
+        if membership.first() is None:
+            await conn.execute(
+                text(
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                    "VALUES (:mid, :aid, :oid, 'admin')",
+                ),
+                {
+                    "mid": str(uuid.uuid4()),
+                    "aid": str(account_id),
+                    "oid": str(org_id),
+                },
+            )
     return account_id
 
 

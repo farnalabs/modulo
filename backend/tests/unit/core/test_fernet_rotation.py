@@ -531,9 +531,7 @@ class TestRotateAllEncryptedData:
     @pytest.mark.asyncio
     async def test_invalid_new_key_raises_before_any_rotator(self) -> None:
         session = _make_session()
-        rotators = {
-            table: AsyncMock(side_effect=AssertionError("rotator should not run")) for table in self._TABLES
-        }
+        rotators = {table: AsyncMock(side_effect=AssertionError("rotator should not run")) for table in self._TABLES}
         with ExitStack() as stack:
             self._enter_rotator_patches(stack, rotators)
             with pytest.raises(ValueError, match="Fernet key"):
