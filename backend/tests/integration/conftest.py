@@ -236,7 +236,7 @@ async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
     return account_id
 
 
-@pytest_asyncio.fixture(loop_scope="function")
+@pytest_asyncio.fixture
 async def rls_session(migrated_db_url: str, test_org: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
     """AsyncSession with RLS set to test_org; all ORM changes are rolled back.
 

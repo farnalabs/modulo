@@ -235,6 +235,7 @@ disable_error_code = ["return"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 filterwarnings = [
     "error::RuntimeWarning",
     "ignore:coroutine .to_thread. was never awaited:RuntimeWarning",
