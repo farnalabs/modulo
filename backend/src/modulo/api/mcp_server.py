@@ -16,6 +16,7 @@ Org context validated per-event for streaming (SSE) connections.
 import contextvars
 import json
 import logging
+import threading
 import time
 import traceback as _traceback
 import uuid
@@ -47,7 +48,7 @@ from modulo.auth.oauth import (
     check_oauth_token_family_valid,
     decode_oauth_access_token,
 )
-from modulo.auth.permissions import set_authz_enforce
+from modulo.auth.permissions import _clamp_role, set_authz_enforce
 from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
 
 # ContextVars populated by McpAuthMiddleware before each request.
@@ -137,6 +138,51 @@ def _ctx_user_id_val() -> uuid.UUID:
 def _ctx_role_val() -> str | None:
     """Get role from the request context (None if unset — scope checks then fail closed)."""
     return _ctx_role.get(None)
+
+
+# API-key role-cap degradation counter (ADR 017 DECISION 4): increments every
+# time a live-role clamp demotes a key (or an owner removal kills one), so mass
+# key-degradation is visible in logs and metrics. Module-level + lock, mirroring
+# the CatchAllMiddleware counter pattern.
+_api_key_role_cap_count: int = 0
+_api_key_role_cap_lock = threading.Lock()
+
+
+def _record_api_key_role_cap(
+    *,
+    minted_role: str,
+    effective_role: str,
+    org_id: uuid.UUID,
+    degraded: bool,
+    key_id: uuid.UUID | None = None,
+) -> None:
+    """Log + count an API-key role-cap clamp (degrade or deny-on-removal).
+
+    ``degraded=True`` when the effective role is lower than the minted role
+    (demoted operator); ``degraded=False`` with ``effective_role=""`` when the
+    owner was removed/deactivated (key dies).
+    """
+    global _api_key_role_cap_count
+    with _api_key_role_cap_lock:
+        _api_key_role_cap_count += 1
+    _log.warning(
+        "permission.api_key_role_cap",
+        extra={
+            "minted_role": minted_role,
+            "effective_role": effective_role,
+            "org_id": str(org_id),
+            "key_id": str(key_id) if key_id else None,
+            "degraded": degraded,
+            "total_caps": _api_key_role_cap_count,
+        },
+    )
+
+
+def get_api_key_role_cap_count() -> int:
+    """Return the total number of API-key role-cap clamps recorded."""
+    global _api_key_role_cap_count
+    with _api_key_role_cap_lock:
+        return _api_key_role_cap_count
 
 
 async def _set_authz_enforce(org_id: uuid.UUID) -> None:
@@ -254,7 +300,43 @@ async def validate_current_auth() -> bool:
     try:
         if auth_type == "api_key":
             async with _session(org_id) as s:
-                await validate_api_key(s, token, org_id)
+                key = await validate_api_key(s, token, org_id)
+            # ADR 017 DECISION 4 — clamp on every per-event re-validation too.
+            # The stored key.role is the minted role; the effective role is
+            # min(minted, live), resolved TTL-bounded through the same cache
+            # the JWT path uses (per-connection keyed by token).
+            account_id = _ctx_user_id.get(None)
+            if account_id is None:
+                return False
+            live_role = await _revalidate_live_role(token, account_id, org_id)
+            if live_role is None:
+                _record_api_key_role_cap(
+                    minted_role=key.role,
+                    effective_role="",
+                    org_id=org_id,
+                    degraded=False,
+                    key_id=key.id,
+                )
+                return False
+            clamped = _clamp_role(key.role, live_role)
+            if clamped == "":
+                _record_api_key_role_cap(
+                    minted_role=key.role,
+                    effective_role="",
+                    org_id=org_id,
+                    degraded=False,
+                    key_id=key.id,
+                )
+                return False
+            if clamped != key.role:
+                _record_api_key_role_cap(
+                    minted_role=key.role,
+                    effective_role=clamped,
+                    org_id=org_id,
+                    degraded=True,
+                    key_id=key.id,
+                )
+            _ctx_role.set(clamped)
             return True
 
         if auth_type == "oauth":
@@ -367,9 +449,39 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 # Now re-validate within the correct RLS context.
                 async with _session(key_record.organisation_id) as s:
                     key = await validate_api_key(s, token, org_id=key_record.organisation_id)
+                    # ADR 017 DECISION 4 — live role-cap on EVERY MCP call. The
+                    # stored key.role is the minted role; the effective role is
+                    # min(minted, live). A demoted operator's key degrades to
+                    # the live role on the next call (never persisted — the ORM
+                    # flushes last_used_at, so mutating key.role here would
+                    # permanently store the demotion). An owner removed from
+                    # the org (no live membership) makes the key die (401).
+                    live_role = await resolve_role_from_membership(
+                        s,
+                        str(key.account_id),
+                        str(key.organisation_id),
+                    )
+                    clamped = _clamp_role(key.role, live_role)
+                    if clamped == "":
+                        _record_api_key_role_cap(
+                            minted_role=key.role,
+                            effective_role="",
+                            org_id=key.organisation_id,
+                            degraded=False,
+                            key_id=key.id,
+                        )
+                        raise ApiKeyInvalidError()
+                    if clamped != key.role:
+                        _record_api_key_role_cap(
+                            minted_role=key.role,
+                            effective_role=clamped,
+                            org_id=key.organisation_id,
+                            degraded=True,
+                            key_id=key.id,
+                        )
                 org_id = key.organisation_id
                 _ctx_org_id.set(org_id)
-                _ctx_role.set(key.role)
+                _ctx_role.set(clamped)
                 _ctx_key_id.set(key.id)
                 _ctx_user_id.set(key.account_id)
                 _ctx_auth_token.set(token)
