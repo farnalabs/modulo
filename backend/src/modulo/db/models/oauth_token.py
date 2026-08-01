@@ -68,7 +68,7 @@ class OAuthConsentState(Base):
     state: Mapped[str] = mapped_column(String(128), primary_key=True)
     client_id: Mapped[str] = mapped_column(String(64), nullable=False)
     redirect_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
-    scopes: Mapped[list] = mapped_column(JSON, nullable=False, comment="Requested scopes — authoritative at mint")
+    scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False, comment="Requested scopes — authoritative at mint")
     code_challenge: Mapped[str] = mapped_column(String(128), nullable=False, comment="PKCE S256 challenge")
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
