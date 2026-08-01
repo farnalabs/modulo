@@ -398,13 +398,20 @@ class TestStaleRunRecoverySweep:
 
         assert result["never_dispatched_swept"] == 0
         assert result["worker_lost_swept"] == 0
-        assert len(statements) == 2
+        assert result["capacity_timeout_swept"] == 0
+        assert len(statements) == 3
         never_sql = statements[0]
-        lost_sql = statements[1]
+        capacity_sql = statements[1]
+        lost_sql = statements[2]
         assert "never_dispatched" in never_sql
+        assert "capacity_timeout" in capacity_sql
         assert "worker_lost" in lost_sql
         assert ":nd_window" in never_sql
+        assert ":ttl" in capacity_sql
         assert ":wl_window" in lost_sql
+        # never_dispatched must not kill reason-marked capacity-blocked runs.
+        assert "org_capacity_limited" in never_sql
+        assert "pipeline_capacity" in never_sql
 
     async def test_explicit_windows_override_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         params_seen: list[dict[str, object]] = []
@@ -439,7 +446,8 @@ class TestStaleRunRecoverySweep:
         assert result["never_dispatched_swept"] == 1
         assert result["worker_lost_swept"] == 1
         assert params_seen[0]["nd_window"] == 300
-        assert params_seen[1]["wl_window"] == 900
+        assert params_seen[1]["ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        assert params_seen[2]["wl_window"] == 900
 
     async def test_returns_error_dict_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class _AsyncConn:
