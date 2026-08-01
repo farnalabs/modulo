@@ -67,18 +67,21 @@ Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 20+, and Docker Desktop.
 
 Install and check each application from its own directory:
 
-```powershell
-Set-Location backend
+```bash
+cd backend
 uv sync --frozen
 uv run pytest tests/unit tests/architecture
 uv run ruff check .
 
-Set-Location ../frontend
+cd ../frontend
 npm ci
 npm run lint
 npm run type-check
 npm run test:unit
 ```
+
+On Windows, use PowerShell with `Set-Location backend` and
+`Set-Location ../frontend` instead of `cd`.
 
 The repository also contains integration, multi-database, browser, security,
 and container suites. Some require local services or deployment credentials
