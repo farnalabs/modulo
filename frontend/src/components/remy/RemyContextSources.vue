@@ -103,7 +103,7 @@ async function fetchSources() {
   loading.value = true;
   error.value = null;
   try {
-    const { data, error: err } = await (api as any).GET("/api/v1/me/remy/context-sources");
+    const { data, error: err } = await api.GET("/api/v1/me/remy/context-sources");
     if (err) {
       error.value = `Failed to load sources: ${formatApiError(err)}`;
     } else if (data) {
@@ -125,7 +125,7 @@ async function updateSource(key: string, mode: ContextSourceMode) {
     prev.source_mode = mode;
   }
   try {
-    const { data, error: err } = await (api as any).PUT(
+    const { data, error: err } = await api.PUT(
       "/api/v1/me/remy/context-sources/{source_key}",
       {
         params: { path: { source_key: key } },
@@ -156,7 +156,7 @@ async function resetToDefaults() {
   resetting.value = true;
   error.value = null;
   try {
-    const { error: err } = await (api as any).DELETE("/api/v1/me/remy/context-sources");
+    const { error: err } = await api.DELETE("/api/v1/me/remy/context-sources");
     if (err) {
       error.value = `Failed to reset sources: ${formatApiError(err)}`;
       return;
