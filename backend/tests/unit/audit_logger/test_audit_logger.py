@@ -397,7 +397,10 @@ class TestExportChain:
         from_date = datetime(2025, 1, 1, tzinfo=UTC)
         to_date = datetime(2025, 12, 31, tzinfo=UTC)
 
-        async def _execute(*a, **kw):
+        executed = []
+
+        async def _execute(stmt, *a, **kw):
+            executed.append(stmt)
             r = MagicMock()
             r.scalars = MagicMock(return_value=[])
             r.scalar = MagicMock(return_value=0)
@@ -416,6 +419,16 @@ class TestExportChain:
         )
         assert result["total"] == 0
         assert result["items"] == []
+
+        # Every filter must reach the SQL sent to the DB, on both the items
+        # and count queries, not just return an empty page.
+        sql = [str(stmt.compile(compile_kwargs={"literal_binds": True})) for stmt in executed]
+        for stmt_sql in sql:
+            assert "user.login" in stmt_sql
+            assert actor_id.hex in stmt_sql
+            assert "pipeline" in stmt_sql
+            assert "2025-01-01 00:00:00+00:00" in stmt_sql
+            assert "2025-12-31 00:00:00+00:00" in stmt_sql
 
 
 class TestGetAuditEventsBatch:
@@ -619,7 +632,10 @@ class TestListAuditEvents:
         org_id = uuid.uuid4()
         actor_id = uuid.uuid4()
 
-        async def _execute(*a, **kw):
+        executed = []
+
+        async def _execute(stmt, *a, **kw):
+            executed.append(stmt)
             return _scalar_result(0)
 
         session.execute = _execute
@@ -631,6 +647,12 @@ class TestListAuditEvents:
             resource_type="pipeline",
         )
         assert result["total"] == 0
+
+        # Verify the filters reach the SQL, not just that an empty page returns.
+        sql = [str(stmt.compile(compile_kwargs={"literal_binds": True})) for stmt in executed]
+        for stmt_sql in sql:
+            assert actor_id.hex in stmt_sql
+            assert "pipeline" in stmt_sql
 
     async def test_list_clamps_limit(self, session):
         org_id = uuid.uuid4()
