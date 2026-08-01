@@ -80,23 +80,40 @@ async def org_b(db_engine: AsyncEngine) -> uuid.UUID:
 
 @pytest_asyncio.fixture(scope="module")
 async def user_a(db_engine: AsyncEngine, org_a: uuid.UUID) -> uuid.UUID:
-    account_id = uuid.uuid4()
+    # Reuse an existing account for the fixed email so seeding is idempotent
+    # under pytest-xdist against a shared Postgres (see test_cross_tenant_isolation).
     async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
-            ),
-            {"id": str(account_id), "email": "admin-a@test.local", "name": "Admin A"},
+        existing = await conn.execute(
+            text("SELECT id FROM accounts WHERE email = :email"),
+            {"email": "admin-a@test.local"},
         )
-        await conn.execute(
+        row = existing.first()
+        if row is not None:
+            account_id = uuid.UUID(str(row[0]))
+        else:
+            account_id = uuid.uuid4()
+            await conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, display_name, password_hash, "
+                    "auth_provider, active) "
+                    "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                ),
+                {"id": str(account_id), "email": "admin-a@test.local", "name": "Admin A"},
+            )
+        membership = await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "SELECT id FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid",
             ),
-            {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_a)},
+            {"aid": str(account_id), "oid": str(org_a)},
         )
+        if membership.first() is None:
+            await conn.execute(
+                text(
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                    "VALUES (:mid, :aid, :oid, 'admin')",
+                ),
+                {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_a)},
+            )
     return account_id
 
 
