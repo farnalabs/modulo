@@ -81,7 +81,7 @@ const StageBoardView = () => import('../views/StageBoardView.vue')
 const PipelineEditorView = () => import('../views/PipelineEditorView.vue')
 const CompositeEditorView = () => import('../views/pipeline/CompositeEditorView.vue')
 const CopyPipelineWizard = () => import('../views/CopyPipelineWizard.vue')
-// removed: PipelineTemplateGallery â€” merged into /library
+// removed: PipelineTemplateGallery — merged into /library
 const AdminUsersView = () => import('../views/AdminUsersView.vue')
 const AdminSpendLimitsView = () => import('../views/AdminSpendLimitsView.vue')
 const AdminCostBreakdownView = () => import('../views/AdminCostBreakdownView.vue')

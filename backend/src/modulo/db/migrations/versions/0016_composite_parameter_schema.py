@@ -1,6 +1,6 @@
 """Add parameter_schema_id to composite_templates.
 
-Implements RFC Â§10 Phase 4: CompositeTemplate Parameter Schema.
+Implements RFC §10 Phase 4: CompositeTemplate Parameter Schema.
 
 Changes:
   - Add parameter_schema_id column to composite_templates table (nullable)

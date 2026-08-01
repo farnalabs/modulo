@@ -202,7 +202,7 @@ def _validate_generic_agent(
     Library-sourced agents (those with a ``library_id``) inherit trust and
     documentation from their source — they bypass generic-agent checks.
 
-    Generic user-defined agents are experimental per PRD Â§8.2 and must
+    Generic user-defined agents are experimental per PRD §8.2 and must
     satisfy the following criteria before they can execute in a pipeline:
       - An executable generic agent MUST have a ``description`` so other
         pipeline authors can understand its purpose.
@@ -211,7 +211,7 @@ def _validate_generic_agent(
       - Executable generic agents with *novel schema pairs* (no matching
         library primitive) SHOULD define at least one eval for quality
         assurance.  In alpha this is a logged advisory; in production it
-        becomes a hard requirement (see PRD Â§15 — "require eval rubric
+        becomes a hard requirement (see PRD §15 — "require eval rubric
         before production promotion").
     """
     if library_id is not None:
@@ -240,7 +240,7 @@ def _validate_generic_agent(
     if is_executable and not evals:
         _log.warning(
             "Generic executable agent '%s' has no eval definitions. "
-            "Per PRD Â§8.2, generic agents are experimental and require "
+            "Per PRD §8.2, generic agents are experimental and require "
             "an eval rubric before production promotion. "
             "Consider adding at least one eval before deploying this agent "
             "in a production pipeline.",
