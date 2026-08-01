@@ -1051,8 +1051,8 @@ async function loadPickers() {
     ])
     if (mbResp.data) modelBackends.value = (mbResp.data as any)?.items ?? []
     if (schResp.data) allSchemas.value = (schResp.data as any)?.items ?? []
-  } catch {
-    // non-critical
+  } catch (e: unknown) {
+    console.warn('Failed to load picker data', e)
   }
 }
 loadPickers()

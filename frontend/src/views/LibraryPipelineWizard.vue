@@ -5,7 +5,7 @@
       <div class="max-w-3xl mx-auto">
         <button
           class="text-sm text-muted-foreground hover:text-foreground mb-2 inline-flex items-center gap-1"
-          @click="$router.push({ name: 'library' })"
+          @click="router.push({ name: 'library' })"
           data-testid="library-wizard-back"
         >
           <ArrowLeft class="h-4 w-4" />
@@ -148,7 +148,7 @@
           </Button>
           <button
             class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
-            @click="$router.push({ name: 'library' })"
+            @click="router.push({ name: 'library' })"
             data-testid="library-wizard-cancel"
           >
             {{ $t('views.LibraryPipelineWizard.cancel') }}
@@ -179,7 +179,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
@@ -235,6 +235,7 @@ interface CreatePipelineResponse {
 }
 
 const route = useRoute()
+const router = useRouter()
 const { t } = useI18n()
 
 const primitiveId = route.params.id as string
