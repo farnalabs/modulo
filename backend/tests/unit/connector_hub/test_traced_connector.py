@@ -214,6 +214,86 @@ def _hub_global_exporter() -> InMemorySpanExporter:
     return exporter
 
 
+async def test_traced_connector_getattr_proxies_to_inner(traced: _TracedConnector) -> None:
+    """Unknown attributes are proxied to the inner connector."""
+    inner = traced._inner
+    inner.custom_method = lambda: "proxied"  # type: ignore[attr-defined]
+
+    assert traced.custom_method() == "proxied"  # type: ignore[attr-defined]
+
+
+async def test_query_cancelled_records_error(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
+    """CancelledError is re-raised and the span is marked ERROR with a 'cancelled' status."""
+    import asyncio
+
+    inner = traced._inner
+    with (
+        patch.object(inner, "query", AsyncMock(side_effect=asyncio.CancelledError)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await traced.query(ConnectorQuery(resource="/test"))
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+
+
+async def test_post_span_callback_failure_does_not_break_result(
+    traced: _TracedConnector, exporter: InMemorySpanExporter, caplog
+) -> None:
+    """A failing post_span callback is logged but does not change the returned result."""
+    import logging
+
+    inner = traced._inner
+    # Return a result without an `.ok` attribute so the health_check post_span callback fails.
+    bad_result = object()
+    with (
+        patch.object(inner, "health_check", AsyncMock(return_value=bad_result)),
+        caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
+    ):
+        result = await traced.health_check()
+
+    assert result is bad_result
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert any("post_span callback failed" in rec.message for rec in caplog.records)
+
+
+async def test_write_deepcopies_payload(traced: _TracedConnector) -> None:
+    """write() deep-copies the payload before passing it to the inner connector."""
+    inner = traced._inner
+    captured: dict[str, Any] = {}
+
+    async def _fake_write(payload: ConnectorPayload) -> dict[str, Any]:
+        captured["payload"] = payload
+        return {"status": "ok"}
+
+    with patch.object(inner, "write", AsyncMock(side_effect=_fake_write)):
+        payload = ConnectorPayload(resource="/out.txt", data={"nested": {"k": "v"}})
+        await traced.write(payload)
+
+    assert captured["payload"] is not payload
+    assert captured["payload"].data == {"nested": {"k": "v"}}
+
+
+async def test_query_span_sets_result_total_only_when_not_none(tracer, exporter: InMemorySpanExporter) -> None:
+    """post_span for query handles results whose total is None without error."""
+    inner = _FakeConnector()
+
+    async def _no_total(q: ConnectorQuery) -> ConnectorResult:
+        return ConnectorResult(records=[{"file": "x.txt"}], total=None)
+
+    with patch.object(inner, "query", AsyncMock(side_effect=_no_total)):
+        traced = _TracedConnector(inner, tracer=tracer)
+        result = await traced.query(ConnectorQuery(resource="/test"))
+
+    assert result.total is None
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert "connector.result_total" not in (spans[0].attributes or {})
+
+
 async def test_hub_integration_health_check(tmp_path, _hub_global_exporter: InMemorySpanExporter) -> None:
     """ConnectorHub wiring produces spans in health_check."""
     key = Fernet.generate_key().decode()
