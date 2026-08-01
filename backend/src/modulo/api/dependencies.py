@@ -65,7 +65,7 @@ def _tagged_dep(
     return cast(DependsParameter, dep)
 
 
-def require_permission(permission: str) -> DependsParameter:
+def require_permission(permission: str) -> Any:
     """FastAPI dependency factory — require the current tenant's org role.
 
     Resolves the minimum role for ``permission`` at factory-creation time so a

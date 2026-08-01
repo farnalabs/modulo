@@ -12,9 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import (
     AuthenticatedPrincipal,
+    TenantPrincipal,
     create_access_token,
     create_ws_token,
     decode_principal,
@@ -188,6 +189,12 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
 
     try:
         with patch(
@@ -228,6 +235,7 @@ def test_ws_token_jwt_expiry_matches_settings(client: TestClient) -> None:
 def test_ws_token_endpoint_unauthenticated_returns_4xx() -> None:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides.pop(get_current_user, None)  # remove override
+    app.dependency_overrides.pop(get_current_tenant_user, None)  # remove override
     try:
         resp = TestClient(app).post("/api/v1/auth/ws-token")
         assert resp.status_code in (401, 403)
@@ -248,6 +256,12 @@ def test_ws_token_removed_member_returns_401(mock_session: AsyncMock) -> None:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,

@@ -22,9 +22,10 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user_optional
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.core.dispatch import dispatch_run_sync
 from modulo.core.trigger_engine import (
     ConcurrentRunLimitError,
@@ -36,8 +37,11 @@ from modulo.core.trigger_engine import (
     TriggerEngine,
     TriggerInactiveError,
     TriggerNotFoundError,
+    _verify_hmac,
+    _verify_timestamp,
 )
 from modulo.db.models.trigger import Trigger
+from modulo.db.models.webhook import WebhookPayload
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -60,6 +64,12 @@ async def receive_webhook(
 
     Requires X-Modulo-Timestamp header (Unix seconds, ±300s window).
     Requires X-Modulo-Webhook-Secret header if trigger has hmac_secret configured.
+
+    ADR 017 exempt-channel: this route is CSRF-exempt via the audited
+    ``/api/v1/triggers/`` prefix and exempt from the org-role sweep because it
+    authenticates via the trigger's shared-secret HMAC (or is public run
+    creation for HMAC-less triggers by design). Replay and cleanup-expired are
+    NOT exempt — see those handlers.
 
     Returns 202 on success. All validation outcomes are recorded as TriggerEvent rows.
     Returns 400 on duplicate payload, 401 on HMAC failure, 429 on flood rejection.
@@ -185,6 +195,7 @@ async def receive_webhook(
 async def replay_webhook(
     trigger_id: uuid.UUID,
     event_id: uuid.UUID,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     engine: AsyncEngine = Depends(_get_engine),
@@ -193,7 +204,30 @@ async def replay_webhook(
 
     Replays the original raw payload through the trigger pipeline, skipping
     HMAC and timestamp validation but preserving dedup and flood protection.
+
+    ADR 017: replay is a mutating run-creation channel and is NOT exempt. A
+    principal (if present) must hold the ``run.trigger`` permission (``runner``
+    minimum). An unauthenticated caller must present a valid HMAC signature
+    (``X-Modulo-Webhook-Secret`` + ``X-Modulo-Timestamp``) over the stored
+    payload — the same verification ``receive_webhook`` performs.
     """
+    if principal is not None:
+        try:
+            assert_org_role(principal.org_role, "runner", "run.trigger")
+        except PermissionDenied as exc:
+            _log.warning(
+                "permission.denied",
+                extra={
+                    "permission": "run.trigger",
+                    "required": "runner",
+                    "actual": principal.org_role,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permission 'run.trigger' requires 'runner' role",
+            ) from exc
+
     try:
         async with session.begin():
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -216,6 +250,29 @@ async def replay_webhook(
                 raise HTTPException(status_code=401, detail="Could not resolve organization")
 
             await set_rls_org(session, org_id)
+
+            if principal is None:
+                # ADR 017: unauthenticated replay requires a valid HMAC signature
+                # over the stored payload (same check as receive_webhook).
+                hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
+                modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
+                ts = _verify_timestamp(modulo_timestamp)
+                cfg = trigger.config_json or {}
+                hmac_secret: str | None = cfg.get("hmac_secret")
+                if hmac_secret is None:
+                    raise HmacValidationError()
+                payload_row = await session.execute(
+                    select(WebhookPayload).where(
+                        WebhookPayload.trigger_event_id == event_id,
+                        WebhookPayload.organisation_id == org_id,
+                    )
+                )
+                stored = payload_row.scalar_one_or_none()
+                if stored is None:
+                    raise ReplayNotFoundError(event_id)
+                if not _verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
+                    raise HmacValidationError()
+
             snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
             if snapshot is None:
                 raise HTTPException(
@@ -229,6 +286,16 @@ async def replay_webhook(
                 org_id=org_id,
                 snapshot_id=snapshot.id,
             )
+    except TimestampExpiredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Modulo-Timestamp is outside the ±300s replay window",
+        ) from exc
+    except HmacValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="HMAC signature verification failed",
+        ) from exc
     except ReplayNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger event not found") from exc
     except TriggerNotFoundError as exc:
@@ -282,19 +349,17 @@ async def replay_webhook(
 @router.post("/cleanup-expired", status_code=status.HTTP_200_OK)
 async def cleanup_expired(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
+    principal: TenantPrincipal = require_permission("trigger.cleanup"),
 ) -> dict[str, int]:
     """Delete expired dedup hashes and webhook payloads.
 
     Acquires a Postgres advisory lock to prevent concurrent cleanup across workers.
-    Safe to call from cron every 5 minutes.
+    Safe to call from cron every 5 minutes (with a ``runner`` credential).
+
+    ADR 017: swept with ``trigger.cleanup`` (``runner`` minimum) — this route
+    mutates state and resolves a user principal, so it is no longer exempt.
     """
-    org_id = principal.organisation_id if principal else None
-    if org_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
-        )
+    org_id = principal.organisation_id
 
     result: dict[str, int] = {"dedup_hashes_deleted": 0, "payloads_deleted": 0}
     try:

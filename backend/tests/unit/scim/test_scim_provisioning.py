@@ -906,6 +906,65 @@ class TestPatchUser:
         assert mock_user.active is False
 
 
+class TestNoScimRouteSetsOrgRole:
+    """ADR 017: SCIM is exempt via MODULO_SCIM_TOKEN, but no route may set an
+    org role. ``scim_update_user`` has a *functional* role-UPDATE that must
+    stay unwired — prove no SCIM route passes ``org_role``."""
+
+    def test_put_user_with_org_role_field_is_ignored(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
+            patch("modulo.api.routes.scim.scim_update_user", return_value=_MOCK_USER) as update_mock,
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            body = {**_USER_CREATE_BODY, "org_role": "admin"}
+            resp = client.put(
+                f"/scim/v2/Users/{_USER_ID}",
+                json=body,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        update_mock.assert_awaited_once()
+        kwargs = update_mock.call_args.kwargs
+        assert "org_role" not in kwargs
+        assert kwargs.get("role") is None
+
+    def test_patch_user_org_role_path_is_not_applied(self, client: TestClient) -> None:
+        mock_user = _make_mock_user(org_role="runner")
+        with (
+            patch("modulo.api.routes.scim.scim_get_user", return_value=mock_user),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            body = {
+                "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                "Operations": [{"op": "replace", "path": "org_role", "value": "admin"}],
+            }
+            resp = client.patch(
+                f"/scim/v2/Users/{_USER_ID}",
+                json=body,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        assert mock_user.org_role == "runner"
+
+    def test_create_user_org_role_field_is_ignored(self, client: TestClient) -> None:
+        with (
+            patch("modulo.db.crud.account.get_account_by_email", return_value=None),
+            patch("modulo.api.routes.scim.set_rls_org"),
+            patch("modulo.api.routes.scim.scim_create_user", return_value=_MOCK_USER) as create_mock,
+        ):
+            body = {**_USER_CREATE_BODY, "org_role": "admin"}
+            resp = client.post(
+                "/scim/v2/Users",
+                json=body,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        assert resp.status_code == 201
+        create_mock.assert_awaited_once()
+        kwargs = create_mock.call_args.kwargs
+        assert "org_role" not in kwargs
+
+
 # ── Group endpoints (unique tests) ──────────────────────────────────
 
 
