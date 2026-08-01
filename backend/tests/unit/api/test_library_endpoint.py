@@ -12,6 +12,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.crud.base import PageResult
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -129,6 +130,29 @@ def _make_primitive(
     return p
 
 
+def _make_listable_primitive(
+    *,
+    pid: uuid.UUID | None = None,
+    primitive_type: str = "workflow",
+    name: str = "PR Review Workflow",
+) -> MagicMock:
+    p = _make_primitive(pid=pid, primitive_type=primitive_type, name=name)
+    p.source_url = None
+    p.forked_from = None
+    p.checksum = None
+    p.ed25519_signature = None
+    p.verified = None
+    p.trust_tier = None
+    p.tier = "native"
+    p.download_count = 0
+    p.average_rating = None
+    p.review_count = 0
+    p.owner_team_id = None
+    p.account_id = _USER_ID
+    p.auto_update = True
+    return p
+
+
 def _make_pipeline() -> MagicMock:
     p = MagicMock()
     p.id = uuid.uuid4()
@@ -150,6 +174,80 @@ def _make_pipeline() -> MagicMock:
     p.created_at = _NOW
     p.updated_at = _NOW
     return p
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/libraries — multi-type filtering
+# ---------------------------------------------------------------------------
+
+
+def _stub_list_call(
+    *,
+    primitive_type: str | None = None,
+    primitive_types: str | None = None,
+    source: str | None = None,
+    search: str | None = None,
+    client: TestClient,
+    prims: list[MagicMock] | None = None,
+) -> MagicMock:
+    result = PageResult(
+        items=prims or [_make_listable_primitive()],
+        total=1,
+        page=1,
+        page_size=20,
+    )
+    with (
+        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        params: dict[str, str] = {}
+        if primitive_type is not None:
+            params["primitive_type"] = primitive_type
+        if primitive_types is not None:
+            params["primitive_types"] = primitive_types
+        if source is not None:
+            params["source"] = source
+        if search is not None:
+            params["search"] = search
+        resp = client.get("/api/v1/libraries", params=params)
+        assert resp.status_code == 200, resp.text
+        return mock_list
+
+
+def test_list_libraries_parses_multi_type_query_param(client: TestClient) -> None:
+    mock_list = _stub_list_call(client=client, primitive_types="workflow,agent,schema")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_types"] == ["workflow", "agent", "schema"]
+    assert call_kwargs["primitive_type"] is None
+
+
+def test_list_libraries_multi_type_whitespace_normalized(client: TestClient) -> None:
+    mock_list = _stub_list_call(client=client, primitive_types=" workflow , agent ,, schema ")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_types"] == ["workflow", "agent", "schema"]
+
+
+def test_list_libraries_empty_primitive_types_keeps_no_filter_path(client: TestClient) -> None:
+    mock_list = _stub_list_call(client=client, primitive_types=",  ,")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_types"] is None
+    assert call_kwargs["primitive_type"] is None
+
+
+def test_list_libraries_backwards_compatible_single_primitive_type(client: TestClient) -> None:
+    mock_list = _stub_list_call(client=client, primitive_type="workflow")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] == "workflow"
+    assert call_kwargs["primitive_types"] is None
 
 
 # ---------------------------------------------------------------------------

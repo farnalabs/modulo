@@ -27,6 +27,7 @@ from modulo.core.library_service import (
     _fetch_published_community_from_db,
     _filter_community,
     _filter_modulo,
+    _resolve_primitive_types,
     contribute_primitive,
     copy_to_adapt,
     get_primitive,
@@ -140,6 +141,34 @@ def test_filter_modulo_by_type(primitive_type: str, expected_slugs: set[str]):
     results = _filter_modulo(primitive_type=primitive_type, search=None)
     assert all(p.primitive_type == primitive_type for p in results)
     assert {p.slug for p in results} == expected_slugs
+
+
+# ---------------------------------------------------------------------------
+# _resolve_primitive_types
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_primitive_types_plural_wins():
+    assert _resolve_primitive_types("schema", ["workflow", "agent"]) == ["workflow", "agent"]
+
+
+def test_resolve_primitive_types_single_fallback():
+    assert _resolve_primitive_types("schema", None) == ["schema"]
+
+
+def test_resolve_primitive_types_none_when_unfiltered():
+    assert _resolve_primitive_types(None, None) is None
+
+
+def test_filter_modulo_multi_type():
+    results = _filter_modulo(primitive_type=None, primitive_types=["agent", "workflow"], search=None)
+    assert {p.slug for p in results} == _EXPECTED_MODULO_SLUGS["agent"] | _EXPECTED_MODULO_SLUGS["workflow"]
+    assert all(p.primitive_type in {"agent", "workflow"} for p in results)
+
+
+def test_filter_community_multi_type():
+    results = _filter_community(primitive_type=None, primitive_types=["schema", "workflow"], search=None)
+    assert all(p.primitive_type in {"schema", "workflow"} for p in results)
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +432,47 @@ async def test_list_primitives_type_filter_propagated():
     assert call_kwargs["primitive_type"] == "schema"
     # Community result should also be filtered
     assert all(p.primitive_type == "schema" for p in result.items)
+
+
+async def test_list_primitives_multi_type_filter_propagated():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
+        ) as mock_list,
+    ):
+        result = await list_primitives(session, org_id, primitive_types=["workflow", "agent"])
+
+    mock_list.assert_awaited_once()
+    call_kwargs = mock_list.call_args.kwargs
+    assert call_kwargs["primitive_types"] == ["workflow", "agent"]
+    assert call_kwargs["primitive_type"] is None
+    # Plural filter takes precedence and applies to in-memory Native + community results too
+    assert all(p.primitive_type in {"workflow", "agent"} for p in result.items)
+
+
+async def test_list_primitives_plural_types_win_over_single():
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
+        ) as mock_list,
+    ):
+        result = await list_primitives(session, org_id, primitive_type="schema", primitive_types=["workflow"])
+
+    mock_list.assert_awaited_once()
+    call_kwargs = mock_list.call_args.kwargs
+    assert call_kwargs["primitive_types"] == ["workflow"]
+    assert call_kwargs["primitive_type"] == "schema"
+    assert all(p.primitive_type == "workflow" for p in result.items)
 
 
 async def test_list_primitives_passes_excluded_tiers_to_crud():

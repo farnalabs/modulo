@@ -20762,6 +20762,7 @@ export interface operations {
                 page_size?: number;
                 cursor?: string | null;
                 primitive_type?: string | null;
+                primitive_types?: string | null;
                 search?: string | null;
                 source?: string | null;
             };
