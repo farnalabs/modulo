@@ -110,9 +110,9 @@ async def source_run_id(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, "
                 "snapshot_id, status, trigger_type, langgraph_thread_id, "
-                "input_hash) "
+                "input_hash, run_number) "
                 "VALUES (:id, :oid, :pid, :sid, 'complete', 'manual', "
-                ":thread, :hash)",
+                ":thread, :hash, :rn)",
             ),
             {
                 "id": str(rid),
@@ -121,6 +121,7 @@ async def source_run_id(
                 "sid": str(snapshot_id),
                 "thread": thread_id,
                 "hash": "0" * 64,
+                "rn": int(rid.int % 10**9) + 1,
             },
         )
     return rid
@@ -148,7 +149,7 @@ async def trigger_id(
                 "trigger_type, active, max_concurrent_runs, config_json, "
                 "account_id) "
                 "VALUES (:id, :oid, :pid, 'agent_signal', true, 5, "
-                ":config::json, :uid)",
+                "CAST(:config AS json), :uid)",
             ),
             {
                 "id": str(tid),
@@ -269,7 +270,7 @@ class TestFireAgentSignalIntegration:
                         "trigger_type, active, max_concurrent_runs, config_json, "
                         "account_id) "
                         "VALUES (:id, :oid, :pid, 'agent_signal', true, 1, "
-                        ":config::json, :uid)",
+                        "CAST(:config AS json), :uid)",
                     ),
                     {
                         "id": str(tight_tid),
@@ -285,9 +286,9 @@ class TestFireAgentSignalIntegration:
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
                         "snapshot_id, status, trigger_type, langgraph_thread_id, "
-                        "input_hash) "
+                        "input_hash, run_number) "
                         "VALUES (:id, :oid, :pid, :sid, 'running', 'manual', "
-                        ":thread, :hash)",
+                        ":thread, :hash, :rn)",
                     ),
                     {
                         "id": str(rid),
@@ -296,6 +297,7 @@ class TestFireAgentSignalIntegration:
                         "sid": str(snapshot_id),
                         "thread": thread_id,
                         "hash": "0" * 64,
+                        "rn": int(rid.int % 10**9) + 1,
                     },
                 )
 
@@ -428,7 +430,7 @@ class TestFireAgentSignalIntegration:
                             "pipeline_id, trigger_type, active, "
                             "max_concurrent_runs, config_json, account_id) "
                             "VALUES (:id, :oid, :pid, 'agent_signal', true, "
-                            "5, :config::json, :uid)",
+                            "5, CAST(:config AS json), :uid)",
                         ),
                         {
                             "id": uuid.uuid4(),

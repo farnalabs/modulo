@@ -118,10 +118,7 @@ async def org_a_profile(
             account_id=user_a,
             description="Integration test profile",
             capabilities=["docker", "python3.12"],
-            egress_policy="allow_all",
-            timeout_seconds=3600,
-            resource_limits={"cpu": "1", "memory": "512Mi"},
-            persistence_policy={},
+            persistence_policy="ephemeral",
         )
         return profile.id
 
@@ -152,8 +149,6 @@ class TestCreateProfileRoundTrip:
                     account_id=user_a,
                     description="Round trip test",
                     capabilities=["docker"],
-                    egress_policy="deny_all",
-                    timeout_seconds=7200,
                 )
                 pid = profile.id
 
@@ -164,10 +159,7 @@ class TestCreateProfileRoundTrip:
         assert fetched is not None
         assert fetched.name == "roundtrip-profile"
         assert fetched.image_ref == "ubuntu:22.04"
-        assert fetched.capabilities == ["docker"]
-        assert fetched.egress_policy == "deny_all"
-        assert fetched.timeout_seconds == 7200
-        assert fetched.is_active is True
+        assert fetched.capabilities_json == ["docker"]
         assert fetched.account_id == user_a
 
     async def test_list_profiles_returns_seeded(
@@ -193,11 +185,10 @@ class TestCreateProfileRoundTrip:
             updated = await update_environment_profile(
                 session,
                 org_a_profile,
-                {"name": "updated-int-profile", "timeout_seconds": 7200},
+                {"name": "updated-int-profile"},
             )
         assert updated is not None
         assert updated.name == "updated-int-profile"
-        assert updated.timeout_seconds == 7200
 
     async def test_delete_profile(
         self,

@@ -15,7 +15,25 @@ from modulo.db.models.environment_profile import EnvironmentProfile
 pytestmark = pytest.mark.integration
 
 
-async def test_create_environment_profile(rls_session: AsyncSession, test_org: uuid.UUID) -> None:
+async def _seed_account(db_engine: AsyncEngine, email: str) -> uuid.UUID:
+    account_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, "
+                "auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
+            ),
+            {"id": str(account_id), "email": email, "name": email.split("@", maxsplit=1)[0]},
+        )
+    return account_id
+
+
+async def test_create_environment_profile(
+    rls_session: AsyncSession,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+) -> None:
+    account_id = await _seed_account(db_engine, f"env-crud-{uuid.uuid4().hex[:8]}@test.local")
     profile_id = uuid.uuid4()
     profile = EnvironmentProfile(
         id=profile_id,
@@ -23,11 +41,10 @@ async def test_create_environment_profile(rls_session: AsyncSession, test_org: u
         name="test-env",
         description="A test environment",
         image_ref="python:3.12-slim",
-        capabilities=["docker", "network"],
-        egress_policy="allow_all",
-        persistence_policy={"home": "/persistent"},
-        timeout_seconds=7200,
-        resource_limits_json={"cpu": "2", "memory": "4Gi"},
+        capabilities_json=["docker", "network"],
+        network_policy="outbound",
+        persistence_policy="ephemeral",
+        account_id=account_id,
     )
     rls_session.add(profile)
     await rls_session.flush()
@@ -36,21 +53,27 @@ async def test_create_environment_profile(rls_session: AsyncSession, test_org: u
     loaded = result.scalar_one()
     assert loaded.name == "test-env"
     assert loaded.image_ref == "python:3.12-slim"
-    assert loaded.capabilities == ["docker", "network"]
-    assert loaded.egress_policy == "allow_all"
-    assert loaded.timeout_seconds == 7200
-    assert loaded.resource_limits_json == {"cpu": "2", "memory": "4Gi"}
-    assert loaded.is_active is True
+    assert loaded.capabilities_json == ["docker", "network"]
+    assert loaded.network_policy == "outbound"
+    assert loaded.persistence_policy == "ephemeral"
+    assert loaded.account_id == account_id
+    assert loaded.deleted_at is None
 
 
-async def test_read_environment_profile(rls_session: AsyncSession, test_org: uuid.UUID) -> None:
+async def test_read_environment_profile(
+    rls_session: AsyncSession,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+) -> None:
+    account_id = await _seed_account(db_engine, f"env-read-{uuid.uuid4().hex[:8]}@test.local")
     profile_id = uuid.uuid4()
     profile = EnvironmentProfile(
         id=profile_id,
         organisation_id=test_org,
         name="readable-env",
         image_ref="node:20-alpine",
-        capabilities=["docker"],
+        capabilities_json=["docker"],
+        account_id=account_id,
     )
     rls_session.add(profile)
     await rls_session.flush()
@@ -61,40 +84,49 @@ async def test_read_environment_profile(rls_session: AsyncSession, test_org: uui
     assert loaded.image_ref == "node:20-alpine"
 
 
-async def test_update_environment_profile(rls_session: AsyncSession, test_org: uuid.UUID) -> None:
+async def test_update_environment_profile(
+    rls_session: AsyncSession,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+) -> None:
+    account_id = await _seed_account(db_engine, f"env-upd-{uuid.uuid4().hex[:8]}@test.local")
     profile_id = uuid.uuid4()
     profile = EnvironmentProfile(
         id=profile_id,
         organisation_id=test_org,
         name="updatable-env",
         image_ref="ubuntu:22.04",
-        capabilities=["docker"],
-        timeout_seconds=3600,
+        capabilities_json=["docker"],
+        account_id=account_id,
     )
     rls_session.add(profile)
     await rls_session.flush()
 
     profile.name = "updated-env"
-    profile.capabilities = ["docker", "gpu"]
-    profile.timeout_seconds = 1800
+    profile.capabilities_json = ["docker", "gpu"]
     await rls_session.flush()
 
     loaded = await rls_session.get(EnvironmentProfile, profile_id)
     assert loaded is not None
     assert loaded.name == "updated-env"
-    assert loaded.capabilities == ["docker", "gpu"]
-    assert loaded.timeout_seconds == 1800
+    assert loaded.capabilities_json == ["docker", "gpu"]
 
 
-async def test_create_with_minimal_fields(rls_session: AsyncSession, test_org: uuid.UUID) -> None:
+async def test_create_with_minimal_fields(
+    rls_session: AsyncSession,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+) -> None:
     """Only required fields; defaults should be applied."""
+    account_id = await _seed_account(db_engine, f"env-min-{uuid.uuid4().hex[:8]}@test.local")
     profile_id = uuid.uuid4()
     profile = EnvironmentProfile(
         id=profile_id,
         organisation_id=test_org,
         name="minimal-env",
         image_ref="alpine:latest",
-        capabilities=[],
+        capabilities_json=[],
+        account_id=account_id,
     )
     rls_session.add(profile)
     await rls_session.flush()
@@ -102,11 +134,10 @@ async def test_create_with_minimal_fields(rls_session: AsyncSession, test_org: u
     loaded = await rls_session.get(EnvironmentProfile, profile_id)
     assert loaded is not None
     assert loaded.description is None
-    assert loaded.egress_policy is None
-    assert loaded.timeout_seconds == 3600
-    assert loaded.persistence_policy == {}
-    assert loaded.resource_limits_json == {}
-    assert loaded.is_active is True
+    assert loaded.capabilities_json == []
+    assert loaded.network_policy == "outbound"
+    assert loaded.persistence_policy == "ephemeral"
+    assert loaded.deleted_at is None
 
 
 async def test_rls_isolation(db_engine: AsyncEngine) -> None:
@@ -117,6 +148,7 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
 
     org_a = uuid.uuid4()
     org_b = uuid.uuid4()
+    account_id = await _seed_account(db_engine, f"env-rls-{uuid.uuid4().hex[:8]}@test.local")
 
     # Seed orgs
     async with db_engine.connect() as conn, conn.begin():
@@ -138,14 +170,15 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
         await conn.execute(
             text(
                 "INSERT INTO environment_profiles "
-                "(id, organisation_id, name, image_ref, capabilities) "
-                "VALUES (:id, :org_id, :name, :image, '[]'::json)",
+                "(id, organisation_id, name, image_ref, capabilities_json, account_id) "
+                "VALUES (:id, :org_id, :name, :image, '[]'::json, :account_id)",
             ),
             {
                 "id": str(uuid.uuid4()),
                 "org_id": str(org_a),
                 "name": "org-a-profile",
                 "image": "img:latest",
+                "account_id": str(account_id),
             },
         )
 
@@ -155,14 +188,15 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
         await conn.execute(
             text(
                 "INSERT INTO environment_profiles "
-                "(id, organisation_id, name, image_ref, capabilities) "
-                "VALUES (:id, :org_id, :name, :image, '[]'::json)",
+                "(id, organisation_id, name, image_ref, capabilities_json, account_id) "
+                "VALUES (:id, :org_id, :name, :image, '[]'::json, :account_id)",
             ),
             {
                 "id": str(b_id),
                 "org_id": str(org_b),
                 "name": "org-b-profile",
                 "image": "img:latest",
+                "account_id": str(account_id),
             },
         )
 

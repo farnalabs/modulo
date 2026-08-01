@@ -64,9 +64,9 @@ class TestConcurrentRunCreation:
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
                         "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id) "
+                        "langgraph_thread_id, run_number) "
                         "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                        ":hash, :tid)",
+                        ":hash, :tid, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -75,6 +75,7 @@ class TestConcurrentRunCreation:
                         "sid": str(test_snapshot),
                         "hash": _input_hash({"seq": i}),
                         "tid": _thread_id(test_org, run_id),
+                        "rn": int(run_id.int % 10**9) + 1,
                     },
                 )
             return run_id
@@ -113,9 +114,9 @@ class TestConcurrentRunCreation:
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
                         "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id) "
+                        "langgraph_thread_id, run_number) "
                         "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                        ":hash, :tid)",
+                        ":hash, :tid, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -124,6 +125,7 @@ class TestConcurrentRunCreation:
                         "sid": str(test_snapshot),
                         "hash": hash_val,
                         "tid": _thread_id(test_org, run_id),
+                        "rn": int(run_id.int % 10**9) + 1,
                     },
                 )
             return run_id
@@ -157,9 +159,9 @@ class TestConcurrentStatusTransitions:
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
                         "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id) "
+                        "langgraph_thread_id, run_number) "
                         "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                        ":hash, :tid)",
+                        ":hash, :tid, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -168,6 +170,7 @@ class TestConcurrentStatusTransitions:
                         "sid": str(test_snapshot),
                         "hash": _input_hash({"seq": i}),
                         "tid": _thread_id(test_org, run_id),
+                        "rn": int(run_id.int % 10**9) + 1,
                     },
                 )
                 run_ids.append(run_id)
@@ -212,9 +215,9 @@ class TestConcurrentStatusTransitions:
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
                         "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id) "
+                        "langgraph_thread_id, run_number) "
                         "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                        ":hash, :tid)",
+                        ":hash, :tid, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -223,6 +226,7 @@ class TestConcurrentStatusTransitions:
                         "sid": str(test_snapshot),
                         "hash": _input_hash({"seq": i}),
                         "tid": _thread_id(test_org, run_id),
+                        "rn": int(run_id.int % 10**9) + 1,
                     },
                 )
                 run_ids.append(run_id)
@@ -312,9 +316,9 @@ class TestConcurrentActiveRunCounting:
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
                         "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id) "
+                        "langgraph_thread_id, run_number) "
                         "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                        ":hash, :tid)",
+                        ":hash, :tid, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -323,6 +327,7 @@ class TestConcurrentActiveRunCounting:
                         "sid": str(snapshot_id),
                         "hash": _input_hash({"seq": i}),
                         "tid": _thread_id(test_org, run_id),
+                        "rn": int(run_id.int % 10**9) + 1,
                     },
                 )
                 run_ids.append(run_id)
@@ -443,9 +448,9 @@ class TestMaxConcurrentRunsEnforcement:
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
                         "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id, trigger_id) "
+                        "langgraph_thread_id, trigger_id, run_number) "
                         "VALUES (:rid, :oid, :pid, :sid, 'webhook', 'running', "
-                        ":hash, :tid, :tid2)",
+                        ":hash, :tid, :tid2, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -455,6 +460,7 @@ class TestMaxConcurrentRunsEnforcement:
                         "hash": hashlib.sha256(f"{tag}-{i}".encode()).hexdigest(),
                         "tid": tid_str,
                         "tid2": str(trigger_id),
+                        "rn": int(run_id.int % 10**9) + 1,
                     },
                 )
 
