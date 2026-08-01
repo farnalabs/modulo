@@ -36,8 +36,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
 
-_log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/v1", tags=["parameter-schemas"])
 
 

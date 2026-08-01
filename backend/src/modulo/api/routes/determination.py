@@ -26,8 +26,6 @@ from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-_log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/v1/determination", tags=["determination"])
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

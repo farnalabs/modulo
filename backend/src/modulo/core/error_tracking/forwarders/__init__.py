@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 from modulo.core.error_tracking.forwarders.base import BaseForwarder
 from modulo.core.error_tracking.forwarders.datadog import DatadogErrorForwarder
 from modulo.core.error_tracking.forwarders.loki import LokiErrorForwarder
@@ -11,8 +9,6 @@ from modulo.core.error_tracking.forwarders.opsgenie import OpsGenieErrorForwarde
 from modulo.core.error_tracking.forwarders.pagerduty import PagerDutyErrorForwarder
 from modulo.core.error_tracking.forwarders.rollbar import RollbarErrorForwarder
 from modulo.core.error_tracking.forwarders.sentry import SentryErrorForwarder
-
-_log = logging.getLogger(__name__)
 
 _FORWARDERS: dict[str, type[BaseForwarder]] = {
     "sentry": SentryErrorForwarder,

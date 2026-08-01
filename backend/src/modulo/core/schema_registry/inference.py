@@ -1,14 +1,11 @@
 """Schema inference service - uses an LLM to infer JSON Schema from sample data."""
 
-import logging
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from modulo.core.schema_registry._common import _safe_json_dumps, invoke_and_parse
 from modulo.model_backends.base import ModelBackendBase
-
-_log = logging.getLogger(__name__)
 
 _INFERENCE_SYSTEM_PROMPT = (
     "You are a schema inference assistant. Given sample data records, infer "

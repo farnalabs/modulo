@@ -13,7 +13,6 @@ Run a worker with::
     celery -A modulo.celery_app worker --loglevel=info
 """
 
-import logging
 from typing import Any
 
 try:
@@ -28,8 +27,6 @@ except ImportError:
         from celery.signals import task_failure
     Celery = None
     task_failure = None
-
-_log = logging.getLogger(__name__)
 
 _celery_app_instance = None
 

@@ -228,9 +228,7 @@ async def test_forwarder(
         return ForwarderTestResult(ok=False, message=f"Forwarder implementation not found for {forwarder_type}")
 
     config = req.config_json or {}
-    if _is_configured(forwarder_type, config):
-        pass
-    else:
+    if not _is_configured(forwarder_type, config):
         try:
             async with session.begin():
                 await set_rls_org(session, org_id)

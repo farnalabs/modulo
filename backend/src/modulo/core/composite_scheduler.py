@@ -10,7 +10,6 @@ Usage in Celery config::
     beat_scheduler = "modulo.core.composite_scheduler:CompositeScheduler"
 """
 
-import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,8 +19,6 @@ from celery.beat import ScheduleEntry, Scheduler
 from modulo.core.cron_scheduler import DatabaseCronScheduler
 from modulo.core.reports.scheduler import DatabaseReportScheduler
 from modulo.core.trigger_engine.polling import DatabasePollingScheduler
-
-_log = logging.getLogger(__name__)
 
 _STALE_RECOVERY_INTERVAL = 300  # 5 minutes
 

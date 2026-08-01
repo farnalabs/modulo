@@ -17,8 +17,6 @@ from modulo.db.crud.organisation import get_organisation, update_organisation
 
 logger = logging.getLogger(__name__)
 
-_log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/v1/admin/org", tags=["admin"])
 
 
