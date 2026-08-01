@@ -1,9 +1,8 @@
 <template>
-  <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
-    <PageTabs :tabs="[
-      { label: 'Dashboard', to: '/admin/errors' },
-    ]" />
-    <div class="page-wide">
+  <PageTabs :tabs="[
+    { label: 'Dashboard', to: '/admin/errors' },
+  ]" />
+  <div class="page-wide">
     <PageHeader :title="$t('views.AdminErrorsView.error_dashboard')" :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')" />
 
     <FilterBar
@@ -21,15 +20,19 @@
           { value: 'resolved', label: 'Resolved' },
           { value: 'archived', label: 'Archived' },
         ]},
-        { key: 'source', label: 'Source', options: sourceOptions },
+        { key: 'source', label: 'Source', options: [
+          { value: 'backend', label: 'Backend' },
+          { value: 'frontend', label: 'Frontend' },
+          { value: 'celery', label: 'Celery' },
+        ]},
       ]"
       :filter-values="{ level: filterLevel, status: filterStatus, source: filterSource }"
       @update:search="filterSearch = $event"
       @update:filter="handleFilterUpdate"
     >
       <template #after>
-        <Button variant="default" @click="applyFilters">Apply Filters</Button>
-        <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">Reset</button>
+        <Button variant="default" @click="applyFilters">{{ $t('views.AdminErrorsView.apply_filters') }}</Button>
+        <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
 
@@ -108,8 +111,7 @@
         </div>
       </div>
     </template>
-    </div>
-  </FeatureGate>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -127,7 +129,6 @@ import { formatApiError } from "../lib/api/formatError"
 import { Button } from '@/components/ui/button'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
-import FeatureGate from '../components/FeatureGate.vue'
 
 const router = useRouter()
 
@@ -151,24 +152,6 @@ const filterStatus = ref('')
 const filterSource = ref('')
 const filterEnvironment = ref('')
 const filterSearch = ref('')
-
-const KNOWN_SOURCES = ['backend', 'frontend', 'celery']
-
-const sourceOptions = computed<Array<{ value: string; label: string }>>(() => {
-  const options = [
-    { value: 'backend', label: 'Backend' },
-    { value: 'frontend', label: 'Frontend' },
-    { value: 'celery', label: 'Celery' },
-  ]
-  // Generic-bucket fallback (plan F3d): an unknown source value (e.g. 'saq'
-  // during the shadow window) must render in a generic bucket instead of
-  // breaking the dropdown. Only add the fallback when a filter is active so
-  // the known list stays authoritative.
-  if (filterSource.value && !KNOWN_SOURCES.includes(filterSource.value)) {
-    options.push({ value: filterSource.value, label: 'Other' })
-  }
-  return options
-})
 
 function handleFilterUpdate(key: string, value: string) {
   if (key === 'level') filterLevel.value = value

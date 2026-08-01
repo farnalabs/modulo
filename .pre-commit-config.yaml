@@ -111,7 +111,7 @@
         stages: [manual]
       - id: eslint
         name: ESLint
-        entry: bash -c 'cd frontend && if [ -d node_modules ]; then npm run lint --if-present; else echo "eslint skipped (no node_modules; verified via GitHub CI on the PR)"; fi'
+        entry: bash -c 'cd frontend && npm run lint --if-present'
         language: system
         files: \.(vue|ts|js)$
         pass_filenames: false
@@ -150,7 +150,7 @@
         pass_filenames: false
       - id: validate-pipeline-configs
         name: validate pipeline configs (agent_prompt, timeout_seconds, template_id)
-        entry: uv run --no-sync python scripts/validate_pipeline_configs.py
+        entry: uv run --directory backend --no-sync python scripts/validate_pipeline_configs.py
         language: system
         files: ^(backend/src/modulo/core/pipeline_engine/node_runner\.py|backend/src/modulo/api/mcp_server\.py|scripts/validate_pipeline_configs\.py)$
         pass_filenames: false
