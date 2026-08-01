@@ -22,6 +22,7 @@ code:
   - backend/src/modulo/api/routes/admin_sso.py
   - backend/src/modulo/api/routes/viewmodel.py
   - backend/src/modulo/api/mcp_server.py
+  - backend/src/modulo/core/team_visibility.py
   - backend/src/modulo/auth/sso.py
   - backend/src/modulo/core/feature_flags.py
   - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
@@ -105,8 +106,8 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] Admin sees all resources regardless of team visibility
 - [x] Admin can use `view_as_team` to inspect what a specific team sees
 - [x] `view_as_team` from a non-admin returns 403 at the ViewModel layer
-- [ ] A team-private connector can only be bound to pipelines owned by the same team (connector binding logic does not check team match)
-- [ ] Cross-team connector binding returns `connector_team_mismatch` error (named error contract exists in PRD but not enforced in code)
+- [x] A team-private connector can only be bound to pipelines owned by the same team (PRD 9.3 — enforced at pipeline-save via `core/team_visibility.py`)
+- [x] Cross-team connector binding returns `connector_team_mismatch` error (named error contract from PRD — enforced at pipeline-save command layer, HTTP 409)
 - [x] Library primitives carry owner_team_id and visibility fields
 
 ### Team-scoped HITL gates
@@ -229,7 +230,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - Team cost attribution moved to v1
 - No integration tests for the privilege cap trigger with concurrent inserts
 - No test for DB-live membership check on required_team_id with stale JWT claims
-- No cross-team connector binding enforcement test (PRD 9.3 defines `connector_team_mismatch` error but binding logic doesn't check team match)
+- ~~No cross-team connector binding enforcement test (PRD 9.3 defines `connector_team_mismatch` error but binding logic doesn't check team match)~~ **RESOLVED (2026-08-01)** — enforcement added at pipeline-save (`core/team_visibility.py`, HTTP 409 `connector_team_mismatch`); covered by `tests/unit/core/test_team_visibility.py`, `test_pipelines_endpoint.py` route tests, and the now-passing `cross_team_isolation.feature` BDD scenarios
 - JWT payload does not carry team_memberships list (PRD §9.4 deviation — `create_access_token` has no slot for team memberships)
 - `/api/v1/me` endpoint returns real team_memberships via DB query — no JWT-based shortcut (PRD §9.4 requires ViewModel resolution from JWT claims, but every request does a DB round-trip)
 - Team-scoped API key application-level enforcement is not implemented (team_id stored on key record, but route handlers don't filter by it — RLS-only)

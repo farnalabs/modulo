@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH, connector_team_mismatch
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/cross_team_isolation.feature")
 
@@ -55,6 +57,13 @@ def connector_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> 
 def connector_has_visibility(name: str, visibility: str, ctx) -> None:
     if name in ctx["connectors"]:
         ctx["connectors"][name]["visibility"] = visibility
+    else:
+        ctx["connectors"][name] = {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "owner_team_id": None,
+            "visibility": visibility,
+        }
 
 
 @given(parsers.parse('I am a member of team "{team_name}"'))
@@ -73,6 +82,11 @@ def user_is_member(username: str, team_name: str, ctx) -> None:
 
 @given(parsers.parse('I am authenticated as a user in org "{org}"'))
 def auth_in_org(org: str) -> None:
+    pass
+
+
+@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
+def auth_admin_in_org(org: str) -> None:
     pass
 
 
@@ -107,15 +121,16 @@ def user_requests_pipeline_list(username: str, request, ctx) -> None:
 @when(parsers.parse('user "{username}" requests GET /api/connectors/{connector_name}'))
 def user_requests_connector(username: str, connector_name: str, request, ctx) -> None:
     connector = ctx["connectors"].get(connector_name)
-    is_member = username in ctx.get("memberships", {})
+    user_team_id = ctx["memberships"].get(username, {}).get("team_id")
+    allowed = connector and (
+        connector.get("visibility") == "org"
+        or (user_team_id and connector.get("owner_team_id") == user_team_id)
+    )
 
-    if connector and (connector.get("visibility") == "org" or is_member):
-        resp = MagicMock()
-        resp.status_code = 200
+    resp = MagicMock()
+    resp.status_code = 200 if allowed else 404
+    if allowed:
         resp.json = lambda: connector
-    else:
-        resp = MagicMock()
-        resp.status_code = 404
     request.node._resp = resp
 
 
@@ -124,19 +139,25 @@ def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, 
     connector = ctx["connectors"].get(connector_name)
     pipeline = ctx["pipelines"].get(pipeline_name)
 
-    if connector and pipeline:
-        c_team = connector.get("owner_team_id")
-        p_team = pipeline.get("owner_team_id")
-        if c_team and p_team and str(c_team) != str(p_team):
-            resp = MagicMock()
-            resp.status_code = 409
-            resp.json = lambda: {"detail": "connector_team_mismatch"}
-            request.node._resp = resp
-            return
+    if connector and pipeline and connector_team_mismatch(
+        connector.get("visibility"),
+        connector.get("owner_team_id"),
+        pipeline.get("owner_team_id"),
+    ):
+        resp = MagicMock()
+        resp.status_code = 409
+        resp.json = lambda: {"detail": CONNECTOR_TEAM_MISMATCH}
+        request.node._resp = resp
+        return
 
     resp = MagicMock()
     resp.status_code = 200
     request.node._resp = resp
+
+
+@then(parsers.parse("the response status is {status_code:d}"))
+def response_status_is(status_code: int, request) -> None:
+    assert request.node._resp.status_code == status_code
 
 
 @then(parsers.parse('I see pipeline "{name}"'))

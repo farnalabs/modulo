@@ -19,6 +19,7 @@ code:
   - backend/src/modulo/db/crud/library_primitive.py
   - backend/src/modulo/db/crud/run.py
   - backend/src/modulo/api/routes/pipelines.py
+  - backend/src/modulo/core/team_visibility.py
   - backend/src/modulo/api/routes/connectors.py
   - backend/src/modulo/api/routes/model_backends.py
   - backend/src/modulo/api/routes/library.py
@@ -76,8 +77,8 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [ ] Old snapshots remain valid for historical run records after ownership change but should not start new runs — not implemented
 
 ### Connector & Model Backend Ownership
-- [ ] Team-private connector instance only usable within pipelines owned by the same team — no validation exists in route or CRUD layer
-- [ ] Cross-team connector binding returns `connector_team_mismatch` error at ViewModel layer — not implemented
+- [x] Team-private connector instance only usable within pipelines owned by the same team — enforced at pipeline-save (`core/team_visibility.py`, HTTP 409)
+- [x] Cross-team connector binding returns `connector_team_mismatch` error at pipeline-save command layer — implemented (PRD 9.3 named error)
 - [ ] Team-private model backend only usable within pipelines owned by the same team — no validation exists
 - [x] ConnectorInstance and ModelBackend carry `visibility` consistent with all other resource types — verified in ORM models
 
@@ -119,7 +120,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] Creating resource with `visibility=team` but no `owner_team_id` blocked by Pydantic validators — all 5 resource types (pipeline, connector, model_backend, stage, library) now have `@model_validator` enforcing the constraint (feat-teams-team-ownership index 336)
 - [x] Team deletion blocked when owned resources exist (`team_has_resources`) — verified in teams.py and admin.py
 - [ ] Cross-team pipeline to team-stage assignment blocked (`stage_team_mismatch`) — no validation exists
-- [ ] Cross-team connector binding blocked (`connector_team_mismatch`) — no validation exists
+- [x] Cross-team connector binding blocked (`connector_team_mismatch`) — enforced at pipeline-save command layer (HTTP 409)
 - [ ] Pipeline ownership change blocked during active runs (`pipeline_has_active_runs`) — no ownership change endpoint exists
 - [ ] Non-admin using ownership change endpoint returns 403 — no ownership change endpoint exists
 - [x] Import with non-existent `owner_team_id` returns validation error — verified in materialize_import
@@ -144,6 +145,8 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 
 ## QA History
 
+- **2026-08-01 (improve-architecture)**: Implemented cross-team connector binding enforcement (`connector_team_mismatch`, PRD 9.3) at the pipeline-save command layer and on the MCP binding paths. New `backend/src/modulo/core/team_visibility.py` (pure rule + async DB check); `api/routes/pipelines.py` raises HTTP 409 on `PATCH /pipelines/{id}/graph` and `PATCH /pipelines/{id}` (with `graph_json`); `api/mcp_server.py` returns the named error from `update_pipeline_graph`/`bind_connector_to_node`. Marked 3 behaviours `[x]`, resolved the `connector_team_mismatch` BDD test-level gap. Model-backend team-private enforcement remains an open gap.
+
 - **2026-07-08 (index 336)**: Cross-cutting QA by improve-architecture. Fixed CRITICAL — `owner_team_id` missing from PipelineCreate/Update/Response, ConnectorCreate/Update/Response, and ModelBackendCreate/Update/Response route models despite DB/CRUD/RLS support. Added field to all 6 Create+Update models + 3 Response models with `@model_validator` cross-field validation (`visibility='team'` requires `owner_team_id`). Fixed MAJOR — export bundle did not strip `visibility`, risking `visibility=team` + `owner_team_id=NULL` on re-import; export now sets `visibility: "org"`. Fixed MAJOR — templates.py had duplicate dead `except IntegrityError` handler in both list and create endpoints; ProgrammingError returned 503 instead of project-standard 501. Fixed MAJOR — list_templates Endpoint had duplicate IntegrityError handler. Fixed MINOR — `ConnectorResponse.model_config = {"from_attributes": False}` changed to `True` to support automatic model_validate. All 5 resource route files now enforce ProgrammingError→501 and SQLAlchemyError→503. Marked 8 [ ]→[x], resolved 3 Known Gaps. Tests pass.
 
 ## Known Gaps
@@ -160,7 +163,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 ### Test-Level Gaps
 - No dedicated BDD feature file for team ownership exists — only import/export/copy-to-adapt BDD features (`ownership_picker.feature`, `import.feature`, `export.feature`, `copy_to_adapt.feature`) cover ownership propagation
 - No BDD scenarios for `stage_team_mismatch` error path
-- No BDD scenarios for `connector_team_mismatch` error path
+- ~~No BDD scenarios for `connector_team_mismatch` error path~~ — RESOLVED (2026-08-01): `cross_team_isolation.feature` scenario "Cross-team pipeline binding is blocked" now runs and exercises the real rule via `core/team_visibility.py`
 - No BDD scenarios for pipeline ownership change blocked during active runs
 - No BDD scenarios for `resource_team_ownership_changed` audit event
 - No BDD scenarios for the `visibility=team + owner_team_id=NULL` invalid state DB constraint
