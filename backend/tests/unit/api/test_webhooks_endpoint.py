@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal, create_access_token
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -36,6 +36,18 @@ def _make_mock_run() -> MagicMock:
     r = MagicMock()
     r.id = _RUN_ID
     return r
+
+
+def _auth_headers(role: str = "admin") -> dict[str, str]:
+    settings = _make_settings()
+    token = create_access_token(
+        "testuser",
+        settings.secret_key,
+        organisation_id=str(_ORG_ID),
+        account_id=str(_USER_ID),
+        org_role=role,
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _make_mock_session() -> AsyncMock:
@@ -227,6 +239,7 @@ def test_replay_webhook_returns_202(client: TestClient) -> None:
         m.return_value = (run_mock, None, {})
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_auth_headers("admin"),
         )
 
     assert resp.status_code == 202
@@ -246,6 +259,7 @@ def test_replay_webhook_not_found_returns_404(client: TestClient) -> None:
         m.side_effect = ReplayNotFoundError(event_id)
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_auth_headers("admin"),
         )
 
     assert resp.status_code == 404
@@ -261,4 +275,69 @@ def test_webhook_unauthenticated_returns_4xx(client: TestClient) -> None:
     client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
+    assert resp.status_code in (401, 403)
+
+
+# ── cleanup-expired (ADR 017: swept @ runner via trigger.cleanup) ─────────────
+
+
+def _cleanup_client(role: str) -> TestClient:
+    from modulo.auth.dependencies import get_current_tenant_user
+    from modulo.auth.jwt import TenantPrincipal
+
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role
+    )
+    return TestClient(app)
+
+
+def test_cleanup_expired_runner_returns_200(client: TestClient) -> None:
+    from modulo.auth.dependencies import get_current_tenant_user
+    from modulo.auth.jwt import TenantPrincipal
+
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.cleanup_expired_dedup_hashes", new_callable=AsyncMock) as d,
+        patch("modulo.api.routes.webhooks._trigger_engine.cleanup_expired_payloads", new_callable=AsyncMock) as p,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        d.return_value = 3
+        p.return_value = 2
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner"
+        )
+        resp = client.post("/api/v1/triggers/cleanup-expired")
+        app.dependency_overrides.pop(get_current_tenant_user, None)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"dedup_hashes_deleted": 3, "payloads_deleted": 2}
+
+
+def test_cleanup_expired_viewer_denied(client: TestClient) -> None:
+    from modulo.auth.dependencies import get_current_tenant_user
+    from modulo.auth.jwt import TenantPrincipal
+
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    try:
+        resp = client.post("/api/v1/triggers/cleanup-expired")
+    finally:
+        app.dependency_overrides.pop(get_current_tenant_user, None)
+
+    assert resp.status_code == 403
+    assert "trigger.cleanup" in resp.json()["detail"]
+
+
+def test_cleanup_expired_unauthenticated_returns_401(client: TestClient) -> None:
+    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+
+    client.app.dependency_overrides.pop(get_current_user, None)
+    client.app.dependency_overrides.pop(get_current_tenant_user, None)
+    try:
+        resp = client.post("/api/v1/triggers/cleanup-expired")
+    finally:
+        client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+        )
+
     assert resp.status_code in (401, 403)

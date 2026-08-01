@@ -37,6 +37,25 @@ from modulo.db.models.trigger import Trigger
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
+
+def _replay_auth_headers() -> dict[str, str]:
+    """Bearer JWT for the replay route (ADR 017: runner-or-HMAC).
+
+    The route uses ``get_current_tenant_user_optional``, which decodes the
+    Bearer directly — a token signed with the test secret_key is enough.
+    """
+    from modulo.auth.jwt import create_access_token
+
+    token = create_access_token(
+        "ci@test.local",
+        _VALID_32,
+        organisation_id=str(uuid.uuid4()),
+        account_id=str(uuid.uuid4()),
+        org_role="admin",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
 _VALID_TS: int
 
 
@@ -1116,7 +1135,7 @@ async def test_cleanup_expired_payloads_none_expired() -> None:
             lambda: AsyncMock(return_value=(MagicMock(id=uuid.uuid4()), MagicMock(), {"key": "val"})),
             202,
             {"status": "accepted"},
-            {},
+            _replay_auth_headers(),
             {},
         ),
         (
@@ -1124,7 +1143,7 @@ async def test_cleanup_expired_payloads_none_expired() -> None:
             lambda tid, eid: AsyncMock(side_effect=ReplayNotFoundError(eid)),
             404,
             {"detail": "Trigger event not found"},
-            {},
+            _replay_auth_headers(),
             {},
         ),
     ],

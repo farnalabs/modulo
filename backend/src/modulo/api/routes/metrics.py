@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.web_vital_event import WebVitalEvent
@@ -58,10 +58,14 @@ class WebVitalTimeSeriesPoint(BaseModel):
 @router.post("/web-vitals", status_code=status.HTTP_204_NO_CONTENT)
 async def ingest_web_vitals(
     req: WebVitalBatchRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("metrics.ingest"),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    """Ingest a batch of Web Vitals measurements from the frontend."""
+    """Ingest a batch of Web Vitals measurements from the frontend.
+
+    ADR 017: swept with ``metrics.ingest`` (``viewer`` minimum) — telemetry
+    ingestion must keep working for viewers, so the minimum role is the lowest.
+    """
     if not req.events:
         return
 

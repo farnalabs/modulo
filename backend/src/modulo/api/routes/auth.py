@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
 from modulo.api.routes.remy import clear_all_session_approvals
 from modulo.auth.dependencies import (
@@ -23,6 +23,7 @@ from modulo.auth.dependencies import (
 )
 from modulo.auth.jwt import (
     AuthenticatedPrincipal,
+    TenantPrincipal,
     create_access_token,
     create_refresh_token,
     decode_refresh_token_claims,
@@ -399,7 +400,7 @@ async def logout(
 @handle_db_errors("auth.ws_token")
 @router.post("/ws-token", response_model=WsTokenResponse)
 async def ws_token(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = require_permission("run.status"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> WsTokenResponse:
