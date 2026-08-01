@@ -268,7 +268,7 @@ class TestRotateOtelConfig:
         assert new_fernet.decrypt(updated["langsmith_api_key_ciphertext"].encode()) == b"langsmith-key"
 
     @pytest.mark.asyncio
-    async def test_skips_row_with_missing_stored_value(self) -> None:
+    async def test_skips_row_with_empty_stored_value(self) -> None:
         new_fernet = Fernet(_new_key())
         config = {"langsmith_api_key_ciphertext": "", "other": "kept"}
         session = _make_session([SimpleNamespace(id="o-1", otel_config_json=config)])
