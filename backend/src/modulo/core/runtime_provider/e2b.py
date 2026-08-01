@@ -86,10 +86,10 @@ class E2BRuntimeProvider(RuntimeProvider):
             try:
                 await self._clone_repo(sandbox, repo_url, spec.labels or {})
             except asyncio.CancelledError:
-                await asyncio.wait_for(sandbox.kill(), timeout=_KILL_TIMEOUT)
+                await self._kill_sandbox_best_effort(sandbox, "cancellation cleanup")
                 raise
             except Exception:
-                await asyncio.wait_for(sandbox.kill(), timeout=_KILL_TIMEOUT)
+                await self._kill_sandbox_best_effort(sandbox, "clone-failure cleanup")
                 raise
 
         self._sandboxes[sandbox.sandbox_id] = sandbox
@@ -144,12 +144,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         """
         sandbox = self._sandboxes.pop(provider_ref, None)
         if sandbox is not None:
-            try:
-                await asyncio.wait_for(sandbox.kill(), timeout=_KILL_TIMEOUT)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("Failed to kill E2B sandbox %s", provider_ref)
+            await self._kill_sandbox_best_effort(sandbox, "destroy cleanup")
 
     async def get_workspace_status(self, provider_ref: str) -> str:
         """Return the current status of the sandbox."""
@@ -174,6 +169,24 @@ class E2BRuntimeProvider(RuntimeProvider):
         if sandbox is None:
             raise ValueError(f"Unknown sandbox: {provider_ref}")
         return sandbox
+
+    async def _kill_sandbox_best_effort(self, sandbox: Any, context: str) -> None:
+        """Kill a sandbox during error cleanup without masking the cause.
+
+        Logs and swallows kill failures (including a ``TimeoutError`` from the
+        ``wait_for`` wrapper) so the caller can always re-raise the original
+        exception that triggered cleanup.
+        """
+        try:
+            await asyncio.wait_for(sandbox.kill(), timeout=_KILL_TIMEOUT)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "Failed to kill E2B sandbox %s during %s",
+                getattr(sandbox, "sandbox_id", "<unknown>"),
+                context,
+            )
 
     async def _clone_repo(self, sandbox: Any, repo_url: str, labels: dict[str, str]) -> None:
         """Clone a git repository inside the sandbox.
