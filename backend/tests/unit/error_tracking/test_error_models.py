@@ -262,6 +262,11 @@ class TestUpsertErrorGroup:
         assert group.fingerprint == "abc123"
         assert group.level_peak == "error"
         session.add.assert_called_once()
+        added = session.add.call_args.args[0]
+        assert added.organisation_id == _ORG_ID
+        assert added.fingerprint == "abc123"
+        assert added.level_peak == "error"
+        assert added.sample_event_id is None
         session.flush.assert_awaited()
 
     async def test_increments_count_for_existing_group(self) -> None:

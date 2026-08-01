@@ -20,7 +20,7 @@
 
     <template v-else>
       <div v-if="editorMode === 'add'" class="card p-6">
-        <h2 class="mb-4 text-base font-semibold">New Node Category</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminNodeCategoriesView.new_node_category') }}</h2>
         <NodeCategoryEditor
           :category="null"
           @saved="onCategoryCreated"
@@ -29,7 +29,7 @@
       </div>
 
       <div v-if="categories.length === 0 && editorMode === null" class="card p-8 text-center">
-        <p class="text-lg font-medium">No node categories configured</p>
+        <p class="text-lg font-medium">{{ $t('views.AdminNodeCategoriesView.no_node_categories_configured') }}</p>
         <p class="mt-1 text-sm text-muted-foreground">
           Add a category to classify and organize nodes in your pipelines.
         </p>
@@ -39,12 +39,12 @@
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50">
             <tr>
-              <th class="px-4 py-3 font-medium">Name</th>
-              <th class="px-4 py-3 font-medium">Description</th>
-              <th class="px-4 py-3 font-medium">Color</th>
-              <th class="px-4 py-3 font-medium">Icon</th>
-              <th class="px-4 py-3 font-medium">Sort Order</th>
-              <th class="px-4 py-3 font-medium text-right">Actions</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.AdminNodeCategoriesView.name') }}</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.AdminNodeCategoriesView.description') }}</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.AdminNodeCategoriesView.color') }}</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.AdminNodeCategoriesView.icon') }}</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.AdminNodeCategoriesView.sort_order') }}</th>
+              <th class="px-4 py-3 font-medium text-right">{{ $t('views.AdminNodeCategoriesView.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -81,7 +81,7 @@
       </div>
 
       <div v-if="editCategoryId" class="card p-6">
-        <h2 class="mb-4 text-base font-semibold">Edit Node Category</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminNodeCategoriesView.edit_node_category') }}</h2>
         <NodeCategoryEditor
           :category="editingCategory"
           @saved="onCategoryUpdated"
@@ -91,7 +91,7 @@
 
       <div v-if="deleteConfirmCategoryId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
         <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
-        <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
+        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminNodeCategoriesView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button
             :disabled="deleting"

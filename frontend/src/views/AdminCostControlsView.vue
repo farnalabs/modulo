@@ -183,13 +183,13 @@
               <div>
                 <label for="admincostcontrolsview-field-1" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
                 <Select :model-value="settings.billingPeriod" @update:model-value="onBillingPeriodChange">
-                  <SelectTrigger data-testid="cc-billing-period" aria-label="Billing period" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-                    <SelectValue placeholder="Monthly" />
+                  <SelectTrigger data-testid="cc-billing-period" :aria-label="$t('views.AdminCostControlsView.billing_period')" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                    <SelectValue :placeholder="$t('views.AdminCostControlsView.monthly')" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                    <SelectItem value="quarterly">Quarterly</SelectItem>
-                    <SelectItem value="annual">Annual</SelectItem>
+                    <SelectItem value="monthly">{{ $t('views.AdminCostControlsView.monthly') }}</SelectItem>
+                    <SelectItem value="quarterly">{{ $t('views.AdminCostControlsView.quarterly') }}</SelectItem>
+                    <SelectItem value="annual">{{ $t('views.AdminCostControlsView.annual') }}</SelectItem>
                   </SelectContent>
                 </Select>
                 <p v-if="periodSaveError" class="mt-1 text-xs text-destructive">{{ periodSaveError }}</p>

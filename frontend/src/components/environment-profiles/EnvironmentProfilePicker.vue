@@ -1,6 +1,6 @@
 <template>
   <div class="space-y-3">
-    <label for="environmentprofilepicker-field-1" class="mb-1 block text-sm font-medium">Environment Profile</label>
+    <label for="environmentprofilepicker-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.environment-profiles.EnvironmentProfilePicker.environment_profile') }}</label>
 
     <Select v-model="selectedId" @update:model-value="emitChange">
       <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Environment profile" data-testid="envprofile-picker-select">
@@ -19,17 +19,17 @@
 
     <div v-if="selectedProfile" class="rounded-lg border bg-muted/30 p-3 space-y-2 text-sm">
       <div class="flex items-center gap-2">
-        <span class="font-medium">Provider:</span>
+        <span class="font-medium">{{ $t('components.environment-profiles.EnvironmentProfilePicker.provider') }}</span>
         <span class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
           {{ selectedProfile.provider_type }}
         </span>
       </div>
       <div v-if="selectedProfile.image_ref">
-        <span class="font-medium">Image:</span>
+        <span class="font-medium">{{ $t('components.environment-profiles.EnvironmentProfilePicker.image') }}</span>
         <code class="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono">{{ selectedProfile.image_ref }}</code>
       </div>
       <div v-if="selectedProfile.capabilities.length > 0">
-        <span class="font-medium">Capabilities:</span>
+        <span class="font-medium">{{ $t('components.environment-profiles.EnvironmentProfilePicker.capabilities') }}</span>
         <div class="flex flex-wrap gap-1 mt-1">
           <span
             v-for="cap in selectedProfile.capabilities"
@@ -45,10 +45,10 @@
       </p>
     </div>
 
-    <div v-if="store.isLoading" class="text-xs text-muted-foreground">Loading profiles...</div>
+    <div v-if="store.isLoading" class="text-xs text-muted-foreground">{{ $t('components.environment-profiles.EnvironmentProfilePicker.loading_profiles') }}</div>
     <div v-else-if="activeProfiles.length === 0 && !selectedId" class="text-xs text-muted-foreground">
       No active environment profiles. Create one in
-      <router-link to="/environment-profiles" class="text-primary hover:underline">Settings</router-link>.
+      <router-link to="/environment-profiles" class="text-primary hover:underline">{{ $t('components.environment-profiles.EnvironmentProfilePicker.settings') }}</router-link>.
     </div>
   </div>
 </template>

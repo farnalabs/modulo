@@ -82,7 +82,7 @@
             </TooltipTrigger>
             <TooltipContent side="top" class="max-w-xs text-left">
               <p class="font-semibold">{{ p.configured ? 'Remy can route to ' + p.label : 'No API key for ' + p.label }}</p>
-              <p v-if="!p.configured" class="text-muted-foreground text-[10px]">Add one in Model Backends</p>
+              <p v-if="!p.configured" class="text-muted-foreground text-[10px]">{{ tooltipAddOneInModelBackends }}</p>
             </TooltipContent>
           </Tooltip>
         </div>
@@ -92,7 +92,7 @@
               <router-link :to="{ name: 'admin-model-backends' }" class="underline hover:text-foreground">{{ $t('views.AdminRemyView.manage_model_backends') }}</router-link>
             </TooltipTrigger>
             <TooltipContent side="top">
-              <p>Add, edit, or remove API keys for LLM providers.</p>
+              <p>{{ tooltipAddEditRemoveApiKeys }}</p>
             </TooltipContent>
           </Tooltip>
         </div>
@@ -184,7 +184,7 @@
                 <span class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.org_roles') }}</span>
               </TooltipTrigger>
               <TooltipContent side="right" class="max-w-xs">
-                <p>Users with the selected organisation roles will have access to Remy.</p>
+                <p>{{ tooltipUsersWithSelectedRoles }}</p>
               </TooltipContent>
             </Tooltip>
             <div class="flex flex-wrap gap-4">
@@ -221,7 +221,7 @@
                 </Button>
             </TooltipTrigger>
             <TooltipContent side="top">
-              <p>Save the current access list configuration.</p>
+              <p>{{ tooltipSaveCurrentAccessList }}</p>
             </TooltipContent>
           </Tooltip>
         </div>
@@ -304,7 +304,7 @@
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                <p>Save the default model provider and allowed model configuration.</p>
+                <p>{{ tooltipSaveDefaultModelProvider }}</p>
               </TooltipContent>
             </Tooltip>
         </div>
@@ -373,7 +373,7 @@
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                <p>Save extra instructions appended to the system prompt.</p>
+                <p>{{ tooltipSaveExtraInstructions }}</p>
               </TooltipContent>
             </Tooltip>
         </div>
@@ -382,7 +382,7 @@
       <!-- Tool Permissions -->
       <SectionCard title="Tool Permissions" description="Control which UI actions Remy can perform and whether approval is required.">
         <div class="mb-6">
-          <label for="adminremyview-field-13" class="mb-1 block text-sm font-medium">Permission Mode</label>
+          <label for="adminremyview-field-13" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.permission_mode') }}</label>
           <Select v-model="toolPermMode" @update:model-value="applyModePreset">
             <SelectTrigger id="adminremyview-field-13" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Permission Mode">
               <SelectValue placeholder="Select mode" />
@@ -400,9 +400,9 @@
           <table class="w-full text-left text-sm">
             <thead>
               <tr>
-                <th class="table-header">Tool</th>
-                <th class="table-header">Description</th>
-                <th class="table-header">Permission</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.tool') }}</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.description') }}</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.permission') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -415,9 +415,9 @@
                       <SelectValue placeholder="Select" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="always_allowed">Auto-allow</SelectItem>
-                      <SelectItem value="requires_approval">Requires approval</SelectItem>
-                      <SelectItem value="disabled">Disabled</SelectItem>
+                      <SelectItem value="always_allowed">{{ $t('views.AdminRemyView.auto_allow') }}</SelectItem>
+                      <SelectItem value="requires_approval">{{ $t('views.AdminRemyView.requires_approval') }}</SelectItem>
+                      <SelectItem value="disabled">{{ $t('views.AdminRemyView.disabled') }}</SelectItem>
                     </SelectContent>
                   </Select>
                 </td>
@@ -436,8 +436,8 @@
       <SectionCard title="Safety &amp; Limits" description="Configure rate limits, auto-execution thresholds, and no-go patterns for Remy's browser automation.">
         <div class="space-y-4">
           <div>
-            <label for="adminremyview-field-7" class="mb-1 block text-sm font-medium">Max actions per minute</label>
-            <p class="mb-2 text-xs text-muted-foreground">Maximum number of UI actions Remy can perform in a one-minute window.</p>
+            <label for="adminremyview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.max_actions_per_minute') }}</label>
+            <p class="mb-2 text-xs text-muted-foreground">{{ $t('views.AdminRemyView.maximum_number_of_ui_actions_remy_can_perform_in_a_one_minute_window') }}</p>
             <input id="adminremyview-field-7"
               v-model.number="safetyConfig.rateLimitMaxActions"
               type="number"
@@ -449,8 +449,8 @@
             />
           </div>
           <div>
-            <label for="adminremyview-field-6" class="mb-1 block text-sm font-medium">Rate limit window (seconds)</label>
-            <p class="mb-2 text-xs text-muted-foreground">The sliding window duration for rate limit calculations.</p>
+            <label for="adminremyview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.rate_limit_window_seconds') }}</label>
+            <p class="mb-2 text-xs text-muted-foreground">{{ $t('views.AdminRemyView.the_sliding_window_duration_for_rate_limit_calculations') }}</p>
             <input id="adminremyview-field-6"
               v-model.number="safetyConfig.rateLimitWindowSeconds"
               type="number"
@@ -462,7 +462,7 @@
             />
           </div>
           <div>
-            <label for="adminremyview-field-5" class="mb-1 block text-sm font-medium">Auto-execute confidence threshold</label>
+            <label for="adminremyview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.auto_execute_confidence_threshold') }}</label>
             <p class="mb-2 text-xs text-muted-foreground">Minimum confidence score (0.0�1.0) required for Remy to auto-execute an action without approval.</p>
             <div class="flex items-center gap-3">
               <input id="adminremyview-field-5"
@@ -479,8 +479,8 @@
             </div>
           </div>
           <div>
-            <label for="adminremyview-field-4" class="mb-1 block text-sm font-medium">No-go page patterns</label>
-            <p class="mb-2 text-xs text-muted-foreground">URL patterns (comma-separated) that Remy must never navigate to. Supports wildcards.</p>
+            <label for="adminremyview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.no_go_page_patterns') }}</label>
+            <p class="mb-2 text-xs text-muted-foreground">{{ $t('views.AdminRemyView.url_patterns_comma_separated_that_remy_must_never_navigate_to_supports_wildcards') }}</p>
             <textarea id="adminremyview-field-4"
               v-model="safetyConfig.nogoPagePatterns"
               rows="2"
@@ -490,8 +490,8 @@
             />
           </div>
           <div>
-            <label for="adminremyview-field-3" class="mb-1 block text-sm font-medium">No-go selector patterns</label>
-            <p class="mb-2 text-xs text-muted-foreground">CSS selector patterns (comma-separated) for elements Remy must never interact with.</p>
+            <label for="adminremyview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.no_go_selector_patterns') }}</label>
+            <p class="mb-2 text-xs text-muted-foreground">{{ $t('views.AdminRemyView.css_selector_patterns_comma_separated_for_elements_remy_must_never_interact_with') }}</p>
             <textarea id="adminremyview-field-3"
               v-model="safetyConfig.nogoSelectorPatterns"
               rows="2"
@@ -501,8 +501,8 @@
             />
           </div>
           <div>
-            <label for="adminremyview-field-2" class="mb-1 block text-sm font-medium">Allowed CSS Selectors</label>
-            <p class="mb-2 text-xs text-muted-foreground">When set, Remy can ONLY interact with elements matching these CSS selectors or data-testid prefixes. Leave empty to allow all.</p>
+            <label for="adminremyview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.allowed_css_selectors') }}</label>
+            <p class="mb-2 text-xs text-muted-foreground">{{ $t('views.AdminRemyView.when_set_remy_can_only_interact_with_elements_matching_these_css_selectors_or_data_testid_prefixes_leave_empty_to_allow_all') }}</p>
             <textarea id="adminremyview-field-2"
               v-model="safetyConfig.allowedSelectors"
               rows="2"
@@ -512,8 +512,8 @@
             />
           </div>
           <div>
-            <label for="adminremyview-field-1" class="mb-1 block text-sm font-medium">Allowed Page URL Patterns</label>
-            <p class="mb-2 text-xs text-muted-foreground">When set, Remy can ONLY navigate to pages matching these URL patterns. Leave empty to allow all.</p>
+            <label for="adminremyview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.allowed_page_url_patterns') }}</label>
+            <p class="mb-2 text-xs text-muted-foreground">{{ $t('views.AdminRemyView.when_set_remy_can_only_navigate_to_pages_matching_these_url_patterns_leave_empty_to_allow_all') }}</p>
             <textarea id="adminremyview-field-1"
               v-model="safetyConfig.allowedPagePatterns"
               rows="2"
@@ -535,7 +535,7 @@
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top">
-              <p>Save rate limits, threshold, no-go patterns, and allowlist.</p>
+              <p>{{ tooltipSaveRateLimits }}</p>
             </TooltipContent>
           </Tooltip>
         </div>
@@ -561,11 +561,11 @@
           <table class="w-full text-left text-sm">
             <thead>
               <tr>
-                <th class="table-header">Name</th>
-                <th class="table-header">Description</th>
-                <th class="table-header">Triggers</th>
-                <th class="table-header">Active</th>
-                <th class="table-header table-cell-numeric">Actions</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.name') }}</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.description') }}</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.triggers') }}</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.active') }}</th>
+                <th class="table-header table-cell-numeric">{{ $t('views.AdminRemyView.actions') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -655,7 +655,7 @@
         :description="$t('views.AdminRemyView.control_what_remy_knows')"
       >
 
-        <div v-if="contextLoading" class="py-4 text-center text-sm text-muted-foreground">Loading sources...</div>
+        <div v-if="contextLoading" class="py-4 text-center text-sm text-muted-foreground">{{ $t('views.AdminRemyView.loading_sources') }}</div>
         <div v-else class="table-wrapper">
           <table class="w-full text-left text-sm">
             <thead>
@@ -783,12 +783,23 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type { SkillItem } from '../types/remy'
+import { useI18n } from 'vue-i18n'
 
 interface ProviderStatus {
   id: string
   label: string
   configured: boolean
 }
+
+const { t } = useI18n()
+
+const tooltipAddOneInModelBackends = computed(() => t('views.AdminRemyView.add_one_in_model_backends'))
+const tooltipAddEditRemoveApiKeys = computed(() => t('views.AdminRemyView.add_edit_or_remove_api_keys_for_llm_providers'))
+const tooltipUsersWithSelectedRoles = computed(() => t('views.AdminRemyView.users_with_the_selected_organisation_roles_will_have_access'))
+const tooltipSaveCurrentAccessList = computed(() => t('views.AdminRemyView.save_the_current_access_list_configuration'))
+const tooltipSaveDefaultModelProvider = computed(() => t('views.AdminRemyView.save_the_default_model_provider_and_allowed_model_configuration'))
+const tooltipSaveExtraInstructions = computed(() => t('views.AdminRemyView.save_extra_instructions_appended_to_the_system_prompt'))
+const tooltipSaveRateLimits = computed(() => t('views.AdminRemyView.save_rate_limits_threshold_no_go_patterns_and_allowlist'))
 
 const configSaving = ref(false)
 

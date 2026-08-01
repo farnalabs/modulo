@@ -20,12 +20,15 @@ async def test_tenant_dependency_returns_validated_principal() -> None:
         org_role="admin",
     )
 
-    result = await get_current_tenant_user(principal)
+    from unittest.mock import patch
+
+    with patch("modulo.auth.dependencies._verify_identity", return_value="admin"):
+        result = await get_current_tenant_user(principal)
 
     assert isinstance(result, TenantPrincipal)
     assert result.organisation_id == organisation_id
     assert result.account_id == account_id
-    assert result.org_role == "admin"
+    assert result.org_role == "admin"  # _verify_identity returns the live role; degraded to claim when DB unavailable
 
 
 @pytest.mark.asyncio

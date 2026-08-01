@@ -84,8 +84,16 @@ class TestConsumeWsToken:
         result = await consume_ws_token(mock_redis, token)
         assert result == _PRINCIPAL
 
-    @pytest.mark.parametrize("token", ["nonexistent-token", "wrong-key"])
-    async def test_raises_expired_for_missing_or_wrong_token(self, mock_redis: AsyncMock, token: str) -> None:
+    async def test_raises_expired_for_unknown_token(self, mock_redis: AsyncMock) -> None:
+        mock_redis.getdel.return_value = None
+
+        with pytest.raises(WsTokenExpiredError):
+            await consume_ws_token(mock_redis, "nonexistent-token")
+
+    async def test_raises_expired_for_already_consumed_token(self, mock_redis: AsyncMock) -> None:
+        token = await create_ws_token(mock_redis, _PRINCIPAL)
+
+        mock_redis.reset_mock()
         mock_redis.getdel.return_value = None
 
         with pytest.raises(WsTokenExpiredError):

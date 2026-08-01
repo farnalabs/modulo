@@ -12,15 +12,15 @@
       <SectionCard title="Organisation Info">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
-            <span class="text-xs font-medium text-muted-foreground">Name</span>
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminOrgSettingsView.name') }}</span>
             <p class="mt-0.5 text-lg font-semibold">{{ orgInfo.name }}</p>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted-foreground">Slug</span>
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminOrgSettingsView.slug') }}</span>
             <p class="mt-0.5 font-mono text-sm">{{ orgInfo.slug }}</p>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted-foreground">Plan</span>
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminOrgSettingsView.plan') }}</span>
             <p class="mt-0.5">
               <span :class="orgInfo.planTier === 'team' ? 'badge badge-context-purple' : 'badge badge-status-muted'">
                 {{ orgInfo.planTier === 'team' ? 'Team' : 'Community' }}
@@ -28,15 +28,15 @@
             </p>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted-foreground">Created</span>
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminOrgSettingsView.created') }}</span>
             <p class="mt-0.5 text-sm font-medium">{{ formatDate(orgInfo.createdAt) }}</p>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted-foreground">Members</span>
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminOrgSettingsView.members') }}</span>
             <p class="mt-0.5 text-lg font-semibold">{{ orgInfo.memberCount }}</p>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted-foreground">Org ID</span>
+            <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminOrgSettingsView.org_id') }}</span>
             <p class="mt-0.5 font-mono text-xs text-muted-foreground">{{ orgInfo.slug || shortId(orgInfo.id) }}</p>
           </div>
         </div>
@@ -57,7 +57,7 @@
 
         <div v-else-if="exportStatus === 'loading'" class="flex items-center gap-3">
           <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          <span class="text-sm text-muted-foreground">Exporting data...</span>
+          <span class="text-sm text-muted-foreground">{{ $t('views.AdminOrgSettingsView.exporting_data') }}</span>
         </div>
 
         <div v-else-if="exportStatus === 'error'" class="flex items-center gap-3">
@@ -71,7 +71,7 @@
         </div>
 
         <div v-else-if="exportStatus === 'complete'" class="flex items-center gap-3">
-          <span class="badge badge-status-success">Export ready</span>
+          <span class="badge badge-status-success">{{ $t('views.AdminOrgSettingsView.export_ready') }}</span>
           <span class="text-sm text-muted-foreground">
             Exported at {{ formatDate(exportData.exportedAt) }}
           </span>
@@ -115,7 +115,7 @@
       <p class="text-sm text-muted-foreground">
         This will permanently delete <strong>{{ orgInfo.name }}</strong> and all associated data including runs, pipelines, schemas, connectors, and settings.
         <br /><br />
-        <span class="font-semibold text-destructive">This action cannot be undone.</span>
+        <span class="font-semibold text-destructive">{{ $t('views.AdminOrgSettingsView.this_action_cannot_be_undone') }}</span>
       </p>
       <div class="space-y-3">
         <p class="text-sm text-muted-foreground">

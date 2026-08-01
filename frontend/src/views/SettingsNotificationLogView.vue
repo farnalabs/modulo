@@ -5,21 +5,21 @@
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <label for="settingsnotificationlogview-status" class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
+          <label for="settingsnotificationlogview-status" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.SettingsNotificationLogView.status') }}</label>
           <Select v-model="filterStatus">
             <SelectTrigger id="settingsnotificationlogview-status" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Status" data-testid="settings-notification-log-status">
               <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
-              <SelectItem value="delivered">Delivered</SelectItem>
-              <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="delivered">{{ $t('views.SettingsNotificationLogView.delivered') }}</SelectItem>
+              <SelectItem value="failed">{{ $t('views.SettingsNotificationLogView.failed') }}</SelectItem>
               <SelectItem value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div>
-          <label for="settingsnotificationlogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
+          <label for="settingsnotificationlogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsNotificationLogView.from') }}</label>
           <input id="settingsnotificationlogview-field-2"
             v-model="filterDateFrom"
             type="date"
@@ -75,9 +75,9 @@
           <thead>
             <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
               <th class="px-4 py-3">{{ $t('views.AdminAuditView.event_type') }}</th>
-              <th class="px-4 py-3">Destination</th>
-              <th class="px-4 py-3">Status</th>
-              <th class="px-4 py-3">Attempts</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsNotificationLogView.destination') }}</th>
+              <th class="px-4 py-3 capitalize">{{ $t('views.SettingsNotificationLogView.status') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsNotificationLogView.attempts') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsNotificationLogView.last_attempt') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsNotificationLogView.error_detail') }}</th>
             </tr>
@@ -93,7 +93,7 @@
                 {{ entry.endpoint_url || '—' }}
               </td>
               <td class="px-4 py-3">
-                <span :class="statusBadge(entry.status)">
+                <span :class="statusBadge(entry.status)" class="capitalize">
                   {{ entry.status }}
                 </span>
               </td>

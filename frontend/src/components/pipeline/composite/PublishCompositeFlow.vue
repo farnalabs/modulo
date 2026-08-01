@@ -153,7 +153,7 @@ function goToLibrary() {
           />
         </div>
         <div>
-          <label for="publishcompositeflow-field-2" class="mb-1 block text-sm font-medium">Description</label>
+          <label for="publishcompositeflow-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.pipeline.composite.PublishCompositeFlow.description') }}</label>
           <textarea id="publishcompositeflow-field-2"
             v-model="description"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -230,21 +230,21 @@ function goToLibrary() {
         </p>
         <div class="rounded-lg border bg-muted/30 p-4 space-y-2">
           <div class="flex justify-between text-sm">
-            <span class="text-muted-foreground">Name</span>
+            <span class="text-muted-foreground">{{ $t('components.pipeline.composite.PublishCompositeFlow.name_label') }}</span>
             <span class="font-medium">{{ name }}</span>
           </div>
           <div v-if="description" class="flex justify-between text-sm">
-            <span class="text-muted-foreground">Description</span>
+            <span class="text-muted-foreground">{{ $t('components.pipeline.composite.PublishCompositeFlow.description') }}</span>
             <span class="font-medium text-right max-w-[200px]">{{
               description
             }}</span>
           </div>
           <div class="flex justify-between text-sm">
-            <span class="text-muted-foreground">Ports</span>
+            <span class="text-muted-foreground">{{ $t('components.pipeline.composite.PublishCompositeFlow.ports') }}</span>
             <span class="font-medium">{{ ports.length }}</span>
           </div>
           <div class="flex justify-between text-sm">
-            <span class="text-muted-foreground">Version</span>
+            <span class="text-muted-foreground">{{ $t('components.pipeline.composite.PublishCompositeFlow.version_label') }}</span>
             <span class="font-medium">{{ version }}</span>
           </div>
         </div>

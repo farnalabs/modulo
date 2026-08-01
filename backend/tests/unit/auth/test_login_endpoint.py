@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -60,6 +61,7 @@ def mock_session() -> AsyncMock:
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
     scalars_mock = MagicMock()
     scalars_mock.all.return_value = []
     result_mock.scalars.return_value = scalars_mock
@@ -152,6 +154,37 @@ def test_login_unknown_user(client: TestClient) -> None:
 
 
 def test_me_returns_username(client: TestClient) -> None:
+    mock_user = _make_mock_user()
+    mock_user.created_at = datetime.now(UTC)
+    mock_family = MagicMock()
+    mock_family.family_id = uuid.uuid4()
+    mock_membership = MagicMock()
+    mock_membership.organisation_id = _ORG_ID
+    mock_membership.role = "admin"
+    with (
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
+    ):
+        login_resp = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@example.com", "password": "testpass"},
+        )
+    token = login_resp.json()["access_token"]
+
+    with (
+        patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+    ):
+        resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert resp.json()["email"] == "admin@example.com"
+
+
+def test_me_removed_member_returns_401(client: TestClient) -> None:
+    """ADR 017: a removed/deactivated member gets 401 from /me, not a stale role."""
     from datetime import UTC, datetime
 
     mock_user = _make_mock_user()
@@ -174,10 +207,12 @@ def test_me_returns_username(client: TestClient) -> None:
         )
     token = login_resp.json()["access_token"]
 
-    with patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)):
+    with (
+        patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value=None)),
+    ):
         resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
-    assert resp.status_code == 200
-    assert resp.json()["email"] == "admin@example.com"
+    assert resp.status_code == 401
 
 
 def test_me_without_token_returns_4xx(client: TestClient) -> None:

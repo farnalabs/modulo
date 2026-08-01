@@ -21,7 +21,7 @@ class TestAssertOrgRole:
 
     @pytest.mark.parametrize("required", ["viewer", "runner", "operator", "admin"])
     def test_sufficient_role_passes(self, required: str) -> None:
-        assert_org_role(required, required, "test.permission")
+        assert assert_org_role(required, required, "test.permission") is None
 
     @pytest.mark.parametrize(
         ("role", "required"),

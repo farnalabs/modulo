@@ -125,6 +125,26 @@ class Settings(BaseSettings):
     # SAQ Redis client pool size (Upstash connection budget — F2).
     saq_redis_pool_size: int = Field(default=5, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
 
+    # ------------------------------------------------------------------
+    # Health check timeouts (seconds) — configurable per-check limits for
+    # /healthz/ready dependency probes. Each per-check override defaults to
+    # 0, meaning "fall back to MODULO_HEALTH_TIMEOUT_SECONDS". Overrides are
+    # capped at 60s so a single hung dependency cannot stall readiness.
+    # ------------------------------------------------------------------
+    modulo_health_timeout_seconds: float = Field(default=5.0, alias="MODULO_HEALTH_TIMEOUT_SECONDS", ge=0.5, le=60)
+    modulo_health_db_timeout_seconds: float = Field(
+        default=0.0, alias="MODULO_HEALTH_DB_TIMEOUT_SECONDS", ge=0.0, le=60
+    )
+    modulo_health_redis_timeout_seconds: float = Field(
+        default=0.0, alias="MODULO_HEALTH_REDIS_TIMEOUT_SECONDS", ge=0.0, le=60
+    )
+    modulo_health_checkpointer_timeout_seconds: float = Field(
+        default=0.0, alias="MODULO_HEALTH_CHECKPOINTER_TIMEOUT_SECONDS", ge=0.0, le=60
+    )
+    modulo_health_migrations_timeout_seconds: float = Field(
+        default=0.0, alias="MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS", ge=0.0, le=60
+    )
+
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)
     modulo_auth_max_attempts: int = Field(10)

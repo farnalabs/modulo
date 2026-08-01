@@ -29,11 +29,11 @@
           <table class="w-full text-left text-sm">
             <thead>
               <tr>
-                <th class="table-header">Plugin</th>
-                <th class="table-header">Version</th>
-                <th class="table-header">Type</th>
-                <th class="table-header">Status</th>
-                <th class="table-header table-cell-numeric">Actions</th>
+                <th class="table-header">{{ $t('views.AdminPluginsView.plugin') }}</th>
+                <th class="table-header">{{ $t('views.AdminPluginsView.version') }}</th>
+                <th class="table-header">{{ $t('views.AdminPluginsView.type') }}</th>
+                <th class="table-header capitalize">{{ $t('views.AdminPluginsView.status') }}</th>
+                <th class="table-header table-cell-numeric">{{ $t('views.AdminPluginsView.actions') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -120,11 +120,11 @@
                           <p class="font-mono text-xs">{{ plugin.PLUGIN_ID }}</p>
                         </div>
                         <div>
-                          <span class="text-xs font-medium text-muted-foreground">Description</span>
+                          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminPluginsView.description') }}</span>
                           <p class="text-sm">{{ plugin.description || '—' }}</p>
                         </div>
                         <div>
-                          <span class="text-xs font-medium text-muted-foreground">Capabilities</span>
+                          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminPluginsView.capabilities') }}</span>
                           <div class="flex flex-wrap gap-1 mt-1">
                             <span
                               v-for="cap in plugin.capabilities"

@@ -15,7 +15,7 @@
 
         <div v-else-if="error" class="flex flex-col items-center justify-center h-32 gap-3">
           <p class="text-destructive text-sm">{{ error || 'Failed to load monitoring configuration' }}</p>
-          <Button size="sm" variant="outline" @click="load()">Retry</Button>
+          <Button size="sm" variant="outline" @click="load()">{{ $t('views.SettingsMonitorConfigView.retry') }}</Button>
         </div>
 
         <template v-else>

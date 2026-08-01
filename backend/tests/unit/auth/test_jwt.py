@@ -1,5 +1,7 @@
 """JWT encode/decode unit tests."""
 
+import base64
+import json
 import time
 from datetime import UTC, datetime
 
@@ -12,6 +14,7 @@ from modulo.auth.jwt import (
     create_access_token,
     create_claim_token,
     create_refresh_token,
+    create_ws_token,
     decode_claim_token,
     decode_principal,
     refresh_access_token,
@@ -62,9 +65,6 @@ def test_none_algorithm_rejected() -> None:
     validation) and verifies that decode_principal rejects it since HS256 is the
     only allowed algorithm.
     """
-    import base64
-    import json
-
     claims = {
         "sub": "alice",
         "org_id": _ORG,
@@ -149,8 +149,6 @@ def test_decode_principal_rejects_token_without_account_id() -> None:
 
 
 def test_decode_principal_accepts_ws_token_with_allowed_purpose() -> None:
-    from modulo.auth.jwt import create_ws_token
-
     token = create_ws_token("alice", _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
     principal = decode_principal(token, _KEY, allowed_purposes=["ws"])
     assert principal.username == "alice"
@@ -177,8 +175,6 @@ def test_decode_principal_rejects_refresh_token_for_ws_purpose() -> None:
 
 
 def test_decode_principal_multiple_allowed_purposes() -> None:
-    from modulo.auth.jwt import create_ws_token
-
     ws = create_ws_token("alice", _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
     refresh = create_refresh_token(
         "bob",
@@ -258,8 +254,6 @@ def test_refresh_access_token_rejects_access_token() -> None:
 
 
 def test_refresh_access_token_rejects_ws_token() -> None:
-    from modulo.auth.jwt import create_ws_token
-
     ws = create_ws_token("alice", _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
     with pytest.raises(JWTError):
         refresh_access_token(ws, _KEY)

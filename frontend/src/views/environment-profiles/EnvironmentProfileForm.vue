@@ -19,7 +19,7 @@
 
     <form @submit.prevent="handleSubmit" class="card p-6 space-y-5">
       <div>
-        <label for="environmentprofileform-field-7" class="mb-1 block text-sm font-medium">Name <span class="text-destructive">*</span></label>
+        <label for="environmentprofileform-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.name') }} <span class="text-destructive">*</span></label>
         <input id="environmentprofileform-field-7"
           v-model="form.name"
           type="text"
@@ -28,11 +28,11 @@
           data-testid="envprofile-form-name"
           :class="{ 'border-destructive': submitted && !form.name.trim() }"
         />
-        <p v-if="submitted && !form.name.trim()" class="mt-1 text-xs text-destructive">Name is required</p>
+        <p v-if="submitted && !form.name.trim()" class="mt-1 text-xs text-destructive">{{ $t('views.EnvironmentProfileForm.name_is_required') }}</p>
       </div>
 
       <div>
-        <label for="environmentprofileform-field-6" class="mb-1 block text-sm font-medium">Description</label>
+        <label for="environmentprofileform-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.description') }}</label>
         <textarea id="environmentprofileform-field-6"
           v-model="form.description"
           rows="3"
@@ -43,21 +43,21 @@
       </div>
 
       <div>
-        <label for="environmentprofileform-field-5" class="mb-1 block text-sm font-medium">Provider Type <span class="text-destructive">*</span></label>
+        <label for="environmentprofileform-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.provider_type') }} <span class="text-destructive">*</span></label>
         <Select v-model="form.provider_type">
           <SelectTrigger aria-label="Provider type" data-testid="envprofile-form-provider" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" :class="{ 'border-destructive': submitted && !form.provider_type }">
             <SelectValue placeholder="Select provider type" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="local_docker">Local Docker</SelectItem>
-            <SelectItem value="e2b">E2B (Sandboxed Cloud)</SelectItem>
+            <SelectItem value="local_docker">{{ $t('views.EnvironmentProfileForm.local_docker') }}</SelectItem>
+            <SelectItem value="e2b">{{ $t('views.EnvironmentProfileForm.e2b_sandboxed_cloud') }}</SelectItem>
           </SelectContent>
         </Select>
-        <p v-if="submitted && !form.provider_type" class="mt-1 text-xs text-destructive">Provider type is required</p>
+        <p v-if="submitted && !form.provider_type" class="mt-1 text-xs text-destructive">{{ $t('views.EnvironmentProfileForm.provider_type_is_required') }}</p>
       </div>
 
       <div>
-        <label for="environmentprofileform-field-4" class="mb-1 block text-sm font-medium">Image Reference</label>
+        <label for="environmentprofileform-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.image_reference') }}</label>
         <input id="environmentprofileform-field-4"
           v-model="form.image_ref"
           type="text"
@@ -68,7 +68,7 @@
       </div>
 
       <div>
-        <span class="mb-1 block text-sm font-medium">Capabilities</span>
+        <span class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.capabilities') }}</span>
         <div class="flex flex-wrap gap-2">
           <label
             v-for="cap in availableCapabilities"
@@ -89,43 +89,43 @@
       </div>
 
       <div>
-        <label for="environmentprofileform-field-3" class="mb-1 block text-sm font-medium">Network Policy</label>
+        <label for="environmentprofileform-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.network_policy') }}</label>
         <Select v-model="form.network_policy">
           <SelectTrigger aria-label="Network policy" data-testid="envprofile-form-network" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
             <SelectValue placeholder="Select network policy" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="outbound">Outbound (full egress)</SelectItem>
-            <SelectItem value="none">None (isolated)</SelectItem>
-            <SelectItem value="selected">Selected domains only</SelectItem>
+            <SelectItem value="outbound">{{ $t('views.EnvironmentProfileForm.outbound_full_egress') }}</SelectItem>
+            <SelectItem value="none">{{ $t('views.EnvironmentProfileForm.none_isolated') }}</SelectItem>
+            <SelectItem value="selected">{{ $t('views.EnvironmentProfileForm.selected_domains_only') }}</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       <div>
-        <label for="environmentprofileform-field-2" class="mb-1 block text-sm font-medium">Initialisation Strategy</label>
+        <label for="environmentprofileform-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.initialisation_strategy') }}</label>
         <Select v-model="form.initialisation_strategy">
           <SelectTrigger aria-label="Initialisation strategy" data-testid="envprofile-form-init" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
             <SelectValue placeholder="Select strategy" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="git_clone">Git Clone</SelectItem>
-            <SelectItem value="blank">Blank (empty workspace)</SelectItem>
-            <SelectItem value="worktree">Git Worktree</SelectItem>
+            <SelectItem value="git_clone">{{ $t('views.EnvironmentProfileForm.git_clone') }}</SelectItem>
+            <SelectItem value="blank">{{ $t('views.EnvironmentProfileForm.blank_empty_workspace') }}</SelectItem>
+            <SelectItem value="worktree">{{ $t('views.EnvironmentProfileForm.git_worktree') }}</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       <div>
-        <label for="environmentprofileform-field-1" class="mb-1 block text-sm font-medium">Persistence Policy</label>
+        <label for="environmentprofileform-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.persistence_policy') }}</label>
         <Select v-model="form.persistence_policy">
           <SelectTrigger aria-label="Persistence policy" data-testid="envprofile-form-persistence" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
             <SelectValue placeholder="Select policy" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="ephemeral">Ephemeral (destroyed after run)</SelectItem>
-            <SelectItem value="retained">Retained (available for inspection)</SelectItem>
-            <SelectItem value="cache">Cache (reusable between runs)</SelectItem>
+            <SelectItem value="ephemeral">{{ $t('views.EnvironmentProfileForm.ephemeral_destroyed_after_run') }}</SelectItem>
+            <SelectItem value="retained">{{ $t('views.EnvironmentProfileForm.retained_available_for_inspection') }}</SelectItem>
+            <SelectItem value="cache">{{ $t('views.EnvironmentProfileForm.cache_reusable_between_runs') }}</SelectItem>
           </SelectContent>
         </Select>
       </div>

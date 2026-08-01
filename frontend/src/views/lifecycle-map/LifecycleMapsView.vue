@@ -2,7 +2,7 @@
   <div class="mx-auto max-w-5xl px-4 py-8">
     <div class="mb-6 flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Lifecycle Maps</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.LifecycleMapsView.lifecycle_maps') }}</h1>
         <p class="mt-1 text-sm text-muted-foreground">
           Visual maps of your software delivery lifecycle stages and their transitions
         </p>
@@ -27,7 +27,7 @@
 
     <div v-else-if="(maps ?? []).length === 0" class="rounded-lg border border-dashed border-border bg-card py-12 text-center">
       <MapIcon class="mx-auto mb-3 h-10 w-10 text-muted-foreground/50" />
-      <h3 class="text-sm font-medium">No lifecycle maps yet</h3>
+      <h3 class="text-sm font-medium">{{ $t('views.LifecycleMapsView.no_lifecycle_maps_yet') }}</h3>
       <p class="mt-1 text-xs text-muted-foreground">
         Create your first lifecycle map to visualize your delivery pipeline
       </p>
@@ -64,10 +64,10 @@
       @click.self="showCreateDialog = false"
     >
       <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-base font-semibold">Create Lifecycle Map</h3>
+        <h3 class="mb-4 text-base font-semibold">{{ $t('views.LifecycleMapsView.create_lifecycle_map') }}</h3>
         <div class="space-y-4">
           <div>
-            <label for="lifecyclemapsview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <label for="lifecyclemapsview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.LifecycleMapsView.name') }}</label>
             <input id="lifecyclemapsview-field-2"
               v-model="newName"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -75,7 +75,7 @@
             />
           </div>
           <div>
-            <label for="lifecyclemapsview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <label for="lifecyclemapsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.LifecycleMapsView.description') }}</label>
             <textarea id="lifecyclemapsview-field-1"
               v-model="newDescription"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"

@@ -125,7 +125,7 @@
       <Dialog v-if="showConfirm" :open="showConfirm" @update:open="showConfirm = false">
         <DialogContent data-testid="hk-confirm-dialog">
           <DialogHeader>
-            <DialogTitle>Confirm Cleanup</DialogTitle>
+            <DialogTitle>{{ $t('views.AdminHousekeepingView.confirm_cleanup') }}</DialogTitle>
             <DialogDescription>
               This will delete the following items. This action cannot be undone.
             </DialogDescription>

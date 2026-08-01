@@ -20,7 +20,7 @@
             </svg>
           </div>
         </div>
-        <h1 class="text-3xl font-bold tracking-tight">Modulo</h1>
+        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.LoginView.modulo') }}</h1>
         <p class="mt-1 text-muted-foreground">{{ $t('views.LoginView.governed_orchestration_for_your_agentic_sdlc') }}</p>
       </div>
 

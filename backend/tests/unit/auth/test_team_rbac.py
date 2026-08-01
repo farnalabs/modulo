@@ -30,9 +30,11 @@ class TestConstants:
         }
 
     def test_valid_team_roles_is_frozenset(self) -> None:
+        assert isinstance(VALID_TEAM_ROLES, frozenset)
         assert frozenset({"viewer", "runner", "operator"}) == VALID_TEAM_ROLES
 
     def test_valid_org_roles_is_frozenset(self) -> None:
+        assert isinstance(VALID_ORG_ROLES, frozenset)
         assert frozenset({"viewer", "runner", "operator", "admin"}) == VALID_ORG_ROLES
 
 

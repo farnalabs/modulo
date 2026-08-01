@@ -136,6 +136,21 @@ class TestIngest:
             create_mock.assert_awaited_once()
             upsert_mock.assert_awaited_once()
 
+            create_kwargs = create_mock.await_args.kwargs
+            assert create_kwargs["session"] is session
+            assert create_kwargs["org_id"] == _ORG_ID
+            assert create_kwargs["fingerprint"] == svc.fingerprint(message="test", stacktrace=None, source="backend")
+            assert create_kwargs["level"] == "error"
+            assert create_kwargs["message"] == "test"
+            assert create_kwargs["source"] == "backend"
+            assert create_kwargs["environment"] is None
+            assert create_kwargs["version"] is None
+
+            upsert_kwargs = upsert_mock.await_args.kwargs
+            assert upsert_kwargs["org_id"] == _ORG_ID
+            assert upsert_kwargs["fingerprint"] == create_kwargs["fingerprint"]
+            assert upsert_kwargs["sample_event_id"] == event_mock.id
+
     async def test_ingest_existing_group_returns_is_new_false(self) -> None:
         svc = ErrorIngestionService()
         session = _make_session()
@@ -159,6 +174,28 @@ class TestIngest:
                 {"level": "error", "message": "test", "source": "backend"},
             )
             assert result["is_new"] is False
+
+    @pytest.mark.parametrize(
+        ("event_data", "missing"),
+        [
+            ({"level": "error", "source": "backend"}, "message"),
+            ({"message": "test", "source": "backend"}, "level"),
+            ({"level": "error", "message": "test"}, "source"),
+        ],
+        ids=["missing_message", "missing_level", "missing_source"],
+    )
+    async def test_ingest_rejects_incomplete_event_data(self, event_data: dict, missing: str) -> None:
+        svc = ErrorIngestionService()
+        session = _make_session()
+
+        with (
+            patch("modulo.core.error_tracking.create_error_event", AsyncMock()) as create_mock,
+            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock()),
+            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock()),
+        ):
+            with pytest.raises(ValueError, match=rf"'{missing}'"):
+                await svc.ingest(session, _ORG_ID, event_data)
+            create_mock.assert_not_awaited()
 
 
 class TestIngestBatch:
@@ -186,6 +223,33 @@ class TestIngestBatch:
     async def test_batch_max_20(self) -> None:
         with pytest.raises(ValidationError):
             ErrorIngestRequest(events=[{"level": "error", "message": "x", "source": "backend"}] * 21)
+
+    async def test_batch_item_failure_does_not_abort_batch(self) -> None:
+        """A single malformed event must not prevent valid events from being ingested."""
+        svc = ErrorIngestionService()
+        session = _make_session()
+        event_mock = MagicMock()
+        event_mock.id = uuid.uuid4()
+        grp = MagicMock()
+        grp.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.core.error_tracking.create_error_event",
+                AsyncMock(side_effect=[event_mock, ValueError("boom"), event_mock]),
+            ),
+            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
+            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock(return_value=grp)),
+        ):
+            events = [
+                {"level": "error", "message": "ok1", "source": "backend"},
+                {"level": "error", "message": "ok2", "source": "backend"},
+                {"level": "error", "message": "ok3", "source": "backend"},
+            ]
+            results = await svc.ingest_batch(session, _ORG_ID, events)
+
+        assert len(results) == 2
+        assert all("group_id" in r for r in results)
 
 
 # =========================================================================
