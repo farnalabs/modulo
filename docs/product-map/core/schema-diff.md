@@ -5,6 +5,7 @@ bdd:
   - backend/tests/bdd/features/schemas/schema_migration.feature
 unit-tests:
   - backend/tests/unit/core/test_schema_migration.py
+  - backend/tests/unit/api/test_schemas_endpoint.py
 code:
   - backend/src/modulo/core/schema_registry/migration.py
   - backend/src/modulo/api/routes/schemas.py
@@ -66,20 +67,27 @@ Compute structural diffs between two JSON Schema definitions and transform data 
 - [x] Rename conflicts (target field already exists) handled with warning — migration continues
 - [x] Empty/missing properties handled gracefully
 - [ ] Migration gap detection raises error — no degraded fallback for partial migration chains
+- [x] Audit event append failure does not break the migration response (logged, migration still returns 200)
 
 ## Edge Cases
 
 - [x] Empty/missing properties in both source and target handled
 - [x] Same source and target schema — empty migration plan (no changes detected)
 - [x] Single-field schema — diff detected correctly
-- [ ] Large schemas (1000+ fields) — no performance testing for diff computation
+- [x] Large schemas (1000+ fields) — diff computation and apply scale test
 - [ ] Circular rename chains (A→B, B→A) — may produce unpredictable results
-- [ ] Non-existent version in migration chain gap detection
+- [x] Non-existent version in migration chain gap detection — MissingMigrationError raised
+- [x] Audit table missing (ProgrammingError on append) — logged, migration succeeds
 
 ## Security
 
 - [x] Auth required — 401 for unauthenticated access
 - [x] Schema access is org-scoped — cross-org schema returns 404
-- [ ] No audit logging for schema migration operations
+- [x] Audit logging for schema migration operations — schema_migration_completed event on POST /api/v1/schemas/migrate (recorded for both apply and dry_run, flagged via `dry_run` payload field)
 
 ## Known Gaps
+
+- Circular rename chains (A→B, B→A) produce a deterministic-but-unpredictable result (each removed field is greedily matched to the first same-type added field, so a full swap is applied). No cycle detection.
+- POST /api/v1/schemas/migrate/plan is stateless and unaudited by design — it only previews a plan from inline definitions and never touches persisted schemas.
+- The `/migrate/plan` endpoint has no auth dependency (pure compute on request bodies). Confirm this is acceptable before shipping in a public deployment.
+- MigrationRegistry's `validate_chain` reports gaps but callers have no degraded fallback — a partial chain is an error, never a best-effort migration.

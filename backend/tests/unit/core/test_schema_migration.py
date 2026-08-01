@@ -178,6 +178,52 @@ class TestCreateMigration:
         assert plan.type_changes["tags"].new_type == "array"
 
 
+class TestLargeSchema:
+    """Scale sanity for diff computation on large schemas (1000+ fields)."""
+
+    def test_create_migration_handles_large_schema(self) -> None:
+        old_props = {f"field_{i}": {"type": "string"} for i in range(1000)}
+        new_props = {**old_props, "field_1000": {"type": "integer"}, "field_1001": {"type": "string"}}
+        old = {"type": "object", "properties": old_props}
+        new = {"type": "object", "properties": new_props}
+
+        plan = create_migration(old, new)
+        assert "field_1000" in plan.field_additions
+        assert plan.field_additions["field_1000"] == "integer"
+        assert "field_1001" in plan.field_additions
+        assert plan.field_removals == []
+        assert plan.type_changes == {}
+        assert plan.renames == {}
+
+    def test_create_migration_large_schema_with_rename_and_removal(self) -> None:
+        old_props = {f"field_{i}": {"type": "string"} for i in range(1500)}
+        old_props["legacy"] = {"type": "integer"}
+        new_props = {f"field_{i}": {"type": "string"} for i in range(1500)}
+        new_props["modern"] = {"type": "integer"}
+        old = {"type": "object", "properties": old_props}
+        new = {"type": "object", "properties": new_props}
+
+        plan = create_migration(old, new)
+        assert plan.renames.get("legacy") == "modern"
+        assert "legacy" not in plan.field_removals
+        assert "modern" not in plan.field_additions
+
+    def test_apply_migration_large_plan_preserves_unrelated_fields(self) -> None:
+        plan = MigrationPlan(
+            field_additions={"field_1500": "string"},
+            field_removals=["field_0"],
+            renames={"legacy": "modern"},
+        )
+        data = {f"field_{i}": i for i in range(1, 1500)}
+        data["legacy"] = 42
+        result = apply_migration(data, plan)
+        assert result["modern"] == 42
+        assert "legacy" not in result
+        assert "field_0" not in result
+        assert result["field_1500"] is None
+        assert result["field_1"] == 1
+
+
 class TestApplyMigration:
     def test_apply_additions(self) -> None:
         plan = MigrationPlan(field_additions={"email": "string", "age": "integer"})

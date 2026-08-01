@@ -3,7 +3,7 @@
 import contextlib
 import json
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
@@ -37,46 +37,36 @@ def _make_schema_version(schema_id: uuid.UUID, fields: dict[str, str]) -> MagicM
     return sv
 
 
-@given(
-    parsers.parse(
-        "a source schema version with fields {fields_json}",
-    ),
-    target_fixture="source_schema_ctx",
-)
-def step_source_schema_with_fields(fields_json: str, request) -> dict:
+@given(parsers.parse("a source schema version with fields {fields_json}"))
+def step_source_schema_with_fields(fields_json: str, request) -> None:
     fields = json.loads(fields_json)
     schema = _make_schema("source-schema")
     version = _make_schema_version(schema.id, fields)
     _MOCK_SCHEMAS["source"] = schema
     _MOCK_VERSIONS["source"] = version
-    return {"schema": schema, "version": version, "fields": fields}
+    request.node._source_schema_ctx = {"schema": schema, "version": version, "fields": fields}
 
 
-@given(
-    parsers.parse(
-        "a target schema version with fields {fields_json}",
-    ),
-    target_fixture="target_schema_ctx",
-)
-def step_target_schema_with_fields(fields_json: str, request) -> dict:
+@given(parsers.parse("a target schema version with fields {fields_json}"))
+def step_target_schema_with_fields(fields_json: str, request) -> None:
     fields = json.loads(fields_json)
     schema = _make_schema("target-schema")
     version = _make_schema_version(schema.id, fields)
     _MOCK_SCHEMAS["target"] = schema
     _MOCK_VERSIONS["target"] = version
-    return {"schema": schema, "version": version, "fields": fields}
+    request.node._target_schema_ctx = {"schema": schema, "version": version, "fields": fields}
 
 
-@given(parsers.parse("a source definition with field {field_json}"), target_fixture="source_def")
-def step_source_definition(field_json: str) -> dict:
+@given(parsers.parse("a source definition with field {field_json}"))
+def step_source_definition(field_json: str, request) -> None:
     parsed = json.loads(field_json)
-    return {"type": "object", "properties": {k: {"type": v} for k, v in parsed.items()}}
+    request.node._source_def = {"type": "object", "properties": {k: {"type": v} for k, v in parsed.items()}}
 
 
-@given(parsers.parse("a target definition with field {field_json}"), target_fixture="target_def")
-def step_target_definition(field_json: str) -> dict:
+@given(parsers.parse("a target definition with field {field_json}"))
+def step_target_definition(field_json: str, request) -> None:
     parsed = json.loads(field_json)
-    return {"type": "object", "properties": {k: {"type": v} for k, v in parsed.items()}}
+    request.node._target_def = {"type": "object", "properties": {k: {"type": v} for k, v in parsed.items()}}
 
 
 @when(parsers.parse("I POST /api/v1/schemas/migrate with dry_run=true"))
@@ -91,6 +81,11 @@ def step_migrate_dry_run(request, client):
 )
 def step_migrate_dry_run_with_data(data_json: str, request, client):
     _call_migrate(request, client, dry_run=True, data_override=json.loads(data_json))
+
+
+@when(parsers.parse("I POST /api/v1/schemas/migrate with data {data_json}"))
+def step_migrate_with_data(data_json: str, request, client):
+    _call_migrate(request, client, dry_run=False, data_override=json.loads(data_json))
 
 
 @when("I POST /api/v1/schemas/migrate/plan")
@@ -133,10 +128,10 @@ def step_migrated_data_equals_original(request):
     )
 
 
-@then('the migrated_data still contains "full_name"')
-def step_migrated_data_contains_full_name(request):
+@then(parsers.parse('the migrated_data still contains "{field}"'))
+def step_migrated_data_still_contains(field: str, request):
     data = request.node._resp.json()
-    assert "full_name" in data["migrated_data"], f"Dry-run should not remove full_name: {data['migrated_data']}"
+    assert field in data["migrated_data"], f"Expected '{field}' preserved: {data['migrated_data']}"
 
 
 @then(
@@ -159,6 +154,32 @@ def step_plan_lists_field_addition(field: str, request):
     assert field in additions, f"Expected '{field}' in field_additions, got {additions}"
 
 
+@then(parsers.parse('the migrated_data no longer contains "{field}"'))
+def step_migrated_data_no_longer_contains(field: str, request):
+    data = request.node._resp.json()
+    assert field not in data["migrated_data"], f"Expected '{field}' to be removed: {data['migrated_data']}"
+
+
+@then(parsers.parse('an audit event "{event_type}" is recorded'))
+def step_audit_event_recorded(event_type: str, request):
+    mock_append = getattr(request.node, "_audit_append", None)
+    assert mock_append is not None, "append_audit_event was not patched for this scenario"
+    mock_append.assert_awaited()
+    call = mock_append.await_args
+    assert call.kwargs.get("event_type") == event_type, f"Expected event_type {event_type}, got {call.kwargs}"
+
+
+@then(parsers.parse('an audit event "{event_type}" is recorded with dry_run: true'))
+def step_audit_event_recorded_dry_run(event_type: str, request):
+    mock_append = getattr(request.node, "_audit_append", None)
+    assert mock_append is not None, "append_audit_event was not patched for this scenario"
+    mock_append.assert_awaited()
+    call = mock_append.await_args
+    assert call.kwargs.get("event_type") == event_type, f"Expected event_type {event_type}, got {call.kwargs}"
+    payload = call.kwargs.get("payload_json") or {}
+    assert payload.get("dry_run") is True, f"Expected dry_run=True in payload, got {payload}"
+
+
 def _call_migrate(request, client, dry_run: bool = False, data_override: dict | None = None) -> None:
     source_ctx = getattr(request.node, "_source_schema_ctx", None)
     target_ctx = getattr(request.node, "_target_schema_ctx", None)
@@ -178,7 +199,9 @@ def _call_migrate(request, client, dry_run: bool = False, data_override: dict | 
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch("modulo.api.routes.schemas.get_schema") as mock_get_schema,
         patch("modulo.api.routes.schemas._get_latest_version") as mock_latest,
+        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_audit_append,
     ):
+        request.node._audit_append = mock_audit_append
 
         def _get_schema_side(session, schema_id):
             for ctx in (source_ctx, target_ctx):
