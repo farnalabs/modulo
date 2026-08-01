@@ -6,8 +6,10 @@ from unittest.mock import patch
 import pytest
 
 from modulo.api.routes.remy import (
+    _get_all_tool_definitions,
     _has_destructive_pattern,
     _is_approved_for_session,
+    _reconstruct_tool_calls,
     _resolve_tool_permission,
     _session_approvals,
 )
@@ -282,43 +284,33 @@ class TestPermissionResolution:
 
 
 class TestGetAllToolDefinitions:
-    def _get_definitions(self):
-        from modulo.api.ui_tools import _UI_TOOLS
-
-        tools = []
-        for name, schema in _UI_TOOLS.items():
-            tools.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "description": schema["description"],
-                        "parameters": {
-                            "type": "object",
-                            "properties": schema["parameters"],
-                        },
-                    },
-                }
-            )
-        return tools
-
     def test_returns_list_of_dicts(self):
-        result = self._get_definitions()
+        result = _get_all_tool_definitions()
         assert isinstance(result, list)
-        assert len(result) == 13
+        assert len(result) >= 13
+
+    def test_includes_all_ui_tools(self):
+        result = _get_all_tool_definitions()
+        names = {entry["function"]["name"] for entry in result}
+        assert names >= UI_TOOL_NAMES
 
     def test_each_entry_has_type_function(self):
-        for entry in self._get_definitions():
+        for entry in _get_all_tool_definitions():
             assert entry["type"] == "function"
 
     def test_each_entry_has_function_with_name_description_parameters(self):
-        for entry in self._get_definitions():
+        for entry in _get_all_tool_definitions():
             fn = entry["function"]
             assert "name" in fn
             assert "description" in fn
             assert "parameters" in fn
             assert fn["parameters"]["type"] == "object"
             assert "properties" in fn["parameters"]
+
+    def test_include_ui_tools_false_excludes_ui_tools(self):
+        result = _get_all_tool_definitions(include_ui_tools=False)
+        names = {entry["function"]["name"] for entry in result}
+        assert names.isdisjoint(UI_TOOL_NAMES)
 
 
 class TestBuildToolDefinitionsForText:
@@ -443,63 +435,40 @@ class TestAgenticLoopRouting:
         intersection = mcp_tools & UI_TOOL_NAMES
         assert intersection == set(), f"MCP tool names leaked into UI tools: {intersection}"
 
-    def test_non_tool_model_does_not_pass_tools_param(self):
-        from unittest.mock import MagicMock
+    def test_tool_param_includes_ui_definitions_for_tool_model(self):
+        tools = _get_all_tool_definitions(include_ui_tools=True)
+        names = {entry["function"]["name"] for entry in tools}
+        assert "navigate" in names
+        assert "get_manifest" in names
 
-        backend = MagicMock()
-        backend.supports_tools = False
-
-        tools_param = None
-        if getattr(backend, "supports_tools", False):
-            from modulo.api.routes.remy import _get_all_tool_definitions
-
-            tools_param = _get_all_tool_definitions()
-
-        assert tools_param is None
-
-    def test_tool_model_passes_tools_param(self):
-        from unittest.mock import MagicMock
-
-        from modulo.api.routes.remy import _get_all_tool_definitions
-
-        backend = MagicMock()
-        backend.supports_tools = True
-
-        tools_param = None
-        if getattr(backend, "supports_tools", False):
-            tools_param = _get_all_tool_definitions()
-
-        assert tools_param is not None
-        assert len(tools_param) == 13
+    def test_tool_param_omits_ui_definitions_for_non_tool_model(self):
+        tools = _get_all_tool_definitions(include_ui_tools=False)
+        names = {entry["function"]["name"] for entry in tools}
+        assert names.isdisjoint(UI_TOOL_NAMES)
 
     def test_agentic_loop_continues_when_tool_calls_exist(self):
-        tool_calls = [{"name": "navigate", "id": "call_1", "args": {"path": "/admin"}}]
-        should_continue = len(tool_calls) > 0
-        assert should_continue is True
+        tool_calls = _reconstruct_tool_calls({0: {"id": "call_1", "name": "navigate", "args": '{"path": "/admin"}'}})
+        assert len(tool_calls) > 0
 
     def test_agentic_loop_exits_when_no_tool_calls(self):
-        tool_calls: list[dict] = []
-        should_exit = len(tool_calls) == 0
-        assert should_exit is True
+        tool_calls = _reconstruct_tool_calls({})
+        assert tool_calls == []
 
     def test_agentic_loop_continues_for_mixed_ui_and_mcp(self):
-        tool_calls = [
-            {"name": "navigate", "id": "call_1", "args": {"path": "/admin"}},
-            {"name": "list_pipelines", "id": "call_2", "args": {}},
-        ]
-        should_continue = len(tool_calls) > 0
-        assert should_continue is True
+        tool_calls = _reconstruct_tool_calls(
+            {
+                0: {"id": "call_1", "name": "navigate", "args": '{"path": "/admin"}'},
+                1: {"id": "call_2", "name": "list_pipelines", "args": "{}"},
+            }
+        )
+        assert len(tool_calls) == 2
 
     def test_agentic_loop_with_empty_tool_call_buffers(self):
-        from modulo.api.routes.remy import _reconstruct_tool_calls
-
         buffers: dict[int, dict] = {}
         result = _reconstruct_tool_calls(buffers)
         assert result == []
 
     def test_agentic_loop_reconstructs_single_tool_call(self):
-        from modulo.api.routes.remy import _reconstruct_tool_calls
-
         buffers = {
             0: {"id": "call_abc", "name": "navigate", "args": '{"path": "/admin"}'},
         }
@@ -510,8 +479,6 @@ class TestAgenticLoopRouting:
         assert result[0]["args"] == {"path": "/admin"}
 
     def test_agentic_loop_reconstructs_multiple_tool_calls(self):
-        from modulo.api.routes.remy import _reconstruct_tool_calls
-
         buffers = {
             0: {"id": "call_1", "name": "navigate", "args": '{"path": "/admin"}'},
             1: {"id": "call_2", "name": "click", "args": '{"selector": ".btn"}'},
@@ -524,20 +491,34 @@ class TestAgenticLoopRouting:
         assert result[2]["name"] == "fill"
 
     def test_reconstruct_handles_malformed_json_gracefully(self):
-        from modulo.api.routes.remy import _reconstruct_tool_calls
-
         buffers = {
             0: {"id": "call_x", "name": "click", "args": "not valid json"},
         }
         result = _reconstruct_tool_calls(buffers)
         assert result[0]["args"] == {}
 
-    def test_tool_param_is_omitted_for_non_tool_backend_definition(self):
-        from modulo.api.routes.remy import _get_all_tool_definitions
+    def test_reconstruct_handles_empty_and_none_args(self):
+        buffers = {
+            0: {"id": "call_1", "name": "navigate", "args": ""},
+            1: {"id": "call_2", "name": "click", "args": None},
+        }
+        result = _reconstruct_tool_calls(buffers)
+        assert result[0]["args"] == {}
+        assert result[1]["args"] == {}
 
+    def test_reconstruct_sorts_buffers_by_index(self):
+        buffers = {
+            2: {"id": "call_3", "name": "fill", "args": '{"value": "x"}'},
+            0: {"id": "call_1", "name": "navigate", "args": '{"path": "/admin"}'},
+            1: {"id": "call_2", "name": "click", "args": '{"selector": ".btn"}'},
+        }
+        result = _reconstruct_tool_calls(buffers)
+        assert [tc["name"] for tc in result] == ["navigate", "click", "fill"]
+
+    def test_tool_param_is_omitted_for_non_tool_backend_definition(self):
         tools = _get_all_tool_definitions()
         assert isinstance(tools, list)
-        assert len(tools) == 13
+        assert len(tools) >= 13
         for t in tools:
             assert t["type"] == "function"
             assert "function" in t

@@ -4,8 +4,18 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.core.remy.config_service import RemyConfig, RemyConfigService
+
+
+def _stored_config(mock_session: AsyncMock, value: object) -> None:
+    """Point the session's next execute at a stored SystemConfig row with the given value."""
+    entry = MagicMock()
+    entry.value = value
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none = MagicMock(return_value=entry)
+    mock_session.execute = AsyncMock(return_value=mock_result)
 
 
 class TestRemyConfigDefaults:
@@ -80,17 +90,15 @@ class TestRemyConfigServiceGetConfig:
         mock_session: AsyncMock,
         org_id: uuid.UUID,
     ) -> None:
-        stored_value = {
-            "system_prompt": "You are helpful.",
-            "default_provider": "openai",
-            "default_model": "gpt-4o",
-            "default_context_window": 100000,
-        }
-        entry = MagicMock()
-        entry.value = stored_value
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=entry)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        _stored_config(
+            mock_session,
+            {
+                "system_prompt": "You are helpful.",
+                "default_provider": "openai",
+                "default_model": "gpt-4o",
+                "default_context_window": 100000,
+            },
+        )
 
         config = await service.get_config(org_id)
         assert config.system_prompt == "You are helpful."
@@ -104,15 +112,36 @@ class TestRemyConfigServiceGetConfig:
         mock_session: AsyncMock,
         org_id: uuid.UUID,
     ) -> None:
-        entry = MagicMock()
-        entry.value = "not a dict"
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=entry)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        _stored_config(mock_session, "not a dict")
 
         config = await service.get_config(org_id)
         assert isinstance(config, RemyConfig)
         assert config.system_prompt == ""
+
+    async def test_returns_defaults_when_db_query_raises(
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        mock_session.execute = AsyncMock(side_effect=SQLAlchemyError("connection lost"))
+
+        config = await service.get_config(org_id)
+        assert isinstance(config, RemyConfig)
+        assert config.system_prompt == ""
+        assert config.default_provider == "anthropic"
+
+    async def test_returns_defaults_when_stored_value_is_invalid(
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        _stored_config(mock_session, {"default_context_window": "not-an-int"})
+
+        config = await service.get_config(org_id)
+        assert isinstance(config, RemyConfig)
+        assert config.default_context_window == 200000
 
     async def test_returns_partial_config_with_defaults(
         self,
@@ -120,14 +149,7 @@ class TestRemyConfigServiceGetConfig:
         mock_session: AsyncMock,
         org_id: uuid.UUID,
     ) -> None:
-        stored_value = {
-            "system_prompt": "Be concise.",
-        }
-        entry = MagicMock()
-        entry.value = stored_value
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=entry)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        _stored_config(mock_session, {"system_prompt": "Be concise."})
 
         config = await service.get_config(org_id)
         assert config.system_prompt == "Be concise."
@@ -159,6 +181,23 @@ class TestRemyConfigServiceUpdateConfig:
             assert kwargs["key"] == f"remy_config:{org_id}"
             assert kwargs["value"]["system_prompt"] == "New system prompt"
             assert kwargs["value"]["default_provider"] == "deepseek"
+            mock_session.flush.assert_awaited_once()
+
+    async def test_update_config_reraises_on_db_error(
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        with (
+            patch(
+                "modulo.core.remy.config_service.set_config",
+                new_callable=AsyncMock,
+                side_effect=SQLAlchemyError("write failed"),
+            ),
+            pytest.raises(SQLAlchemyError),
+        ):
+            await service.update_config(org_id, RemyConfig(system_prompt="Nope"))
 
 
 class TestRemyConfigServiceCheckAccess:
@@ -175,18 +214,16 @@ class TestRemyConfigServiceCheckAccess:
         org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
-        stored_value = {
-            "access_rules": {
-                "user_ids": [str(user_id)],
-                "team_ids": [],
-                "org_roles": [],
+        _stored_config(
+            mock_session,
+            {
+                "access_rules": {
+                    "user_ids": [str(user_id)],
+                    "team_ids": [],
+                    "org_roles": [],
+                },
             },
-        }
-        entry = MagicMock()
-        entry.value = stored_value
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=entry)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        )
 
         granted = await service.check_access(org_id, user_id, "viewer", [])
         assert granted is True
@@ -198,18 +235,37 @@ class TestRemyConfigServiceCheckAccess:
         org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
-        stored_value = {
-            "access_rules": {
-                "user_ids": [],
-                "team_ids": [],
-                "org_roles": ["admin"],
+        _stored_config(
+            mock_session,
+            {
+                "access_rules": {
+                    "user_ids": [],
+                    "team_ids": [],
+                    "org_roles": ["admin"],
+                },
             },
-        }
-        entry = MagicMock()
-        entry.value = stored_value
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=entry)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        )
+
+        granted = await service.check_access(org_id, user_id, "admin", [])
+        assert granted is True
+
+    async def test_check_access_matches_org_role_case_insensitively(
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        user_id = uuid.uuid4()
+        _stored_config(
+            mock_session,
+            {
+                "access_rules": {
+                    "user_ids": [],
+                    "team_ids": [],
+                    "org_roles": ["Admin"],
+                },
+            },
+        )
 
         granted = await service.check_access(org_id, user_id, "admin", [])
         assert granted is True
@@ -222,18 +278,16 @@ class TestRemyConfigServiceCheckAccess:
     ) -> None:
         user_id = uuid.uuid4()
         team_id = uuid.uuid4()
-        stored_value = {
-            "access_rules": {
-                "user_ids": [],
-                "team_ids": [str(team_id)],
-                "org_roles": [],
+        _stored_config(
+            mock_session,
+            {
+                "access_rules": {
+                    "user_ids": [],
+                    "team_ids": [str(team_id)],
+                    "org_roles": [],
+                },
             },
-        }
-        entry = MagicMock()
-        entry.value = stored_value
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=entry)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        )
 
         granted = await service.check_access(org_id, user_id, "viewer", [team_id])
         assert granted is True
@@ -245,18 +299,16 @@ class TestRemyConfigServiceCheckAccess:
         org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
-        stored_value: dict = {
-            "access_rules": {
-                "user_ids": [],
-                "team_ids": [],
-                "org_roles": [],
+        _stored_config(
+            mock_session,
+            {
+                "access_rules": {
+                    "user_ids": [],
+                    "team_ids": [],
+                    "org_roles": [],
+                },
             },
-        }
-        entry = MagicMock()
-        entry.value = stored_value
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=entry)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        )
 
         granted = await service.check_access(org_id, user_id, "viewer", [])
         assert granted is False
@@ -269,18 +321,16 @@ class TestRemyConfigServiceCheckAccess:
     ) -> None:
         user_id = uuid.uuid4()
         team_id = uuid.uuid4()
-        stored_value = {
-            "access_rules": {
-                "user_ids": [],
-                "team_ids": [team_id],  # stored as UUID, not string
-                "org_roles": [],
+        _stored_config(
+            mock_session,
+            {
+                "access_rules": {
+                    "user_ids": [],
+                    "team_ids": [team_id],  # stored as UUID, not string
+                    "org_roles": [],
+                },
             },
-        }
-        entry = MagicMock()
-        entry.value = stored_value
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=entry)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        )
 
         granted = await service.check_access(org_id, user_id, "viewer", [team_id])
         assert granted is True
@@ -292,18 +342,67 @@ class TestRemyConfigServiceCheckAccess:
         org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
-        stored_value = {
-            "access_rules": {
-                "user_ids": [user_id],  # UUID, not string
-                "team_ids": [],
-                "org_roles": [],
+        _stored_config(
+            mock_session,
+            {
+                "access_rules": {
+                    "user_ids": [user_id],  # UUID, not string
+                    "team_ids": [],
+                    "org_roles": [],
+                },
             },
-        }
-        entry = MagicMock()
-        entry.value = stored_value
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=entry)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        )
 
         granted = await service.check_access(org_id, user_id, "viewer", [])
         assert granted is True
+
+    async def test_check_access_skips_invalid_user_ids(
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        user_id = uuid.uuid4()
+        _stored_config(
+            mock_session,
+            {
+                "access_rules": {
+                    "user_ids": ["not-a-uuid", 123],  # both invalid → normalized away
+                    "team_ids": [],
+                    "org_roles": [],
+                },
+            },
+        )
+
+        granted = await service.check_access(org_id, user_id, "viewer", [])
+        assert granted is False
+
+    async def test_check_access_when_access_rules_missing_keys(
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        user_id = uuid.uuid4()
+        _stored_config(
+            mock_session,
+            {"access_rules": {"user_ids": [], "team_ids": []}},  # no org_roles key
+        )
+
+        granted = await service.check_access(org_id, user_id, "admin", [])
+        assert granted is False
+
+    async def test_check_access_denies_when_config_fetch_fails(
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        user_id = uuid.uuid4()
+        with patch(
+            "modulo.core.remy.config_service.get_config",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ):
+            granted = await service.check_access(org_id, user_id, "admin", [])
+        assert granted is False
