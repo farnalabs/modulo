@@ -334,21 +334,23 @@ async def test_polling_trigger_concurrency_limit(
                 {"id": str(_TRIGGER_ID)},
             )
             for i in range(2):
+                run_id = uuid.uuid4()
                 await session.execute(
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
                         "snapshot_id, trigger_type, status, "
-                        "input_hash, langgraph_thread_id, trigger_id) "
+                        "input_hash, langgraph_thread_id, trigger_id, run_number) "
                         "VALUES (:rid, :oid, :pid, :sid, 'polling', 'running', "
-                        "'abcd1234', :thread_id, :tid)",
+                        "'abcd1234', :thread_id, :tid, :rn)",
                     ),
                     {
-                        "rid": str(uuid.uuid4()),
+                        "rid": str(run_id),
                         "oid": str(_ORG_ID),
                         "pid": str(_PIPELINE_ID),
                         "sid": str(_SNAPSHOT_ID),
                         "thread_id": f"{_ORG_ID}:run-{i}",
                         "tid": str(_TRIGGER_ID),
+                        "rn": int(run_id.int % 10**9) + 1,
                     },
                 )
     finally:

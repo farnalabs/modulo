@@ -59,7 +59,7 @@ async def test_list_schemas_pagination(rls_session: AsyncSession, test_org: uuid
             name=f"ListSchema-{uuid.uuid4().hex[:6]}",
             account_id=test_user,
         )
-    page1 = await list_schemas(rls_session, page=1, page_size=2)
+    page1 = await list_schemas(rls_session, limit=2)
     assert page1.total >= 3
     assert len(page1.items) == 2
 

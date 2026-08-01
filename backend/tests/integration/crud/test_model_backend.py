@@ -63,7 +63,7 @@ async def test_list_model_backends_pagination(
             rls_session,
             **_mb_kwargs(test_org, test_user, suffix=f"-list-{i}-{uuid.uuid4().hex[:4]}"),
         )
-    page1 = await list_model_backends(rls_session, page=1, page_size=2)
+    page1 = await list_model_backends(rls_session, org_id=test_org, page=1, page_size=2)
     assert page1.total >= 3
     assert len(page1.items) == 2
     assert page1.page == 1
@@ -116,7 +116,7 @@ class TestListModelBackendsTierFiltering:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "preview", "-tier-prev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier-nat")
-        result = await list_model_backends(rls_session)
+        result = await list_model_backends(rls_session, org_id=test_org)
         assert result.total == 2
         assert all(i.tier != "in_dev" for i in result.items)
 
@@ -128,7 +128,7 @@ class TestListModelBackendsTierFiltering:
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier2-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier2-nat")
-        result = await list_model_backends(rls_session, excluded_tiers=["in_dev"])
+        result = await list_model_backends(rls_session, org_id=test_org, excluded_tiers=["in_dev"])
         assert result.total == 1
         assert result.items[0].tier == "native"
 
@@ -140,7 +140,7 @@ class TestListModelBackendsTierFiltering:
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier3-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier3-nat")
-        result = await list_model_backends(rls_session, excluded_tiers=None)
+        result = await list_model_backends(rls_session, org_id=test_org, excluded_tiers=None)
         assert result.total == 1
         assert result.items[0].tier == "native"
 
@@ -152,7 +152,7 @@ class TestListModelBackendsTierFiltering:
     ) -> None:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier4-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier4-nat")
-        result = await list_model_backends(rls_session, excluded_tiers=[])
+        result = await list_model_backends(rls_session, org_id=test_org, excluded_tiers=[])
         assert result.total == 2
 
     async def test_excluded_tiers_preview(
@@ -164,7 +164,7 @@ class TestListModelBackendsTierFiltering:
         await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier5-dev")
         await self._create_with_tier(rls_session, test_org, test_user, "preview", "-tier5-prev")
         await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier5-nat")
-        result = await list_model_backends(rls_session, excluded_tiers=["preview"])
+        result = await list_model_backends(rls_session, org_id=test_org, excluded_tiers=["preview"])
         assert result.total == 2
         assert all(i.tier != "preview" for i in result.items)
         tiers = {i.tier for i in result.items}
