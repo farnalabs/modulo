@@ -148,6 +148,9 @@ class TestGetOrCreateDailyCount:
             await get_or_create_daily_count(mock_session, org_id=_ORG_ID, run_date=_TODAY, team_id=None)
 
         savepoint.rollback.assert_awaited_once()
+        mock_session.add.assert_called_once()
+        mock_session.flush.assert_awaited_once()
+        assert mock_session.execute.await_count == 2
 
     async def test_cancelled_error_is_not_swallowed(self, mock_session: AsyncMock) -> None:
         savepoint = AsyncMock()
@@ -162,6 +165,8 @@ class TestGetOrCreateDailyCount:
 
         savepoint.rollback.assert_not_awaited()
         mock_session.add.assert_called_once()
+        mock_session.flush.assert_awaited_once()
+        assert mock_session.execute.await_count == 1
 
 
 # ---------------------------------------------------------------------------
