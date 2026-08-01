@@ -1,5 +1,7 @@
 """Unit tests for the PluginRegistry."""
 
+import asyncio
+import importlib.metadata as importlib_metadata
 from typing import Any
 from unittest.mock import patch
 
@@ -15,8 +17,10 @@ from modulo.connectors.base import (
 from modulo.core.plugin_registry import (
     PluginHealth,
     PluginManifest,
+    PluginNotFoundError,
     PluginRegistry,
     get_plugin_registry,
+    reset_plugin_registry,
 )
 from modulo.model_backends.base import HealthResult, ModelBackendBase
 
@@ -117,14 +121,177 @@ def test_register_and_build_model_backend():
 
 def test_build_unknown_connector_raises():
     registry = PluginRegistry()
-    with pytest.raises(KeyError, match="stub_connector"):
+    with pytest.raises(PluginNotFoundError, match="stub_connector"):
         registry.build_connector("stub_connector", {}, {})
 
 
 def test_build_unknown_backend_raises():
     registry = PluginRegistry()
-    with pytest.raises(KeyError, match="stub_provider"):
+    with pytest.raises(PluginNotFoundError, match="stub_provider"):
         registry.build_model_backend("stub_provider", "x", "y")
+
+
+def test_build_connector_rejects_bad_types():
+    registry = PluginRegistry()
+    with pytest.raises(TypeError, match="type_id must be a string"):
+        registry.build_connector(123, {}, {})
+    with pytest.raises(TypeError, match="config must be a dict"):
+        registry.build_connector("t", [], {})
+    with pytest.raises(TypeError, match="creds must be a dict"):
+        registry.build_connector("t", {}, [])
+
+
+def test_build_model_backend_rejects_bad_types():
+    registry = PluginRegistry()
+    with pytest.raises(TypeError, match="provider must be a string"):
+        registry.build_model_backend(123, "m", "k")
+    with pytest.raises(TypeError, match="model_id must be a string"):
+        registry.build_model_backend("p", 123, "k")
+    with pytest.raises(TypeError, match="api_key must be a string"):
+        registry.build_model_backend("p", "m", 123)
+
+
+def test_register_connector_type_rejects_bad_args():
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    with pytest.raises(TypeError, match="type_id must be a string"):
+        registry.register_connector_type(123, _build_stub_connector, manifest)
+    with pytest.raises(TypeError, match="builder must be callable"):
+        registry.register_connector_type("t", "not-callable", manifest)
+    with pytest.raises(TypeError, match="manifest must be a PluginManifest"):
+        registry.register_connector_type("t", _build_stub_connector, {"PLUGIN_ID": "p"})
+
+
+def test_register_model_backend_rejects_bad_args():
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    with pytest.raises(TypeError, match="provider must be a string"):
+        registry.register_model_backend(123, _build_stub_backend, manifest)
+    with pytest.raises(TypeError, match="builder must be callable"):
+        registry.register_model_backend("p", "not-callable", manifest)
+    with pytest.raises(TypeError, match="manifest must be a PluginManifest"):
+        registry.register_model_backend("p", _build_stub_backend, {"PLUGIN_ID": "p"})
+
+
+def test_connector_builder_failure_wrapped_in_runtime_error():
+    def _bad_builder(config, creds):
+        raise RuntimeError("boom")
+
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    registry.register_connector_type("t", _bad_builder, manifest)
+    with pytest.raises(RuntimeError, match="Connector builder for type 't' failed"):
+        registry.build_connector("t", {}, {})
+
+
+def test_connector_builder_cancelled_error_propagates():
+    def _cancelling_builder(config, creds):
+        raise asyncio.CancelledError
+
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    registry.register_connector_type("t", _cancelling_builder, manifest)
+    with pytest.raises(asyncio.CancelledError):
+        registry.build_connector("t", {}, {})
+
+
+def test_model_backend_builder_failure_wrapped_in_runtime_error():
+    def _bad_builder(api_key, model_id, **kwargs):
+        raise RuntimeError("boom")
+
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    registry.register_model_backend("p", _bad_builder, manifest)
+    with pytest.raises(RuntimeError, match="Model backend builder for provider 'p' failed"):
+        registry.build_model_backend("p", "m", "k")
+
+
+def test_model_backend_builder_cancelled_error_propagates():
+    def _cancelling_builder(api_key, model_id, **kwargs):
+        raise asyncio.CancelledError
+
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    registry.register_model_backend("p", _cancelling_builder, manifest)
+    with pytest.raises(asyncio.CancelledError):
+        registry.build_model_backend("p", "m", "k")
+
+
+def test_register_connector_type_overwrite_logs_warning(caplog):
+    registry = PluginRegistry()
+    m1 = PluginManifest(PLUGIN_ID="p1", display_name="P1", description="", version="1")
+    m2 = PluginManifest(PLUGIN_ID="p2", display_name="P2", description="", version="1")
+    registry.register_connector_type("dup", _build_stub_connector, m1)
+    with caplog.at_level("WARNING", logger="modulo.core.plugin_registry"):
+        registry.register_connector_type("dup", _build_stub_connector, m2)
+    assert any("Overwriting existing connector type 'dup'" in r.message for r in caplog.records)
+    assert registry.has_connector_type("dup")
+    # Re-registration keeps the same plugin manifest healthy
+    assert registry.get_plugin("p2") is not None
+
+
+def test_register_model_backend_overwrite_logs_warning(caplog):
+    registry = PluginRegistry()
+    m1 = PluginManifest(PLUGIN_ID="p1", display_name="P1", description="", version="1")
+    m2 = PluginManifest(PLUGIN_ID="p2", display_name="P2", description="", version="1")
+    registry.register_model_backend("dup", _build_stub_backend, m1)
+    with caplog.at_level("WARNING", logger="modulo.core.plugin_registry"):
+        registry.register_model_backend("dup", _build_stub_backend, m2)
+    assert any("Overwriting existing model backend 'dup'" in r.message for r in caplog.records)
+    assert registry.has_model_backend("dup")
+
+
+def test_health_check_cancelled_error_propagates():
+    registry = PluginRegistry()
+    manifest = PluginManifest(
+        PLUGIN_ID="pkg-cancel",
+        display_name="Cancel",
+        description="",
+        version="1.0.0",
+    )
+    registry.register_connector_type("t1", _build_stub_connector, manifest)
+    with (
+        patch(
+            "modulo.core.plugin_registry.importlib.metadata.metadata",
+            side_effect=asyncio.CancelledError,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        registry.health_check("pkg-cancel")
+
+
+def test_health_check_unexpected_metadata_error_reports_unhealthy():
+    registry = PluginRegistry()
+    manifest = PluginManifest(
+        PLUGIN_ID="pkg-odd",
+        display_name="Odd",
+        description="",
+        version="1.0.0",
+    )
+    registry.register_connector_type("t1", _build_stub_connector, manifest)
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.metadata",
+        side_effect=OSError("metadata blew up"),
+    ):
+        result = registry.health_check("pkg-odd")
+    assert result["pkg-odd"].ok is False
+    assert result["pkg-odd"].detail == "Error checking plugin metadata"
+
+
+def test_entry_point_errors_recorded_on_load_failure():
+    registry = PluginRegistry()
+    fail_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "broken_con",
+        dist_name="pkg-broken",
+        load_side_effect=ImportError,
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[fail_ep], []],
+    ):
+        registry.discover_plugins()
+    assert registry.entry_point_errors == {"pkg-broken": "Failed to load entry point broken_con"}
 
 
 def test_list_plugins_after_registration():
@@ -175,7 +342,7 @@ def test_health_check_unknown_plugin():
     assert "Unknown" in result["nonexistent"].detail
 
 
-def test_health_check_registered_plugin():
+def test_health_check_registered_plugin_metadata_found():
     registry = PluginRegistry()
     manifest = PluginManifest(
         PLUGIN_ID="modulo-plugin-stub",
@@ -184,11 +351,29 @@ def test_health_check_registered_plugin():
         version="1.0.0",
     )
     registry.register_connector_type("stub", _build_stub_connector, manifest)
-    result = registry.health_check("modulo-plugin-stub")
-    # The _check_single will try importlib.metadata.metadata('modulo-plugin-stub')
-    # which won't be found (not actually installed), but the test at least
-    # exercises the path without exceptions.
-    assert "modulo-plugin-stub" in result
+    with patch("modulo.core.plugin_registry.importlib.metadata.metadata", return_value=object()):
+        result = registry.health_check("modulo-plugin-stub")
+    assert result["modulo-plugin-stub"].ok is True
+    assert result["modulo-plugin-stub"].detail == "Package metadata found"
+
+
+def test_health_check_registered_plugin_package_missing():
+    """A registered plugin whose package is uninstalled reports unhealthy."""
+    registry = PluginRegistry()
+    manifest = PluginManifest(
+        PLUGIN_ID="modulo-plugin-stub",
+        display_name="Stub",
+        description="",
+        version="1.0.0",
+    )
+    registry.register_connector_type("stub", _build_stub_connector, manifest)
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.metadata",
+        side_effect=importlib_metadata.PackageNotFoundError,
+    ):
+        result = registry.health_check("modulo-plugin-stub")
+    assert result["modulo-plugin-stub"].ok is False
+    assert result["modulo-plugin-stub"].detail == "Package not found in installed packages"
 
 
 def test_health_check_all_plugins():
@@ -200,9 +385,11 @@ def test_health_check_all_plugins():
         version="0.0.0",
     )
     registry.register_connector_type("t1", _build_stub_connector, manifest)
-    results = registry.health_check()
+    with patch("modulo.core.plugin_registry.importlib.metadata.metadata", return_value=object()):
+        results = registry.health_check()
     assert isinstance(results, dict)
     assert "test-pkg" in results
+    assert results["test-pkg"].ok is True
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +519,46 @@ def test_discover_plugins_no_plugins():
         discovered = registry.discover_plugins()
     assert discovered == []
     assert registry.list_plugins() == {}
+
+
+def test_discover_plugins_propagates_cancelled_error():
+    registry = PluginRegistry()
+    with (
+        patch(
+            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            side_effect=asyncio.CancelledError,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        registry.discover_plugins()
+
+
+def test_discover_plugins_swallows_entry_point_query_error():
+    registry = PluginRegistry()
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=OSError("boom"),
+    ):
+        discovered = registry.discover_plugins()
+    assert discovered == []
+
+
+def test_load_entry_point_failure_variants_are_skipped():
+    for exc_type in (ImportError, TypeError, AttributeError, SyntaxError):
+        registry = PluginRegistry()
+        fail_ep = _make_mock_entry_point(
+            "modulo.connectors",
+            "broken_con",
+            dist_name=f"pkg-{exc_type.__name__}",
+            load_side_effect=exc_type,
+        )
+        with patch(
+            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            side_effect=[[fail_ep], []],
+        ):
+            discovered = registry.discover_plugins()
+        assert discovered == []
+        assert not registry.has_connector_type("broken_con")
 
 
 def test_discover_plugins_connector_entry_point():
@@ -480,3 +707,48 @@ def test_backend_providers_property():
 def test_empty_registry(method, args, expected):
     result = getattr(PluginRegistry(), method)(*args)
     assert result == expected
+
+
+# ---------------------------------------------------------------------------
+# Singleton lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_reset_plugin_registry_invalidates_singleton():
+    before = get_plugin_registry()
+    reset_plugin_registry()
+    try:
+        after = get_plugin_registry()
+        assert before is not after
+    finally:
+        reset_plugin_registry()
+
+
+# ---------------------------------------------------------------------------
+# Deep-copy isolation
+# ---------------------------------------------------------------------------
+
+
+def test_list_plugins_returns_deep_copies():
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p1", display_name="P1", description="", version="1")
+    registry.register_connector_type("c1", _build_stub_connector, manifest)
+
+    plugin = registry.list_plugins()["p1"]
+    plugin.display_name = "MUTATED"
+    plugin.capabilities.add("model_backend")
+
+    assert registry.list_plugins()["p1"].display_name == "P1"
+    assert registry.list_plugins()["p1"].capabilities == {"connector_type"}
+
+
+def test_get_plugin_returns_deep_copy():
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p1", display_name="P1", description="", version="1")
+    registry.register_connector_type("c1", _build_stub_connector, manifest)
+
+    plugin = registry.get_plugin("p1")
+    assert plugin is not None
+    plugin.display_name = "MUTATED"
+
+    assert registry.get_plugin("p1").display_name == "P1"
