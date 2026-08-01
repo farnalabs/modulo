@@ -164,7 +164,7 @@ const saving = ref(false);
 async function fetchSkills() {
   skillError.value = null;
   try {
-    const { data, error: err } = await (api as any).GET("/api/v1/me/remy/skills");
+    const { data, error: err } = await api.GET("/api/v1/me/remy/skills");
     if (err) {
       skillError.value = `Failed to load skills: ${formatApiError(err)}`;
     } else if (data) {
@@ -215,7 +215,7 @@ async function saveSkill() {
   skillError.value = null;
   try {
     if (editingId.value) {
-      const { error: err } = await (api as any).PUT(
+      const { error: err } = await api.PUT(
         "/api/v1/me/remy/skills/{skill_id}",
         {
           params: { path: { skill_id: editingId.value } },
@@ -227,7 +227,7 @@ async function saveSkill() {
         return;
       }
     } else {
-      const { data, error: err } = await (api as any).POST(
+      const { data, error: err } = await api.POST(
         "/api/v1/me/remy/skills",
         { body: payload },
       );
@@ -250,7 +250,7 @@ async function saveSkill() {
 async function deleteSkill(id: string) {
   skillError.value = null;
   try {
-    const { error: err } = await (api as any).DELETE(
+    const { error: err } = await api.DELETE(
       "/api/v1/me/remy/skills/{skill_id}",
       {
         params: { path: { skill_id: id } },

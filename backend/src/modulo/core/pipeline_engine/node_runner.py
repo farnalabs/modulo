@@ -619,15 +619,9 @@ def make_sandbox_agent_fn(
             m = _secret_ref_re.match(str(value))
             if m:
                 secret_key = m.group(1)
-                import os as _os
-
-                resolved_value = _os.environ.get(secret_key)
+                resolved_value = os.environ.get(secret_key)
                 if resolved_value is None:
-                    import logging as _logging
-
-                    _logging.getLogger(__name__).warning(
-                        "env_var.secret_ref_not_found", extra={"key": key, "secret_key": secret_key}
-                    )
+                    _log.warning("env_var.secret_ref_not_found", extra={"key": key, "secret_key": secret_key})
                     resolved[key] = ""
                 else:
                     resolved[key] = resolved_value
