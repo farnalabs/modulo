@@ -63,6 +63,7 @@ ignore_imports =
     modulo.core.feature_flags -> modulo.api.dependencies
     modulo.core.logging_config -> modulo.api.dependencies
     modulo.core.error_tracking.celery_hooks -> modulo.api.dependencies
+    modulo.core.dispatch -> modulo.api.dependencies
 
 [importlinter:contract:db-does-not-import-core]
 name = DB layer has no business logic imports

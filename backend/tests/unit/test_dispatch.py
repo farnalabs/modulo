@@ -111,6 +111,8 @@ class TestDispatchRunRouting:
 
     @pytest.mark.asyncio
     async def test_shadow_execute_routes_to_celery_dispatcher_null(self) -> None:
+        # Shadow mode must delegate entirely to celery_dispatch — send first,
+        # dispatched_at best-effort after — so a DB error never strands a run.
         with (
             patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=False)),
             _rls_patch(),
@@ -124,8 +126,9 @@ class TestDispatchRunRouting:
         assert outcome == "enqueued"
         assert job_id is None
         celery_dispatch.assert_called_once_with(RUN_ID, ORG_ID, "runs_automated")
-        dispatched.assert_called_once()
-        # dispatcher stays NULL — the SAQ job write is never issued
+        # No pre-enqueue dispatched_at write in shadow mode — celery_dispatch
+        # handles it (best-effort) after the send, and dispatcher stays NULL.
+        dispatched.assert_not_called()
         saq_job.assert_not_called()
 
     @pytest.mark.asyncio

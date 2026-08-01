@@ -12,12 +12,13 @@ drop the recovery).
 The dispatcher column reflects WHERE THE JOB ACTUALLY WENT:
 ``'saq'`` iff enqueued to SAQ; NULL iff routed to Celery.
 
-Capacity gating (plan F3b/F3e) applies to new ``execute_run`` dispatches only —
-a run at the pipeline's ``max_concurrent_runs`` is returned ``'deferred'`` with
-NO enqueue and NO ``dispatched_at`` (dispatcher_reconcile re-dispatches when
-capacity frees). ``resume_run`` skips the gate because the run already holds a
-slot, and the shadow/Celery path keeps today's executor-side capacity gate so
-shadow behaviour is unchanged.
+Capacity gating (plan F3b/F3e) applies to SAQ dispatches — both new
+``execute_run`` dispatches and ``resume_run`` — a run at the pipeline's
+``max_concurrent_runs`` is returned ``'deferred'`` with NO enqueue and NO
+``dispatched_at`` (dispatcher_reconcile re-dispatches when capacity frees). The
+run's own slot is excluded from the count so a resume never blocks itself. The
+shadow/Celery path keeps today's executor-side capacity gate so shadow
+behaviour is unchanged.
 
 On enqueue failure: webhook handlers pass ``fail_fast=True`` (respond 202,
 leave recovery to ``dispatcher_reconcile`` — never block the request on
@@ -31,12 +32,12 @@ import asyncio
 import logging
 import threading
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from redis.asyncio import Redis as AsyncRedis
 from saq.queue.redis import RedisQueue
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.settings import get_settings
 
@@ -51,22 +52,17 @@ SAQ_RESUME_RUN_FUNCTION = "modulo.core.saq_worker.resume_run"
 SAQ_RUN_TIMEOUT = 7200
 SAQ_RUN_TTL = 300
 
-_ENGINE = None
-
-
-def _get_engine() -> Any:
-    global _ENGINE
-    if _ENGINE is None:
-        settings = get_settings()
-        kw: dict[str, Any] = {"url": settings.database_url}
-        if settings.modulo_db.lower() == "postgres":
-            kw["connect_args"] = {"timeout": 10, "ssl": False}
-        _ENGINE = create_async_engine(**kw)
-    return _ENGINE
-
 
 def _open_session() -> AsyncSession:
-    return async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)()
+    # Reuse the shared, tuned app engine (pool_pre_ping, asyncpg statement cache
+    # disabled for Fly/HAProxy, pooled sizing) rather than a divergent second pool.
+    from modulo.api.dependencies import get_or_create_engine
+
+    return async_sessionmaker(
+        get_or_create_engine(get_settings()),
+        expire_on_commit=False,
+        autobegin=False,
+    )()
 
 
 def _new_claim_token() -> str:
@@ -146,13 +142,6 @@ async def _expire_webhook_dedup(session: AsyncSession, run_id: uuid.UUID) -> Non
     )
 
 
-def _pg_conn_string(database_url: str) -> str:
-    """Strip the SQLAlchemy prefix for a psycopg-compatible checkpointer URL."""
-    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
-        "postgresql+psycopg://", "postgresql://"
-    )
-
-
 async def _resume_inline(
     run_id: uuid.UUID,
     org_id: uuid.UUID,
@@ -165,10 +154,11 @@ async def _resume_inline(
     a queue no worker consumes. Replay the pre-B-1 ``recover_run_node`` path
     (``PipelineExecutor.resume``) directly so recovery can never silently drop.
     """
+    from modulo.api.dependencies import get_or_create_engine, pg_connection_string
     from modulo.core.pipeline_engine.executor import PipelineExecutor
 
-    engine = _get_engine()
-    executor = PipelineExecutor(engine, checkpointer_conn_string=_pg_conn_string(str(engine.url)))
+    engine = get_or_create_engine(get_settings())
+    executor = PipelineExecutor(engine, checkpointer_conn_string=pg_connection_string(str(engine.url)))
     await executor.resume(run_id=run_id, org_id=org_id, resume_data=resume_data or {})
 
 
@@ -262,18 +252,19 @@ async def dispatch_run(
         finally:
             await session.close()
 
-    # Write dispatched_at BEFORE enqueue.
-    session = _open_session()
-    try:
-        async with session.begin():
-            from modulo.db.rls import set_rls_org
+        # Write dispatched_at BEFORE enqueue (F3e) — intentional SAQ-path
+        # ordering. Shadow/Celery delegates to celery_dispatch which records
+        # dispatched_at itself (best-effort) AFTER the send.
+        session = _open_session()
+        try:
+            async with session.begin():
+                from modulo.db.rls import set_rls_org
 
-            await set_rls_org(session, oid)
-            await _record_dispatched(session, rid)
-    finally:
-        await session.close()
+                await set_rls_org(session, oid)
+                await _record_dispatched(session, rid)
+        finally:
+            await session.close()
 
-    if use_saq:
         try:
             job_id, deduped = await _enqueue_saq(str(rid), str(oid), queue_name, job_type, resume_data)
         except asyncio.CancelledError:
@@ -322,7 +313,8 @@ async def dispatch_run(
         return ("deduped" if deduped else "enqueued", job_id)
 
     # Shadow mode — route execute_run to Celery via the existing dispatch;
-    # dispatcher stays NULL.
+    # dispatcher stays NULL and dispatched_at is recorded by celery_dispatch
+    # itself (send-first, best-effort), so a DB error here can never strand a run.
     from modulo.core.pipeline_executor_task import dispatch as celery_dispatch
 
     try:
@@ -342,12 +334,17 @@ def dispatch_run_sync(run_id: str, org_id: str, **kwargs: Any) -> tuple[str, str
     except RuntimeError:
         return asyncio.run(dispatch_run(run_id, org_id, **kwargs))
     # A loop is already running in this thread — run in a separate thread.
-    result: dict[str, tuple[str, str | None]] = {}
+    result: dict[str, Any] = {}
 
     def _runner() -> None:
-        result["value"] = asyncio.run(dispatch_run(run_id, org_id, **kwargs))
+        try:
+            result["value"] = asyncio.run(dispatch_run(run_id, org_id, **kwargs))
+        except BaseException as exc:
+            result["error"] = exc
 
     thread = threading.Thread(target=_runner, daemon=True)
     thread.start()
     thread.join()
-    return result["value"]
+    if "error" in result:
+        raise result["error"]
+    return cast(tuple[str, str | None], result["value"])

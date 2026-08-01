@@ -72,7 +72,7 @@ class Run(OrgScoped):
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     rate_limit_key: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
-    # SAQ dispatch tracking (PR B, migration 0030) — dispatcher reflects where
+    # SAQ dispatch tracking (PR B, migration 0031) — dispatcher reflects where
     # the job actually went: 'saq' iff enqueued to SAQ; NULL iff Celery/legacy.
     dispatcher: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     # SAQ job id — deterministic saq:job:{queue}:run:{id}. SAQ retries reuse it.
