@@ -109,7 +109,7 @@
                       v-model="schemaName"
                       type="text"
                       data-testid="schema-editor-name"
-                      class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      class="input-base"
                       :placeholder="$t('views.SchemaEditorView.name_placeholder')"
                     />
                   </div>
@@ -119,7 +119,7 @@
                       v-model="schemaDescription"
                       type="text"
                       data-testid="schema-editor-description"
-                      class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      class="input-base"
                       :placeholder="$t('views.SchemaEditorView.description_placeholder')"
                     />
                   </div>
@@ -129,7 +129,7 @@
                       v-model="schemaVersion"
                       type="text"
                       data-testid="schema-editor-version"
-                      class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      class="input-base"
                       :placeholder="$t('views.SchemaEditorView.version_placeholder')"
                     />
                   </div>
@@ -329,6 +329,7 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { formatDateShort } from '../lib/formatDate'
+import { buildJsonSchema, createField, parseDefinitionToFields, type SchemaField } from '../utils/schema-definition'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
@@ -345,15 +346,6 @@ const { t } = useI18n()
 
 type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse']
 
-interface SchemaField {
-  _key: number
-  name: string
-  type: string
-  required: boolean
-  description: string
-  defaultValue: string
-}
-
 interface SchemaVersion {
   id: string
   schema_id: string
@@ -365,23 +357,6 @@ interface SchemaVersion {
 }
 
 let fieldKeyCounter = 0
-
-function parseDefinitionToFields(def: Record<string, unknown>): SchemaField[] {
-  const properties = def.properties
-  if (!properties || typeof properties !== 'object') return []
-  const loadedFields: SchemaField[] = []
-  for (const [name, prop] of Object.entries(properties as Record<string, any>)) {
-    loadedFields.push({
-      _key: ++fieldKeyCounter,
-      name,
-      type: prop.type ?? 'string',
-      required: Array.isArray(def.required) && def.required.includes(name),
-      description: prop.description ?? '',
-      defaultValue: prop.default !== undefined ? String(prop.default) : '',
-    })
-  }
-  return loadedFields
-}
 
 const route = useRoute()
 
@@ -415,17 +390,6 @@ const filteredSchemas = computed(() => {
   )
 })
 
-function createField(): SchemaField {
-  return {
-    _key: ++fieldKeyCounter,
-    name: '',
-    type: 'string',
-    required: false,
-    description: '',
-    defaultValue: '',
-  }
-}
-
 const isValid = computed(() => {
   if (!schemaName.value.trim()) return false
   if (!schemaVersion.value.trim()) return false
@@ -434,47 +398,17 @@ const isValid = computed(() => {
 })
 
 const jsonPreview = computed(() => {
-  const properties: Record<string, unknown> = {}
-  const requiredFields: string[] = []
-
-  for (const field of fields.value) {
-    if (!field.name.trim()) continue
-    const prop: Record<string, unknown> = { type: field.type }
-    if (field.description) prop.description = field.description
-    if (field.defaultValue) {
-      prop.default = coerceDefault(field.defaultValue, field.type)
-    }
-    properties[field.name.trim()] = prop
-    if (field.required) requiredFields.push(field.name.trim())
-  }
-
-  const schema: Record<string, unknown> = {
-    $schema: 'https://json-schema.org/draft/2020-12/schema',
-    title: schemaName.value || t('views.SchemaEditorView.untitled_schema'),
-    type: 'object',
-    properties,
-  }
-  if (schemaDescription.value) schema.description = schemaDescription.value
-  if (requiredFields.length > 0) schema.required = requiredFields
-
-  return JSON.stringify(schema, null, 2)
+  return JSON.stringify(
+    buildJsonSchema({
+      schemaName: schemaName.value,
+      schemaDescription: schemaDescription.value,
+      fields: fields.value,
+      untitledLabel: t('views.SchemaEditorView.untitled_schema'),
+    }),
+    null,
+    2,
+  )
 })
-
-function coerceDefault(value: string, type: string): unknown {
-  switch (type) {
-    case 'number': {
-      const n = Number(value)
-      return Number.isNaN(n) ? value : n
-    }
-    case 'boolean': {
-      if (value === 'true') return true
-      if (value === 'false') return false
-      return value
-    }
-    default:
-      return value
-  }
-}
 
 async function loadSchemas() {
   loadingSchemas.value = true
@@ -536,7 +470,7 @@ function cancelEditing() {
 }
 
 function addField() {
-  fields.value.push(createField())
+  fields.value.push(createField(++fieldKeyCounter))
 }
 
 function removeField(index: number) {
@@ -560,7 +494,7 @@ async function loadLatestVersion(schemaId: string) {
     if (data.items && data.items.length > 0) {
       const latest = data.items[0]
       schemaVersion.value = latest.version
-      fields.value = parseDefinitionToFields(latest.definition_json)
+      fields.value = parseDefinitionToFields(latest.definition_json, () => ++fieldKeyCounter)
     }
   } catch (e) {
     console.warn('Failed to load schema', e)
@@ -714,7 +648,7 @@ async function saveSchema() {
 
 async function restoreVersion(version: SchemaVersion) {
   schemaVersion.value = version.version
-  fields.value = parseDefinitionToFields(version.definition_json)
+  fields.value = parseDefinitionToFields(version.definition_json, () => ++fieldKeyCounter)
 }
 
 function formatDate(dateStr: string): string {

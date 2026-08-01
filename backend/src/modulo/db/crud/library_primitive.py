@@ -82,6 +82,7 @@ async def list_library_primitives(
     page: int = 1,
     page_size: int = 20,
     primitive_type: str | None = None,
+    primitive_types: list[str] | None = None,
     search: str | None = None,
     cursor: str | None = None,
     excluded_tiers: list[str] | None = None,
@@ -95,7 +96,9 @@ async def list_library_primitives(
     if org_id is not None:
         conditions.append(LibraryPrimitive.organisation_id == org_id)
 
-    if primitive_type is not None:
+    if primitive_types:
+        conditions.append(LibraryPrimitive.primitive_type.in_(primitive_types))
+    elif primitive_type is not None:
         conditions.append(LibraryPrimitive.primitive_type == primitive_type)
 
     if search is not None and search.strip():
