@@ -316,7 +316,7 @@ async def test_exec_command_timeout_returns_timeout_result(
     stream = mock_docker_client.containers.get.return_value.exec.return_value.start.return_value
     stream.read_out = AsyncMock(side_effect=_hang)
 
-    result = await provider.exec_command(ref, ["sleep", "100"], cmd_timeout=0.05)
+    result = await provider.exec_command(ref, ["sleep", "100"], cmd_timeout=0)
 
     assert result.exit_code == -1
     assert result.stderr == "Command timed out"
