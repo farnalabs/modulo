@@ -1,7 +1,11 @@
 """In-memory LRU cache for compiled LangGraph StateGraphs.
 
-Cache key is (pipeline_id, snapshot_id) — not snapshot_id alone, because two
-pipelines can share snapshot version numbers (they're per-pipeline sequences).
+Cache key is (pipeline_id, snapshot_id, pipeline_node_timeout_seconds) — not
+snapshot_id alone, because two pipelines can share snapshot version numbers
+(they're per-pipeline sequences). The node timeout is part of the key because
+build_graph_from_json bakes the pipeline value into every node with a null
+timeout_seconds; keying on it means PATCHing node_timeout_seconds takes effect
+immediately instead of serving a stale graph until eviction.
 Eviction is true LRU via OrderedDict.
 
 The compilation factory is synchronous (build_graph_from_json) so it blocks
@@ -30,26 +34,39 @@ from modulo.core.pipeline_engine.node_runner import (
     make_sandbox_agent_fn,
 )
 
+# Cache key: (pipeline_id, snapshot_id, pipeline_node_timeout_seconds). The
+# third element matters because the compiled graph bakes the effective per-node
+# timeout in — without it, PATCHing node_timeout_seconds would be a no-op until
+# LRU eviction/restart.
+CacheKey = tuple[uuid.UUID, uuid.UUID, int]
+
 # OrderedDict-based LRU cache. Accessing an entry moves it to the end;
 # when full, the least-recently-used entry (first in order) is evicted.
-_CACHE: OrderedDict[tuple[uuid.UUID, uuid.UUID], Any] = OrderedDict()
+_CACHE: OrderedDict[CacheKey, Any] = OrderedDict()
 _MAX_SIZE = 256
 
 # Per-key lock to prevent double compilation if factory becomes async.
-_compile_locks: dict[tuple[uuid.UUID, uuid.UUID], threading.Lock] = {}
+_compile_locks: dict[CacheKey, threading.Lock] = {}
 
 
 def get_or_compile(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     factory: Callable[[], Any],
+    *,
+    pipeline_node_timeout_seconds: int = 300,
 ) -> Any:
     """Return cached compiled graph or call factory() and cache the result.
+
+    The cache key includes ``pipeline_node_timeout_seconds`` because the
+    compiled graph embeds the effective per-node timeout (the pipeline value is
+    used for every node with a null ``timeout_seconds``). Keying on it means a
+    PATCH to the pipeline setting takes effect immediately.
 
     Uses a per-key lock so concurrent calls for the same uncached key
     compile only once.
     """
-    key = (pipeline_id, snapshot_id)
+    key = (pipeline_id, snapshot_id, pipeline_node_timeout_seconds)
     if key in _CACHE:
         _CACHE.move_to_end(key)
         return _CACHE[key]
@@ -240,6 +257,7 @@ def build_graph_from_json(
     eval_definitions_by_node: dict[str, list[EvalDefinition]] | None = None,
     session_factory: Callable[..., Any] | None = None,
     org_id: uuid.UUID | None = None,
+    pipeline_node_timeout_seconds: int = 300,
 ) -> Any:
     """Compile a StateGraph from the serialised graph_json stored in a snapshot.
 
@@ -279,7 +297,9 @@ def build_graph_from_json(
     for node_def in nodes:
         node_id: str = str(node_def["id"])
         role: str | None = node_def.get("role")
-        timeout: float | None = node_def.get("timeout_seconds")
+        timeout: int | None = node_def.get("timeout_seconds")
+        if timeout is None:
+            timeout = pipeline_node_timeout_seconds
         node_type: str = node_def.get("node_type", "agent")
         max_input_length: int | None = node_def.get("max_input_length")
         token_budget: int | None = node_def.get("token_budget")
@@ -472,5 +492,11 @@ def build_graph_from_json(
 
 
 def evict(pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> None:
-    """Remove the cached entry for a (pipeline_id, snapshot_id) pair."""
-    _CACHE.pop((pipeline_id, snapshot_id), None)
+    """Remove every cached entry for a (pipeline_id, snapshot_id) pair.
+
+    A snapshot can hold multiple compiled graphs — one per
+    pipeline_node_timeout_seconds — so all variants are removed.
+    """
+    for key in [k for k in _CACHE if k[0] == pipeline_id and k[1] == snapshot_id]:
+        _CACHE.pop(key, None)
+        _compile_locks.pop(key, None)

@@ -27,6 +27,7 @@ def ctx() -> dict[str, Any]:
         "org_skills": [],
         "user_skills": [],
         "product_primer": "",
+        "product_docs_content": "Modulo is an AI-powered SDLC orchestration platform.",
         "sys_prompt": "",
         "org_id": uuid.UUID("00000000-0000-0000-0000-000000000001"),
         "user_id": uuid.UUID("00000000-0000-0000-0000-000000000002"),
@@ -129,6 +130,10 @@ def build_system_prompt(request, ctx) -> None:
     # Product Overview
     if merged.get("product_primer") == "always_on" and ctx.get("product_primer"):
         parts.append("## Product Overview\n\n" + ctx["product_primer"])
+
+    # Product Documentation inline when always_on
+    if merged.get("product_docs") == "always_on" and ctx.get("product_docs_content"):
+        parts.append("## Product Documentation\n\n" + ctx["product_docs_content"])
 
     # Knowledge Tools
     tool_lines: list[str] = []

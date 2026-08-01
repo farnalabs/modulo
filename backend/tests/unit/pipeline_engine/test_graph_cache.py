@@ -1,7 +1,9 @@
 """Unit tests for graph cache and graph compilation."""
 
 import uuid
+from collections.abc import Callable
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -57,10 +59,10 @@ def test_get_or_compile_different_pipeline_calls_factory():
 def test_evict_removes_entry():
     pid, sid = uuid.uuid4(), uuid.uuid4()
     get_or_compile(pid, sid, lambda: "cached")
-    assert (pid, sid) in _CACHE
+    assert (pid, sid, 300) in _CACHE
 
     evict(pid, sid)
-    assert (pid, sid) not in _CACHE
+    assert (pid, sid, 300) not in _CACHE
 
 
 def test_cache_evicts_oldest_when_full():
@@ -74,7 +76,7 @@ def test_cache_evicts_oldest_when_full():
     extra_pid = uuid.uuid4()
     get_or_compile(extra_pid, base_sid, lambda: "new")
     assert first_key not in _CACHE
-    assert (extra_pid, base_sid) in _CACHE
+    assert (extra_pid, base_sid, 300) in _CACHE
 
 
 def test_evict_does_not_affect_other_pipelines():
@@ -83,8 +85,8 @@ def test_evict_does_not_affect_other_pipelines():
     get_or_compile(pid2, sid, lambda: "2")
 
     evict(pid1, sid)
-    assert (pid1, sid) not in _CACHE
-    assert (pid2, sid) in _CACHE
+    assert (pid1, sid, 300) not in _CACHE
+    assert (pid2, sid, 300) in _CACHE
 
 
 def test_lru_moves_entry_on_access():
@@ -94,7 +96,42 @@ def test_lru_moves_entry_on_access():
         get_or_compile(k, sid, lambda: "v")
     # Access the first key, making it recently used
     get_or_compile(keys[0], sid, lambda: "v")
-    assert next(iter(_CACHE)) == (keys[1], sid)
+    assert next(iter(_CACHE)) == (keys[1], sid, 300)
+
+
+def test_get_or_compile_distinguishes_node_timeout_values():
+    """PATCHing pipeline.node_timeout_seconds must recompile, not serve a stale graph."""
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+    calls: list[int] = []
+
+    def factory_for(timeout: int) -> Callable[[], str]:
+        def factory() -> str:
+            calls.append(timeout)
+            return f"compiled-{timeout}"
+
+        return factory
+
+    first = get_or_compile(pid, sid, factory_for(100), pipeline_node_timeout_seconds=100)
+    second = get_or_compile(pid, sid, factory_for(200), pipeline_node_timeout_seconds=200)
+    cached = get_or_compile(pid, sid, factory_for(100), pipeline_node_timeout_seconds=100)
+
+    assert first == "compiled-100"
+    assert second == "compiled-200"
+    assert cached == "compiled-100"
+    # Recompiled once for the new timeout; the original timeout is served from cache.
+    assert calls == [100, 200]
+
+
+def test_evict_removes_all_node_timeout_variants():
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+    get_or_compile(pid, sid, lambda: "a", pipeline_node_timeout_seconds=100)
+    get_or_compile(pid, sid, lambda: "b", pipeline_node_timeout_seconds=200)
+    assert (pid, sid, 100) in _CACHE
+    assert (pid, sid, 200) in _CACHE
+
+    evict(pid, sid)
+    assert (pid, sid, 100) not in _CACHE
+    assert (pid, sid, 200) not in _CACHE
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +185,32 @@ def test_build_graph_cycle_detection():
     }
     with pytest.raises(ValueError, match="cycle or no entry"):
         build_graph_from_json(graph_json)
+
+
+def test_node_null_timeout_uses_pipeline_default():
+    """A node with null timeout_seconds resolves to pipeline_node_timeout_seconds."""
+    graph_json: dict[str, Any] = {
+        "nodes": [{"id": "node-a", "role": None, "timeout_seconds": None}],
+        "edges": [],
+    }
+    with patch("modulo.core.pipeline_engine.graph_cache.make_node_fn") as mock_make:
+        mock_make.return_value = lambda state: state
+        build_graph_from_json(graph_json, pipeline_node_timeout_seconds=1234)
+        _, kwargs = mock_make.call_args
+    assert kwargs["timeout"] == 1234
+
+
+def test_node_explicit_timeout_wins_over_pipeline_default():
+    """An explicit per-node timeout_seconds is honoured over the pipeline default."""
+    graph_json: dict[str, Any] = {
+        "nodes": [{"id": "node-a", "role": None, "timeout_seconds": 77}],
+        "edges": [],
+    }
+    with patch("modulo.core.pipeline_engine.graph_cache.make_node_fn") as mock_make:
+        mock_make.return_value = lambda state: state
+        build_graph_from_json(graph_json, pipeline_node_timeout_seconds=1234)
+        _, kwargs = mock_make.call_args
+    assert kwargs["timeout"] == 77
 
 
 async def test_built_graph_executes_simple_pipeline():

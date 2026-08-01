@@ -86,7 +86,7 @@ class PipelineCreate(BaseModel):
     node_timeout_seconds: int = Field(default=300, ge=1)
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
-    max_duration_seconds: int | None = Field(None, ge=1)
+    max_duration_seconds: int = Field(3600, ge=1)
     stale_run_timeout_minutes: int = Field(
         30,
         ge=1,
@@ -144,6 +144,27 @@ class PipelineUpdate(BaseModel):
         description="Replace the pipeline graph (nodes + edges). Creates a new snapshot.",
     )
 
+    @field_validator("max_duration_seconds", mode="before")
+    @classmethod
+    def reject_null_max_duration(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("max_duration_seconds cannot be set to null. Use a value >= 1.")
+        return v
+
+    @field_validator("node_timeout_seconds", mode="before")
+    @classmethod
+    def reject_null_node_timeout(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("node_timeout_seconds cannot be set to null. Use a value >= 1.")
+        return v
+
+    @field_validator("lock_wait_timeout_seconds", mode="before")
+    @classmethod
+    def reject_null_lock_wait_timeout(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("lock_wait_timeout_seconds cannot be set to null. Use a value >= 30.")
+        return v
+
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> PipelineUpdate:
         if self.visibility == "team" and self.owner_team_id is None:
@@ -162,6 +183,9 @@ class PipelineResponse(BaseModel):
     node_timeout_seconds: int
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
+    # TODO: Make this non-optional (int = 3600) once migration
+    # 0029_fix_pipeline_max_duration_non_null has run on all production DBs and there's no risk
+    # of NULL values from rollbacks or pre-migration data.
     max_duration_seconds: int | None = None
     stale_run_timeout_minutes: int = 30
     rate_limit_config: dict[str, Any] | None = None

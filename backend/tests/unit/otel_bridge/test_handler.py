@@ -146,9 +146,7 @@ def test_unknown_parent_run_id_is_handled_gracefully(
 # ---------------------------------------------------------------------------
 
 
-def test_set_run_context_attributes_on_spans(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_set_run_context_attributes_on_spans(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     bridge.set_run_context(org_id="org-123", pipeline_id="pipe-456")
     run_id = uuid.uuid4()
 
@@ -161,9 +159,7 @@ def test_set_run_context_attributes_on_spans(
     assert span.attributes.get("pipeline_id") == "pipe-456"
 
 
-def test_run_context_not_set_leaves_no_attributes(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_run_context_not_set_leaves_no_attributes(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     bridge.on_chain_start(_serialized("Node"), {}, run_id=run_id)
     bridge.on_chain_end({}, run_id=run_id)
@@ -174,9 +170,7 @@ def test_run_context_not_set_leaves_no_attributes(
     assert "pipeline_id" not in span.attributes
 
 
-def test_run_context_applies_to_new_spans_only(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_run_context_applies_to_new_spans_only(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     early_id = uuid.uuid4()
     late_id = uuid.uuid4()
     bridge.on_chain_start(_serialized("Early"), {}, run_id=early_id)
@@ -305,9 +299,7 @@ def _chat_start(bridge: LangGraphOtelBridge, run_id: uuid.UUID, name: str = "gpt
     )
 
 
-def test_chat_model_start_creates_span(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_chat_model_start_creates_span(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     _chat_start(bridge, run_id)
 
@@ -317,9 +309,7 @@ def test_chat_model_start_creates_span(
     assert len(exporter.get_finished_spans()) == 0
 
 
-def test_chat_model_end_finishes_span_ok(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_chat_model_end_finishes_span_ok(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     _chat_start(bridge, run_id)
     result = ChatResult(
@@ -339,9 +329,7 @@ def test_chat_model_end_finishes_span_ok(
     assert str(run_id) not in bridge._spans
 
 
-def test_chat_model_error_records_exception(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_chat_model_error_records_exception(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     _chat_start(bridge, run_id)
     bridge.on_chat_model_error(RuntimeError("provider down"), run_id=run_id)
@@ -352,9 +340,7 @@ def test_chat_model_error_records_exception(
     assert str(run_id) not in bridge._spans
 
 
-def test_chat_model_start_empty_messages(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_chat_model_start_empty_messages(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     bridge.on_chat_model_start(_serialized("gpt-4"), [], run_id=run_id)
     bridge.on_chat_model_end(ChatResult(generations=[]), run_id=run_id)
@@ -535,9 +521,7 @@ def test_stale_span_finalization_errors_are_swallowed(
     assert str(run_id) not in bridge._spans
 
 
-def test_llm_finalize_errors_are_swallowed(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_llm_finalize_errors_are_swallowed(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     """A failing set_status/end on an LLM span must not break the bridge."""
     run_id = uuid.uuid4()
     bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
@@ -549,9 +533,7 @@ def test_llm_finalize_errors_are_swallowed(
     assert str(run_id) not in bridge._spans
 
 
-def test_span_finalization_errors_are_swallowed(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_span_finalization_errors_are_swallowed(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     """A span whose set_status/end raise must not break the bridge."""
     run_id = uuid.uuid4()
     bridge.on_chain_start(_serialized("Broken"), {}, run_id=run_id)
@@ -562,5 +544,3 @@ def test_span_finalization_errors_are_swallowed(
 
     bridge.on_chain_end({}, run_id=run_id)  # must not raise
     assert str(run_id) not in bridge._spans
-
-

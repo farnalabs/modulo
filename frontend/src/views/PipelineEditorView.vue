@@ -1618,7 +1618,7 @@ async function handleDelete() {
 }
 
 async function updateMaxDuration() {
-  const val = maxDurationInput.value && maxDurationInput.value > 0 ? maxDurationInput.value : null
+  const val = maxDurationInput.value && maxDurationInput.value > 0 ? maxDurationInput.value : undefined
   try {
     await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
       params: { path: { pipeline_id: pipelineId } },

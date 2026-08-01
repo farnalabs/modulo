@@ -2,7 +2,7 @@
 
 import contextlib
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -174,8 +174,12 @@ def post_schema_infer(client, request):
         "required": ["id", "title"],
     }
 
+    mock_connector = MagicMock()
+    mock_connector.id = connector_id
+    mock_connector.connector_type_id = "github"
+
     with (
-        patch("modulo.api.routes.schemas.get_connector_instance"),
+        patch("modulo.api.routes.schemas.get_connector_instance", return_value=mock_connector),
         patch("modulo.api.routes.schemas.list_model_backends", return_value=mock_mbs),
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch("modulo.api.routes.schemas.ConnectorHub.sample"),
@@ -238,7 +242,7 @@ def inferred_draft_schema(request):
 
 @when(parsers.parse('I publish the schema via POST /api/v1/schemas with version "{version}"'))
 def publish_schema(version: str, client, request):
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     mock_schema = MagicMock()
     mock_schema.id = uuid.uuid4()
     mock_schema.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -246,6 +250,7 @@ def publish_schema(version: str, client, request):
     mock_schema.description = "Inferred from connector"
     mock_schema.abstract_name = None
     mock_schema.created_by = uuid.uuid4()
+    mock_schema.account_id = mock_schema.created_by
     mock_schema.created_at = now
     mock_schema.updated_at = now
 
@@ -258,6 +263,7 @@ def publish_schema(version: str, client, request):
     mock_sv.definition_json = getattr(request.node, "_draft_schema", {})
     mock_sv.published = True
     mock_sv.created_by = uuid.uuid4()
+    mock_sv.account_id = mock_sv.created_by
     mock_sv.created_at = now
     mock_sv.updated_at = now
 

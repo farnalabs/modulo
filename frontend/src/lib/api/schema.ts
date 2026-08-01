@@ -9430,7 +9430,7 @@ export interface components {
              */
             default_autonomy_level: string;
             /** Max Duration Seconds */
-            max_duration_seconds?: number | null;
+            max_duration_seconds?: number;
         };
         /** PipelineFolderMoveRequest */
         PipelineFolderMoveRequest: {
@@ -9696,7 +9696,7 @@ export interface components {
             /** Default Autonomy Level */
             default_autonomy_level?: string | null;
             /** Max Duration Seconds */
-            max_duration_seconds?: number | null;
+            max_duration_seconds?: number;
         };
         /** PlanInfo */
         PlanInfo: {

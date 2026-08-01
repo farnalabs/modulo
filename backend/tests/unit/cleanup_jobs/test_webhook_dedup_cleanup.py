@@ -136,13 +136,16 @@ class TestCleanupSchedulerLoop:
         """Keep deleting until a pass returns fewer than BATCH_SIZE, then sleep."""
         factory = _make_factory(AsyncMock())
 
-        with patch(
-            "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
-            side_effect=[BATCH_SIZE, 3, asyncio.CancelledError()],
-        ) as mock_cleanup, patch(
-            "modulo.core.cleanup_jobs.webhook_dedup_cleanup.asyncio.sleep",
-            new_callable=AsyncMock,
-        ) as mock_sleep:
+        with (
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
+                side_effect=[BATCH_SIZE, 3, asyncio.CancelledError()],
+            ) as mock_cleanup,
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+        ):
             await cleanup_scheduler_loop(factory)
 
         assert mock_cleanup.await_count == 3
@@ -151,13 +154,16 @@ class TestCleanupSchedulerLoop:
     async def test_breaks_on_cancellation(self) -> None:
         factory = _make_factory(AsyncMock())
 
-        with patch(
-            "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
-            side_effect=asyncio.CancelledError(),
-        ) as mock_cleanup, patch(
-            "modulo.core.cleanup_jobs.webhook_dedup_cleanup.asyncio.sleep",
-            new_callable=AsyncMock,
-        ) as mock_sleep:
+        with (
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
+                side_effect=asyncio.CancelledError(),
+            ) as mock_cleanup,
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+        ):
             await cleanup_scheduler_loop(factory)
 
         mock_cleanup.assert_awaited_once()
@@ -166,13 +172,16 @@ class TestCleanupSchedulerLoop:
     async def test_backs_off_exponentially_after_errors(self) -> None:
         factory = _make_factory(AsyncMock())
 
-        with patch(
-            "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
-            side_effect=[OSError("boom"), OSError("boom"), asyncio.CancelledError()],
-        ) as mock_cleanup, patch(
-            "modulo.core.cleanup_jobs.webhook_dedup_cleanup.asyncio.sleep",
-            new_callable=AsyncMock,
-        ) as mock_sleep:
+        with (
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
+                side_effect=[OSError("boom"), OSError("boom"), asyncio.CancelledError()],
+            ) as mock_cleanup,
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+        ):
             await cleanup_scheduler_loop(factory)
 
         assert mock_cleanup.await_count == 3

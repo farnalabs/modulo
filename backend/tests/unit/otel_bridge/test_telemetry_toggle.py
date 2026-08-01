@@ -33,9 +33,10 @@ class TestTelemetryDefaults:
 
     def test_disabled_otlp_exporter_not_used(self):
         """When disabled, OTLP must not be configured even with endpoint set."""
-        with patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}), patch(
-            "modulo.otel_bridge.export.OTLPSpanExporter"
-        ) as mock_otlp:
+        with (
+            patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}),
+            patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp,
+        ):
             setup_otel(telemetry_enabled=False)
         mock_otlp.assert_not_called()
 
@@ -75,17 +76,16 @@ class TestTelemetryEnabled:
 
     def test_otlp_not_configured_without_env(self):
         """OTLP exporter should not be configured when env var is absent."""
-        with patch.dict(os.environ, {}, clear=True), patch(
-            "modulo.otel_bridge.export.OTLPSpanExporter"
-        ) as mock_otlp:
+        with patch.dict(os.environ, {}, clear=True), patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
             setup_otel(telemetry_enabled=True)
         mock_otlp.assert_not_called()
 
     def test_otlp_configured_with_env(self):
         """OTLP exporter should be constructed when endpoint env var is set."""
-        with patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}), patch(
-            "modulo.otel_bridge.export.OTLPSpanExporter"
-        ) as mock_otlp:
+        with (
+            patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}),
+            patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp,
+        ):
             setup_otel(telemetry_enabled=True)
         mock_otlp.assert_called_once()
 

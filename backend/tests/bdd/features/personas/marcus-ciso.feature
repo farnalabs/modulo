@@ -3,7 +3,7 @@ Feature: Marcus — CISO at a Regulated Organisation
   I want every agent action to be auditable, attributable, and reversible
   So that I can approve AI-in-SDLC without expanding our regulatory risk
 
-  @goal-marcus-immutable-audit @delivered
+  @goal-marcus-immutable-audit @awaiting-implementation
   Scenario: Marcus verifies the audit log is append-only
     Given an audit event has been written for a run action
     When I attempt to delete or alter the audit event
@@ -18,7 +18,7 @@ Feature: Marcus — CISO at a Regulated Organisation
     Then each event's hash is derived from the previous event's hash
     And tampering with any event breaks the chain for all subsequent events
 
-  @goal-marcus-data-residency @delivered
+  @goal-marcus-data-residency @awaiting-implementation
   Scenario: Marcus confirms no data leaves the organisation's infrastructure
     Given Modulo is deployed in a self-hosted configuration
     When I inspect outbound network connections
@@ -58,7 +58,7 @@ Feature: Marcus — CISO at a Regulated Organisation
     Then no organisation can access another org's pipelines, runs, or credentials
     And RLS is enforced at the database level
 
-  @goal-marcus-offboarding @delivered
+  @goal-marcus-offboarding @awaiting-implementation
   Scenario: Marcus confirms offboarding immediately revokes access
     Given user "engineer-bob" has an active JWT session
     When Bob is removed from the organisation

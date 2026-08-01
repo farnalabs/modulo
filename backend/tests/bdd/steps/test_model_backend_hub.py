@@ -29,7 +29,7 @@ def hub_ctx():
     """Shared mutable context for hub step definitions."""
     return {
         "hub": None,
-        "backend_ids": {},   # name -> uuid
+        "backend_ids": {},  # name -> uuid
         "backend_objs": {},  # name -> backend instance
         "fallbacks": {},
         "healthy": {},
@@ -119,9 +119,7 @@ def resolve_backend(name: str, hub_ctx):
             hub_ctx["error"] = exc
         return
     try:
-        hub_ctx["resolved"] = asyncio.run(
-            hub_ctx["hub"].get(bid, audit_logger=_audit_logger(hub_ctx))
-        )
+        hub_ctx["resolved"] = asyncio.run(hub_ctx["hub"].get(bid, audit_logger=_audit_logger(hub_ctx)))
     except (BackendNotFoundError, BackendUnavailableError) as exc:
         hub_ctx["error"] = exc
 
@@ -137,9 +135,7 @@ def resolve_backend_rotation(name: str, hub_ctx):
             hub_ctx["error"] = exc
         return
     try:
-        result = asyncio.run(
-            hub_ctx["hub"].get_with_rotation(bid, audit_logger=_audit_logger(hub_ctx))
-        )
+        result = asyncio.run(hub_ctx["hub"].get_with_rotation(bid, audit_logger=_audit_logger(hub_ctx)))
         hub_ctx["resolved"] = result.backend
     except (BackendNotFoundError, BackendUnavailableError) as exc:
         hub_ctx["error"] = exc
@@ -152,6 +148,7 @@ def hub_initialises(name: str, hub_ctx):
 
     async def _init():
         secrets = AsyncMock()
+
         async def _get_secret(_key: str) -> str:
             hub_ctx["secret_reads"][name] = hub_ctx["secret_reads"].get(name, 0) + 1
             return '{"api_key": "sk-test"}'
@@ -185,11 +182,7 @@ def not_found_error(hub_ctx):
     assert isinstance(hub_ctx["error"], BackendNotFoundError), hub_ctx["error"]
 
 
-@then(
-    parsers.parse(
-        'a model_failover audit event records primary "{primary}" and fallback "{fallback}"'
-    )
-)
+@then(parsers.parse('a model_failover audit event records primary "{primary}" and fallback "{fallback}"'))
 def audit_event_recorded(primary: str, fallback: str, hub_ctx):
     primary_id = str(hub_ctx["backend_ids"][primary])
     fallback_id = str(hub_ctx["backend_ids"][fallback])
