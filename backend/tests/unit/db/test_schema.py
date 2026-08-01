@@ -35,6 +35,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "onboarding_progress",
         "oauth_authorization_codes",
         "oauth_clients",
+        "oauth_consent_states",
         "oauth_token_families",
         "org_api_keys",
         "org_daily_run_counts",
