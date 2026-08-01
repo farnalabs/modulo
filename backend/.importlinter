@@ -12,15 +12,15 @@ forbidden_modules =
 ignore_imports =
     modulo.api.main -> modulo.core.pipeline_engine.modulo_saver
     modulo.api.main -> modulo.core.scheduler
-    modulo.api.routes.runs -> modulo.core.pipeline_engine.executor
+    modulo.api.routes.runs -> modulo.core.dispatch
     modulo.api.routes.runs -> modulo.core.trigger_engine
     modulo.api.routes.hitl -> modulo.core.pipeline_engine.executor
-    modulo.api.routes.webhooks -> modulo.core.pipeline_executor_task
+    modulo.api.routes.webhooks -> modulo.core.dispatch
     modulo.api.routes.webhooks -> modulo.core.trigger_engine
     modulo.api.routes.triggers -> modulo.core.cron_scheduler
     modulo.api.routes.triggers -> modulo.core.trigger_engine
     modulo.api.mcp_server -> modulo.core.cron_scheduler
-    modulo.api.mcp_server -> modulo.core.pipeline_executor_task
+    modulo.api.mcp_server -> modulo.core.dispatch
     modulo.api.routes.pipelines -> modulo.core.reports.quality_report
 
 [importlinter:contract:connectors-do-not-import-api]
@@ -63,6 +63,7 @@ ignore_imports =
     modulo.core.feature_flags -> modulo.api.dependencies
     modulo.core.logging_config -> modulo.api.dependencies
     modulo.core.error_tracking.celery_hooks -> modulo.api.dependencies
+    modulo.core.dispatch -> modulo.api.dependencies
 
 [importlinter:contract:db-does-not-import-core]
 name = DB layer has no business logic imports

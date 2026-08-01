@@ -93,7 +93,7 @@ def test_replay_webhook_returns_202(client: TestClient) -> None:
     run_mock = _make_mock_run()
     with (
         patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-        patch("modulo.core.pipeline_executor_task.dispatch"),
+        patch("modulo.api.routes.webhooks.dispatch_run_sync"),
         patch("modulo.api.routes.webhooks.set_rls_org"),
     ):
         m.return_value = (run_mock, None, {})
@@ -131,7 +131,7 @@ def test_replay_webhook_unauthenticated_succeeds(client: TestClient) -> None:
     client.app.dependency_overrides.pop(get_current_user, None)
     with (
         patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-        patch("modulo.core.pipeline_executor_task.dispatch"),
+        patch("modulo.api.routes.webhooks.dispatch_run_sync"),
         patch("modulo.api.routes.webhooks.set_rls_org"),
     ):
         m.return_value = (run_mock, None, {})

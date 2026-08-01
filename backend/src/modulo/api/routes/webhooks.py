@@ -11,6 +11,7 @@ All delivery attempts are logged as TriggerEvent rows regardless of outcome.
 """
 
 import asyncio
+import functools
 import logging
 import uuid
 from typing import Any
@@ -24,7 +25,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.auth.dependencies import get_current_tenant_user_optional
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.pipeline_executor_task import dispatch
+from modulo.core.dispatch import dispatch_run_sync
 from modulo.core.trigger_engine import (
     ConcurrentRunLimitError,
     DuplicateWebhookError,
@@ -169,7 +170,12 @@ async def receive_webhook(
 
     run_id = run.id
     loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, dispatch, str(run_id), str(org_id), "runs_automated")
+    loop.run_in_executor(
+        None,
+        functools.partial(dispatch_run_sync, queue="runs", celery_queue="runs_automated", fail_fast=True),
+        str(run_id),
+        str(org_id),
+    )
 
     return {"run_id": str(run_id), "status": "accepted"}
 
@@ -262,7 +268,12 @@ async def replay_webhook(
 
     run_id = run.id
     loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, dispatch, str(run_id), str(org_id), "runs_automated")
+    loop.run_in_executor(
+        None,
+        functools.partial(dispatch_run_sync, queue="runs", celery_queue="runs_automated", fail_fast=True),
+        str(run_id),
+        str(org_id),
+    )
 
     return {"run_id": str(run_id), "status": "accepted"}
 
