@@ -75,6 +75,27 @@ class TestAppendOnlyGuardRegistration:
         register_append_only_guard()
         assert append_only._guard_registered is True
 
+    def test_second_register_does_not_duplicate_listeners(self, monkeypatch):
+        """Repeated registration must not re-register ORM listeners (duplicates
+        would make the blocker fire multiple times and double-raise)."""
+        from modulo.core.audit_logger import append_only as mod
+
+        listen_calls: list[tuple] = []
+
+        def _recording_listen(target, identifier, listener):
+            listen_calls.append((target, identifier, listener))
+
+        monkeypatch.setattr(mod, "_guard_registered", False)
+        monkeypatch.setattr(mod.event, "listen", _recording_listen)
+
+        register_append_only_guard()
+        register_append_only_guard()
+        register_append_only_guard()
+
+        # 2 models x (before_update + before_delete) = 4 listeners, once.
+        assert len(listen_calls) == 4
+        assert mod._guard_registered is True
+
     def test_update_blocked_by_orm_listener(self):
         """UPDATE on an AuditEvent instance raises AppendOnlyViolationError."""
         from sqlalchemy import create_engine
