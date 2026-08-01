@@ -68,6 +68,14 @@ def _make_app(settings: Settings | None = None) -> FastAPI:
     async def webhook():
         return {"ok": True}
 
+    @app.post("/mcp/oauth/token")
+    async def oauth_token():
+        return {"ok": True}
+
+    @app.post("/mcp/oauth/refresh")
+    async def oauth_refresh():
+        return {"ok": True}
+
     app.add_middleware(
         CsrfMiddleware,
         settings=settings or _make_settings(),
@@ -222,6 +230,20 @@ class TestExemptPaths:
         app = _make_app()
         with TestClient(app) as client:
             resp = client.post("/api/v1/triggers/test/webhook")
+        assert resp.status_code == 200
+
+    def test_oauth_token_hardcoded_exempt(self):
+        """/mcp/oauth/token authenticates via client_secret — CSRF-exempt by
+        hardcoded exact path (ADR 017 A1b), independent of env config."""
+        app = _make_app()
+        with TestClient(app) as client:
+            resp = client.post("/mcp/oauth/token")
+        assert resp.status_code == 200
+
+    def test_oauth_refresh_hardcoded_exempt(self):
+        app = _make_app()
+        with TestClient(app) as client:
+            resp = client.post("/mcp/oauth/refresh")
         assert resp.status_code == 200
 
 

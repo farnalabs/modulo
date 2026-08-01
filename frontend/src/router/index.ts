@@ -17,6 +17,7 @@ declare module 'vue-router' {
     requiredPermissions?: string[]
     featureFlag?: string
     visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
+    public?: boolean
   }
 }
 
@@ -119,6 +120,7 @@ const DevMetricsView = () => import('../views/DevMetricsView.vue')
 const EnvironmentProfileList = () => import('../views/environment-profiles/EnvironmentProfileList.vue')
 const EnvironmentProfileForm = () => import('../views/environment-profiles/EnvironmentProfileForm.vue')
 const ParameterSchemasView = () => import('../views/ParameterSchemasView.vue')
+const OAuthConsentView = () => import('../views/OAuthConsentView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -127,6 +129,16 @@ const router = createRouter({
       path: '/login',
       name: 'login',
       component: LoginView,
+    },
+    {
+      // OAuth browser consent route (ADR 017 A1b): the 302 target of
+      // /mcp/oauth/authorize. Public — anonymous users must be able to land
+      // here and sign in before approving (the authenticated approve POST IS
+      // the consent).
+      path: '/oauth/authorize',
+      name: 'oauth-authorize',
+      component: OAuthConsentView,
+      meta: { public: true, breadcrumb: 'Authorize' },
     },
     {
       path: '/',
@@ -537,6 +549,9 @@ router.beforeEach((to) => {
     }
 
     const token = getAccessToken()
+    if (to.meta?.public) {
+      return true
+    }
     if (to.name === 'login' && token) {
       return { name: 'dashboard' }
     }
