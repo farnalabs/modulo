@@ -294,6 +294,20 @@ class _FakeStatsRedis:
         return None
 
 
+class _PerQueueFakeStatsRedis(_FakeStatsRedis):
+    """Fake redis that serves per-queue stats (worker_info hashes keyed by the
+    ``saq:{queue}:stats`` zset), so ``_check_saq_workers`` can use the REAL
+    ``_live_worker_hostnames`` against multiple queues."""
+
+    async def zrangebyscore(self, key: str, min_score: int, max_score: str) -> list[bytes]:
+        prefix = f"saq:{key.split(':')[1]}:stats:"
+        out = []
+        for member, score in self._stats.items():
+            if member.startswith(prefix) and score >= min_score and (max_score == "+inf" or score <= max_score):
+                out.append(member.encode())
+        return out
+
+
 def _worker_blob(hostname: str) -> str:
     return json.dumps({"metadata": {"hostname": hostname}})
 
@@ -407,3 +421,68 @@ class TestCheckSaqWorkersPerQueue:
     async def test_shadow_staleness_alert_only(self, reset_stale_probes: None) -> None:
         result = await self._run({"runs": set(), "system": set()}, saq_enabled=False)
         assert result.status == "ok"
+
+
+class TestCheckSaqWorkersEndToEnd:
+    """_check_saq_workers through the REAL _live_worker_hostnames (fake Redis)
+    — the ok → degraded → unavailable transition is covered without patching
+    the mechanism. Uses fake worker_info hashes with millisecond scores."""
+
+    NOW_MS = 1_700_000_000_000
+
+    async def _call(
+        self,
+        stats: dict[str, int],
+        blobs: dict[str, str],
+        *,
+        this_host: str = "machine-a",
+    ) -> CheckResult:
+        settings = _make_settings().model_copy(update={"saq_enabled": True})
+        fake = _PerQueueFakeStatsRedis(stats, blobs)
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("modulo.api.routes.health.time.time", return_value=self.NOW_MS / 1000),
+            patch.dict("os.environ", {"FLY_MACHINE_ID": this_host}, clear=False),
+        ):
+            return await _check_saq_workers()
+
+    async def test_ok_then_degraded_then_unavailable(self, reset_stale_probes: None) -> None:
+        # Worker live on both queues (score in the future = within the 90s TTL).
+        live_stats = {
+            "saq:runs:stats:w1": self.NOW_MS + 90_000,
+            "saq:system:stats:w1": self.NOW_MS + 90_000,
+        }
+        live_blobs = {
+            "saq:runs:stats:w1": _worker_blob("machine-a"),
+            "saq:system:stats:w1": _worker_blob("machine-a"),
+        }
+        # Worker gone -> stale on BOTH queues.
+        stale_stats: dict[str, int] = {}
+        stale_blobs: dict[str, str] = {}
+
+        ok = await self._call(live_stats, live_blobs)
+        assert ok.status == "ok"
+
+        statuses: list[str] = []
+        for _ in range(4):
+            result = await self._call(stale_stats, stale_blobs)
+            statuses.append(result.status)
+        # stale -> degraded (x3) -> unavailable after the 4th stale probe.
+        assert statuses == ["degraded", "degraded", "degraded", "unavailable"]
+        assert "machine-a" in result.detail
+
+    async def test_stale_on_one_queue_degraded_not_unavailable_yet(self, reset_stale_probes: None) -> None:
+        # machine-a live on runs only; system worker dead -> degraded, never ok.
+        stats = {
+            "saq:runs:stats:w1": self.NOW_MS + 90_000,
+            "saq:system:stats:w1": self.NOW_MS - 1_000,  # stale -> excluded
+        }
+        blobs = {
+            "saq:runs:stats:w1": _worker_blob("machine-a"),
+            "saq:system:stats:w1": _worker_blob("machine-a"),
+        }
+        result = await self._call(stats, blobs)
+        assert result.status == "degraded"
+        assert "system" in result.detail

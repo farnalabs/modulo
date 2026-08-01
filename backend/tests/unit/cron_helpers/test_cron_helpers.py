@@ -84,7 +84,9 @@ def _rows_result(rows: list[Any]) -> MagicMock:
     return r
 
 
-def _cron_row(trigger_id: uuid.UUID, *, snapshot_id: str | None = "default") -> SimpleNamespace:
+def _cron_row(
+    trigger_id: uuid.UUID, *, snapshot_id: str | None = "default", cron_timezone: str | None = None
+) -> SimpleNamespace:
     if snapshot_id == "default":
         snapshot_id = str(uuid.uuid4())
     return SimpleNamespace(
@@ -92,6 +94,7 @@ def _cron_row(trigger_id: uuid.UUID, *, snapshot_id: str | None = "default") -> 
         pipeline_id=uuid.uuid4(),
         config_json={"snapshot_id": snapshot_id} if snapshot_id else {},
         cron_expression="*/30 * * * * *",
+        cron_timezone=cron_timezone,
     )
 
 
@@ -241,6 +244,38 @@ class TestFireDueTriggers:
         kwargs = ingest.await_args.kwargs
         assert kwargs["function"] == "fire_due_triggers"
         assert kwargs["context"]["trigger_type"] == "cron"
+
+    @pytest.mark.asyncio
+    async def test_cron_advance_passes_row_cron_timezone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Fix 2 review: fire_due_triggers must fetch cron_timezone from the
+        SELECT and pass it through to the atomic advance."""
+        _patch_env(monkeypatch)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _rows_result([_cron_row(TRIGGER_A, cron_timezone="America/New_York")]),
+                _rows_result([]),
+                _rows_result([]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True) as adv_cron,
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id"),
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock),
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["cron_enqueued"] == 1
+        adv_cron.assert_awaited_once()
+        assert adv_cron.await_args.args[3] == "America/New_York"
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +440,35 @@ class TestAtomicAdvance:
         session.execute = AsyncMock(return_value=r)
         ok = await ch._advance_cron_next_fire(session, TRIGGER_A, "*/30 * * * * *")
         assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_cron_advance_honors_configured_timezone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Fix 2 review: a non-UTC trigger must advance next_fire_at in ITS
+        timezone (legacy CronFireTask behaviour), never UTC."""
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        r = MagicMock()
+        r.fetchone.return_value = (TRIGGER_A,)
+        session.execute = AsyncMock(return_value=r)
+        with patch.object(ch, "compute_next_fire") as cnf:
+            cnf.return_value = ch.datetime.now(ch.UTC)
+            ok = await ch._advance_cron_next_fire(session, TRIGGER_A, "0 9 * * *", "America/New_York")
+        assert ok is True
+        cnf.assert_called_once()
+        assert cnf.call_args.kwargs["timezone"] == "America/New_York"
+
+    @pytest.mark.asyncio
+    async def test_cron_advance_defaults_to_utc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        r = MagicMock()
+        r.fetchone.return_value = (TRIGGER_A,)
+        session.execute = AsyncMock(return_value=r)
+        with patch.object(ch, "compute_next_fire") as cnf:
+            cnf.return_value = ch.datetime.now(ch.UTC)
+            ok = await ch._advance_cron_next_fire(session, TRIGGER_A, "0 9 * * *", None)
+        assert ok is True
+        assert cnf.call_args.kwargs["timezone"] == "UTC"
 
 
 # ---------------------------------------------------------------------------

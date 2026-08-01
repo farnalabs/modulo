@@ -14,6 +14,9 @@ Two worker processes (plan F1/F2):
 Staging uses the SAME workers on dedicated queue names so a staging worker can
 never dequeue production system jobs: ``staging_runs_settings`` (queue
 ``staging-runs``) and ``staging_system_settings`` (queue ``staging-system``).
+Staging configures the queue names via ``SAQ_RUNS_QUEUE=staging-runs``; the
+worker queue names ALWAYS derive from ``settings.saq_runs_queue`` so workers,
+``dispatch_run``, ``fire_due_triggers``, and the health gate stay in sync.
 
 SAQ 0.26.4 CLI invocation (no ``worker`` subcommand — the settings path is the
 only positional arg)::
@@ -67,10 +70,6 @@ _TIMERS: dict[str, float] = {"schedule": 5, "worker_info": 89, "sweep": 60, "abo
 # Web UI bind (F8): fly ssh only.
 _SYSTEM_WEB_HOST = "127.0.0.1"
 _SYSTEM_WEB_PORT = 8081
-
-# Job function names — must match the strings enqueued by dispatch_run
-# (modulo.core.dispatch) and fire_due_triggers (modulo.core.cron_helpers).
-_RUNS_FUNCTIONS: list[tuple[str, Any]] = []
 
 # Engine for run execution (SAQ path) — per-worker DB pool (plan F4).
 _ASYNC_ENGINE: AsyncEngine | None = None
@@ -322,6 +321,28 @@ async def stale_run_recovery(ctx: dict[str, Any]) -> dict[str, Any]:
 _HOSTNAME = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
 
 
+def _runs_queue_name() -> str:
+    """Runs worker queue — derives from ``SAQ_RUNS_QUEUE`` (settings).
+
+    ``dispatch_run``, ``fire_due_triggers``, and the health gate all enqueue/
+    check this exact queue name; the worker MUST listen on the same one or jobs
+    are enqueued but never dequeued (plan F3 / review).
+    """
+    return get_settings().saq_runs_queue
+
+
+def _system_queue_name() -> str:
+    """System worker queue — derived from the runs queue.
+
+    Matches ``health._configured_queues`` (``runs_queue.replace("runs",
+    "system")``) so the readiness gate checks the queues the workers actually
+    listen on. Falls back to ``"system"`` for a runs queue name without
+    ``"runs"``.
+    """
+    runs_queue = get_settings().saq_runs_queue
+    return runs_queue.replace("runs", "system") if "runs" in runs_queue else "system"
+
+
 def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, Any]:
     return {
         "queue": _build_queue(queue_name),
@@ -459,24 +480,24 @@ def _assert_system_auth_configured() -> None:
 
 def runs_settings() -> dict[str, Any]:
     """WorkerSettings for the ``runs`` worker (no web UI)."""
-    return _base_worker_settings("runs", _runs_functions())
+    return _base_worker_settings(_runs_queue_name(), _runs_functions())
 
 
 def system_settings() -> dict[str, Any]:
     """WorkerSettings for the ``system`` worker (web UI, FAIL-CLOSED auth, crons)."""
     _assert_system_auth_configured()
-    return {**_base_worker_settings("system", _system_functions()), "cron_jobs": _system_cron_jobs()}
+    return {**_base_worker_settings(_system_queue_name(), _system_functions()), "cron_jobs": _system_cron_jobs()}
 
 
 def staging_runs_settings() -> dict[str, Any]:
-    """Staging ``runs`` worker — dedicated queue ``staging-runs``."""
-    return _base_worker_settings("staging-runs", _runs_functions())
+    """Staging ``runs`` worker — queue derives from ``SAQ_RUNS_QUEUE=staging-runs``."""
+    return _base_worker_settings(_runs_queue_name(), _runs_functions())
 
 
 def staging_system_settings() -> dict[str, Any]:
-    """Staging ``system`` worker — dedicated queue ``staging-system``."""
+    """Staging ``system`` worker — queue derives from the staging runs queue."""
     _assert_system_auth_configured()
-    return {**_base_worker_settings("staging-system", _system_functions()), "cron_jobs": _system_cron_jobs()}
+    return {**_base_worker_settings(_system_queue_name(), _system_functions()), "cron_jobs": _system_cron_jobs()}
 
 
 def run_system_web() -> None:
