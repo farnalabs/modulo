@@ -16,6 +16,7 @@ from scripts.restore import (
     decrypt_archive,
     extract_archive,
     get_db_url,
+    hash_file,
     main,
     parse_args,
     pg_database_name,
@@ -49,11 +50,9 @@ def sample_archive(tmp_dir):
     Path(os.path.join(content_dir, "secrets.env")).write_text("FERNET_KEY=test\n")
     Path(os.path.join(content_dir, "manifest.json")).write_text('{"tool": "modulo-backup", "version": "1"}')
     # write checksums
-    from scripts.backup import hash_file as bhash
-
     with open(os.path.join(content_dir, "checksums.sha256"), "w") as f:
         for name in ("modulo.pgdump", "secrets.env", "manifest.json"):
-            h = bhash(os.path.join(content_dir, name))
+            h = hash_file(os.path.join(content_dir, name))
             f.write(f"{h}  {name}\n")
 
     archive_path = os.path.join(tmp_dir, "backup.tar.gz")
@@ -232,13 +231,11 @@ def test_verify_hashes_returns_true_without_checksums(tmp_dir):
 
 
 def test_verify_hashes_unchecked_files_do_not_fail(tmp_dir):
-    from scripts.backup import hash_file as bhash
-
     known = os.path.join(tmp_dir, "known.txt")
     extra = os.path.join(tmp_dir, "extra.txt")
     Path(known).write_text("aaa")
     Path(extra).write_text("bbb")
-    Path(os.path.join(tmp_dir, "checksums.sha256")).write_text(f"{bhash(known)}  known.txt\n")
+    Path(os.path.join(tmp_dir, "checksums.sha256")).write_text(f"{hash_file(known)}  known.txt\n")
     files = {"known.txt": known, "extra.txt": extra}
     assert verify_hashes(tmp_dir, files) is True
 
