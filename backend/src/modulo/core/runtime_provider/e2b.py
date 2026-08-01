@@ -144,12 +144,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         """
         sandbox = self._sandboxes.pop(provider_ref, None)
         if sandbox is not None:
-            try:
-                await asyncio.wait_for(sandbox.kill(), timeout=_KILL_TIMEOUT)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("Failed to kill E2B sandbox %s", provider_ref)
+            await self._kill_sandbox_best_effort(sandbox, "destroy cleanup")
 
     async def get_workspace_status(self, provider_ref: str) -> str:
         """Return the current status of the sandbox."""
@@ -187,7 +182,11 @@ class E2BRuntimeProvider(RuntimeProvider):
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception("Failed to kill E2B sandbox during %s", context)
+            _log.exception(
+                "Failed to kill E2B sandbox %s during %s",
+                getattr(sandbox, "sandbox_id", "<unknown>"),
+                context,
+            )
 
     async def _clone_repo(self, sandbox: Any, repo_url: str, labels: dict[str, str]) -> None:
         """Clone a git repository inside the sandbox.
