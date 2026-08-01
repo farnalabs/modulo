@@ -58,12 +58,49 @@ def test_no_sensitive_data_in_logs():
     )
 
 
+#: Max characters of a sensitive value that a truncated prefix log may expose
+#: (e.g. ``token[:10]``) before it is treated as a leak. Truncated prefixes are
+#: a deliberate, well-known diagnostics idiom (e.g. JWT header bytes) and carry
+#: no usable secret material.
+_SAFE_PREFIX_CHARS = 12
+
+
+def _is_safe_truncated_prefix(expr: ast.expr, name_id: str) -> bool:
+    """Return True if ``name_id`` only appears as a small leading slice (``name[:N]``/``name[0:N]``).
+
+    A truncated-prefix log (``token[:10] + "..."``) intentionally exposes only
+    the first few characters of a value and is not a leak. Any other usage —
+    full value, long slice, mid-string slice — is still flagged.
+    """
+    for sub in ast.walk(expr):
+        if not isinstance(sub, ast.Subscript):
+            continue
+        if not (isinstance(sub.value, ast.Name) and sub.value.id == name_id):
+            continue
+        lower = upper = None
+        if isinstance(sub.slice, ast.Slice):
+            lower, upper = sub.slice.lower, sub.slice.upper
+        elif isinstance(sub.slice, ast.Constant):
+            upper = sub.slice
+        if lower is not None and not (isinstance(lower, ast.Constant) and lower.value == 0):
+            return False
+        return (
+            upper is not None
+            and isinstance(upper, ast.Constant)
+            and isinstance(upper.value, int)
+            and 0 <= upper.value <= _SAFE_PREFIX_CHARS
+        )
+    return False
+
+
 def _check_expr_for_sensitive_var(expr, path, lineno, violations):
     """Check if an expression references a sensitive variable name."""
     # Look for ast.Name references
     for sub in ast.walk(expr):
         # Direct variable reference (e.g., logger.info(token))
         if isinstance(sub, ast.Name) and sub.id in SENSITIVE_VARS:
+            if _is_safe_truncated_prefix(expr, sub.id):
+                continue
             violations.append(
                 f"  {path.relative_to(SRC.parent.parent)}:{lineno}  Variable '{sub.id}' logged — "
                 "may contain sensitive data"

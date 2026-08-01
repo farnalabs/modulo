@@ -529,7 +529,15 @@ class TestEnvVarSeeding:
         settings = _make_settings()
         settings.modulo_oidc_providers = "[]"
 
-        await _seed_sso_providers(settings)
+        with (
+            patch("modulo.api.dependencies.get_or_create_engine") as mock_engine,
+            patch("modulo.api.dependencies.get_or_create_session_factory") as mock_factory,
+        ):
+            await _seed_sso_providers(settings)
+
+        # Empty env var -> early return before any DB engine/session is created.
+        mock_engine.assert_not_called()
+        mock_factory.assert_not_called()
 
 
 class TestSetGroupMappings:
