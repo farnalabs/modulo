@@ -85,6 +85,7 @@ def make_mock_session() -> AsyncMock:
     hitl_result.scalar_one_or_none = MagicMock(return_value=team_mock)
     hitl_result.scalar_one = MagicMock(return_value=0)
     hitl_result.scalars = MagicMock(return_value=scalar_mock)
+    hitl_result.first = MagicMock(return_value=MagicMock())
     session.execute.return_value = hitl_result
     return session
 
@@ -190,19 +191,22 @@ from pytest_bdd import given, parsers, then  # noqa: E402
 
 
 @given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def _bdd_auth_admin_in_org(org: str) -> None:
+def _bdd_auth_admin_in_org(org: str, request, client) -> None:
     """No-op — the ``client`` fixture already provides an admin principal."""
+    request.node._client = client
 
 
 @given(parsers.parse('I am authenticated in org "{org}"'))
-def _bdd_auth_in_org(org: str) -> None:
-    """No-op — auth fixture handles this."""
+def _bdd_auth_in_org(org: str, request, client) -> None:
+    """Auth fixture handles this; set the default admin client for @when steps."""
+    request.node._client = client
 
 
 @given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
-def _bdd_auth_viewer_in_org(org: str, request) -> None:
-    """Flag viewer authentication so ``@when`` steps can choose the right client."""
+def _bdd_auth_viewer_in_org(org: str, request, viewer_client) -> None:
+    """Flag viewer authentication and set the role client for @when steps."""
     request.node._viewer_auth = True
+    request.node._client = viewer_client
 
 
 @given("the organisation exists")
@@ -218,9 +222,13 @@ def _bdd_check_response_status(status: int, request) -> None:
 
 
 def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Generator[TestClient, None, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
     from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+    from modulo.auth.dependencies import (
+        get_current_tenant_user,
+        get_current_tenant_user_or_api_key,
+        get_current_user,
+    )
     from modulo.auth.jwt import TenantPrincipal
     from modulo.settings import get_settings
 
@@ -246,6 +254,7 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[_get_session_factory] = lambda: MagicMock()
     app.dependency_overrides[get_plan_context] = _override_plan_context
     if principal_kwargs:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**principal_kwargs)
@@ -254,6 +263,7 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
             return TenantPrincipal(**principal_kwargs)
 
         app.dependency_overrides[get_current_tenant_user] = _override_tenant
+        app.dependency_overrides[get_current_tenant_user_or_api_key] = _override_tenant
 
     yield TestClient(app)
 
@@ -279,6 +289,28 @@ def viewer_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
         organisation_id=ORG_ID,
         account_id=uuid.uuid4(),
         org_role="viewer",
+    )
+
+
+@pytest.fixture
+def runner_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
+    yield from _make_test_client(
+        mock_session,
+        username="runner",
+        organisation_id=ORG_ID,
+        account_id=uuid.uuid4(),
+        org_role="runner",
+    )
+
+
+@pytest.fixture
+def operator_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
+    yield from _make_test_client(
+        mock_session,
+        username="operator",
+        organisation_id=ORG_ID,
+        account_id=uuid.uuid4(),
+        org_role="operator",
     )
 
 

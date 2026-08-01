@@ -3,6 +3,14 @@
 Requires MODULO_SCIM_TOKEN env var for auth. Gated behind the "scim"
 feature flag (require_feature). Maps SCIM Users → internal User, SCIM
 Groups → internal Team + TeamMembership.
+
+ADR 017: SCIM is EXEMPT from the org-role sweep at phase 1 — every route
+authenticates via the shared-secret ``MODULO_SCIM_TOKEN`` (an enumerated
+channel with a dedicated non-role auth mechanism). No SCIM route passes
+``org_role`` to the CRUD layer: ``scim_create_user`` defaults to the
+``runner`` grant and ``scim_update_user`` has a *functional* role-UPDATE
+that is intentionally left unwired. Do not wire a role-update path without
+an ADR 017 follow-up (Phase 3 documents the runner-default grant).
 """
 
 import logging

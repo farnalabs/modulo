@@ -979,7 +979,7 @@ Every trigger activation creates a `TriggerEvent` record:
 - `run_id` (if a run was created)
 - `error_detail`
 
-Operators can view the TriggerEvent log and **replay** any logged event (re-fires the trigger with the captured payload hash — requires the original payload to have been stored if the trigger is configured with `retain_payload: true`).
+Operators can view the TriggerEvent log and **replay** any logged event (re-fires the trigger with the captured payload hash — requires the original payload to have been stored if the trigger is configured with `retain_payload: true`). **Replay auth (ADR 017)**: replay is a mutating run-creation channel — a principal must hold the `run.trigger` permission (`runner` minimum); an unauthenticated caller must present a valid HMAC signature over the stored payload (same verification as webhook receive).
 
 **`retain_payload` storage**: when `retain_payload: true`, the raw webhook payload is stored in a `webhook_payloads` table (`id`, `trigger_event_id`, `payload_ciphertext`, `created_at`, `expires_at`). The payload is encrypted with Fernet (same mechanism as connector credentials, §6.2). `expires_at` is set to `created_at + 7 days` by default (configurable per trigger, max 90 days). A background cleanup job deletes expired rows nightly. Access to stored payloads is restricted to `operator` and `admin` roles — `runner` role cannot retrieve them. Payloads may contain sensitive data from the calling system (API tokens embedded in GitHub webhooks, repository metadata); operators must acknowledge this when enabling `retain_payload`.
 

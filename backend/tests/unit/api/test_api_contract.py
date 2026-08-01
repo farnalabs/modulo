@@ -253,6 +253,29 @@ class TestAuthEndpointSchemas:
         validate_shape(resp.json(), MeResponse)
 
     def test_ws_token_schema(self, client: TestClient) -> None:
+        # ws-token is swept via require_permission("run.status") (ADR 017), which
+        # resolves the authz-enforce kill switch through the DI session. Provide a
+        # session whose execute returns a scalar (enforce=True) plus a tenant
+        # principal override so the test does not touch a real database.
+        from modulo.auth.dependencies import get_current_tenant_user
+        from modulo.auth.jwt import TenantPrincipal
+
+        mock_session = configure_mock_session(AsyncMock())
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.begin = MagicMock(return_value=begin_cm)
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = True
+        mock_session.execute = AsyncMock(return_value=result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+        )
         with (
             patch("redis.asyncio.Redis.from_url") as mock_redis_factory,
             patch(
