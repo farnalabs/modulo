@@ -212,8 +212,12 @@ class ExecuteRunTask(Task):  # type: ignore[misc]
     max_retries = 3
     default_retry_delay = 60
     retry_backoff = True
-    soft_time_limit = 870
-    hard_time_limit = 900
+    # Sandbox agent nodes may run up to their configured timeout_seconds
+    # (default 1800s / 30 min). The task-level limits must be >= the node
+    # timeout or Celery kills the whole run (task_failure) before the node
+    # can finish. Raised from 870/900 (15 min) to 1740/1800 (30 min).
+    soft_time_limit = 1740
+    hard_time_limit = 1800
     track_started = True
     acks_late = True
     reject_on_worker_lost = True
