@@ -21,7 +21,7 @@ test.describe('WCAG AA audit (local)', { tag: "@regression" }, () => {
     expect(results.violations.filter(v => !knownViolations.has(v.id))).toEqual([])
   })
 
-  // Core authenticated pages â€” sampled to avoid full-suite timeout cascades
+  // Core authenticated pages — sampled to avoid full-suite timeout cascades
   const authedPages = [
     '/pipelines', '/stages', '/schemas',
     '/admin/connectors', '/admin/model-backends',

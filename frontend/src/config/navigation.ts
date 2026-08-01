@@ -130,7 +130,7 @@ function isManifest(obj: unknown): obj is Manifest {
 
 function buildSidebarGroups(): NavGroup[] {
   if (!isManifest(manifest)) {
-    console.error('[navigation] manifest is invalid â€” missing routes or sidebar_groups')
+    console.error('[navigation] manifest is invalid — missing routes or sidebar_groups')
     return []
   }
 

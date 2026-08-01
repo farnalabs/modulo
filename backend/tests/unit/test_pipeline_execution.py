@@ -1,6 +1,6 @@
 """Unit tests for modulo.core.pipeline_execution (shared Celery + SAQ core).
 
-Tests are mock/fake based â€” no Postgres required. Real Postgres concurrency
+Tests are mock/fake based — no Postgres required. Real Postgres concurrency
 behaviour (two concurrent claims -> exactly one) lives in
 ``tests/integration/test_pipeline_execution.py`` (marked ``integration``).
 """
@@ -87,7 +87,7 @@ def _compiled(stmt: object, *, render_postcompile: bool = False) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Claim â€” SQL structure + staleness constants
+# Claim — SQL structure + staleness constants
 # ---------------------------------------------------------------------------
 
 
@@ -202,7 +202,7 @@ class TestClaimRunAsync:
 
 
 # ---------------------------------------------------------------------------
-# 'complete' fix â€” DB enum source of truth + mark_complete
+# 'complete' fix — DB enum source of truth + mark_complete
 # ---------------------------------------------------------------------------
 
 
@@ -461,7 +461,7 @@ class TestStaleRunRecoverySweep:
 
 
 # ---------------------------------------------------------------------------
-# execute_run orchestration â€” claim-then-execute-then-complete
+# execute_run orchestration — claim-then-execute-then-complete
 # ---------------------------------------------------------------------------
 
 
@@ -561,7 +561,7 @@ class TestExecuteRun:
 
 
 # ---------------------------------------------------------------------------
-# Settings plumbing â€” F4 SAQ settings section defaults
+# Settings plumbing — F4 SAQ settings section defaults
 # ---------------------------------------------------------------------------
 
 
@@ -640,7 +640,7 @@ class TestSaqSettingsDefaults:
 
 
 # ---------------------------------------------------------------------------
-# count_active_runs_for_pipeline â€” include_pending flag
+# count_active_runs_for_pipeline — include_pending flag
 # ---------------------------------------------------------------------------
 
 
@@ -717,7 +717,7 @@ class TestCountActiveRuns:
 
 
 # ---------------------------------------------------------------------------
-# saq_worker â€” worker settings structure + fail-closed auth + queue knobs
+# saq_worker — worker settings structure + fail-closed auth + queue knobs
 # ---------------------------------------------------------------------------
 
 
