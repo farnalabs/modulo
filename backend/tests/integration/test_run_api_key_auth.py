@@ -137,6 +137,7 @@ async def test_wrong_secret_rejected(
 
 
 async def test_prefix_lookup_without_org_context_sees_no_rows(
+    db_engine: AsyncEngine,
     migrated_db_url: str,
     org_api_key: dict[str, Any],
 ) -> None:
@@ -145,17 +146,42 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
     A plain session without ``app.organisation_id`` cannot see the key record —
     this is exactly why the auth dependency disables RLS for the prefix lookup
     before re-validating inside the key's org context.
+
+    testcontainers connects as a superuser, which bypasses RLS regardless of
+    ``FORCE ROW LEVEL SECURITY`` (FORCE only removes the table-owner exemption,
+    not the superuser/BYPASSRLS exemption). Drop to a non-superuser role with
+    SELECT on ``org_api_keys`` so the policy actually filters — the same
+    ``SET LOCAL ROLE`` pattern ``test_rls_isolation`` uses.
     """
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from modulo.db.models.api_key import OrgApiKey
 
-    engine = create_async_engine(migrated_db_url, echo=False)
+    role = f"test_apikey_{uuid.uuid4().hex[:8]}"
+    async with db_engine.connect() as conn:
+        await conn.execute(text(f'CREATE ROLE "{role}"'))
+        await conn.execute(text(f'GRANT SELECT ON org_api_keys TO "{role}"'))
+        await conn.execute(text("COMMIT"))
+
     try:
-        factory = async_sessionmaker(engine, expire_on_commit=False)
-        async with factory() as session:
-            result = await session.execute(select(OrgApiKey).where(OrgApiKey.lookup_prefix == org_api_key["prefix"]))
-            assert result.scalar_one_or_none() is None
+
+        engine = create_async_engine(migrated_db_url, echo=False)
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as session:
+                await session.execute(text(f'SET LOCAL ROLE "{role}"'))
+                # Explicitly clear any org context so the RLS policy filters.
+                await session.execute(text("SELECT set_config('app.organisation_id', '', true)"))
+                result = await session.execute(
+                    select(OrgApiKey).where(OrgApiKey.lookup_prefix == org_api_key["prefix"])
+                )
+                assert result.scalar_one_or_none() is None
+        finally:
+            await engine.dispose()
+
     finally:
-        await engine.dispose()
+        async with db_engine.connect() as conn:
+            await conn.execute(text(f'DROP OWNED BY "{role}"'))
+            await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+            await conn.execute(text("COMMIT"))

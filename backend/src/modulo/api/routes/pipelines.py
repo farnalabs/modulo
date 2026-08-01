@@ -21,7 +21,8 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_team_membership_or_admin
+from modulo.api.team_scope import resolve_pipeline_team_scope
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
@@ -732,6 +733,7 @@ async def replace_pipeline_graph_endpoint(
     req: PipelineGraphUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineGraphResponse:
     node_data = [node.model_dump(mode="json") for node in req.nodes]
     edge_data = [
@@ -826,6 +828,7 @@ async def update_pipeline_endpoint(
     req: PipelineUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     updates = req.model_dump(exclude_unset=True)
     has_graph = "graph_json" in updates
@@ -905,6 +908,7 @@ async def delete_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> None:
     try:
         async with session.begin():
