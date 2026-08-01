@@ -121,7 +121,67 @@ class TestRemyContextSourceServiceSetUserOverride:
         stmt = mock_session.execute.call_args[0][0]
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "FOR UPDATE" in compiled
-        assert "product_docs" in compiled
+        assert f"remy_context_sources.organisation_id = '{org_id.hex}'" in compiled
+        assert "remy_context_sources.source_key = 'product_docs'" in compiled
+        assert f"remy_context_sources.user_id = '{user_id.hex}'" in compiled
+
+    async def test_set_user_override_inserts_new_row_when_missing(
+        self,
+        service: RemyContextSourceService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        await service.set_user_override(org_id, user_id, "product_docs", "always_on")
+
+        mock_session.add.assert_called_once()
+        added = mock_session.add.call_args[0][0]
+        assert isinstance(added, RemyContextSource)
+        assert added.organisation_id == org_id
+        assert added.user_id == user_id
+        assert added.source_key == "product_docs"
+        assert added.source_mode == "always_on"
+        mock_session.flush.assert_awaited_once()
+
+    async def test_set_user_override_updates_existing_row(
+        self,
+        service: RemyContextSourceService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        existing = _mock_source_row("product_docs", "off", org_id, user_id)
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none = MagicMock(return_value=existing)
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
+        await service.set_user_override(org_id, user_id, "product_docs", "always_on")
+
+        mock_session.add.assert_not_called()
+        assert existing.source_mode == "always_on"
+        mock_session.flush.assert_awaited_once()
+
+    async def test_set_user_override_rejects_empty_key(
+        self,
+        service: RemyContextSourceService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        with pytest.raises(ValueError, match="source_key must not be empty"):
+            await service.set_user_override(org_id, user_id, "", "always_on")
+        mock_session.execute.assert_not_called()
+
+    async def test_set_user_override_rejects_invalid_mode(
+        self,
+        service: RemyContextSourceService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        with pytest.raises(ValueError, match="Invalid source_mode 'sometimes'"):
+            await service.set_user_override(org_id, user_id, "product_docs", "sometimes")
+        mock_session.execute.assert_not_called()
 
 
 class TestRemyContextSourceServiceSetOrgDefault:
@@ -143,7 +203,96 @@ class TestRemyContextSourceServiceSetOrgDefault:
         stmt = mock_session.execute.call_args[0][0]
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "FOR UPDATE" in compiled
-        assert "product_docs" in compiled
+        assert f"remy_context_sources.organisation_id = '{org_id.hex}'" in compiled
+        assert "remy_context_sources.source_key = 'product_docs'" in compiled
+        assert "remy_context_sources.user_id IS NULL" in compiled
+
+    async def test_set_org_default_scopes_to_null_user(
+        self,
+        service: RemyContextSourceService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        await service.set_org_default(org_id, "product_docs", "off")
+
+        stmt = mock_session.execute.call_args[0][0]
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert f"remy_context_sources.organisation_id = '{org_id.hex}'" in compiled
+        assert "remy_context_sources.source_key = 'product_docs'" in compiled
+        assert "remy_context_sources.user_id IS NULL" in compiled
+        assert "FOR UPDATE" in compiled
+
+    async def test_set_org_default_rejects_invalid_mode(
+        self,
+        service: RemyContextSourceService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        with pytest.raises(ValueError, match="Invalid source_mode"):
+            await service.set_org_default(org_id, "product_docs", "bogus")
+        mock_session.execute.assert_not_called()
+
+
+class TestRemyContextSourceServiceQueries:
+    """Tests for get_org_defaults, get_user_overrides and build_effective_items."""
+
+    @pytest.fixture
+    def service(self, mock_session: AsyncMock) -> RemyContextSourceService:
+        return RemyContextSourceService(mock_session)
+
+    async def test_get_org_defaults_returns_mode_map(
+        self,
+        service: RemyContextSourceService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        rows = [
+            _mock_source_row("product_docs", "off", org_id),
+            _mock_source_row("feature_overview", "always_on", org_id),
+        ]
+        scalars = MagicMock()
+        scalars.__iter__ = MagicMock(return_value=iter(rows))
+        mock_result = MagicMock()
+        mock_result.scalars = MagicMock(return_value=scalars)
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
+        result = await service.get_org_defaults(org_id)
+        assert result == {"product_docs": "off", "feature_overview": "always_on"}
+
+    async def test_get_user_overrides_scopes_by_user(
+        self,
+        service: RemyContextSourceService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        await service.get_user_overrides(org_id, user_id)
+
+        stmt = mock_session.execute.call_args[0][0]
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert f"remy_context_sources.organisation_id = '{org_id.hex}'" in compiled
+        assert f"remy_context_sources.user_id = '{user_id.hex}'" in compiled
+
+    def test_build_effective_items_marks_overrides(self) -> None:
+        service = RemyContextSourceService.__new__(RemyContextSourceService)
+        effective = {"page_context": "always_on", "product_docs": "off"}
+        user_overrides = {"product_docs": "off"}
+
+        items = service.build_effective_items(effective, user_overrides)
+        assert len(items) == 2
+        by_key = {item.key: item for item in items}
+        assert by_key["page_context"].name == "Page Context"
+        assert by_key["page_context"].is_overridden is False
+        assert by_key["page_context"].source_mode == "always_on"
+        assert by_key["product_docs"].is_overridden is True
+        assert by_key["product_docs"].description != ""
+
+    def test_build_effective_items_handles_unknown_keys(self) -> None:
+        service = RemyContextSourceService.__new__(RemyContextSourceService)
+        items = service.build_effective_items({"custom_source": "tool"}, {})
+        assert len(items) == 1
+        assert items[0].name == "Custom Source"
+        assert items[0].description == ""
 
 
 class TestRemyContextSourceServiceResetUserOverrides:
@@ -166,16 +315,6 @@ class TestRemyContextSourceServiceResetUserOverrides:
         stmt = mock_session.execute.call_args[0][0]
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "DELETE FROM remy_context_sources" in compiled
-        assert org_id.hex in compiled
-        assert user_id.hex in compiled
-
-    async def test_reset_user_overrides_no_entries(
-        self,
-        service: RemyContextSourceService,
-        mock_session: AsyncMock,
-        org_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> None:
-        await service.reset_user_overrides(org_id, user_id)
-
-        mock_session.execute.assert_called_once()
+        assert f"remy_context_sources.organisation_id = '{org_id.hex}'" in compiled
+        assert f"remy_context_sources.user_id = '{user_id.hex}'" in compiled
+        mock_session.flush.assert_awaited_once()
