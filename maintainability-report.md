@@ -5,11 +5,8 @@
 
 ## Major
 
-### 1. File exceeds 500 lines — SchemaEditorView.vue (750 lines)
-`frontend/src/views/SchemaEditorView.vue:1-750`
-This file is 750 lines and mixes sidebar (schema list), form editor, JSON preview, version history, and validation logic. Should be split into at least: `SchemaEditorSidebar.vue`, `SchemaEditorForm.vue`, `SchemaVersionHistory.vue`, and `SchemaJsonPreview.vue`.
-
-**Progress:** the pure schema logic (`parseDefinitionToFields`, `coerceDefault`, `buildJsonSchema`, `createField`) was extracted to `frontend/src/utils/schema-definition.ts`, and the duplicated `.input-base` class strings were consolidated. The remaining work is the component split itself.
+### 1. ~~File exceeds 500 lines — SchemaEditorView.vue~~ **FIXED**
+`SchemaEditorView.vue` is now a thin orchestrator (~430 lines) that owns state and API orchestration. The view was split into `frontend/src/components/schema/SchemaEditorSidebar.vue`, `SchemaEditorForm.vue`, `SchemaFieldEditor.vue`, `SchemaVersionHistory.vue`, and `SchemaJsonPreview.vue`. The pure schema logic (`parseDefinitionToFields`, `coerceDefault`, `buildJsonSchema`, `createField`) lives in `frontend/src/utils/schema-definition.ts`.
 
 ### 2. ~~Massive template duplication — LibraryView.vue~~ **FIXED**
 `LibraryView.vue` now renders all three sections (native primitives, preview primitives, community primitives) through the shared `LibraryPrimitiveCard.vue` component.

@@ -39,7 +39,7 @@ describe('schema-definition', () => {
 
   describe('parseDefinitionToFields', () => {
     it('returns an empty list when properties are missing', () => {
-      expect(parseDefinitionToFields({}, () => 1)).toEqual([])
+      expect(parseDefinitionToFields({})).toEqual([])
     })
 
     it('maps properties, required flags, and descriptions', () => {
@@ -51,11 +51,10 @@ describe('schema-definition', () => {
             age: { type: 'number' },
           },
         },
-        () => 7,
       )
       expect(fields).toEqual([
         {
-          _key: 7,
+          _key: 1,
           name: 'email',
           type: 'string',
           required: true,
@@ -63,7 +62,7 @@ describe('schema-definition', () => {
           defaultValue: 'a@b.c',
         },
         {
-          _key: 7,
+          _key: 2,
           name: 'age',
           type: 'number',
           required: false,
@@ -71,6 +70,19 @@ describe('schema-definition', () => {
           defaultValue: '',
         },
       ])
+    })
+
+    it('continues keys from a provided startKey', () => {
+      const fields = parseDefinitionToFields(
+        {
+          properties: {
+            a: { type: 'string' },
+            b: { type: 'number' },
+          },
+        },
+        5,
+      )
+      expect(fields.map(f => f._key)).toEqual([6, 7])
     })
   })
 

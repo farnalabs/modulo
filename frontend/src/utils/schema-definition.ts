@@ -36,14 +36,15 @@ export function coerceDefault(value: string, type: string): unknown {
 
 export function parseDefinitionToFields(
   def: Record<string, unknown>,
-  keyCounter: () => number,
+  startKey = 0,
 ): SchemaField[] {
   const properties = def.properties
   if (!properties || typeof properties !== 'object') return []
   const loadedFields: SchemaField[] = []
+  let key = startKey
   for (const [name, prop] of Object.entries(properties as Record<string, Record<string, unknown>>)) {
     loadedFields.push({
-      _key: keyCounter(),
+      _key: ++key,
       name,
       type: (prop.type as string | undefined) ?? 'string',
       required: Array.isArray(def.required) && def.required.includes(name),
