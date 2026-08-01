@@ -333,12 +333,25 @@ def require_team_membership_or_admin(resource_team_id_provider: TeamScopeProvide
         if principal.org_role == "admin":
             return principal
         try:
+            # ONE transaction: RLS context (set_config ... is_local) is scoped
+            # to the transaction and reverts on COMMIT, so the provider read
+            # and the membership check MUST share a single session.begin() or
+            # the second query runs with an empty app.organisation_id and
+            # team_memberships RLS filters every row (hard 403 on Postgres).
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
                 await set_rls_user_context(session, principal.account_id, principal.org_role)
                 row = await resource_team_id_provider(request, session)
+                if row is not None and row.visibility not in ("org", None) and row.owner_team_id is not None:
+                    is_member = await team_membership_exists(
+                        session,
+                        account_id=principal.account_id,
+                        team_id=row.owner_team_id,
+                    )
+                else:
+                    is_member = True
         except SQLAlchemyError:
-            logger.exception("permission.live_role_read_failed")
+            logger.exception("permission.team_scope_read_failed")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database temporarily unavailable.",
@@ -347,19 +360,6 @@ def require_team_membership_or_admin(resource_team_id_provider: TeamScopeProvide
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
         if row.visibility == "org" or row.visibility is None or row.owner_team_id is None:
             return principal
-        try:
-            async with session.begin():
-                is_member = await team_membership_exists(
-                    session,
-                    account_id=principal.account_id,
-                    team_id=row.owner_team_id,
-                )
-        except SQLAlchemyError:
-            logger.exception("permission.live_role_read_failed")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database temporarily unavailable.",
-            ) from None
         if not is_member:
             logger.warning(
                 "permission.denied",
