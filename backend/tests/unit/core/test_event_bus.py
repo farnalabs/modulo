@@ -17,8 +17,10 @@ def _reset_singleton() -> Iterator[None]:
     import modulo.core.events.event_bus as eb
 
     eb._event_bus = None
+    eb._background_tasks = set()
     yield
     eb._event_bus = None
+    eb._background_tasks = set()
 
 
 class TestEventBus:
