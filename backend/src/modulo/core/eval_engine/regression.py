@@ -63,9 +63,7 @@ async def detect_regressions(
     if threshold < 0:
         raise ValueError(f"threshold must be >= 0, got {threshold}")
     if not 0 < recent_window_ratio <= 1.0:
-        raise ValueError(
-            f"recent_window_ratio must be > 0 and <= 1.0, got {recent_window_ratio}"
-        )
+        raise ValueError(f"recent_window_ratio must be > 0 and <= 1.0, got {recent_window_ratio}")
 
     now = datetime.now(UTC)
     recent_window_days = max(int(days * recent_window_ratio), 1)

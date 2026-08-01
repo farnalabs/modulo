@@ -155,9 +155,7 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:
-            result = await session.execute(
-                select(OrgApiKey).where(OrgApiKey.lookup_prefix == org_api_key["prefix"])
-            )
+            result = await session.execute(select(OrgApiKey).where(OrgApiKey.lookup_prefix == org_api_key["prefix"]))
             assert result.scalar_one_or_none() is None
     finally:
         await engine.dispose()

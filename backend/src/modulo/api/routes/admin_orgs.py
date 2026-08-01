@@ -5,11 +5,13 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
+from modulo.api.routes.admin import _require_org_admin
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -23,6 +25,7 @@ from modulo.db.crud.organisation import (
     list_organisations,
     update_organisation,
 )
+from modulo.db.models.organisation import Organisation
 
 logger = logging.getLogger(__name__)
 
@@ -556,3 +559,63 @@ async def admin_remove_org_license(
         ) from None
 
     return OrgLicenseResponse(has_license=False)
+
+
+# ── Org Authz Kill Switch ───────────────────────────────────────────────
+
+
+class SetOrgAuthzEnforceRequest(BaseModel):
+    enforce: bool
+
+
+class SetOrgAuthzEnforceResponse(BaseModel):
+    org_id: str
+    enforce: bool
+
+
+@handle_db_errors("admin.orgs.admin_set_org_authz_enforce")
+@router.patch("/{org_id}/authz-enforce", response_model=SetOrgAuthzEnforceResponse)
+async def admin_set_org_authz_enforce(
+    org_id: uuid.UUID,
+    req: SetOrgAuthzEnforceRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> SetOrgAuthzEnforceResponse:
+    # Tenancy-bounded (ADR 017 DECISION 3): only the org's own admin (or a
+    # system admin) may flip the flag, and only for their org. Flipping org A
+    # never affects org B.
+    if not current_user.is_system_admin and current_user.organisation_id != org_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    _require_org_admin(current_user)
+
+    # Atomic at statement level — a dedicated boolean column, no read-modify-write.
+    affected = 0
+    try:
+        async with session.begin():
+            result = await session.execute(
+                update(Organisation).where(Organisation.id == org_id).values(authz_enforce=req.enforce)
+            )
+            affected = result.rowcount or 0
+    except ProgrammingError as exc:
+        logger.exception("admin_orgs.admin_set_org_authz_enforce")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        logger.exception("admin_orgs.admin_set_org_authz_enforce")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while updating org authz-enforce.",
+        ) from exc
+    except Exception:
+        logger.exception("Unexpected error in admin_set_org_authz_enforce")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
+
+    if affected == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+    return SetOrgAuthzEnforceResponse(org_id=str(org_id), enforce=req.enforce)

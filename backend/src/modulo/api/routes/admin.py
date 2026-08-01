@@ -16,7 +16,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.api_key import revoke_api_key
 from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import detect_regressions
@@ -1638,7 +1638,7 @@ async def admin_billing_overview(
 # ── Org Deletion ─────────────────────────────────────────────────────
 
 
-def _require_org_admin(principal: TenantPrincipal) -> None:
+def _require_org_admin(principal: AuthenticatedPrincipal) -> None:
     if principal.is_system_admin:
         return
     if principal.org_role != "admin":

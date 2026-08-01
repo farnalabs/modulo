@@ -11,7 +11,31 @@ required to perform them. Roles resolve through ``ORG_ROLE_HIERARCHY`` from
 
 from __future__ import annotations
 
+from contextvars import ContextVar, Token
+
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+
+# Per-request, tenancy-bounded authorization kill switch (ADR 017 DECISION 3).
+# ``None`` means enforcement is ON (fail-closed default); ``False`` fail-opens
+# the generic org-role gate for the current request. Set by the REST
+# ``require_permission`` variants and the MCP auth middleware per-request.
+_authz_enforce_ctx: ContextVar[bool | None] = ContextVar("authz_enforce", default=None)
+
+
+def set_authz_enforce(value: bool) -> Token:
+    """Set the per-request authz-enforce flag; return a token for reset.
+
+    ``True``/unset means enforcement is ON. ``False`` fail-opens the org-role
+    gate. Callers reset the ContextVar with ``reset_authz_enforce(token)`` so
+    no stale value leaks across requests.
+    """
+    return _authz_enforce_ctx.set(bool(value))
+
+
+def reset_authz_enforce(token: Token) -> None:
+    """Restore the authz-enforce ContextVar to its pre-request value."""
+    _authz_enforce_ctx.reset(token)
+
 
 PERMISSIONS: dict[str, str] = {
     # pipelines
@@ -156,11 +180,26 @@ def resolve_required(permission: str) -> str:
         raise PermissionConfigurationError(f"Unknown permission key '{permission}' — add it to PERMISSIONS") from exc
 
 
-def assert_org_role(role: str | None, required: str, subject: str) -> None:
+def assert_org_role(
+    role: str | None,
+    required: str,
+    subject: str,
+    *,
+    kill_switch_eligible: bool = True,
+) -> None:
     """Assert ``role`` is at least ``required`` in the org-role hierarchy.
 
     Fail-closed: unknown role, empty string, or ``None`` are denied. The
     comparison is the single place that consults ``ORG_ROLE_HIERARCHY``.
+
+    When ``kill_switch_eligible`` is True (default) and the per-request,
+    tenancy-bounded kill switch is OFF for the current org
+    (``_authz_enforce_ctx`` is False), the hierarchy-level comparison is
+    skipped (fail-open). Only the level gate is lifted — the fail-closed
+    identity checks (missing/unknown role) still deny, and destructive
+    mutations (org deletion via ``require_system_or_org_admin``) pass
+    ``kill_switch_eligible=False`` so they are never bypassed. ADR 017
+    DECISION 3.
     """
     if required not in ORG_ROLE_HIERARCHY:
         raise PermissionConfigurationError(f"Required role '{required}' is not in the org-role hierarchy")
@@ -180,6 +219,8 @@ def assert_org_role(role: str | None, required: str, subject: str) -> None:
             actual_role=role,
             reason="unknown_role",
         )
+    if kill_switch_eligible and _authz_enforce_ctx.get() is False:
+        return
     if actual_level < ORG_ROLE_HIERARCHY[required]:
         raise PermissionDenied(
             permission=subject,

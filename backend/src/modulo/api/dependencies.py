@@ -10,6 +10,7 @@ if test isolation is needed.
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+from contextvars import Token
 from typing import Any, cast
 
 from fastapi import Depends, HTTPException, Request, status
@@ -29,10 +30,13 @@ from modulo.auth.permissions import (
     PermissionConfigurationError,
     PermissionDenied,
     assert_org_role,
+    reset_authz_enforce,
     resolve_required,
+    set_authz_enforce,
 )
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.feature_flags import PlanContext
+from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -75,23 +79,33 @@ def require_permission(permission: str) -> DependsParameter:
 
     async def _check(
         principal: TenantPrincipal = Depends(get_current_tenant_user),
+        session: AsyncSession = Depends(get_db_session),
     ) -> TenantPrincipal:
+        token: Token | None = None
         try:
-            assert_org_role(principal.org_role, required, permission)
-        except PermissionDenied as exc:
-            logger.warning(
-                "permission.denied",
-                extra={
-                    "permission": permission,
-                    "required": required,
-                    "actual": principal.org_role,
-                },
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission '{permission}' requires '{required}' role",
-            ) from exc
-        return principal
+            if principal.organisation_id is not None:
+                async with session.begin():
+                    enforce = await resolve_authz_enforce(session, principal.organisation_id)
+                token = set_authz_enforce(enforce)
+            try:
+                assert_org_role(principal.org_role, required, permission)
+            except PermissionDenied as exc:
+                logger.warning(
+                    "permission.denied",
+                    extra={
+                        "permission": permission,
+                        "required": required,
+                        "actual": principal.org_role,
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Permission '{permission}' requires '{required}' role",
+                ) from exc
+            return principal
+        finally:
+            if token is not None:
+                reset_authz_enforce(token)
 
     return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant")
 
@@ -149,7 +163,10 @@ def require_system_or_org_admin(permission: str) -> DependsParameter:
         if principal.is_system_admin:
             return principal
         try:
-            assert_org_role(principal.org_role, "admin", permission)
+            # Destructive operations are NEVER lifted by the kill switch
+            # (ADR 017 DECISION 3 scope pin): org deletion stays gated on the
+            # org-admin role even when authz.enforce is off.
+            assert_org_role(principal.org_role, "admin", permission, kill_switch_eligible=False)
         except PermissionDenied as exc:
             logger.warning(
                 "permission.denied",
@@ -234,32 +251,39 @@ def require_target_org_role(permission: str, min_role: str) -> DependsParameter:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid org_id path parameter",
             ) from None
+        token: Token | None = None
         try:
-            async with session.begin():
-                role = await _resolve_live_org_role(session, current_user.account_id, org_id)
-        except SQLAlchemyError:
-            logger.exception("permission.live_role_read_failed")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database temporarily unavailable.",
-            ) from None
-        try:
-            assert_org_role(role, min_role, permission)
-        except PermissionDenied as exc:
-            logger.warning(
-                "permission.denied",
-                extra={
-                    "permission": permission,
-                    "required": min_role,
-                    "actual": role,
-                    "target_org_id": str(org_id),
-                },
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission '{permission}' requires '{min_role}' role in target organisation",
-            ) from exc
-        return current_user
+            try:
+                async with session.begin():
+                    role = await _resolve_live_org_role(session, current_user.account_id, org_id)
+                    enforce = await resolve_authz_enforce(session, org_id)
+                token = set_authz_enforce(enforce)
+            except SQLAlchemyError:
+                logger.exception("permission.live_role_read_failed")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Database temporarily unavailable.",
+                ) from None
+            try:
+                assert_org_role(role, min_role, permission)
+            except PermissionDenied as exc:
+                logger.warning(
+                    "permission.denied",
+                    extra={
+                        "permission": permission,
+                        "required": min_role,
+                        "actual": role,
+                        "target_org_id": str(org_id),
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Permission '{permission}' requires '{min_role}' role in target organisation",
+                ) from exc
+            return current_user
+        finally:
+            if token is not None:
+                reset_authz_enforce(token)
 
     return _tagged_dep(
         Depends(_check),

@@ -33,3 +33,35 @@ async def get_effective_setting(
         _log.warning("Failed to resolve system config for key=%s", key, exc_info=True)
 
     return default
+
+
+async def resolve_authz_enforce(
+    session: AsyncSession,
+    org_id: uuid.UUID | None,
+) -> bool:
+    """Return whether authorization enforcement is ON for the org.
+
+    Reads ``organisations.authz_enforce`` (dedicated boolean column) — the
+    per-org kill switch. Defaults to True when the row is absent. Per-request
+    read (uncached). ADR 017 DECISION 3.
+
+    Fail-closed: a SQL read error also defaults to True (enforce). The caller
+    must provide an active transaction (e.g. ``async with session.begin():``);
+    the read is a dedicated SELECT so it never observes a stale pre-flip value
+    from the ORM identity map.
+    """
+    if org_id is None:
+        return True
+    try:
+        from sqlalchemy import select
+
+        from modulo.db.models.organisation import Organisation
+
+        result = await session.execute(select(Organisation.authz_enforce).where(Organisation.id == org_id))
+        value = result.scalar_one_or_none()
+    except SQLAlchemyError:
+        _log.warning("permission.kill_switch_read_failed", exc_info=True)
+        return True
+    if value is None:
+        return True
+    return bool(value)

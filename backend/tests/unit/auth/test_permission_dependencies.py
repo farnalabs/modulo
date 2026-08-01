@@ -60,20 +60,20 @@ class TestRequirePermission:
     @pytest.mark.asyncio
     async def test_operator_allowed(self) -> None:
         dep = require_permission("pipeline.graph.update")
-        result = await dep.dependency(principal=_tenant("operator"))
+        result = await dep.dependency(principal=_tenant("operator"), session=_make_session(role="operator"))
         assert result.org_role == "operator"
 
     @pytest.mark.asyncio
     async def test_admin_allowed(self) -> None:
         dep = require_permission("pipeline.graph.update")
-        result = await dep.dependency(principal=_tenant("admin"))
+        result = await dep.dependency(principal=_tenant("admin"), session=_make_session(role="admin"))
         assert result.org_role == "admin"
 
     @pytest.mark.asyncio
     async def test_viewer_denied(self) -> None:
         dep = require_permission("pipeline.graph.update")
         with pytest.raises(HTTPException) as excinfo:
-            await dep.dependency(principal=_tenant("viewer"))
+            await dep.dependency(principal=_tenant("viewer"), session=_make_session(role="viewer"))
         assert excinfo.value.status_code == 403
         assert "pipeline.graph.update" in excinfo.value.detail
         assert "operator" in excinfo.value.detail
