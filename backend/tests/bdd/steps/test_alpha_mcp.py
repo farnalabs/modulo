@@ -4,7 +4,7 @@ library_browse, onboarding."""
 import contextlib
 import json
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
@@ -199,13 +199,8 @@ def claimed_gate(request):
 
 @when(parsers.parse('the MCP client sends a tools/call request for "review_hitl" with action "approve"'))
 def mcp_review_hitl_approve(client, request):
-    from modulo.hitl_manager import ApproveResult
-
     with (
-        patch(
-            "modulo.hitl_manager.HITLManager.approve_gate",
-            return_value=ApproveResult(success=True, new_status="running"),
-        ),
+        patch("modulo.api.mcp_server.HITLManager.approve", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/mcp/tools/call",
@@ -233,13 +228,8 @@ def check_run_status(status: str, request):
     )
 )
 def mcp_review_hitl_reject(reason: str, client, request):
-    from modulo.hitl_manager import ApproveResult
-
     with (
-        patch(
-            "modulo.hitl_manager.HITLManager.approve_gate",
-            return_value=ApproveResult(success=True, new_status="rejected"),
-        ),
+        patch("modulo.api.mcp_server.HITLManager.reject", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/mcp/tools/call",
