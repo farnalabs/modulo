@@ -112,7 +112,7 @@ def require_permission(permission: str) -> Any:
     return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant")
 
 
-def require_permission_any_credential(permission: str) -> DependsParameter:
+def require_permission_any_credential(permission: str) -> Any:
     """FastAPI dependency factory — require the org role for JWT OR API-key callers.
 
     Resolves the principal via `get_current_tenant_user_or_api_key` so both

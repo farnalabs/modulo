@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -74,6 +74,12 @@ def client() -> Generator[TestClient, None, None]:
         org_role="admin",
     )
     app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="admin",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
         username="admin",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
