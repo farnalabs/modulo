@@ -687,11 +687,12 @@ async def create_session(
                     provider = provider or config.default_provider
                     model = model or config.default_model
 
-            _default_models: dict[str, str] = {
-                "opencode": "deepseek-v4-flash",
-            }
-            if provider in _default_models:
-                model = _default_models[provider]
+            if not model:
+                _default_models: dict[str, str] = {
+                    "opencode": "deepseek-v4-flash",
+                }
+                if provider in _default_models:
+                    model = _default_models[provider]
 
             chat_session = ChatSession(
                 organisation_id=principal.organisation_id,
