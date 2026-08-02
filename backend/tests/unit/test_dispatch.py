@@ -2,15 +2,13 @@
 
 Mock/fake based — no Postgres, no Redis. Covers:
   * capacity -> deferred (no enqueue, no dispatched_at)
-  * SAQ_ENABLED=false -> Celery route + dispatcher NULL
-  * SAQ_ENABLED=false + resume_run -> inline resume (no enqueue, no dispatcher)
-  * SAQ_ENABLED=true  -> SAQ route + dispatcher 'saq' + enqueued
+  * SAQ route + dispatcher 'saq' + enqueued (PR C: SAQ is the only path)
   * enqueued vs deduped
   * enqueue failure -> dispatch_failed + webhook dedup expiry (non-webhook)
   * fail-fast (webhook) enqueue failure -> deferred, no block
   * claim_token distinct from saq_job_id
   * error enum: 'saq' accepted by the validator, unknown rejected
-  * the 7+1 call sites route through dispatch_run / dispatch_run_sync
+  * the call sites route through dispatch_run / dispatch_run_sync
 """
 
 from __future__ import annotations
@@ -25,8 +23,6 @@ from pydantic import ValidationError
 
 import modulo.core.dispatch as dispatch
 from modulo.api.models.error import ErrorEventInput
-from modulo.core.cron_scheduler import CronFireTask
-from modulo.core.trigger_engine.polling import PollingFireTask
 
 RUN_ID = "fb4b1368-68ca-4125-8091-ca8d7c25839e"
 ORG_ID = "18348064-eca3-4aa7-be96-8f6c9123efd0"
@@ -60,7 +56,6 @@ class _MockSession:
 
 def _make_settings(**overrides: object) -> MagicMock:
     base: dict[str, object] = {
-        "saq_enabled": False,
         "saq_runs_queue": "runs",
         "redis_url": "redis://localhost:6379/0",
         "saq_job_heartbeat": 300,
@@ -95,7 +90,7 @@ class TestDispatchRunRouting:
     @pytest.mark.asyncio
     async def test_capacity_deferred_no_enqueue_no_dispatched_at(self) -> None:
         with (
-            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=True)),
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=True),
             _enqueue_patch() as enqueue,
@@ -110,31 +105,9 @@ class TestDispatchRunRouting:
         dispatched.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_shadow_execute_routes_to_celery_dispatcher_null(self) -> None:
-        # Shadow mode must delegate entirely to celery_dispatch — send first,
-        # dispatched_at best-effort after — so a DB error never strands a run.
+    async def test_execute_enqueues_and_sets_dispatcher(self) -> None:
         with (
-            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=False)),
-            _rls_patch(),
-            patch.object(dispatch, "_open_session", return_value=_MockSession()),
-            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock) as dispatched,
-            patch.object(dispatch, "_record_saq_job", new_callable=AsyncMock) as saq_job,
-            patch("modulo.core.pipeline_executor_task.dispatch") as celery_dispatch,
-        ):
-            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID, celery_queue="runs_automated")
-
-        assert outcome == "enqueued"
-        assert job_id is None
-        celery_dispatch.assert_called_once_with(RUN_ID, ORG_ID, "runs_automated")
-        # No pre-enqueue dispatched_at write in shadow mode — celery_dispatch
-        # handles it (best-effort) after the send, and dispatcher stays NULL.
-        dispatched.assert_not_called()
-        saq_job.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_saq_enabled_execute_enqueues_and_sets_dispatcher(self) -> None:
-        with (
-            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=True)),
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
@@ -152,48 +125,10 @@ class TestDispatchRunRouting:
         assert args[3] != JOB_ID
 
     @pytest.mark.asyncio
-    async def test_shadow_resume_resumes_inline_no_enqueue(self) -> None:
-        # PR B-1 guard: in shadow mode (SAQ worker not wired), a resume must run
-        # in-process — never enqueue to a queue no worker consumes.
+    async def test_resume_enqueues_and_sets_dispatcher(self) -> None:
+        # resume_run enqueues to SAQ (worker wiring, F6a).
         with (
-            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=False)),
-            patch.object(dispatch, "_resume_inline", new_callable=AsyncMock) as resume_inline,
-            patch.object(dispatch, "_open_session", return_value=_MockSession()),
-            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock) as dispatched,
-            _enqueue_patch() as enqueue,
-            patch.object(dispatch, "_record_saq_job", new_callable=AsyncMock) as saq_job,
-        ):
-            outcome, job_id = await dispatch.dispatch_run(
-                RUN_ID, ORG_ID, job_type="resume_run", resume_data={"action": "approved"}
-            )
-
-        assert outcome == "resumed"
-        assert job_id is None
-        resume_inline.assert_awaited_once_with(uuid.UUID(RUN_ID), uuid.UUID(ORG_ID), {"action": "approved"})
-        enqueue.assert_not_called()
-        saq_job.assert_not_called()
-        dispatched.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_shadow_resume_failure_propagates(self) -> None:
-        # An inline resume that fails must raise so the caller can surface 500.
-        with (
-            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=False)),
-            patch.object(
-                dispatch,
-                "_resume_inline",
-                new_callable=AsyncMock,
-                side_effect=RuntimeError("resume boom"),
-            ),
-            pytest.raises(RuntimeError, match="resume boom"),
-        ):
-            await dispatch.dispatch_run(RUN_ID, ORG_ID, job_type="resume_run", resume_data={"action": "approved"})
-
-    @pytest.mark.asyncio
-    async def test_saq_resume_enqueues_and_sets_dispatcher(self) -> None:
-        # SAQ_ENABLED=true: resume_run enqueues to SAQ (B-2/C worker wiring).
-        with (
-            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=True)),
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
@@ -212,7 +147,7 @@ class TestDispatchRunRouting:
     @pytest.mark.asyncio
     async def test_deduped_returns_deduped(self) -> None:
         with (
-            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=True)),
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
@@ -228,7 +163,7 @@ class TestDispatchRunRouting:
     @pytest.mark.asyncio
     async def test_enqueue_failure_marks_dispatch_failed_and_expires_dedup(self) -> None:
         with (
-            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=True)),
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
@@ -248,7 +183,7 @@ class TestDispatchRunRouting:
     @pytest.mark.asyncio
     async def test_enqueue_failure_fail_fast_does_not_block(self) -> None:
         with (
-            patch.object(dispatch, "get_settings", return_value=_make_settings(saq_enabled=True)),
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
@@ -382,66 +317,3 @@ class TestCallSiteConversions:
         import modulo.api.mcp_server as mcp
 
         assert mcp.dispatch_run is dispatch.dispatch_run
-
-    def test_scheduler_uses_dispatch_run(self) -> None:
-        import modulo.core.scheduler as scheduler
-
-        assert scheduler.dispatch_run is dispatch.dispatch_run
-
-    def test_cron_scheduler_uses_dispatch_run_sync(self) -> None:
-        import modulo.core.cron_scheduler as cron
-
-        assert cron.dispatch_run_sync is dispatch.dispatch_run_sync
-
-    def test_polling_uses_dispatch_run_sync(self) -> None:
-        import modulo.core.trigger_engine.polling as polling
-
-        assert polling.dispatch_run_sync is dispatch.dispatch_run_sync
-
-
-class TestCronFireTaskDispatch:
-    def test_cron_fire_dispatches_via_dispatch_run_sync(self) -> None:
-        task = CronFireTask()
-        result = {"status": "fired", "run_id": RUN_ID}
-        trigger_id = str(uuid.uuid4())
-        pipeline_id = str(uuid.uuid4())
-        with (
-            patch(
-                "modulo.core.cron_scheduler.fire_cron_trigger",
-                new_callable=AsyncMock,
-                return_value=result,
-            ),
-            patch("modulo.core.cron_scheduler.dispatch_run_sync") as dispatch_sync,
-        ):
-            out = task.run(trigger_id, ORG_ID, pipeline_id, "*/5 * * * *")
-
-        assert out["status"] == "fired"
-        dispatch_sync.assert_called_once_with(result["run_id"], ORG_ID, queue="runs", celery_queue="runs_automated")
-
-
-class TestPollingFireTaskDispatch:
-    def test_polling_fire_dispatches_via_dispatch_run_sync(self) -> None:
-        task = PollingFireTask()
-        result = {"status": "fired", "run_id": RUN_ID}
-        trigger_id = str(uuid.uuid4())
-        pipeline_id = str(uuid.uuid4())
-        connector_id = str(uuid.uuid4())
-        with (
-            patch(
-                "modulo.core.trigger_engine.polling.fire_polling_trigger",
-                new_callable=AsyncMock,
-                return_value=result,
-            ),
-            patch("modulo.core.trigger_engine.polling.dispatch_run_sync") as dispatch_sync,
-        ):
-            out = task.run(
-                trigger_id,
-                ORG_ID,
-                pipeline_id,
-                connector_id,
-                "SELECT 1",
-                "condition == true",
-            )
-
-        assert out["status"] == "fired"
-        dispatch_sync.assert_called_once_with(result["run_id"], ORG_ID, queue="runs", celery_queue="runs_automated")

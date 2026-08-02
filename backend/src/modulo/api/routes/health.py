@@ -5,9 +5,9 @@ Each worker writes its metadata (``{"hostname": FLY_MACHINE_ID}``) to
 ``saq:{queue}:worker_info:{worker_id}``; this machine's readiness verifies that
 a live worker for THIS hostname exists on EACH configured queue independently
 (runs AND system — one live queue does not mask a dead sibling). Stale workers
-for 4 consecutive probes => 503, gated on ``SAQ_ENABLED=true`` (shadow is
-alert-only so a shadow worker crash can never degrade web capacity on a
-Celery-served system).
+for 4 consecutive probes => 503. Post-cutover (PR C) the gate is ALWAYS active
+— there is no Celery path to fall back on — but can be relaxed to degraded
+(alert-only) via ``SAQ_HARD_GATE=false`` after the hold (plan F7).
 """
 
 import asyncio
@@ -303,10 +303,9 @@ async def _check_saq_workers() -> CheckResult:
     machine-scoped: it only fails when THIS machine's worker is stale on ANY
     queue — a live system worker does not mask a dead runs worker on the same
     machine. After 4 consecutive stale probes the check reports
-    ``unavailable`` (503) — but ONLY when ``SAQ_ENABLED=true``. In shadow
-    (``SAQ_ENABLED=false``) staleness is alert-only (reported degraded, never
-    503) so a shadow worker crash cannot degrade web capacity on a
-    Celery-served system.
+    ``unavailable`` (503). The 503 gate is ALWAYS active post-cutover (PR C —
+    there is no Celery path), but ``SAQ_HARD_GATE=false`` relaxes it to
+    degraded (alert-only) after the hold (plan F7).
     """
     global _consecutive_stale_probes
 
@@ -336,7 +335,7 @@ async def _check_saq_workers() -> CheckResult:
         )
 
     _consecutive_stale_probes += 1
-    if settings.saq_enabled and _consecutive_stale_probes >= _STALE_PROBE_LIMIT:
+    if settings.saq_hard_gate and _consecutive_stale_probes >= _STALE_PROBE_LIMIT:
         return CheckResult(
             status="unavailable",
             detail=(
@@ -345,7 +344,7 @@ async def _check_saq_workers() -> CheckResult:
                 f"live_by_queue={live_by_queue})"
             ),
         )
-    if settings.saq_enabled:
+    if settings.saq_hard_gate:
         return CheckResult(
             status="degraded",
             detail=(
@@ -353,16 +352,17 @@ async def _check_saq_workers() -> CheckResult:
                 f"{_STALE_PROBE_LIMIT} probes; hostname={this_host}, stale_queues={sorted(missing_queues)})"
             ),
         )
-    # Shadow: alert-only — report ok so the check never 503s a Celery-served env.
+    # SAQ_HARD_GATE=false (post-hold): alert-only — report ok so the check
+    # never 503s a machine; alerting continues permanently (plan F7).
     _log.warning(
-        "health.saq_workers_stale_shadow hostname=%s stale_queues=%s probes=%d",
+        "health.saq_workers_stale_relaxed hostname=%s stale_queues=%s probes=%d",
         this_host,
         sorted(missing_queues),
         _consecutive_stale_probes,
     )
     return CheckResult(
         status="ok",
-        detail=f"saq workers stale (shadow alert-only) on this machine ({this_host})",
+        detail=f"saq workers stale (SAQ_HARD_GATE=false, alert-only) on this machine ({this_host})",
     )
 
 

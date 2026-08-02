@@ -15,7 +15,7 @@ code:
   - backend/src/modulo/core/error_tracking/alerting.py
   - backend/src/modulo/core/error_tracking/alert_dispatcher.py
   - backend/src/modulo/core/error_tracking/metrics.py
-  - backend/src/modulo/core/error_tracking/celery_hooks.py
+  - backend/src/modulo/core/error_tracking/saq_hooks.py
   - backend/src/modulo/api/routes/errors.py
   - backend/src/modulo/api/routes/error_notification_rules.py
   - backend/src/modulo/api/models/error.py
@@ -45,7 +45,7 @@ status: partial
 # Error Tracking
 
 Multi-source error ingestion pipeline with fingerprint-based grouping, alert rules,
-external forwarders, and a frontend SDK. Supports backend (FastAPI middleware, Celery
+external forwarders, and a frontend SDK. Supports backend (FastAPI middleware, SAQ
 hooks, logging handler), frontend (JS SDK with breadcrumbs), and external (Sentry,
 Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 
@@ -109,9 +109,9 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] Frontend uses `crypto.subtle.sign('HMAC', ...)` with SHA-256 digest fallback
 - [x] Session key invalidated on auth change
 
-### Celery Task Failure Hook
+### SAQ Job Failure Hook
 
-- [x] Registers as Celery `on_failure` handler for all tasks
+- [x] `saq_hooks.after_process` ingests failed execute/resume jobs (source `saq`)
 - [x] Extracts task name, exception type+message, full stacktrace, args, kwargs
 - [x] Runs in new asyncio event loop
 

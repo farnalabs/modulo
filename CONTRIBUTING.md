@@ -122,7 +122,7 @@ auto-seeds an admin user based on the `MODULO_USERS` environment variable.
 | `FERNET_KEY` | Yes | — | Fernet encryption key for credentials |
 | `DATABASE_URL` | No | `sqlite+aiosqlite:///./modulo.db` | Database connection string |
 | `MODULO_DB` | No | `postgres` | Database dialect (`postgres`, `sqlite`, `mariadb`) |
-| `REDIS_URL` | No | `redis://localhost:6379/0` | Redis connection for Celery task queue |
+| `REDIS_URL` | Yes | `redis://localhost:6379/0` | Redis connection for the SAQ broker |
 | `MODULO_PUBLIC_URL` | No | `http://localhost:8000` | Public-facing URL for OIDC/SAML callbacks |
 | `MODULO_USERS` | No | — | Seed admin users (`username:password`) |
 

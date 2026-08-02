@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
 
-from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
+from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 
 
 class TestValidateCronExpression:

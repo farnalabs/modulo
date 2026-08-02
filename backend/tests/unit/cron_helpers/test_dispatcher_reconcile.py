@@ -89,7 +89,6 @@ def _run_row(run_id: uuid.UUID, status: str, *, dispatched: bool = True, stale: 
 
 def _settings(**overrides: object) -> MagicMock:
     base: dict[str, object] = {
-        "saq_enabled": True,
         "saq_runs_queue": "runs",
         "saq_reenqueue_window": 600,
         "saq_job_heartbeat": 300,
@@ -214,33 +213,6 @@ class TestReconcilePredicateMatrix:
         assert summary["repaired"] == 1
         reenqueue.assert_awaited_once()
         assert reenqueue.await_args.args[3] == "execute_run"
-        ingest.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_pending_undispatched_not_redispatched_in_shadow_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """In shadow mode a pending+undispatched run is a not-yet-sent Celery
-        dispatch, not a SAQ capacity deferral — reconcile must not touch it."""
-        _patch_env(monkeypatch)
-        session = _MockSession([_org_result([ORG]), _rows_result([])])
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-        q = _make_queue(redis_client)
-        redis_cls = MagicMock()
-        redis_cls.from_url.return_value = redis_client
-
-        with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings(saq_enabled=False)),
-            patch.object(ch, "AsyncRedis", redis_cls),
-            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
-            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock) as reenqueue,
-            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
-        ):
-            summary = await ch.dispatcher_reconcile()
-
-        assert summary["repaired"] == 0
-        assert summary["scanned"] == 0
-        reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
 
     @pytest.mark.asyncio

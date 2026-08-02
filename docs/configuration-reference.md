@@ -57,14 +57,39 @@ See [`docs/deployment-security.md`](./deployment-security.md) for key rotation p
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `REDIS_URL` | For multi-replica | — | `redis://host:port/db` for Celery broker and rate limiting |
+| `REDIS_URL` | **Yes** | — | `redis://host:port/db` for the SAQ broker and rate limiting |
 
-Redis is optional for single-replica deployments but required for:
-- Multi-replica coordination (cron triggers, polling, task queues)
-- Distributed rate limiting
-- WebSocket event broker (Redis pub/sub)
+Redis is **required** for production: the SAQ workers (runs + system) provide
+run dispatch, cron firing, and the scheduler. Without Redis there is no
+executor — only in-memory rate limiting and an in-memory event broker.
 
-Without Redis: in-process scheduler, in-memory rate limiting, in-memory event broker.
+---
+
+## SAQ (task queue / workers)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SAQ_RUNS_QUEUE` | No | `runs` | Runs-queue name (`staging-runs` on staging for isolation) |
+| `SAQ_HARD_GATE` | No | `true` | Healthz/ready 503-gates when THIS machine's SAQ workers are stale. Set `false` after the cutover hold to relax to degraded (alerting continues) |
+| `SAQ_AUTH_PASSWORD` | Yes (system worker) | — | Fail-closed web UI auth password; refuse to boot without it |
+| `SAQ_AUTH_USERNAME` | Yes (system worker) | — | Fail-closed web UI auth user; maps to the `AUTH_USER` env SAQ's web reads |
+| `SAQ_RUN_RETRIES` | No | `5` | SAQ retries per run job — `N` is N total attempts (N-1 retries) |
+| `SAQ_RETRY_DELAY` | No | `60` | Fixed retry delay in seconds (`retry_backoff=False`) |
+| `SAQ_JOB_HEARTBEAT` | No | `300` | SAQ job heartbeat knob (per-job `heartbeat`) |
+| `SAQ_E2B_IDEMPOTENCY` | No | `true` | Per-claim E2B idempotency key `run:{id}:e2b:{claim_token}` |
+| `SAQ_REENQUEUE_WINDOW` | No | `600` | Re-enqueue staleness window for `dispatcher_reconcile` |
+| `SAQ_NEVER_DISPATCHED_WINDOW` | No | `300` | Legacy never-dispatched sweep window (non-SAQ rows only) |
+| `SAQ_WORKER_LOST_WINDOW` | No | `600` | Legacy worker-lost sweep window (non-SAQ rows only) |
+| `SAQ_WORKER_DB_POOL_SIZE` | No | `10` | SAQ worker Postgres pool size (per worker) |
+| `SAQ_REDIS_POOL_SIZE` | No | `5` | SAQ Redis client pool size (Upstash connection budget) |
+| `RUN_CLAIM_STALE_SECONDS` | No | `450` | Staleness gate for re-claiming a SAQ run whose heartbeat is stale |
+| `LEGACY_RUN_CLAIM_STALE_SECONDS` | No | `180` | Legacy claim window for the shared sync claim helpers |
+| `RUN_HEARTBEAT_SECONDS` | No | `30` | DB heartbeat cadence (keep below the 300s SAQ sweep threshold) |
+| `SAQ_TEST_PAUSE` | TEST-ONLY | `false` | Test-only pause flag; refused outside test/staging (`DEBUG=true`) |
+
+`SAQ_HARD_GATE` replaces the removed `SAQ_ENABLED` flag: post-cutover SAQ is the
+only dispatch path, so the readiness gate is always active and the hold gate is
+controlled by `SAQ_HARD_GATE` alone.
 
 ---
 

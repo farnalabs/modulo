@@ -1,21 +1,20 @@
-"""Shared pipeline execution core for Celery and SAQ.
+"""Shared pipeline execution core for SAQ.
 
 This module is the single home for the claim / execute / heartbeat / complete /
 stale-sweep logic that was historically embedded in
 :mod:`modulo.core.pipeline_executor_task` (the Celery task module deleted by
-PR C of the Celery->SAQ migration). SAQ workers (PR B) and the Celery task both
-delegate here.
+PR C of the Celery->SAQ migration). The SAQ workers delegate here.
 
-NOT here: ``dispatch_run`` (PR B), cron firing (PR B), fire/report jobs.
+NOT here: ``dispatch_run``, cron firing, fire/report jobs.
 
 Engine injection: every entry point takes its engine(s) explicitly so the
-Celery prefork path can keep using its sync claim pool + async execution pool
-while the SAQ path passes its own async engine. No module-level engine globals.
+legacy sync claim pool + async execution pool helpers stay usable while the SAQ
+path passes its own async engine. No module-level engine globals.
 
 Staleness constants (plan F4 / F1 ordering):
 
     RUN_CLAIM_STALE_SECONDS        = 450  SAQ runs only
-    LEGACY_RUN_CLAIM_STALE_SECONDS = 180  Celery/legacy path (today's 3-minute window)
+    LEGACY_RUN_CLAIM_STALE_SECONDS = 180  legacy sync claim helpers
     SAQ_JOB_HEARTBEAT              = 300  SAQ job heartbeat knob
     RUN_HEARTBEAT_SECONDS          = 30   DB heartbeat cadence
 
@@ -30,14 +29,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import threading
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from sqlalchemy.orm import Session
 
 from modulo.db.crud.run import get_run
 
@@ -108,44 +105,6 @@ def _make_sync_url(database_url: str) -> str:
     return (
         database_url.replace("+asyncpg", "+psycopg").replace("+aiomysql", "+mysqldb").replace("+aiosqlite", "+pysqlite")
     )
-
-
-_sync_beat_engine: Any = None
-_sync_beat_lock = threading.Lock()
-
-
-def get_beat_sync_session() -> Session:
-    """Return a sync SQLAlchemy session for the Celery beat scheduler.
-
-    Uses a dedicated engine separate from the worker's sync pool to avoid
-    contention between beat polling and task execution. Relocated from
-    ``modulo.core.pipeline_executor_task`` (PR B-2, plan F1).
-    """
-    global _sync_beat_engine
-    if _sync_beat_engine is None:
-        with _sync_beat_lock:
-            if _sync_beat_engine is None:
-                s = get_settings()
-                sync_url = _make_sync_url(str(s.database_url))
-                _sync_beat_engine = create_engine(
-                    sync_url,
-                    pool_size=s.modulo_celery_db_pool_sync_size,
-                    max_overflow=s.modulo_celery_db_pool_sync_overflow,
-                    pool_pre_ping=True,
-                    pool_recycle=300,
-                    pool_use_lifo=False,
-                    pool_timeout=s.modulo_celery_db_pool_sync_timeout,
-                )
-    from sqlalchemy.orm import sessionmaker
-
-    return sessionmaker(bind=_sync_beat_engine)()
-
-
-def dispose_beat_sync_engine() -> None:
-    global _sync_beat_engine
-    if _sync_beat_engine is not None:
-        _sync_beat_engine.dispose()
-        _sync_beat_engine = None
 
 
 def _resolve_claim_stale_seconds(*, legacy: bool, stale_seconds: int | None) -> int:
@@ -447,8 +406,11 @@ async def stale_run_recovery_sweep(
     Legacy windows default to today's beat-sweep values — never_dispatched=300s
     (settings ``SAQ_NEVER_DISPATCHED_WINDOW``), worker_lost=600s (settings
     ``SAQ_WORKER_LOST_WINDOW``) — and are deliberately decoupled from
-    ``RUN_CLAIM_STALE_SECONDS=450`` (SAQ runs only). PR B scopes this sweep to
-    legacy-dispatched runs once the ``dispatcher`` column exists.
+    ``RUN_CLAIM_STALE_SECONDS=450`` (SAQ runs only). The never-dispatched and
+    worker-lost branches are scoped to legacy-dispatched rows
+    (``dispatcher IS NULL OR dispatcher != 'saq'``) — SAQ runs never carry
+    worker_lost/never_dispatched (plan F1). The capacity-timeout backstop is
+    SAQ-relevant (capacity-deferred runs) and is NOT dispatcher-scoped.
     """
     settings = get_settings()
     nd_window = never_dispatched_window if never_dispatched_window is not None else settings.saq_never_dispatched_window
@@ -464,7 +426,8 @@ async def stale_run_recovery_sweep(
                     "AND created_at < now() - (:nd_window * interval '1 second') "
                     "AND dispatched_at IS NULL "
                     "AND cancellation_requested = false "
-                    "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity'))"
+                    "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
+                    "AND (dispatcher IS NULL OR dispatcher != 'saq')"
                 ),
                 {"nd_window": nd_window},
             )
@@ -524,7 +487,8 @@ async def stale_run_recovery_sweep(
                     "SET status = 'failed', error_code = 'worker_lost', completed_at = now() "
                     "WHERE status = 'running' "
                     "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
-                    "AND claim_count >= 5"
+                    "AND claim_count >= 5 "
+                    "AND (dispatcher IS NULL OR dispatcher != 'saq')"
                 ),
                 {"wl_window": wl_window},
             )

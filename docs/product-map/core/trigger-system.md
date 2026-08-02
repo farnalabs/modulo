@@ -13,7 +13,8 @@ code:
   - backend/src/modulo/core/trigger_engine/__init__.py
   - backend/src/modulo/core/trigger_engine/polling.py
   - backend/src/modulo/core/trigger_engine/agent_signal.py
-  - backend/src/modulo/core/cron_scheduler.py
+  - backend/src/modulo/core/cron_helpers.py
+  - backend/src/modulo/core/saq_worker.py
 depends-on: [feat-connectors-hub, feat-core-pipeline-execution]
 unit-tests:
   - backend/tests/unit/trigger_engine/test_trigger_engine.py
@@ -89,11 +90,11 @@ concurrency management via `max_concurrent_runs`.
 
 ### Cron Trigger
 
-- [x] `DatabaseCronScheduler` — custom Celery beat scheduler querying `triggers` where `trigger_type='cron'`, `active=true`, `next_fire_at <= now()`
+- [x] `fire_due_triggers` SAQ system cron
 - [x] Tick interval: 30 seconds (`max_interval`)
 - [x] `DatabaseCronEntry` created per matching trigger row
 - [x] Stale entries removed from in-memory schedule when DB rows are deleted/deactivated
-- [x] `CronFireTask` — Celery task with `autoretry_for=(Exception,)`, `max_retries=3`, `default_retry_delay=60`
+- [x] `fire_cron_trigger` SAQ per-item fire job with
 - [x] Trigger re-read with `FOR UPDATE` lock to serialise concurrent fire attempts
 - [x] Concurrency check against `max_concurrent_runs` before firing
 - [x] Daily spend limit check via `trigger.daily_spend_limit` — sums `Run.total_cost_usd` for today, skips if limit reached
@@ -108,9 +109,9 @@ concurrency management via `max_concurrent_runs`.
 
 ### Polling Trigger
 
-- [x] `DatabasePollingScheduler` — Celery beat scheduler querying `triggers` where `trigger_type='polling'`, `active=true`, `next_fire_at <= now()`
+- [x] `fire_due_triggers` SAQ system cron (polling fire jobs)
 - [x] `DatabasePollingEntry` created per matching trigger row
-- [x] `PollingFireTask` with `autoretry_for=(ConnectionError, TimeoutError, OSError)`, `max_retries=2`, `default_retry_delay=30`
+- [x] `fire_polling_trigger` SAQ per-item fire job with `autoretry_for=(ConnectionError, TimeoutError, OSError)`, `max_retries=2`, `default_retry_delay=30`
 - [x] Trigger re-read with `FOR UPDATE` lock for concurrency serialisation
 - [x] Next-fire guard: if `next_fire_at > now()` the task returns `already_fired_this_cycle` without firing
 - [x] `schedule_polling_trigger()` in TriggerEngine computes `next_fire_at` from `poll_interval_seconds`

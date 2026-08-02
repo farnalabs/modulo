@@ -85,14 +85,9 @@ class DispatchResult:
 
 
 class Notifier:
-    """Dispatch notifications to configured endpoints with retry and dead-letter.
+    """Dispatch notifications to configured endpoints with retry and dead-letter."""
 
-    When ``use_celery`` is True, ``dispatch_event()`` enqueues the work as a
-    Celery task instead of running inline. Falls back to inline dispatch if
-    the Celery broker is unreachable.
-    """
-
-    def __init__(self, db_engine: AsyncEngine, fernet_key: str, *, use_celery: bool = False) -> None:
+    def __init__(self, db_engine: AsyncEngine, fernet_key: str) -> None:
         self._engine = db_engine
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
         try:
@@ -101,7 +96,6 @@ class Notifier:
             raise ValueError(f"Invalid Fernet key: {exc}") from exc
         self._http_client: httpx.AsyncClient | None = None
         self._http_client_lock = asyncio.Lock()
-        self._use_celery = use_celery
 
     async def _get_client(self) -> httpx.AsyncClient:
         async with self._http_client_lock:
@@ -123,10 +117,6 @@ class Notifier:
     ) -> list[DispatchResult]:
         """Dispatch a notification event to subscribed endpoints.
 
-        When ``use_celery`` is True, enqueues a Celery task and returns
-        a placeholder result immediately. Falls back to inline dispatch if
-        the Celery broker is unreachable.
-
         When ``team_id`` is provided, dispatches to team-specific endpoints
         first, falling back to org-wide (team_id IS NULL) endpoints if no
         team-specific endpoints are configured for the event type.
@@ -135,82 +125,7 @@ class Notifier:
 
         Returns a list of DispatchResult, one per endpoint.
         """
-        if self._use_celery:
-            return await self._dispatch_via_celery(
-                org_id, event_type, payload, run_id=run_id, retain_payload=retain_payload, team_id=team_id
-            )
-
         return await self._dispatch_inline(org_id, event_type, payload, run_id, retain_payload, team_id)
-
-    async def _dispatch_via_celery(
-        self,
-        org_id: uuid.UUID,
-        event_type: str,
-        payload: dict[str, Any],
-        *,
-        run_id: uuid.UUID | None = None,
-        retain_payload: bool = False,
-        team_id: uuid.UUID | None = None,
-    ) -> list[DispatchResult]:
-        """Enqueue dispatch to Celery; fall back to inline on failure."""
-        try:
-            from modulo.core.notifier.celery_tasks import enqueue_dispatch
-
-            results = await enqueue_dispatch(
-                org_id,
-                event_type,
-                payload,
-                run_id=run_id,
-                retain_payload=retain_payload,
-                team_id=team_id,
-            )
-            parsed: list[DispatchResult] = []
-            for r in results:
-                eid = r["endpoint_id"]
-                if eid == "celery-enqueued":
-                    parsed.append(
-                        DispatchResult(
-                            endpoint_id=uuid.uuid4(),
-                            status=r["status"],
-                            attempt_count=r["attempt_count"],
-                            response_code=r["response_code"],
-                            last_error=r["last_error"],
-                        )
-                    )
-                else:
-                    try:
-                        parsed.append(
-                            DispatchResult(
-                                endpoint_id=uuid.UUID(eid),
-                                status=r["status"],
-                                attempt_count=r["attempt_count"],
-                                response_code=r["response_code"],
-                                last_error=r["last_error"],
-                            )
-                        )
-                    except (ValueError, TypeError, AttributeError):
-                        _log.error(
-                            "notifier.invalid_endpoint_id",
-                            extra={"endpoint_id": eid, "org_id": str(org_id)},
-                        )
-                        parsed.append(
-                            DispatchResult(
-                                endpoint_id=uuid.uuid4(),
-                                status="error",
-                                attempt_count=0,
-                                response_code=None,
-                                last_error=f"Invalid endpoint_id: {eid}",
-                            )
-                        )
-            return parsed
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            _log.warning(
-                "notifier.celery_fallback",
-                extra={"event_type": event_type, "org_id": str(org_id), "error": str(exc)},
-            )
-            return await self._dispatch_inline(org_id, event_type, payload, run_id, retain_payload, team_id)
 
     async def _get_subscribed_endpoints(
         self,

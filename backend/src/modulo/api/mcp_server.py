@@ -1143,7 +1143,7 @@ async def trigger_pipeline(
             run_id = run.id
             thread_id = run.langgraph_thread_id
 
-        await dispatch_run(str(run_id), str(org_id), queue="runs", celery_queue="runs_manual")
+        await dispatch_run(str(run_id), str(org_id), queue="runs")
 
         return {
             "run_id": str(run_id),

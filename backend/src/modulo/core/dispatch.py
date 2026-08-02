@@ -1,24 +1,16 @@
 """dispatch_run — the single gating point for run dispatch.
 
-Every run dispatch flows through :func:`dispatch_run` (plan F3e). In SAQ mode
-(``SAQ_ENABLED=true``) it enqueues ``execute_run`` / ``resume_run`` jobs to the
-SAQ runs queue with per-job knobs from Settings and records the ``dispatcher``
-column. In shadow mode (``SAQ_ENABLED=false``) ``execute_run`` routes to Celery
-via the existing Celery dispatch (``dispatcher`` stays NULL) while ``resume_run``
-runs IN-PROCESS (no enqueue — there is no Celery resume path and the SAQ worker
-wiring lands in a later PR slice, so queueing a resume in shadow would silently
-drop the recovery).
+Every run dispatch flows through :func:`dispatch_run` (plan F3e). It enqueues
+``execute_run`` / ``resume_run`` jobs to the SAQ runs queue with per-job knobs
+from Settings and records the ``dispatcher`` column — unconditionally ``'saq'``
+(PR C cutover: Celery removed, the dispatcher column reflects where the job
+actually went, and that is always SAQ).
 
-The dispatcher column reflects WHERE THE JOB ACTUALLY WENT:
-``'saq'`` iff enqueued to SAQ; NULL iff routed to Celery.
-
-Capacity gating (plan F3b/F3e) applies to SAQ dispatches — both new
+Capacity gating (plan F3b/F3e) applies to all dispatches — both new
 ``execute_run`` dispatches and ``resume_run`` — a run at the pipeline's
 ``max_concurrent_runs`` is returned ``'deferred'`` with NO enqueue and NO
 ``dispatched_at`` (dispatcher_reconcile re-dispatches when capacity frees). The
-run's own slot is excluded from the count so a resume never blocks itself. The
-shadow/Celery path keeps today's executor-side capacity gate so shadow
-behaviour is unchanged.
+run's own slot is excluded from the count so a resume never blocks itself.
 
 On enqueue failure: webhook handlers pass ``fail_fast=True`` (respond 202,
 leave recovery to ``dispatcher_reconcile`` — never block the request on
@@ -43,7 +35,7 @@ from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
-# SAQ job function names — registered in core/saq_worker.py (PR B step 5).
+# SAQ job function names — registered in core/saq_worker.py.
 SAQ_EXECUTE_RUN_FUNCTION = "modulo.core.saq_worker.execute_run"
 SAQ_RESUME_RUN_FUNCTION = "modulo.core.saq_worker.resume_run"
 
@@ -142,26 +134,6 @@ async def _expire_webhook_dedup(session: AsyncSession, run_id: uuid.UUID) -> Non
     )
 
 
-async def _resume_inline(
-    run_id: uuid.UUID,
-    org_id: uuid.UUID,
-    resume_data: dict[str, Any] | None,
-) -> None:
-    """Resume a run in-process (shadow mode) — no queue, no worker.
-
-    PR B-1 lands the dispatch routing BEFORE the SAQ worker wiring, so in
-    shadow mode (``SAQ_ENABLED=false``) a node recovery must NOT be enqueued to
-    a queue no worker consumes. Replay the pre-B-1 ``recover_run_node`` path
-    (``PipelineExecutor.resume``) directly so recovery can never silently drop.
-    """
-    from modulo.api.dependencies import get_or_create_engine, pg_connection_string
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
-
-    engine = get_or_create_engine(get_settings())
-    executor = PipelineExecutor(engine, checkpointer_conn_string=pg_connection_string(str(engine.url)))
-    await executor.resume(run_id=run_id, org_id=org_id, resume_data=resume_data or {})
-
-
 async def _enqueue_saq(
     run_id: str,
     org_id: str,
@@ -206,129 +178,100 @@ async def dispatch_run(
     org_id: str,
     *,
     queue: str = "runs",
-    celery_queue: str = "runs_automated",
     job_type: str = "execute_run",
     resume_data: dict[str, Any] | None = None,
     fail_fast: bool = False,
 ) -> tuple[str, str | None]:
-    """Route a run to SAQ (or Celery in shadow mode).
+    """Route a run to SAQ (the only dispatch path post-cutover).
 
     Returns ``(outcome, job_id)``:
 
-      * ``('enqueued', job_id)``  — job is on the SAQ queue (or sent to Celery).
+      * ``('enqueued', job_id)``  — job is on the SAQ queue.
       * ``('deduped', job_id)``   — a SAQ job with the same key already exists.
-      * ``('resumed', None)``     — shadow-mode ``resume_run`` executed in-process
-        (no enqueue).
       * ``('deferred', None)``    — capacity-blocked (no enqueue, no dispatched_at)
         or enqueue failed.
     """
     settings = get_settings()
     rid = uuid.UUID(str(run_id))
     oid = uuid.UUID(str(org_id))
-    use_saq = bool(settings.saq_enabled)
     queue_name = queue or settings.saq_runs_queue
-
-    # Shadow-mode resume: the SAQ worker is not wired in this slice and there is
-    # no Celery resume path, so enqueuing a resume would silently drop the
-    # recovery (the run would stay stuck). Resume inline in-process — exactly the
-    # pre-B-1 recover_run_node behaviour — and never touch dispatched_at or SAQ.
-    if not use_saq and job_type == "resume_run":
-        await _resume_inline(rid, oid, resume_data)
-        return ("resumed", None)
 
     # Capacity check FIRST (plan F3b/F3e). The run itself is excluded from the
     # count so a resume never counts against its own slot; a capacity-deferred
     # resume is re-dispatched by dispatcher_reconcile. No dispatched_at here.
-    if use_saq:
-        session = _open_session()
-        try:
-            async with session.begin():
-                from modulo.db.rls import set_rls_org
+    session = _open_session()
+    try:
+        async with session.begin():
+            from modulo.db.rls import set_rls_org
 
-                await set_rls_org(session, oid)
-                if await _capacity_deferred(session, rid, oid):
-                    _log.info("dispatch_run: run %s capacity-deferred (no enqueue)", rid)
-                    return ("deferred", None)
-        finally:
-            await session.close()
-
-        # Write dispatched_at BEFORE enqueue (F3e) — intentional SAQ-path
-        # ordering. Shadow/Celery delegates to celery_dispatch which records
-        # dispatched_at itself (best-effort) AFTER the send.
-        session = _open_session()
-        try:
-            async with session.begin():
-                from modulo.db.rls import set_rls_org
-
-                await set_rls_org(session, oid)
-                await _record_dispatched(session, rid)
-        finally:
-            await session.close()
-
-        try:
-            job_id, deduped = await _enqueue_saq(str(rid), str(oid), queue_name, job_type, resume_data)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            if fail_fast:
-                _log.exception("dispatch_run: SAQ enqueue failed for run %s (fail-fast)", rid)
+            await set_rls_org(session, oid)
+            if await _capacity_deferred(session, rid, oid):
+                _log.info("dispatch_run: run %s capacity-deferred (no enqueue)", rid)
                 return ("deferred", None)
-            _log.warning("dispatch_run: SAQ enqueue failed for run %s: %s", rid, exc)
-            for attempt in (1, 2, 3):
-                await asyncio.sleep(attempt)
-                try:
-                    job_id, deduped = await _enqueue_saq(str(rid), str(oid), queue_name, job_type, resume_data)
-                    break
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc2:
-                    _log.warning(
-                        "dispatch_run: SAQ enqueue retry %d failed for run %s: %s",
-                        attempt,
-                        rid,
-                        exc2,
-                    )
-            else:
-                session = _open_session()
-                try:
-                    async with session.begin():
-                        from modulo.db.rls import set_rls_org
+    finally:
+        await session.close()
 
-                        await set_rls_org(session, oid)
-                        await _mark_dispatch_failed(session, rid)
-                        await _expire_webhook_dedup(session, rid)
-                finally:
-                    await session.close()
-                return ("deferred", None)
+    # Write dispatched_at BEFORE enqueue (F3e).
+    session = _open_session()
+    try:
+        async with session.begin():
+            from modulo.db.rls import set_rls_org
 
-        session = _open_session()
-        try:
-            async with session.begin():
-                from modulo.db.rls import set_rls_org
-
-                await set_rls_org(session, oid)
-                await _record_saq_job(session, rid, job_id, _new_claim_token())
-        finally:
-            await session.close()
-        return ("deduped" if deduped else "enqueued", job_id)
-
-    # Shadow mode — route execute_run to Celery via the existing dispatch;
-    # dispatcher stays NULL and dispatched_at is recorded by celery_dispatch
-    # itself (send-first, best-effort), so a DB error here can never strand a run.
-    from modulo.core.pipeline_executor_task import dispatch as celery_dispatch
+            await set_rls_org(session, oid)
+            await _record_dispatched(session, rid)
+    finally:
+        await session.close()
 
     try:
-        celery_dispatch(str(rid), str(oid), celery_queue)
+        job_id, deduped = await _enqueue_saq(str(rid), str(oid), queue_name, job_type, resume_data)
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         if fail_fast:
-            _log.exception("dispatch_run: Celery dispatch failed for run %s (fail-fast)", rid)
+            _log.exception("dispatch_run: SAQ enqueue failed for run %s (fail-fast)", rid)
             return ("deferred", None)
-        raise exc from None
-    return ("enqueued", None)
+        _log.warning("dispatch_run: SAQ enqueue failed for run %s: %s", rid, exc)
+        for attempt in (1, 2, 3):
+            await asyncio.sleep(attempt)
+            try:
+                job_id, deduped = await _enqueue_saq(str(rid), str(oid), queue_name, job_type, resume_data)
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc2:
+                _log.warning(
+                    "dispatch_run: SAQ enqueue retry %d failed for run %s: %s",
+                    attempt,
+                    rid,
+                    exc2,
+                )
+        else:
+            session = _open_session()
+            try:
+                async with session.begin():
+                    from modulo.db.rls import set_rls_org
+
+                    await set_rls_org(session, oid)
+                    await _mark_dispatch_failed(session, rid)
+                    await _expire_webhook_dedup(session, rid)
+            finally:
+                await session.close()
+            return ("deferred", None)
+
+    session = _open_session()
+    try:
+        async with session.begin():
+            from modulo.db.rls import set_rls_org
+
+            await set_rls_org(session, oid)
+            await _record_saq_job(session, rid, job_id, _new_claim_token())
+    finally:
+        await session.close()
+    return ("deduped" if deduped else "enqueued", job_id)
 
 
 def dispatch_run_sync(run_id: str, org_id: str, **kwargs: Any) -> tuple[str, str | None]:
-    """Sync facade for sync Celery task contexts (CronFireTask/PollingFireTask)."""
+    """Sync facade for sync call sites (webhook handlers)."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:

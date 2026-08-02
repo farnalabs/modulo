@@ -1,20 +1,10 @@
-"""Celery beat scheduler for scheduled reports.
+"""Scheduled-report registry + fire + delivery (SAQ path).
 
-Architecture
-------------
-*DatabaseReportScheduler* is a custom Celery beat ``Scheduler`` that queries
-the ``scheduled_reports`` table for rows where ``active = true`` and
-``next_send_at <= now()``.
-
-On each tick it creates a schedule entry per matching report, firing
-a ``ReportFireTask`` that:
-  1. Re-reads the report row (with ``FOR UPDATE`` to serialise)
-  2. Looks up the registered report generator for ``report_type``
-  3. Calls the generator to produce report data
-  4. Formats and delivers the report
-  5. Updates ``last_sent_at`` and ``next_send_at``
-
-Report generators are registered via ``register_report_type()``.
+Report generators are registered via ``register_report_type()``. The per-item
+fire job (``fire_report_trigger`` in :mod:`modulo.core.cron_helpers`, enqueued
+by ``fire_due_triggers``) generates, formats, and delivers each due report as a
+bounded SAQ job. The Celery beat scheduler (``DatabaseReportScheduler`` /
+``ReportFireTask``) was removed in PR C of the Celery->SAQ migration.
 """
 
 from __future__ import annotations
@@ -30,27 +20,10 @@ from typing import Any
 import httpx
 from croniter import croniter
 from sqlalchemy import select, update
-from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.pipeline_execution import SchedulerDBError
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.settings import get_settings
-
-try:
-    from celery import Celery, Task
-    from celery.beat import ScheduleEntry, Scheduler
-except ImportError:
-    import typing
-
-    if typing.TYPE_CHECKING:
-        from celery import Celery, Task
-        from celery.beat import ScheduleEntry, Scheduler
-    Celery = None
-    Task = object
-    ScheduleEntry = object
-    Scheduler = object
-
 
 _log = logging.getLogger(__name__)
 
@@ -158,49 +131,8 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Celery task — fire one scheduled report
+# Fire logic — shared async core (called by the SAQ fire_report_trigger job)
 # ---------------------------------------------------------------------------
-
-celery_app_global: Any = None
-_CELERY_LOCK: threading.Lock = threading.Lock()
-
-
-def get_celery_app() -> Any:
-    global celery_app_global
-    if celery_app_global is None:
-        with _CELERY_LOCK:
-            if celery_app_global is None:
-                from modulo.celery_app import get_celery_app as _get_celery_app
-
-                celery_app_global = _get_celery_app()
-    return celery_app_global
-
-
-class ReportFireTask(Task):  # type: ignore[misc]  # Celery does not publish typed base classes
-    """Task that fires a single scheduled report — generates and delivers."""
-
-    name = "modulo.reports.fire_report"
-    autoretry_for = (httpx.RequestError, DBAPIError, TimeoutError)
-    max_retries = 3
-    default_retry_delay = 60
-
-    def run(self, report_id: str, org_id: str) -> dict[str, Any]:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(
-                _fire_scheduled_report(
-                    report_id=uuid.UUID(report_id),
-                    org_id=uuid.UUID(org_id),
-                )
-            )
-        else:
-            coro = _fire_scheduled_report(
-                report_id=uuid.UUID(report_id),
-                org_id=uuid.UUID(org_id),
-            )
-            future = asyncio.run_coroutine_threadsafe(coro, loop)
-            return future.result()
 
 
 async def _fire_scheduled_report(
@@ -302,7 +234,7 @@ async def _fire_scheduled_report(
 
 
 # ---------------------------------------------------------------------------
-# Generic delivery
+# Registry + delivery (shared — imported by cron_helpers fire jobs)
 # ---------------------------------------------------------------------------
 
 
@@ -429,161 +361,3 @@ async def _deliver_webhook(payload: Any, recipient_config: dict[str, Any]) -> li
     headers = recipient_config.get("headers", {})
     body = payload if isinstance(payload, (dict, list)) else {"data": str(payload)}
     return await _deliver_to_urls(urls, body, headers=headers)
-
-
-# ---------------------------------------------------------------------------
-# Database-backed beat scheduler
-# ---------------------------------------------------------------------------
-
-
-class DatabaseReportEntry(ScheduleEntry):  # type: ignore[misc]  # Celery does not publish typed base classes
-    """A single schedule entry representing one scheduled report row."""
-
-    def __init__(
-        self,
-        report_id: uuid.UUID,
-        org_id: uuid.UUID,
-        cron_expression: str,
-        next_send_at: datetime.datetime,
-    ) -> None:
-        self._report_id = report_id
-        self._org_id = org_id
-        self._cron_expression = cron_expression
-        self._next_send_at = next_send_at
-
-    @property
-    def name(self) -> str:
-        return f"report-{self._report_id}"
-
-    @property
-    def task(self) -> str:
-        return ReportFireTask.name
-
-    @property
-    def schedule(self) -> Any:
-        return self
-
-    @property
-    def args(self) -> list[str]:
-        return [str(self._report_id), str(self._org_id)]
-
-    @property
-    def kwargs(self) -> dict[str, Any]:
-        return {}
-
-    @property
-    def options(self) -> dict[str, Any]:
-        return {"task_id": f"report-{self._report_id}-{self._next_send_at.timestamp():.0f}"}
-
-    def is_due(self) -> tuple[bool, datetime.timedelta]:
-        now = datetime.datetime.now(datetime.UTC)
-        if self._next_send_at <= now:
-            return (True, datetime.timedelta(seconds=0))
-        delay = (self._next_send_at - now).total_seconds()
-        return (False, datetime.timedelta(seconds=max(delay, 0)))
-
-    def __repr__(self) -> str:
-        return f"<DatabaseReportEntry report={self._report_id} next={self._next_send_at.isoformat()}>"
-
-
-class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does not publish typed base classes
-    """Celery beat scheduler that reads scheduled reports from the database.
-
-    On each tick (default every 60 s via ``max_interval``), the scheduler
-    queries the ``scheduled_reports`` table for active rows whose
-    ``next_send_at <= now()`` and creates one ``DatabaseReportEntry`` per match.
-    """
-
-    Entry = DatabaseReportEntry
-
-    def __init__(self, app: Celery, **kwargs: Any) -> None:
-        self._schedule: dict[str, DatabaseReportEntry] = {}
-        super().__init__(app, **kwargs)
-
-    def setup_schedule(self) -> None:
-        """Populate the schedule from the database."""
-        self._sync_with_db()
-
-    def tick(self) -> float:
-        """Called periodically by Celery beat. Syncs with DB and returns seconds until next tick."""
-        self._sync_with_db()
-        return float(super().tick())
-
-    def _sync_with_db(self) -> None:
-        """Query the database and update the in-memory schedule."""
-        try:
-            rows = self._fetch_due_reports()
-        except SchedulerDBError:
-            return
-
-        current_ids = set(self._schedule.keys())
-        db_ids: set[str] = set()
-
-        for row in rows:
-            entry_id = f"report-{row['report_id']}"
-            db_ids.add(entry_id)
-
-            if entry_id in self._schedule:
-                existing = self._schedule[entry_id]
-                if existing._next_send_at == row["next_send_at"]:
-                    continue
-
-            entry = DatabaseReportEntry(
-                report_id=row["report_id"],
-                org_id=row["org_id"],
-                cron_expression=row["cron_expression"],
-                next_send_at=row["next_send_at"],
-            )
-            self._schedule[entry_id] = entry
-
-        stale = current_ids - db_ids
-        for sid in stale:
-            self._schedule.pop(sid, None)
-
-    def _fetch_due_reports(self) -> list[dict[str, Any]]:
-        """Sync query for scheduled reports due to fire — runs inside Celery beat."""
-        try:
-            from datetime import UTC, datetime
-
-            from modulo.core.pipeline_execution import SchedulerDBError, get_beat_sync_session
-            from modulo.db.models.scheduled_report import ScheduledReport
-
-            session = get_beat_sync_session()
-            try:
-                now = datetime.now(UTC)
-                result = session.execute(
-                    select(
-                        ScheduledReport.id,
-                        ScheduledReport.organisation_id,
-                        ScheduledReport.cron_expression,
-                        ScheduledReport.next_send_at,
-                    ).where(
-                        ScheduledReport.active,
-                        ScheduledReport.next_send_at <= now,
-                    )
-                )
-                rows = result.all()
-
-                reports: list[dict[str, Any]] = []
-                for row in rows:
-                    reports.append(
-                        {
-                            "report_id": row.id,
-                            "org_id": row.organisation_id,
-                            "cron_expression": row.cron_expression,
-                            "next_send_at": row.next_send_at,
-                        }
-                    )
-                return reports
-            finally:
-                session.close()
-        except (
-            OperationalError,
-            InterfaceError,
-            TimeoutError,
-        ):
-            _log.exception("Failed to fetch scheduled reports from database")
-            raise SchedulerDBError("Report scheduler DB query failed") from None
-
-    # max_interval: class attribute (not @property) so Celery can set it
-    max_interval: int = 60
