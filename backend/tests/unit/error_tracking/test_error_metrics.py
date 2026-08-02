@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 import types
+from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -39,24 +40,31 @@ def _make_meter() -> MagicMock:
     return meter
 
 
-def _inject_fake_otel(provider=None, raise_on_counter: type[Exception] | None = None) -> MagicMock:
-    """Inject a fake ``opentelemetry.metrics`` into ``sys.modules`` and return the meter."""
+@pytest.fixture
+def fake_otel() -> Iterator[tuple[MagicMock, MagicMock]]:
+    """Inject a fake ``opentelemetry`` / ``opentelemetry.metrics`` into ``sys.modules``
+    for the duration of the test and clean up afterwards so the stubs never shadow the
+    real OTel package for other test modules running in the same process.
+
+    Yields ``(meter, fake_metrics)`` where ``fake_metrics.get_meter_provider`` returns
+    ``None`` by default; tests may override it to point at a fake provider.
+    """
     fake_metrics = types.ModuleType("opentelemetry.metrics")
     meter = MagicMock()
     meter.create_counter.return_value = MagicMock()
     meter.create_gauge.return_value = MagicMock()
-    if raise_on_counter is not None:
-        meter.create_counter.side_effect = raise_on_counter
-    if provider is not None:
-        provider.get_meter.return_value = meter
-    fake_metrics.get_meter_provider = MagicMock(return_value=provider)
+    fake_metrics.get_meter_provider = MagicMock(return_value=None)
     fake_otel = types.ModuleType("opentelemetry")
     fake_otel.metrics = fake_metrics
-    patch.dict(
+    patcher = patch.dict(
         sys.modules,
         {"opentelemetry": fake_otel, "opentelemetry.metrics": fake_metrics},
-    ).start()
-    return meter
+    )
+    patcher.start()
+    try:
+        yield meter, fake_metrics
+    finally:
+        patcher.stop()
 
 
 # =========================================================================
@@ -65,13 +73,14 @@ def _inject_fake_otel(provider=None, raise_on_counter: type[Exception] | None = 
 
 
 class TestGetMeter:
-    def test_returns_none_when_provider_is_none(self) -> None:
-        _inject_fake_otel(provider=None)
+    def test_returns_none_when_provider_is_none(self, fake_otel: tuple[MagicMock, MagicMock]) -> None:
         assert metrics_mod._get_meter() is None
 
-    def test_returns_meter_from_provider(self) -> None:
+    def test_returns_meter_from_provider(self, fake_otel: tuple[MagicMock, MagicMock]) -> None:
+        meter, fake_metrics = fake_otel
         provider = MagicMock()
-        meter = _inject_fake_otel(provider=provider)
+        provider.get_meter.return_value = meter
+        fake_metrics.get_meter_provider.return_value = provider
         assert metrics_mod._get_meter() is meter
         provider.get_meter.assert_called_once_with("modulo.error_tracking", version="0.1.0")
 
