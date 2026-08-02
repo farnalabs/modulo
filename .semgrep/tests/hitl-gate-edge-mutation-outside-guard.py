@@ -1,7 +1,6 @@
-from sqlalchemy import delete
-
 from modulo.db.models.other_model import OtherModel
 from modulo.db.models.pipeline_edge import PipelineEdge
+from sqlalchemy import delete
 
 
 def safe_delete_other_model(session, obj_id):
