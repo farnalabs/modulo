@@ -4,6 +4,11 @@ primary_region = 'lhr'
 [build]
   dockerfile = "backend/Dockerfile.fly"
 
+# Restart policy — crash-loop guard + max-restart in the entrypoint is the
+# control (plan F8); no auto-restart here.
+[restart]
+  policy = "no"
+
 [http_service]
   internal_port = 8080
   force_https = true
@@ -11,6 +16,8 @@ primary_region = 'lhr'
   auto_start_machines = true
   min_machines_running = 2
   processes = ['app']
+  # Graceful worker drain window (plan F8).
+  kill_timeout = 120
 
   [http_service.concurrency]
     type = "connections"
@@ -18,11 +25,11 @@ primary_region = 'lhr'
     soft_limit = 50
 
   [[http_service.checks]]
-    interval = "10s"
+    interval = "15s"
     timeout = "5s"
     grace_period = "30s"
     method = "GET"
-    path = "/healthz"
+    path = "/healthz/ready"
     protocol = "http"
 
 [env]

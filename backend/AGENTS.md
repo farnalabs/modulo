@@ -156,7 +156,7 @@ fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
 
 Then set `REDIS_URL` in the corresponding `fly.*.toml` to the connection string from `fly redis status <name>`.
 
-In-memory fallbacks exist at many call sites (rate limiter `core/rate_limiter.py`, dashboard cache `api/routes/dashboard.py`, error tracking keys `core/error_tracking/__init__.py`, alert cooldowns `alerting.py`, EventBus `event_bus.py`, WS tokens `auth.py:315`, Celery scheduler `celery_app.py`) — these are acceptable in debug mode but silently lose state in production on deploy or scale-up. The eventual goal is to remove all fallbacks and hard-require Redis.
+In-memory fallbacks exist at many call sites (rate limiter `core/rate_limiter.py`, dashboard cache `api/routes/dashboard.py`, error tracking keys `core/error_tracking/__init__.py`, alert cooldowns `alerting.py`, EventBus `event_bus.py`, WS tokens `auth.py:315`) — these are acceptable in debug mode but silently lose state in production on deploy or scale-up. The eventual goal is to remove all fallbacks and hard-require Redis.
 
 ### Model backends: `health_check` overrides must re-raise `asyncio.CancelledError`
 
@@ -242,7 +242,7 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 
 ### Module-level raises for optional deps block the entire application
 
-- Never `raise ImportError(...)` at module level for an optional dependency. A module-level raise prevents the module from loading, which cascades up to crash the entire uvicorn process (or any caller that imports the module). Instead, use a graceful fallback pattern: catch `ImportError`, set a boolean flag (e.g. `CELERY_AVAILABLE = False`), and replace the imported class with a stub (`_CeleryTask = object`). Guard the optional-class definition behind the flag, and let consumers check `CELERY_AVAILABLE` at call time. Found in `webhook_dedup_cleanup.py` where `from celery import Task` raised at import time, blocking uvicorn startup.
+- Never `raise ImportError(...)` at module level for an optional dependency. A module-level raise prevents the module from loading, which cascades up to crash the entire uvicorn process (or any caller that imports the module). Instead, use a graceful fallback pattern: catch `ImportError`, set a boolean flag (e.g. `CELERY_AVAILABLE = False`), and replace the imported class with a stub (`_CeleryTask = object`). Guard the optional-class definition behind the flag, and let consumers check `CELERY_AVAILABLE` at call time. (Legacy example — the Celery dependency was removed in the SAQ cutover; the pattern still applies to any optional dependency.) Found in `webhook_dedup_cleanup.py` where `from celery import Task` raised at import time, blocking uvicorn startup.
 
 ### SQL: `FOR UPDATE` is not allowed with aggregate functions
 

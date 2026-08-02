@@ -127,7 +127,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 
 - [x] Dispatch to each endpoint is sequential (no concurrent deliveries to same endpoint in one call) — `for ep in endpoints: await self._dispatch_to_endpoint(...)`
 - [x] Multiple endpoints in one dispatch_event are processed sequentially
-- [x] Claim expiry job runs as asyncio task (not Celery) in alpha — asyncio.create_task in ClaimExpiryJob.start
+- [x] Claim expiry job runs as an SAQ system cron (SAQ SOLE writer/notifier) — asyncio.create_task in ClaimExpiryJob.start
 - [ ] Multi-worker advisory lock for expiry job specified in PRD §8.11 but not yet implemented — documented gap
 
 ### Backward compatibility
@@ -142,7 +142,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - Slack native integration listed in PRD as v1 — not implemented
 - PRD §8.11 specifies 5 consecutive failures within 24h for auto-disable; code uses 10 consecutive with no time window
 - `X-Modulo-Timestamp` header referenced in signing.feature but not emitted by notifier code — replay protection gap
-- Celery-based dispatcher isolation (PRD v1) — dispatcher still runs in FastAPI process
+- SAQ-cron-based dispatcher isolation (PRD v1) — dispatcher still runs in FastAPI process
 - Multi-worker advisory lock for expiry job not yet implemented
 - Team notification endpoint configuration (team_id field) not exposed in admin API create/update routes — NotificationEndpoint model has team_id column but API does not surface it
 - `hitl_overdue` event type constant exists in AVAILABLE_EVENTS and event_mapper but no background job dispatches it

@@ -85,15 +85,17 @@ def test_check_node_config_default_timeout_fails(tmp_path):
     assert "timeout_seconds is 600" in fail.call_args.args[0]
 
 
-def test_check_node_config_env_vars_extra_after_token_fails(tmp_path):
+def test_check_node_config_env_vars_extra_after_system_vars_ok(tmp_path):
+    # env_vars_extra AFTER system vars is the documented policy (AGENTS.md b0c4bde97):
+    # pipelines override GITHUB_TOKEN for identity separation (e.g. PR Reviewer injects its own PAT).
     node = _good_node()
     node["envs"] = {"GITHUB_TOKEN": "t", "env_vars_extra": {"EXTRA": "1"}}
     with patch.object(vpc, "_fail") as fail:
         vpc._check_node_config(Path(tmp_path), node)
-    assert "env_vars_extra" in fail.call_args.args[0]
+    fail.assert_not_called()
 
 
-def test_check_node_config_env_vars_extra_first_ok(tmp_path):
+def test_check_node_config_env_vars_extra_alias_after_system_vars_ok(tmp_path):
     node = _good_node()
     node["envs"] = {"env_vars_extra": {"EXTRA": "1"}, "APP_MODULO_OPENCODE_API_KEY": "k"}
     with patch.object(vpc, "_fail") as fail:
@@ -133,12 +135,7 @@ def test_check_node_config_uses_env_vars_alias(tmp_path):
     node["env_vars"] = {"GITHUB_TOKEN": "t", "env_vars_extra": {"EXTRA": "1"}}
     with patch.object(vpc, "_fail") as fail:
         vpc._check_node_config(Path(tmp_path), node)
-    assert "env_vars_extra" in fail.call_args.args[0]
-
-
-# ---------------------------------------------------------------------------
-# _scan_node_runner
-# ---------------------------------------------------------------------------
+    fail.assert_not_called()
 
 
 def test_scan_node_runner_flags_timeout_600_default(tmp_path):
@@ -167,34 +164,12 @@ def test_scan_node_runner_ok_on_good_defaults(tmp_path):
     fail.assert_not_called()
 
 
-def test_scan_node_runner_flags_env_vars_extra_line(tmp_path):
+def test_scan_node_runner_env_vars_extra_after_system_vars_ok(tmp_path):
+    # env_vars_extra AFTER system vars is the documented policy (AGENTS.md b0c4bde97).
     src = tmp_path / "node_runner.py"
     src.write_text('envs = {\n    "GITHUB_TOKEN": "x",\n    **env_vars_extra\n}\n')
     with patch.object(vpc, "_fail") as fail:
         vpc._scan_node_runner(src)
-    fail.assert_called_once()
-    assert "**env_vars_extra` must precede system env vars" in fail.call_args.args[0]
-
-
-# ---------------------------------------------------------------------------
-# _scan_mcp_server
-# ---------------------------------------------------------------------------
-
-
-def test_scan_mcp_server_flags_empty_agent_prompt(tmp_path):
-    src = tmp_path / "mcp_server.py"
-    src.write_text('prompt = n.get("agent_prompt", "")\n')
-    with patch.object(vpc, "_fail") as fail:
-        vpc._scan_mcp_server(src)
-    fail.assert_called_once()
-    assert "Empty agent_prompt fallback" in fail.call_args.args[0]
-
-
-def test_scan_mcp_server_ok_with_non_empty_fallback(tmp_path):
-    src = tmp_path / "mcp_server.py"
-    src.write_text('prompt = n.get("agent_prompt", default_prompt)\n')
-    with patch.object(vpc, "_fail") as fail:
-        vpc._scan_mcp_server(src)
     fail.assert_not_called()
 
 
@@ -206,7 +181,6 @@ def test_scan_mcp_server_ok_with_non_empty_fallback(tmp_path):
 def test_main_returns_zero_when_all_checks_pass(capsys):
     with (
         patch.object(vpc, "_scan_node_runner") as scan_node,
-        patch.object(vpc, "_scan_mcp_server") as scan_mcp,
         patch.object(vpc, "_scan_pipeline_config_files") as scan_files,
     ):
         result = vpc.main()
@@ -214,7 +188,6 @@ def test_main_returns_zero_when_all_checks_pass(capsys):
     assert result == 0
     assert "All pipeline config checks passed." in capsys.readouterr().out
     scan_node.assert_called_once()
-    scan_mcp.assert_called_once()
     scan_files.assert_called_once()
 
 
@@ -224,7 +197,6 @@ def test_main_returns_one_when_validations_fail(capsys):
 
     with (
         patch.object(vpc, "_scan_node_runner", side_effect=bad_scan),
-        patch.object(vpc, "_scan_mcp_server"),
         patch.object(vpc, "_scan_pipeline_config_files"),
     ):
         result = vpc.main()
@@ -269,10 +241,11 @@ def test_scan_pipeline_config_files_flags_bad_json(monkeypatch, tmp_path):
     assert "timeout_seconds is 600" in messages
 
 
-def test_scan_pipeline_config_files_flags_env_vars_extra_order(monkeypatch, tmp_path):
+def test_scan_pipeline_config_files_env_vars_extra_after_system_vars_ok(monkeypatch, tmp_path):
+    # env_vars_extra AFTER system vars is the documented policy (AGENTS.md b0c4bde97).
     pipeline_dir = tmp_path / "pipelines"
     pipeline_dir.mkdir()
-    bad = {
+    ok = {
         "nodes": [
             {
                 "type": "sandbox_agent",
@@ -285,12 +258,11 @@ def test_scan_pipeline_config_files_flags_env_vars_extra_order(monkeypatch, tmp_
     }
     import json
 
-    (pipeline_dir / "bad.json").write_text(json.dumps(bad))
+    (pipeline_dir / "ok.json").write_text(json.dumps(ok))
     monkeypatch.chdir(tmp_path)
     with patch.object(vpc, "_fail") as fail:
         vpc._scan_pipeline_config_files()
-    fail.assert_called_once()
-    assert "env_vars_extra" in fail.call_args.args[0]
+    fail.assert_not_called()
 
 
 def test_scan_pipeline_config_files_ignores_good_json(monkeypatch, tmp_path):

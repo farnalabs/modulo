@@ -24,7 +24,7 @@ status: partial
 
 # SSE Event Bus (Real-Time Frontend Sync)
 
-In-memory (and optionally Redis-backed) event pub/sub that pushes resource-change notifications to connected frontend sessions via Server-Sent Events. Eliminates polling loops and keeps the UI in sync with backend mutations from any source (REST API, MCP, background jobs, Celery tasks, CLI scripts).
+In-memory (and optionally Redis-backed) event pub/sub that pushes resource-change notifications to connected frontend sessions via Server-Sent Events. Eliminates polling loops and keeps the UI in sync with backend mutations from any source (REST API, MCP, background jobs, SAQ workers, CLI scripts).
 
 ## Behaviours
 
@@ -44,7 +44,7 @@ In-memory (and optionally Redis-backed) event pub/sub that pushes resource-chang
 - [x] Listeners are registered in a single module (`core/events/listeners.py`)
 - [x] Listeners construct `{type, id, action, version, org_id}` from the model instance
 - [x] Listeners fire after successful DB operations — table must exist for INSERT/UPDATE/DELETE to succeed; no `ProgrammingError` catch needed in listener path
-- [x] Listeners fire regardless of the mutation origin (API, MCP, Celery, CLI)
+- [x] Listeners fire regardless of the mutation origin (API, MCP, SAQ worker, CLI)
 - [x] `register_listeners()` called during app startup (`main.py:_lifespan`)
 - [x] Unknown model type logged as warning, not crash
 - [x] Missing `organisation_id` or `id` attribute logged as warning, not crash

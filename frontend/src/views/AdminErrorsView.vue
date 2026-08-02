@@ -1,4 +1,5 @@
 <template>
+  <FeatureGate feature-name="error_tracking" show-disabled>
   <PageTabs :tabs="[
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />
@@ -23,7 +24,8 @@
         { key: 'source', label: 'Source', options: [
           { value: 'backend', label: 'Backend' },
           { value: 'frontend', label: 'Frontend' },
-          { value: 'celery', label: 'Celery' },
+          { value: 'saq', label: 'SAQ' },
+          { value: 'celery', label: 'Celery (legacy)' },
         ]},
       ]"
       :filter-values="{ level: filterLevel, status: filterStatus, source: filterSource }"
@@ -112,10 +114,12 @@
       </div>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'

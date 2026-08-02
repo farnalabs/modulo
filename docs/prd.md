@@ -1109,7 +1109,7 @@ Pipelines paused at HITL may persist for days or weeks. LangGraph checkpoints ac
 When `retain_payload` is enabled on a run, the run's `input_payload` and `outputs_json` columns are retained past the run's lifecycle. The **payload retention job** (`cleanup_retained_payloads`) nulls these columns for runs older than the retention period (default: 30 days) in terminal states. Processes in batches of 500.
 
 ##### TriggerEvent Log Cleanup
-The `TriggerEvent` log accumulates records for every webhook trigger activation. The **trigger event cleanup job** (`cleanup_old_webhook_events`) deletes events older than the retention period (default: 30 days) in batches of 1000. Runs on a scheduled loop (`cleanup_scheduler_loop`, every 60 minutes) and as a Celery periodic task. Failure of the cleanup job does not block webhook processing — stale events cause no functional harm beyond table bloat.
+The `TriggerEvent` log accumulates records for every webhook trigger activation. The **trigger event cleanup job** (`cleanup_old_webhook_events`) deletes events older than the retention period (default: 30 days) in batches of 1000. Runs on a scheduled loop (`cleanup_scheduler_loop`, every 60 minutes) and as an SAQ system cron. Failure of the cleanup job does not block webhook processing — stale events cause no functional harm beyond table bloat.
 
 ### 8.9 Error Handling
 
@@ -1190,7 +1190,7 @@ Outbound webhook on: `hitl_awaiting`, `run_failed`, `budget_exceeded`, `circuit_
 
 All payloads HMAC-SHA256 signed (`X-Modulo-Signature` header). Multiple endpoints configurable per org. V1: native Slack.
 
-**Notification delivery and retry**: outbound webhooks are delivered with at-least-once semantics. On 4xx (except 429) or network error, the delivery is retried up to 3 times with exponential backoff (1s, 5s, 30s). On 429, retry after the `Retry-After` header value (capped at 60s). On 5xx, retry 3 times with the same backoff. After all retries exhausted, the delivery is logged as `failed` in a `notification_delivery_log` table (`id`, `event_type`, `endpoint_id`, `run_id`, `attempt_count`, `last_error`, `failed_at`). Failed deliveries for `hitl_awaiting` events trigger an in-app alert to org admins (surfaced in the header notification bell) — a HITL review may be blocked without notification delivery. Admins can manually retry failed deliveries from the notification delivery log. After 5 consecutive delivery failures to the same endpoint within 24 hours, the endpoint is automatically disabled and the admin is alerted. In alpha, the notification dispatcher runs in the FastAPI process (async task); in v1, it moves to Celery for isolation and retry durability.
+**Notification delivery and retry**: outbound webhooks are delivered with at-least-once semantics. On 4xx (except 429) or network error, the delivery is retried up to 3 times with exponential backoff (1s, 5s, 30s). On 429, retry after the `Retry-After` header value (capped at 60s). On 5xx, retry 3 times with the same backoff. After all retries exhausted, the delivery is logged as `failed` in a `notification_delivery_log` table (`id`, `event_type`, `endpoint_id`, `run_id`, `attempt_count`, `last_error`, `failed_at`). Failed deliveries for `hitl_awaiting` events trigger an in-app alert to org admins (surfaced in the header notification bell) — a HITL review may be blocked without notification delivery. Admins can manually retry failed deliveries from the notification delivery log. After 5 consecutive delivery failures to the same endpoint within 24 hours, the endpoint is automatically disabled and the admin is alerted. The notification dispatcher runs in the FastAPI process (async task) with SAQ cron isolation for retry durability.
 
 **Team notification endpoints (v1)**: the Team entity carries `notification_endpoints` (same structure as org-level webhook config). When a HITL gate fires `hitl_awaiting` and the gate has `required_team_id`, the notification dispatches to the team's configured endpoints (if any) and falls back to org-wide endpoints if the team has none configured. This ensures the right group of people is notified rather than spamming the whole org for team-specific review work.
 
@@ -1844,7 +1844,7 @@ data: {"type":"run","id":"uuid","action":"updated","version":42,"org_id":"uuid"}
 
 **Publishing**:
 - Via **SQLAlchemy `after_insert` / `after_update` / `after_delete` event listeners** on key ORM models (Run, Pipeline, Agent, Schema, ConnectorInstance, ModelBackend, Team, Trigger, EvalDefinition, FeedbackRecord, LibraryPrimitive)
-- Listeners are registered in a central module and fire on any mutation, regardless of origin (REST API, MCP, Celery task, CLI script)
+- Listeners are registered in a central module and fire on any mutation, regardless of origin (REST API, MCP, SAQ worker, CLI script)
 - Each listener constructs the event and calls `EventBus.publish()`
 - `ProgrammingError` is caught gracefully — if the EventBus table/mechanism doesn't exist yet, the listener is a no-op (safe for migrations)
 
@@ -2174,7 +2174,7 @@ Two tables, both immutable append-only (same pattern as `audit_events`):
 - `id`, `org_id`, `fingerprint` (SHA-256 of dedup key)
 - `level`: `error` | `warning` | `critical`
 - `message`, `stacktrace`, `context_json` (request URL, user agent, user_id, breadcrumbs)
-- `source`: `backend` | `frontend` | `celery`
+- `source`: `backend` | `frontend` | `saq` | `celery` (legacy)
 - `environment`, `version`
 - `status`: `new` | `acknowledged` | `resolved` | `archived`
 - `created_at`, `resolved_at`
@@ -2192,7 +2192,7 @@ Two tables, both immutable append-only (same pattern as `audit_events`):
 |---|---|
 | Backend unhandled exceptions | `CatchAllMiddleware` — pipes 500s to `ErrorIngestionService` |
 | Backend ERROR+ log records | Custom `LogHandler` forwards structured JSON records |
-| Celery task failures | Task failure handler captures exception + context |
+| SAQ job failures | `saq_hooks` after_process captures exception + context (source `saq`) |
 | Frontend JS errors | `window.onerror` + `onunhandledrejection` |
 | Frontend Vue errors | `app.config.errorHandler` + `warnHandler` |
 | Frontend breadcrumbs | Last 50 user actions: click, navigation, API call, route change |
@@ -3122,7 +3122,7 @@ Telemetry is opt-in and disabled by default. The OTel bridge (`setup_otel`) is c
 | YAML parsing | `yaml.safe_load()` only | Lint rule enforced |
 | Encryption | cryptography (Fernet) | Connector credentials + model backend credentials |
 | API keys | SHA-256 hash storage | `mk_<lookup_prefix>_<secret>` format |
-| Task queue | Celery + Redis | Optional alpha; required for v1 cron/polling triggers |
+| Task queue | SAQ + Redis | Required for run dispatch + cron/polling triggers |
 | Auth (v1+) | PyJWT[crypto] (JWT/JWK), passlib (bcrypt), python-saml, authlib (OIDC) | |
 
 ### Frontend

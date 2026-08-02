@@ -597,11 +597,11 @@ class TriggerEngine:
         trigger: Trigger,
         org_id: uuid.UUID,
     ) -> None:
-        """Register/update a polling trigger's Celery periodic schedule.
+        """Register/update a polling trigger's scheduled next fire.
 
         Computes ``next_fire_at`` from ``poll_interval_seconds`` and persists it
-        on the trigger row. The ``DatabasePollingScheduler`` will pick it up on
-        the next beat tick - there is no in-memory scheduler to update directly.
+        on the trigger row. ``fire_due_triggers`` (system cron) picks it up on
+        the next tick.
         """
         config = trigger.config_json or {}
         raw_interval = config.get("poll_interval_seconds")
@@ -632,7 +632,7 @@ class TriggerEngine:
           - ``error``: error detail (only on error)
 
         This is a sync-friendly evaluation meant for testing or manual one-off
-        checks. For automatic scheduled evaluation use the Celery task path.
+        checks. For automatic scheduled evaluation use the SAQ fire job path.
         """
         from modulo.core.trigger_engine.polling import (
             _build_polling_connector,

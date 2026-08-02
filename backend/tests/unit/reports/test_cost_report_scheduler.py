@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.email_service import EmailSendingError
 from modulo.core.reports.cost_report import deliver_cost_report, format_cost_report, generate_cost_report
-from modulo.core.reports.scheduler import DatabaseReportScheduler, _fire_scheduled_report, get_generator
+from modulo.core.reports.scheduler import _fire_scheduled_report, get_generator
 from modulo.db.crud.scheduled_report import delete_scheduled_report, list_scheduled_reports
 from modulo.db.models.scheduled_report import ScheduledReport
 
@@ -110,9 +110,10 @@ async def test_generate_format_and_deliver_cost_report() -> None:
     ],
 )
 async def test_generate_cost_report_rejects_unsupported_config(config: dict[str, str]) -> None:
-    with patch(
-        "modulo.core.reports.cost_report.get_cost_report", new_callable=AsyncMock
-    ) as get_cost, pytest.raises(ValueError):
+    with (
+        patch("modulo.core.reports.cost_report.get_cost_report", new_callable=AsyncMock) as get_cost,
+        pytest.raises(ValueError),
+    ):
         await generate_cost_report(
             cast(AsyncSession, MagicMock(spec=AsyncSession)),
             uuid.uuid4(),
@@ -169,9 +170,11 @@ def test_format_cost_report_rejects_unknown_format() -> None:
 )
 async def test_deliver_cost_report_rejects_invalid_recipients(recipient_config: dict[str, object]) -> None:
     payload = {"subject": "Cost", "body_html": "<p />", "body_text": "cost"}
-    with patch("modulo.core.reports.cost_report.get_settings"), patch(
-        "modulo.core.reports.cost_report.send_email", new_callable=AsyncMock
-    ) as send, pytest.raises(ValueError):
+    with (
+        patch("modulo.core.reports.cost_report.get_settings"),
+        patch("modulo.core.reports.cost_report.send_email", new_callable=AsyncMock) as send,
+        pytest.raises(ValueError),
+    ):
         await deliver_cost_report(payload, recipient_config)
     send.assert_not_awaited()
 
@@ -248,22 +251,6 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
 
     assert result == {"status": "failed", "reason": "generation_or_delivery_failed"}
     assert session.execute.await_count == 1
-
-
-def test_due_selection_requires_active_non_null_due_time() -> None:
-    result = MagicMock()
-    result.all.return_value = []
-    session = MagicMock()
-    session.execute.return_value = result
-    scheduler = object.__new__(DatabaseReportScheduler)
-
-    with patch("modulo.core.pipeline_execution.get_beat_sync_session", return_value=session):
-        assert scheduler._fetch_due_reports() == []
-
-    statement = session.execute.call_args[0][0]
-    sql = str(statement)
-    assert "scheduled_reports.active" in sql
-    assert "scheduled_reports.next_send_at <=" in sql
 
 
 async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
