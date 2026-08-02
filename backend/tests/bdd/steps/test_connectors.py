@@ -550,6 +550,20 @@ def step_result_is_error(ctx):
     assert ctx.get("query_error") is not None, "Expected an error but query succeeded"
 
 
+@then("the result reports a next page cursor")
+def step_result_reports_next_cursor(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.next_cursor is not None, "Expected a next page cursor but got None"
+
+
+@then("the result reports no next page cursor")
+def step_result_reports_no_next_cursor(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.next_cursor is None, f"Expected no next page cursor but got {result.next_cursor!r}"
+
+
 @when(parsers.parse('the API returns HTTP {status_code:d} "{reason}"'))
 def step_github_api_returns_error(status_code, reason, ctx):
     connector = ctx["connector"]
@@ -1318,6 +1332,16 @@ def step_gitlab_connector(ctx):
         from modulo.connectors.base import ConnectorResult
 
         match q.resource:
+            case "projects":
+                next_cursor = "3" if q.cursor == "2" else None
+                return ConnectorResult(
+                    records=[
+                        {"id": 1, "name": "proj-a", "path_with_namespace": "group/proj-a"},
+                        {"id": 2, "name": "proj-b", "path_with_namespace": "group/proj-b"},
+                    ],
+                    total=2,
+                    next_cursor=next_cursor,
+                )
             case "issues":
                 return ConnectorResult(
                     records=[
@@ -1465,6 +1489,22 @@ def step_gitlab_query_with_iid(resource, project, iid, ctx):
     from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "iid": iid})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query GitLab resource "{resource}" on page "{page}"'))
+def step_gitlab_query_project_page(resource, page, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, cursor=page)
     import asyncio
 
     try:
@@ -1742,6 +1782,66 @@ def step_records_contain_issue_fields(ctx):
     assert len(result.records) > 0
     rec = result.records[0]
     assert any(k in rec for k in ("id", "iid", "title", "state")), f"Record missing issue fields: {rec}"
+
+
+@when("the GitLab API returns 500 on issue creation")
+def step_gitlab_api_returns_500_issue(ctx):
+    connector = ctx["connector"]
+
+    async def mock_write(payload):
+        raise ValueError("GitLab API HTTP 500: internal server error")
+
+    connector.write = mock_write
+    ctx["write_result"] = None
+    ctx["write_error"] = None
+
+
+@when("the GitLab API returns 429 on issues query")
+def step_gitlab_api_returns_429_issues(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise ValueError("GitLab API HTTP 429: rate limit exceeded")
+
+    connector.query = mock_query
+    ctx["query_result"] = None
+    ctx["query_error"] = None
+
+
+@then(parsers.parse('the write result is an error with "{message}"'))
+def step_write_result_is_error_with(message, ctx):
+    import asyncio
+
+    from modulo.connectors.base import ConnectorPayload
+
+    try:
+        result = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="issue", data={"title": "x"})))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+    assert ctx["write_error"] is not None, f"Expected error '{message}' but write succeeded"
+    assert message in ctx["write_error"], f"Expected '{message}' in error but got: {ctx['write_error']}"
+
+
+@then(parsers.parse('the query result is an error with "{message}"'))
+def step_query_result_is_error_with(message, ctx):
+    import asyncio
+
+    from modulo.connectors.base import ConnectorQuery
+
+    try:
+        result = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="issues", filters={"project": "p"})))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+    assert ctx["query_error"] is not None, f"Expected error '{message}' but query succeeded"
+    assert message in ctx["query_error"], f"Expected '{message}' in error but got: {ctx['query_error']}"
 
 
 # ============================================================================
