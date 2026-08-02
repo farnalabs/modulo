@@ -3,6 +3,7 @@
 import datetime
 import hashlib
 import uuid
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -104,6 +105,7 @@ def _make_trigger(
     active: bool = True,
     max_concurrent_runs: int = 5,
     config: dict[str, Any] | None = None,
+    daily_spend_limit: Any = None,
 ) -> MagicMock:
     t = MagicMock(spec=Trigger)
     t.id = uuid.uuid4()
@@ -111,6 +113,7 @@ def _make_trigger(
     t.organisation_id = uuid.uuid4()
     t.active = active
     t.max_concurrent_runs = max_concurrent_runs
+    t.daily_spend_limit = daily_spend_limit
     t.config_json = config or {}
     t.next_fire_at = datetime.datetime.now(datetime.UTC)
     return t
@@ -203,6 +206,7 @@ def _setup_session_for_polling(
     trigger: MagicMock,
     connector_instance: MagicMock | None = None,
     active_run_count: int = 0,
+    today_cost: Any = 0,
 ) -> None:
     """Configure session.execute to handle all DB queries from _fire_polling_trigger.
 
@@ -210,8 +214,9 @@ def _setup_session_for_polling(
       1. _set_rls_org → text(...)
       2. select(Trigger).with_for_update()
       3. _count_active_runs → select(func.count())
-      4. select(ConnectorInstance)
-      5. update(Trigger)  (in _update_next_fire)
+      4. _daily_spend_limit_reached → select(coalesce(sum(Run.total_cost_usd), 0))
+      5. select(ConnectorInstance)
+      6. update(Trigger)  (in _update_next_fire)
     """
     trigger_result = MagicMock()
     trigger_result.scalar_one_or_none.return_value = trigger
@@ -221,6 +226,9 @@ def _setup_session_for_polling(
 
     count_result = MagicMock()
     count_result.scalar_one.return_value = active_run_count
+
+    cost_result = MagicMock()
+    cost_result.scalar_one.return_value = today_cost
 
     rls_result = MagicMock()
 
@@ -240,6 +248,8 @@ def _setup_session_for_polling(
             return ci_result
         if "count(*)" in stmt_str:
             return count_result
+        if "total_cost_usd" in stmt_str:
+            return cost_result
         if "update" in stmt_str:
             return count_result
         return rls_result
@@ -843,6 +853,200 @@ class TestPollingFireTask:
 
         for p in extra_mocks.values():
             p.stop()
+
+
+# ---------------------------------------------------------------------------
+# Daily spend limit tests
+# ---------------------------------------------------------------------------
+
+
+class TestDailySpendLimit:
+    """Daily spend limit (trigger.daily_spend_limit) must prevent run creation."""
+
+    async def test_spend_limit_reached_skips_with_event(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        session = mock_db_components
+        trigger = _make_trigger(
+            daily_spend_limit=Decimal("50.00"),
+            config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60},
+        )
+        _setup_session_for_polling(
+            session,
+            trigger,
+            connector_instance=MagicMock(),
+            active_run_count=0,
+            today_cost=Decimal("55.00"),
+        )
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log_poll_event") as mock_event,
+            patch("modulo.core.trigger_engine.polling._update_next_fire_no_last") as mock_advance,
+        ):
+            mock_event.return_value = MagicMock(id=uuid.uuid4())
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="select * from issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "spend_limit"
+        assert result["daily_spend_limit"] == "50.00"
+        assert result["today_cost"] == "55.00"
+        mock_cr.assert_not_called()
+        mock_event.assert_called_once()
+        assert mock_event.call_args.kwargs["result"] == "spend_limit_reached"
+        assert mock_event.call_args.kwargs["error_detail"] == ("Daily spend limit 50.00 reached (today: 55.00)")
+        mock_advance.assert_awaited_once()
+
+    async def test_spend_limit_equal_skips(self, mock_db_components) -> None:
+        """today_cost == limit is still over budget (>= comparison)."""
+        session = mock_db_components
+        trigger = _make_trigger(
+            daily_spend_limit=Decimal("50.00"),
+            config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60},
+        )
+        _setup_session_for_polling(
+            session,
+            trigger,
+            connector_instance=MagicMock(),
+            active_run_count=0,
+            today_cost=Decimal("50.00"),
+        )
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log_poll_event", new_callable=AsyncMock),
+        ):
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "spend_limit"
+        mock_cr.assert_not_called()
+
+    async def test_spend_limit_not_reached_fires(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+        mock_create_run,
+    ) -> None:
+        """today_cost below the limit must not block run creation."""
+        session = mock_db_components
+        trigger = _make_trigger(
+            daily_spend_limit=Decimal("100.00"),
+            config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60},
+        )
+        _setup_session_for_polling(
+            session,
+            trigger,
+            connector_instance=MagicMock(),
+            active_run_count=0,
+            today_cost=Decimal("55.00"),
+        )
+
+        result = await _fire_polling_trigger(
+            trigger_id=_TRIGGER_ID,
+            org_id=_ORG_ID,
+            pipeline_id=_PIPELINE_ID,
+            connector_instance_id=_CI_ID,
+            poll_query="select * from issues",
+            condition_expression=None,
+        )
+
+        assert result["status"] == "fired"
+        create_run_fn, _ = mock_create_run
+        create_run_fn.assert_awaited_once()
+
+    async def test_no_limit_configured_fires(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+        mock_create_run,
+    ) -> None:
+        """A trigger with no daily_spend_limit is never blocked."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60})
+        _setup_session_for_polling(
+            session,
+            trigger,
+            connector_instance=MagicMock(),
+            active_run_count=0,
+        )
+
+        result = await _fire_polling_trigger(
+            trigger_id=_TRIGGER_ID,
+            org_id=_ORG_ID,
+            pipeline_id=_PIPELINE_ID,
+            connector_instance_id=_CI_ID,
+            poll_query="select * from issues",
+            condition_expression=None,
+        )
+
+        assert result["status"] == "fired"
+        create_run_fn, _ = mock_create_run
+        create_run_fn.assert_awaited_once()
+
+    async def test_spend_limit_query_scoped_to_trigger_and_org(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+        mock_create_run,
+    ) -> None:
+        """The spend query must filter by trigger_id and organisation_id and today's runs."""
+        session = mock_db_components
+        captured: list[str] = []
+
+        trigger = _make_trigger(
+            daily_spend_limit=Decimal("100.00"),
+            config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60},
+        )
+        _setup_session_for_polling(
+            session,
+            trigger,
+            connector_instance=MagicMock(),
+            active_run_count=0,
+            today_cost=Decimal("10.00"),
+        )
+
+        orig_execute = session.execute
+
+        async def _capture_execute(stmt, *args, **kwargs):
+            captured.append(str(stmt).lower())
+            return await orig_execute(stmt, *args, **kwargs)
+
+        session.execute = _capture_execute
+
+        await _fire_polling_trigger(
+            trigger_id=_TRIGGER_ID,
+            org_id=_ORG_ID,
+            pipeline_id=_PIPELINE_ID,
+            connector_instance_id=_CI_ID,
+            poll_query="query",
+            condition_expression=None,
+        )
+
+        spend_sql = next(s for s in captured if "total_cost_usd" in s)
+        assert "runs.trigger_id" in spend_sql
+        assert "runs.organisation_id" in spend_sql
+        assert "runs.created_at" in spend_sql
 
 
 # ---------------------------------------------------------------------------
