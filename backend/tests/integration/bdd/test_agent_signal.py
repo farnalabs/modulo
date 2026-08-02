@@ -243,7 +243,6 @@ class TestFireAgentSignalIntegration:
         db_engine: AsyncEngine,
         org_id: uuid.UUID,
         target_pipeline_id: uuid.UUID,
-        source_pipeline_id: uuid.UUID,
         source_run_id: uuid.UUID,
         snapshot_id: uuid.UUID,
         user_id: uuid.UUID,
@@ -252,12 +251,15 @@ class TestFireAgentSignalIntegration:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         rid = uuid.uuid4()
         thread_id = f"{org_id}:{rid}"
+        private_source_pipeline_id = uuid.uuid4()
 
-        # Create a trigger with concurrency limit 1.
+        # Create a trigger with concurrency limit 1. Uses a PRIVATE source
+        # pipeline so the module-scoped trigger (which watches
+        # source_pipeline_id/extract) cannot also match and fire.
         tight_tid = uuid.uuid4()
         config_json = json.dumps(
             {
-                "source_pipeline_id": str(source_pipeline_id),
+                "source_pipeline_id": str(private_source_pipeline_id),
                 "source_node_id": "extract",
             }
         )
@@ -282,14 +284,14 @@ class TestFireAgentSignalIntegration:
                     },
                 )
 
-                # Create an active run on the same pipeline to hit the limit.
+                # Create an active run linked to the tight trigger to hit the limit.
                 await session.execute(
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
                         "snapshot_id, status, trigger_type, langgraph_thread_id, "
-                        "input_hash, run_number) "
+                        "input_hash, trigger_id, run_number) "
                         "VALUES (:id, :oid, :pid, :sid, 'running', 'manual', "
-                        ":thread, :hash, :rn)",
+                        ":thread, :hash, :tid, :rn)",
                     ),
                     {
                         "id": str(rid),
@@ -298,6 +300,7 @@ class TestFireAgentSignalIntegration:
                         "sid": str(snapshot_id),
                         "thread": thread_id,
                         "hash": "0" * 64,
+                        "tid": str(tight_tid),
                         "rn": int(rid.int % 10**9) + 1,
                     },
                 )
@@ -309,7 +312,7 @@ class TestFireAgentSignalIntegration:
                     session,
                     org_id=org_id,
                     source_run_id=source_run_id,
-                    source_pipeline_id=source_pipeline_id,
+                    source_pipeline_id=private_source_pipeline_id,
                     completed_node_id="extract",
                 )
 
@@ -339,11 +342,13 @@ class TestFireAgentSignalIntegration:
         self,
         db_engine: AsyncEngine,
         org_id: uuid.UUID,
-        source_pipeline_id: uuid.UUID,
         source_run_id: uuid.UUID,
     ) -> None:
         """When no trigger matches in the current org, returns empty list."""
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        # A fresh source pipeline id — the module-scoped trigger watches the
+        # shared source_pipeline_id fixture, so it must NOT match here.
+        unmatched_source_pipeline_id = uuid.uuid4()
 
         async with factory() as session, session.begin():
             await set_rls_org(session, org_id)
@@ -351,7 +356,7 @@ class TestFireAgentSignalIntegration:
                 session,
                 org_id=org_id,
                 source_run_id=source_run_id,
-                source_pipeline_id=source_pipeline_id,
+                source_pipeline_id=unmatched_source_pipeline_id,
                 completed_node_id="extract",
             )
 
@@ -362,19 +367,21 @@ class TestFireAgentSignalIntegration:
         self,
         db_engine: AsyncEngine,
         org_id: uuid.UUID,
-        source_pipeline_id: uuid.UUID,
         source_run_id: uuid.UUID,
         snapshot_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> None:
         """Two triggers watching the same source pipeline+node both fire."""
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        # Private source pipeline so only the two triggers created below match
+        # (the module-scoped trigger watches the shared source_pipeline_id).
+        private_source_pipeline_id = uuid.uuid4()
 
         pid_b = uuid.uuid4()
         pid_c = uuid.uuid4()
         config_json = json.dumps(
             {
-                "source_pipeline_id": str(source_pipeline_id),
+                "source_pipeline_id": str(private_source_pipeline_id),
                 "source_node_id": "extract",
             }
         )
@@ -448,7 +455,7 @@ class TestFireAgentSignalIntegration:
                     session,
                     org_id=org_id,
                     source_run_id=source_run_id,
-                    source_pipeline_id=source_pipeline_id,
+                    source_pipeline_id=private_source_pipeline_id,
                     completed_node_id="extract",
                     node_output={"result": "ok"},
                 )
