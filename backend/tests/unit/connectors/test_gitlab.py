@@ -82,7 +82,7 @@ async def test_query_mrs(connector):
 @respx.mock
 async def test_write_file(connector):
     response_body = {"file_path": "src/main.py", "branch": "main"}
-    respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+    route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
         return_value=httpx.Response(200, json=response_body)
     )
     result = await connector.write(
@@ -97,6 +97,8 @@ async def test_write_file(connector):
         )
     )
     assert result["file_path"] == "src/main.py"
+    body = json.loads(route.calls.last.request.content)
+    assert body["branch"] == "main"
 
 
 @respx.mock
@@ -325,9 +327,8 @@ def test_default_base_url_is_gitlab_com(connector):
 
 @respx.mock
 async def test_write_file_delete(connector):
-    response_body = {"file_path": "src/main.py", "branch": "main"}
     route = respx.delete(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json=response_body)
+        return_value=httpx.Response(204, text="")
     )
     result = await connector.write(
         ConnectorPayload(
@@ -335,19 +336,22 @@ async def test_write_file_delete(connector):
             data={"project": "group/project", "path": "src/main.py", "ref": "main", "message": "Remove file"},
         )
     )
-    assert result["file_path"] == "src/main.py"
+    assert result == {"status": "deleted"}
     assert route.calls.last.request.method == "DELETE"
-    assert route.calls.last.request.url.params.get("ref") == "main"
+    assert route.calls.last.request.url.params.get("branch") == "main"
+    assert route.calls.last.request.url.params.get("ref") is None
 
 
 @respx.mock
 async def test_write_file_delete_defaults_ref(connector):
-    respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
-        return_value=httpx.Response(200, json={"file_path": "README.md"})
+    route = respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
+        return_value=httpx.Response(204, text="")
     )
-    await connector.write(
+    result = await connector.write(
         ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
     )
+    assert result == {"status": "deleted"}
+    assert route.calls.last.request.url.params.get("branch") == "main"
 
 
 @respx.mock
@@ -356,6 +360,17 @@ async def test_write_file_delete_missing_project(connector):
         await connector.write(ConnectorPayload(resource="file_delete", data={"path": "x"}))
     with pytest.raises(ValueError, match="Missing required filter"):
         await connector.write(ConnectorPayload(resource="file_delete", data={"project": "g/p"}))
+
+
+@respx.mock
+async def test_write_file_delete_error_response(connector):
+    respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
+        return_value=httpx.Response(400, text='{"message": "branch is missing"}')
+    )
+    with pytest.raises(ValueError, match="GitLab API HTTP 400"):
+        await connector.write(
+            ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
+        )
 
 
 @respx.mock

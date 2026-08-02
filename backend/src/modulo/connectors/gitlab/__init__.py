@@ -483,6 +483,7 @@ class GitLabConnector(ConnectorBase):
                 path = self._require_filter(payload.data, "path", payload.resource)
                 encoded = _project_path(project)
                 body: dict[str, Any] = {
+                    "branch": payload.data.get("ref", "main"),
                     "content": payload.data["content"],
                     "commit_message": payload.data.get("message", "Update via Modulo"),
                 }
@@ -498,17 +499,17 @@ class GitLabConnector(ConnectorBase):
                 project = self._require_filter(payload.data, "project", payload.resource)
                 path = self._require_filter(payload.data, "path", payload.resource)
                 encoded = _project_path(project)
-                delete_params = {"ref": payload.data.get("ref", "main")}
+                delete_params = {"branch": payload.data.get("ref", "main")}
                 delete_body: dict[str, Any] = {
                     "commit_message": payload.data.get("message", f"Delete {path} via Modulo"),
                 }
-                r = await self._call_api(
+                await self._call_api(
                     "DELETE",
                     f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
                     params=delete_params,
                     json=delete_body,
                 )
-                return _safe_json_object(r)
+                return {"status": "deleted"}
             case "mr" | "merge_request":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 source_branch = self._require_filter(payload.data, "source_branch", payload.resource)
