@@ -4,7 +4,6 @@ All functions assume the caller has set the RLS org context via set_rls_org()
 before calling. The session must be within an active transaction.
 """
 
-import asyncio
 import copy
 import logging
 import uuid
@@ -14,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from sqlalchemy import Connection, delete, func, select, update
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import InvalidRequestError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncEngine,
@@ -38,7 +37,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
 
@@ -302,6 +301,7 @@ async def clone_pipeline(
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
     account_id: uuid.UUID,
+    org_role: str | None = None,
     new_name: str | None = None,
     _read_session_factory: Callable[[], AsyncSession] | None = None,
     _on_step_a_held: Callable[[], Awaitable[None]] | None = None,
@@ -321,6 +321,12 @@ async def clone_pipeline(
     ``replace_pipeline_graph``'s ``FOR UPDATE`` on the same row can proceed as
     soon as the step-(a) transaction commits. All cloned gated edges emit ONE
     batched ``edge_created_with_gate`` audit event.
+
+    The step-(a) read session is a separate connection, so ``set_rls_org`` is
+    not enough: pipelines in ``_TEAM_SCOPED_RLS`` also require the caller's
+    ``app.user_id`` / ``app.org_role`` (``set_rls_user_context``) to be visible.
+    Pass ``org_role`` (the caller's org role) and the read session re-applies
+    the caller's full RLS context; ``account_id`` doubles as the caller's user.
     """
     _log.info("Cloning pipeline %s (org=%s, requested_name=%s)", pipeline_id, org_id, new_name)
 
@@ -328,6 +334,8 @@ async def clone_pipeline(
         session,
         org_id=org_id,
         pipeline_id=pipeline_id,
+        user_id=account_id,
+        org_role=org_role,
         read_factory=_read_session_factory,
         on_step_a_held=_on_step_a_held,
     )
@@ -442,11 +450,19 @@ async def _read_clone_source_snapshot(
     *,
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    org_role: str | None,
     read_factory: Callable[[], AsyncSession] | None,
     on_step_a_held: Callable[[], Awaitable[None]] | None,
 ) -> _CloneSourceSnapshot | None:
     """Step (a): short transaction that FOR SHARE-locks the source pipeline row,
-    reads nodes/edges/snapshots into plain data, and commits immediately."""
+    reads nodes/edges/snapshots into plain data, and commits immediately.
+
+    The read session is a separate connection/pool checkout, so it must
+    re-apply the caller's full RLS context: ``set_rls_org`` scopes the org, and
+    ``set_rls_user_context`` (when *org_role* is given) makes team-scoped
+    pipelines visible via ``app.user_id`` / ``app.org_role``.
+    """
     factory = read_factory
     read_engine: AsyncEngine | None = None
     if factory is None:
@@ -455,9 +471,10 @@ async def _read_clone_source_snapshot(
             factory = async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession)
         else:
             if bind is None:
-                raw = session.get_bind()
-                if asyncio.iscoroutine(raw):
-                    raw = await raw
+                try:
+                    raw = session.get_bind()
+                except InvalidRequestError:
+                    raise RuntimeError("cannot derive an async read URL from the clone source session") from None
                 async_url = raw.engine.url if isinstance(raw, Connection) else raw.url
             elif isinstance(bind, AsyncConnection):
                 conn = bind.sync_connection
@@ -474,6 +491,8 @@ async def _read_clone_source_snapshot(
     try:
         async with factory() as read_session, read_session.begin():
             await set_rls_org(read_session, org_id)
+            if user_id is not None and org_role is not None:
+                await set_rls_user_context(read_session, user_id, org_role)
             src_result = await read_session.execute(
                 select(Pipeline)
                 .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None))
