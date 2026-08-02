@@ -154,7 +154,7 @@ jobs:
 
   notify-pr-failure:
     name: Trigger Branch Fixer
-    if: github.event_name == 'pull_request' && always()
+    if: github.event_name == 'pull_request' && always() && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubicloud-standard-2
     permissions:
