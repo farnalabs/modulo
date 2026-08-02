@@ -448,6 +448,7 @@ async def _read_clone_source_snapshot(
     """Step (a): short transaction that FOR SHARE-locks the source pipeline row,
     reads nodes/edges/snapshots into plain data, and commits immediately."""
     factory = read_factory
+    read_engine: AsyncEngine | None = None
     if factory is None:
         bind = session.bind
         if isinstance(bind, AsyncEngine):
@@ -460,103 +461,108 @@ async def _read_clone_source_snapshot(
                 async_url = raw.engine.url if isinstance(raw, Connection) else raw.url
             elif isinstance(bind, AsyncConnection):
                 conn = bind.sync_connection
-                assert conn is not None
+                if conn is None:
+                    raise RuntimeError("AsyncConnection has no bound sync connection; cannot derive read URL")
                 async_url = conn.engine.url
             else:
                 async_url = None
-            assert async_url is not None
-            factory = async_sessionmaker(
-                create_async_engine(async_url, poolclass=NullPool),
-                expire_on_commit=False,
-                class_=AsyncSession,
+            if async_url is None:
+                raise RuntimeError("cannot derive an async read URL from the clone source session")
+            read_engine = create_async_engine(async_url, poolclass=NullPool)
+            factory = async_sessionmaker(read_engine, expire_on_commit=False, class_=AsyncSession)
+
+    try:
+        async with factory() as read_session, read_session.begin():
+            await set_rls_org(read_session, org_id)
+            src_result = await read_session.execute(
+                select(Pipeline)
+                .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None))
+                .with_for_update(read=True)
             )
+            source = src_result.scalar_one_or_none()
+            if source is None:
+                return None
+            if on_step_a_held is not None:
+                await on_step_a_held()
 
-    async with factory() as read_session, read_session.begin():
-        await set_rls_org(read_session, org_id)
-        src_result = await read_session.execute(
-            select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None)).with_for_update(read=True)
-        )
-        source = src_result.scalar_one_or_none()
-        if source is None:
-            return None
-        if on_step_a_held is not None:
-            await on_step_a_held()
-
-        edges = [
-            {
-                "source_node_id": e.source_node_id,
-                "target_node_id": e.target_node_id,
-                "edge_type": e.edge_type,
-                "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
-            }
-            for e in (
-                await read_session.execute(
-                    select(PipelineEdge)
-                    .where(PipelineEdge.pipeline_id == pipeline_id)
-                    .order_by(PipelineEdge.created_at, PipelineEdge.id)
-                )
-            ).scalars()
-        ]
-        snap_rows = list(
-            (
-                await read_session.execute(
-                    select(PipelineSnapshot)
-                    .where(PipelineSnapshot.pipeline_id == pipeline_id)
-                    .order_by(PipelineSnapshot.snapshot_version)
-                )
-            ).scalars()
-        )
-        snapshots: list[dict[str, Any]] = []
-        for snap in snap_rows:
-            pins = [
+            edges = [
                 {
-                    "node_id": p.node_id,
-                    "direction": p.direction,
-                    "schema_id": p.schema_id,
-                    "schema_version": p.schema_version,
+                    "source_node_id": e.source_node_id,
+                    "target_node_id": e.target_node_id,
+                    "edge_type": e.edge_type,
+                    "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
                 }
-                for p in (
+                for e in (
                     await read_session.execute(
-                        select(SnapshotSchemaPin).where(SnapshotSchemaPin.snapshot_id == snap.id)
+                        select(PipelineEdge)
+                        .where(PipelineEdge.pipeline_id == pipeline_id)
+                        .order_by(PipelineEdge.created_at, PipelineEdge.id)
                     )
                 ).scalars()
             ]
-            snapshots.append(
-                {
-                    "snapshot_version": snap.snapshot_version,
-                    "account_id": snap.account_id,
-                    "environment_profile_id": snap.environment_profile_id,
-                    "graph_json": copy.deepcopy(snap.graph_json),
-                    "connector_bindings_json": copy.deepcopy(snap.connector_bindings_json),
-                    "schema_pins_json": copy.deepcopy(snap.schema_pins_json),
-                    "prompt_pins_json": copy.deepcopy(snap.prompt_pins_json),
-                    "model_backend_pins_json": copy.deepcopy(snap.model_backend_pins_json),
-                    "composite_bindings_json": copy.deepcopy(snap.composite_bindings_json),
-                    "parameter_bindings_json": copy.deepcopy(snap.parameter_bindings_json),
-                    "tag": snap.tag,
-                    "notes": snap.notes,
-                    "default_autonomy_level": snap.default_autonomy_level,
-                    "config_json": copy.deepcopy(snap.config_json),
-                    "run_context_defaults": copy.deepcopy(snap.run_context_defaults),
-                    "pins": pins,
-                }
+            snap_rows = list(
+                (
+                    await read_session.execute(
+                        select(PipelineSnapshot)
+                        .where(PipelineSnapshot.pipeline_id == pipeline_id)
+                        .order_by(PipelineSnapshot.snapshot_version)
+                    )
+                ).scalars()
             )
+            snapshots: list[dict[str, Any]] = []
+            for snap in snap_rows:
+                pins = [
+                    {
+                        "node_id": p.node_id,
+                        "direction": p.direction,
+                        "schema_id": p.schema_id,
+                        "schema_version": p.schema_version,
+                    }
+                    for p in (
+                        await read_session.execute(
+                            select(SnapshotSchemaPin).where(SnapshotSchemaPin.snapshot_id == snap.id)
+                        )
+                    ).scalars()
+                ]
+                snapshots.append(
+                    {
+                        "snapshot_version": snap.snapshot_version,
+                        "account_id": snap.account_id,
+                        "environment_profile_id": snap.environment_profile_id,
+                        "graph_json": copy.deepcopy(snap.graph_json),
+                        "connector_bindings_json": copy.deepcopy(snap.connector_bindings_json),
+                        "schema_pins_json": copy.deepcopy(snap.schema_pins_json),
+                        "prompt_pins_json": copy.deepcopy(snap.prompt_pins_json),
+                        "model_backend_pins_json": copy.deepcopy(snap.model_backend_pins_json),
+                        "composite_bindings_json": copy.deepcopy(snap.composite_bindings_json),
+                        "parameter_bindings_json": copy.deepcopy(snap.parameter_bindings_json),
+                        "tag": snap.tag,
+                        "notes": snap.notes,
+                        "default_autonomy_level": snap.default_autonomy_level,
+                        "config_json": copy.deepcopy(snap.config_json),
+                        "run_context_defaults": copy.deepcopy(snap.run_context_defaults),
+                        "pins": pins,
+                    }
+                )
 
-        return _CloneSourceSnapshot(
-            name=source.name,
-            description=source.description,
-            visibility=source.visibility,
-            owner_team_id=source.owner_team_id,
-            max_concurrent_runs=source.max_concurrent_runs,
-            lock_wait_timeout_seconds=source.lock_wait_timeout_seconds,
-            node_timeout_seconds=source.node_timeout_seconds,
-            run_context_defaults=copy.deepcopy(source.run_context_defaults),
-            graph_nodes_json=copy.deepcopy(list(source.graph_nodes_json or [])),
-            default_autonomy_level=str(source.default_autonomy_level or "manual_approval"),
-            stale_run_timeout_minutes=source.stale_run_timeout_minutes,
-            edges=edges,
-            snapshots=snapshots,
-        )
+            return _CloneSourceSnapshot(
+                name=source.name,
+                description=source.description,
+                visibility=source.visibility,
+                owner_team_id=source.owner_team_id,
+                max_concurrent_runs=source.max_concurrent_runs,
+                lock_wait_timeout_seconds=source.lock_wait_timeout_seconds,
+                node_timeout_seconds=source.node_timeout_seconds,
+                run_context_defaults=copy.deepcopy(source.run_context_defaults),
+                graph_nodes_json=copy.deepcopy(list(source.graph_nodes_json or [])),
+                default_autonomy_level=str(source.default_autonomy_level or "manual_approval"),
+                stale_run_timeout_minutes=source.stale_run_timeout_minutes,
+                edges=edges,
+                snapshots=snapshots,
+            )
+    finally:
+        if read_engine is not None:
+            await read_engine.dispose()
 
 
 def _preserve_omitted_gate_config(
