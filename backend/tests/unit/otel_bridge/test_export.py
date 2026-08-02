@@ -58,6 +58,11 @@ def test_setup_otel_can_be_called_repeatedly() -> None:
     setup_otel(service_name="second")
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
+    # The provider must remain usable for span creation after the second call.
+    tracer = trace.get_tracer("repeat")
+    with tracer.start_as_current_span("repeat-span") as span:
+        span.set_attribute("repeat", True)
+    assert span.name == "repeat-span"
 
 
 def test_setup_otel_disabled_registers_no_span_processors() -> None:
@@ -88,11 +93,13 @@ def test_setup_otel_no_otlp_without_env(monkeypatch: pytest.MonkeyPatch) -> None
 def test_setup_otel_handles_bad_otlp_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     """Should not crash when OTLP endpoint is invalid; stdout still configured."""
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://nonexistent.local:4318/v1/traces")
-    setup_otel(service_name="bad-otlp", telemetry_enabled=True)
+    with patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_exporter:
+        setup_otel(service_name="bad-otlp", telemetry_enabled=True)
+    mock_exporter.assert_called_once()
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
-    # OTLP exporter construction is lazy (no network), so the OTLP path still
-    # registers its BatchSpanProcessor alongside the stdout processor.
+    # The OTLP path still registers its BatchSpanProcessor alongside the
+    # stdout processor — the exporter is constructed (lazily, no network).
     processors = provider._active_span_processor._span_processors
     assert len(processors) == 2
     assert isinstance(processors[0], SimpleSpanProcessor)
@@ -160,3 +167,20 @@ def test_sanitise_url_strips_username_only() -> None:
 def test_sanitise_url_handles_no_port() -> None:
     url = "https://user:pass@otel.example.com/v1/traces"
     assert _sanitise_url(url) == "https://otel.example.com/v1/traces"
+
+
+def test_sanitise_url_username_only_with_port() -> None:
+    url = "https://user@otel.example.com:8443/v1/traces"
+    assert _sanitise_url(url) == "https://otel.example.com:8443/v1/traces"
+
+
+def test_sanitise_url_password_only_without_username() -> None:
+    """A password with an empty username is still stripped."""
+    url = "https://:secret@otel.example.com/v1/traces"
+    assert _sanitise_url(url) == "https://otel.example.com/v1/traces"
+
+
+def test_sanitise_url_empty_credentials_kept() -> None:
+    """An empty userinfo (bare '@') carries no credentials to strip."""
+    url = "https://@otel.example.com/v1/traces"
+    assert _sanitise_url(url) == "https://@otel.example.com/v1/traces"

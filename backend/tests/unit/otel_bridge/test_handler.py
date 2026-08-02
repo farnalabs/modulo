@@ -159,6 +159,24 @@ def test_set_run_context_attributes_on_spans(bridge: LangGraphOtelBridge, export
     assert span.attributes.get("pipeline_id") == "pipe-456"
 
 
+def test_run_context_via_constructor(
+    exporter: InMemorySpanExporter,
+) -> None:
+    """The constructor's org_id/pipeline_id must seed span attributes."""
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test.langgraph")
+    bridge = LangGraphOtelBridge(tracer=tracer, org_id="org-ctor", pipeline_id="pipe-ctor")
+    run_id = uuid.uuid4()
+    bridge.on_chain_start(_serialized("Node"), {}, run_id=run_id)
+    bridge.on_chain_end({}, run_id=run_id)
+
+    span = exporter.get_finished_spans()[0]
+    assert span.attributes is not None
+    assert span.attributes.get("organisation_id") == "org-ctor"
+    assert span.attributes.get("pipeline_id") == "pipe-ctor"
+
+
 def test_run_context_not_set_leaves_no_attributes(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     bridge.on_chain_start(_serialized("Node"), {}, run_id=run_id)
@@ -286,6 +304,16 @@ def test_llm_error_records_exception(bridge: LangGraphOtelBridge, exporter: InMe
     assert span.status.status_code == StatusCode.ERROR
 
 
+def test_llm_start_sets_tags(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+    run_id = uuid.uuid4()
+    bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id, tags=["llm", "tagged"])
+    bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)
+
+    span = exporter.get_finished_spans()[0]
+    assert span.attributes is not None
+    assert span.attributes.get("langgraph.tags") == ("llm", "tagged")
+
+
 # ---------------------------------------------------------------------------
 # Chat model lifecycle (BaseChatModel callbacks — production path)
 # ---------------------------------------------------------------------------
@@ -350,6 +378,42 @@ def test_chat_model_start_empty_messages(bridge: LangGraphOtelBridge, exporter: 
     assert span.attributes.get("langgraph.llm.message_count") == 0
 
 
+def test_chat_model_span_inherits_parent_context(
+    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
+) -> None:
+    """Chat-model spans (the BaseChatModel production path) parent correctly."""
+    chain_id = uuid.uuid4()
+    chat_id = uuid.uuid4()
+
+    bridge.on_chain_start(_serialized("Chain"), {}, run_id=chain_id)
+    bridge.on_chat_model_start(
+        _serialized("claude"),
+        [[HumanMessage(content="hello")]],
+        run_id=chat_id,
+        parent_run_id=chain_id,
+    )
+    bridge.on_chat_model_end(ChatResult(generations=[]), run_id=chat_id)
+    bridge.on_chain_end({}, run_id=chain_id)
+
+    spans = exporter.get_finished_spans()
+    chat = next(s for s in spans if "claude" in s.name)
+    chain = next(s for s in spans if "chain" in s.name)
+    assert chat.parent is not None
+    assert chat.parent.span_id == chain.context.span_id
+
+
+def test_chat_model_end_without_token_usage_does_not_raise(
+    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
+) -> None:
+    run_id = uuid.uuid4()
+    _chat_start(bridge, run_id)
+    bridge.on_chat_model_end(ChatResult(generations=[]), run_id=run_id)
+
+    span = exporter.get_finished_spans()[0]
+    assert span.status.status_code == StatusCode.OK
+    assert "langgraph.llm.prompt_tokens" not in (span.attributes or {})
+
+
 # ---------------------------------------------------------------------------
 # Tool lifecycle
 # ---------------------------------------------------------------------------
@@ -386,6 +450,18 @@ def test_end_without_start_does_not_raise(bridge: LangGraphOtelBridge) -> None:
     bridge.on_chain_end({}, run_id=run_id)
     bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)
     bridge.on_tool_end("x", run_id=run_id)
+    bridge.on_chat_model_end(ChatResult(generations=[]), run_id=run_id)
+
+    assert bridge._spans == {}
+
+
+def test_error_without_start_does_not_raise(bridge: LangGraphOtelBridge) -> None:
+    """Error callbacks for unknown run_ids must be no-ops, not raise."""
+    run_id = uuid.uuid4()
+    bridge.on_chain_error(ValueError("boom"), run_id=run_id)
+    bridge.on_llm_error(ValueError("boom"), run_id=run_id)
+    bridge.on_chat_model_error(ValueError("boom"), run_id=run_id)
+    bridge.on_tool_error(ValueError("boom"), run_id=run_id)
 
     assert bridge._spans == {}
 

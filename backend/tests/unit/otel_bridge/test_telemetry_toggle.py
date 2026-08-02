@@ -4,7 +4,6 @@ Verifies that MODULO_TELEMETRY_ENABLED controls whether OTel
 exporters are registered, enabling data residency compliance.
 """
 
-import os
 from unittest.mock import patch
 
 import pytest
@@ -31,12 +30,10 @@ class TestTelemetryDefaults:
             setup_otel(telemetry_enabled=False)
         mock_console.assert_not_called()
 
-    def test_disabled_otlp_exporter_not_used(self):
+    def test_disabled_otlp_exporter_not_used(self, monkeypatch: pytest.MonkeyPatch):
         """When disabled, OTLP must not be configured even with endpoint set."""
-        with (
-            patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}),
-            patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp,
-        ):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+        with patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
             setup_otel(telemetry_enabled=False)
         mock_otlp.assert_not_called()
 
@@ -74,25 +71,24 @@ class TestTelemetryEnabled:
             span.set_attribute("key", "value")
         assert span.name == "test-enabled"
 
-    def test_otlp_not_configured_without_env(self):
+    def test_otlp_not_configured_without_env(self, monkeypatch: pytest.MonkeyPatch):
         """OTLP exporter should not be configured when env var is absent."""
-        with patch.dict(os.environ, {}, clear=True), patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+        with patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
             setup_otel(telemetry_enabled=True)
         mock_otlp.assert_not_called()
 
-    def test_otlp_configured_with_env(self):
+    def test_otlp_configured_with_env(self, monkeypatch: pytest.MonkeyPatch):
         """OTLP exporter should be constructed when endpoint env var is set."""
-        with (
-            patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}),
-            patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp,
-        ):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+        with patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
             setup_otel(telemetry_enabled=True)
         mock_otlp.assert_called_once()
 
-    def test_otlp_configured_with_env_keeps_stdout(self):
+    def test_otlp_configured_with_env_keeps_stdout(self, monkeypatch: pytest.MonkeyPatch):
         """Both stdout and OTLP processors should be active when endpoint is set."""
-        with patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"}):
-            setup_otel(telemetry_enabled=True)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+        setup_otel(telemetry_enabled=True)
         provider = trace.get_tracer_provider()
         assert len(span_processors(provider)) == 2
 
@@ -100,40 +96,29 @@ class TestTelemetryEnabled:
 class TestSettingsIntegration:
     """Tests the Settings model integration with telemetry."""
 
-    def test_settings_defaults_to_disabled(self):
+    def _settings(self, **overrides):
+        from modulo.settings import Settings
+
+        return Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key="a" * 32,
+            fernet_key="a" * 32,
+            modulo_admin_password="testpass",
+            **overrides,
+        )
+
+    def test_settings_defaults_to_disabled(self, monkeypatch: pytest.MonkeyPatch):
         """Settings.modulo_telemetry_enabled should default to False."""
-        from modulo.settings import Settings
+        # Isolate from any ambient MODULO_TELEMETRY_ENABLED in the runner env.
+        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        assert self._settings().modulo_telemetry_enabled is False
 
-        settings = Settings(
-            database_url="postgresql+asyncpg://localhost/test",
-            secret_key="a" * 32,
-            fernet_key="a" * 32,
-            modulo_admin_password="testpass",
-        )
-        assert settings.modulo_telemetry_enabled is False
-
-    def test_settings_can_enable(self):
+    def test_settings_can_enable(self, monkeypatch: pytest.MonkeyPatch):
         """Settings.modulo_telemetry_enabled can be set to True."""
-        from modulo.settings import Settings
+        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        assert self._settings(modulo_telemetry_enabled=True).modulo_telemetry_enabled is True
 
-        settings = Settings(
-            database_url="postgresql+asyncpg://localhost/test",
-            secret_key="a" * 32,
-            fernet_key="a" * 32,
-            modulo_admin_password="testpass",
-            modulo_telemetry_enabled=True,
-        )
-        assert settings.modulo_telemetry_enabled is True
-
-    def test_env_var_overrides_default(self):
+    def test_env_var_overrides_default(self, monkeypatch: pytest.MonkeyPatch):
         """MODULO_TELEMETRY_ENABLED env var should override the default."""
-        with patch.dict(os.environ, {"MODULO_TELEMETRY_ENABLED": "true"}):
-            from modulo.settings import Settings
-
-            settings = Settings(
-                database_url="postgresql+asyncpg://localhost/test",
-                secret_key="a" * 32,
-                fernet_key="a" * 32,
-                modulo_admin_password="testpass",
-            )
-            assert settings.modulo_telemetry_enabled is True
+        monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
+        assert self._settings().modulo_telemetry_enabled is True
