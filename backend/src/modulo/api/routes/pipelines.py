@@ -808,15 +808,6 @@ async def replace_pipeline_graph_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("pipeline.graph.update"),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
-    # Admin-only route gate (hitl-gate-removal-guard-plan.md v19 §3 item 5 /
-    # ADR 017 open question 5): graph-replace is a weakening-capable write, so
-    # besides the operator-level pipeline.graph.update the endpoint also
-    # requires admin via pipeline.graph.weakening. This is intentional
-    # defense-in-depth breadth on top of the service-layer backstop inside
-    # replace_pipeline_graph — operators who still weaken gates through other
-    # write paths (update_pipeline / convert_to_agent / revert_to_manual) are
-    # caught and audited by that service-layer guard.
-    __: TenantPrincipal = require_permission("pipeline.graph.weakening"),
 ) -> PipelineGraphResponse:
     # Route layer carries the operator baseline ("pipeline.graph.update") for
     # defense-in-depth breadth; actual gate-weakening enforcement is the
@@ -1651,14 +1642,6 @@ async def rollback_snapshot_endpoint(
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("pipeline.graph.update"),
-    # Admin-only route gate (hitl-gate-removal-guard-plan.md v19 §3 item 5 /
-    # ADR 017 open question 5): snapshot rollback is a weakening-capable write
-    # (legacy snapshots fail closed with legacy-snapshot-ambiguous), so besides
-    # the operator-level pipeline.graph.update the endpoint also requires admin
-    # via pipeline.graph.weakening — intentional defense-in-depth breadth; the
-    # service-layer backstop inside rollback_to_snapshot is the load-bearing
-    # control.
-    __: TenantPrincipal = require_permission("pipeline.graph.weakening"),
 ) -> SnapshotResponse:
     # Route layer carries the operator baseline ("pipeline.graph.update") for
     # defense-in-depth breadth; actual gate-weakening enforcement is the
