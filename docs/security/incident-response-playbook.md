@@ -131,7 +131,7 @@ Medium / Low incident detected
 - [ ] Monitoring dashboards cover all alert signals from `docs/deployment-security.md` §6.4
 - [ ] Audit log chain integrity verified weekly: `uv run modulo audit verify`
 - [ ] Backup encryption passphrase accessible to on-call (separate from prod secrets)
-- [ ] Access to cloud provider console, K8s cluster, and DB read-replica documented in `docs/operations/runbook.md`
+- [ ] Access to cloud provider console, deployment hosts, and DB read-replica documented in `docs/operations/runbook.md`
 - [ ] Incident channel Slack workflow tested quarterly
 - [ ] Pentest findings remediated per `docs/security/penetration-test-plan.md`
 - [ ] Dependency scans pass per `docs/security/dependency-policy.md`
@@ -157,15 +157,15 @@ Medium / Low incident detected
 2. **Create** incident channel `#security-on-call-YYYYMMDD`.
 3. **Classify** severity (see §1). If unsure, classify up.
 4. **Snapshot** current state:
-   - `kubectl get events --all-namespaces --sort-by='.lastTimestamp'`
-   - `kubectl logs -l app.kubernetes.io/component=backend --tail=200`
+   - `docker compose -f docker-compose.prod.yml ps`
+   - `docker compose -f docker-compose.prod.yml logs modulo --tail=200`
    - `uv run modulo audit verify`
    - `uv run modulo health --full`
 5. **Preserve** evidence before any remediation:
-   - Export affected Pod logs: `kubectl logs <pod> > incident-YYYYMMDD-pod.log`
+   - Export affected container logs: `docker compose -f docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
    - Snapshot audit log window: `uv run modulo audit export --since <t-2h> --until <now> > incident-YYYYMMDD-audit.jsonl`
    - Capture Postgres connection state: `SELECT * FROM pg_stat_activity;`
-   - If container compromise suspected: `kubectl exec <pod> -- cat /proc/1/cmdline`
+   - If container compromise suspected: `docker compose -f docker-compose.prod.yml exec modulo cat /proc/1/cmdline`
 6. **Determine scope:**
    - What tenants/users are affected?
    - What data was accessed?
@@ -213,9 +213,9 @@ Medium / Low incident detected
 
 **Container vulnerability exploit:**
 1. Confirm the CVE and affected image digest.
-2. Block inbound traffic to affected Pods (K8s NetworkPolicy).
+2. Block inbound traffic to affected containers at the firewall / network policy.
 3. Deploy patched image with the fix (see `docs/security/dependency-policy.md`).
-4. Scan for indicators of compromise in the affected Pod's filesystem and network logs.
+4. Scan for indicators of compromise in the affected container's filesystem and network logs.
 
 **Data exfiltration (detected):**
 1. Block the destination IP/domain at the network egress firewall.
@@ -498,7 +498,7 @@ All post-mortems must include a chronological timeline in this format:
 | 2026-06-28 12:00 | Alert triggered: audit chain failure | PagerDuty incident #123 |
 | 2026-06-28 12:03 | On-call acked | Slack #security-alert |
 | 2026-06-28 12:05 | Incident channel created | #security-on-call-20260628 |
-| 2026-06-28 12:12 | Triage: RLS policy missing on `checkpoints` table | `kubectl logs` output |
+| 2026-06-28 12:12 | Triage: RLS policy missing on `checkpoints` table | `docker compose logs` output |
 | 2026-06-28 12:30 | Containment: emergency RLS policy applied | Git commit <sha> |
 | 2026-06-28 13:00 | Eradication: full RLS audit and fix deployed | Git commit <sha> |
 | 2026-06-28 13:15 | Recovery: service restored, pipelines thawed | `modulo health --full` |
@@ -647,11 +647,11 @@ Once confirmed, contact security@modulo.run to re-enable SSO.
 
 ### 8.3 Evidence Preservation Checklist
 
-- [ ] Pod logs exported: `kubectl logs <pod> > incident-YYYYMMDD-pod.log`
+- [ ] Container logs exported: `docker compose -f docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
 - [ ] Audit log window exported: `uv run modulo audit export --since <t-2h> --until <now>`
 - [ ] Database snapshot: `pg_dump -Fc modulo > incident-YYYYMMDD.dump`
-- [ ] Container image digest recorded: `kubectl get pod <pod> -o jsonpath='{.spec.containers[0].image}'`
-- [ ] Network logs captured from cloud provider (VPC flow logs, K8s network policy logs)
+- [ ] Container image digest recorded: `docker image inspect ghcr.io/farnalabs/modulo-backend | jq '.[0].RepoDigests'`
+- [ ] Network logs captured from cloud provider (VPC flow logs, host firewall logs)
 - [ ] Active sessions snapshot: `uv run modulo sessions list --all`
 - [ ] Checkpoint state snapshot: `uv run modulo pipelines list --running`
 

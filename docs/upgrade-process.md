@@ -78,17 +78,16 @@ The advisory lock prevents concurrent migrations across multiple replicas. The l
 
 ## Zero-Downtime Requirements
 
-| Requirement | Docker Compose | Kubernetes |
-|-------------|---------------|------------|
-| Minimum replicas | 1 (brief downtime on restart) | 2+ backend, 2+ frontend |
-| Readiness probe | Manual check | `GET /healthz` returning 200 |
-| Rolling update | Not supported (stop + start) | Built-in (maxSurge: 25%, maxUnavailable: 25%) |
-| PodDisruptionBudget | N/A | `minAvailable: 1` |
+| Requirement | Docker Compose |
+|-------------|---------------|
+| Minimum replicas | 1 (brief downtime on restart) |
+| Readiness probe | Manual check |
+| Rolling update | Not supported (stop + start) |
 
-For true zero-downtime on Kubernetes:
-- Ensure 2+ backend replicas are running before the upgrade
-- The readiness probe must pass migration before the pod receives traffic
-- A `PodDisruptionBudget` prevents all replicas from being terminated simultaneously
+Docker Compose self-hosted deployments stop the old container before
+starting the new one, so a brief downtime occurs during upgrades. For
+true zero-downtime, deploy via Fly.io, which performs rolling deployments
+between machine groups.
 
 ---
 
@@ -102,15 +101,6 @@ docker compose -f docker-compose.prod.yml stop modulo-api
 docker tag modulo-backend:old modulo-backend:latest
 docker compose -f docker-compose.prod.yml up -d
 
-# Kubernetes
-kubectl rollout undo deployment/modulo-backend -n modulo-prod
-
-# Kubernetes — specific revision
-kubectl rollout undo deployment/modulo-backend -n modulo-prod --to-revision=3
-
-# View history
-kubectl rollout history deployment/modulo-backend -n modulo-prod
-
 # Self-hosted
 git checkout <previous-tag>
 uv sync
@@ -123,13 +113,13 @@ sudo systemctl restart modulo
 
 ```bash
 # Check current Alembic version
-kubectl exec deploy/modulo-backend -n modulo-prod -- uv run alembic current
+docker compose -f docker-compose.prod.yml exec modulo uv run alembic current
 
 # Preview the downgrade SQL
-kubectl exec deploy/modulo-backend -n modulo-prod -- uv run alembic downgrade --sql -1
+docker compose -f docker-compose.prod.yml exec modulo uv run alembic downgrade --sql -1
 
 # Downgrade (use with extreme caution — data loss possible)
-kubectl exec deploy/modulo-backend -n modulo-prod -- uv run alembic downgrade -1
+docker compose -f docker-compose.prod.yml exec modulo uv run alembic downgrade -1
 ```
 
 **Prefer a forward-fix over downgrading.** Write a new migration that reverts the schema change rather than using `alembic downgrade`. Not all migrations include a `downgrade()` function.

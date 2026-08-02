@@ -18,8 +18,8 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 - [ ] **`install.sh`** is uploaded to `https://modulo.run/install.sh`
 - [ ] **DNS** is configured for the target domain
   - A/AAAA record or CNAME to the reverse proxy or load balancer
-- [ ] **TLS certificate** is provisioned (Let's Encrypt via cert-manager or Caddy)
-- [ ] **Reverse proxy** is configured (nginx, Caddy, or K8s Ingress)
+- [ ] **TLS certificate** is provisioned (Let's Encrypt via Caddy ACME or a manual certificate)
+- [ ] **Reverse proxy** is configured (nginx or Caddy)
   - TLS 1.2+ only, AEAD ciphers
   - HSTS enabled (`max-age=31536000; includeSubDomains`)
   - WebSocket support (`proxy_set_header Upgrade $http_upgrade`)
@@ -56,7 +56,7 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 - [ ] **Secrets** are injected via environment — not hardcoded in any file or committed to git
 - [ ] **Container images** have zero critical/high CVEs (Trivy scan)
 - [ ] **Containers** run as non-root user
-- [ ] **Read-only root filesystem** enabled for backend pods (K8s)
+- [ ] **Read-only root filesystem** enabled for backend containers
 - [ ] **Firewall** blocks all inbound ports except 443 (HTTPS)
 - [ ] **Network egress** is restricted to known endpoints (see [`docs/deployment/vpc-checklist.md`](./deployment/vpc-checklist.md))
 - [ ] **`SECURITY.md`** exists at the repo root with contact and disclosure policy
