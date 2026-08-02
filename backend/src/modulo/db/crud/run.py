@@ -18,11 +18,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from modulo.db.crud.base import PageResult
+from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 
 _log = logging.getLogger(__name__)
+
+# Capacity-block reason markers (B5). Set on error_code when a run is demoted
+# back to pending because a capacity limit was hit; distinct from terminal
+# failure codes (never_dispatched, worker_lost, capacity_timeout, ...).
+ERROR_CODE_ORG_CAPACITY_LIMITED = "org_capacity_limited"
+ERROR_CODE_PIPELINE_CAPACITY = "pipeline_capacity"
+ERROR_CODE_CAPACITY_TIMEOUT = "capacity_timeout"
+# Non-terminal markers that operators must be able to distinguish from real
+# failures. The stale-run sweep exempts runs carrying these markers.
+CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY})
+
+_SANDBOX_CONCURRENCY_KEY = "sandbox_concurrency_limit"
+_SANDBOX_CONCURRENCY_MIN = 1
+_SANDBOX_CONCURRENCY_MAX = 100
 
 
 def _input_hash(payload: dict[str, Any]) -> str:
@@ -188,6 +204,7 @@ async def update_run_status(
     node_token_usage: dict[str, Any] | None = None,
     outputs_json: dict[str, Any] | None = None,
     claimed_by: str | None = None,
+    clear_error_code: bool = False,
 ) -> Run | None:
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
     run = result.scalar_one_or_none()
@@ -200,6 +217,11 @@ async def update_run_status(
         run.claimed_by = claimed_by
     if status in ("complete", "failed", "cancelled", "eval_failed"):
         run.completed_at = datetime.now(UTC)
+    if clear_error_code:
+        # Explicitly clear a prior capacity marker (the error_code=... writes
+        # below are conditional on non-None, so None alone cannot clear it).
+        run.error_code = None
+        run.error_detail = None
     if error_code is not None:
         run.error_code = error_code
     if error_detail is not None:
@@ -264,6 +286,85 @@ async def count_active_runs_for_pipeline(
         stmt = stmt.where(Run.id != exclude_run_id)
     result = await session.execute(stmt)
     return int(result.scalar_one_or_none() or 0)
+
+
+def _graph_contains_sandbox_agent(graph_json: dict[str, Any] | None) -> bool:
+    """Top-level scan for any ``sandbox_agent`` node in a snapshot graph.
+
+    Fail-open: ``None``, non-dicts, and missing ``nodes`` return ``False``
+    (treat as non-sandbox, never block). Only the top-level ``nodes`` list is
+    scanned — composite ``composite_ref`` → ``sub_pipeline_graph_json`` is
+    deliberately not recursed (composite pipelines are not compilable today).
+    """
+    if not isinstance(graph_json, dict):
+        return False
+    nodes = graph_json.get("nodes")
+    if not isinstance(nodes, list):
+        return False
+    return any(isinstance(n, dict) and n.get("node_type") == "sandbox_agent" for n in nodes)
+
+
+async def count_active_sandbox_runs_for_org(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    exclude_run_id: uuid.UUID | None = None,
+) -> int:
+    """Count ``running`` sandbox-agent runs for an organisation.
+
+    Only ``running`` runs whose snapshot graph contains a ``sandbox_agent``
+    node count against the org sandbox cap. It is the sole executing state;
+    pending, awaiting_human, and claimed runs hold no live sandbox — and
+    neither do non-sandbox pipelines, so they must not consume a slot (B5).
+    The explicit ``organisation_id`` filter makes the query cross-tenant safe
+    on top of RLS; the snapshots join runs under the same RLS context.
+    """
+    stmt = (
+        select(PipelineSnapshot.graph_json)
+        .join(Run, Run.snapshot_id == PipelineSnapshot.id)
+        .where(
+            Run.organisation_id == org_id,
+            Run.status == "running",
+            Run.cancellation_requested == False,  # noqa: E712
+        )
+    )
+    if exclude_run_id is not None:
+        stmt = stmt.where(Run.id != exclude_run_id)
+    rows = (await session.execute(stmt)).scalars()
+    return sum(1 for graph_json in rows if _graph_contains_sandbox_agent(graph_json))
+
+
+async def get_sandbox_concurrency_limit(session: AsyncSession, org_id: uuid.UUID) -> int | None:
+    """Read the org's sandbox concurrency limit from ``settings_json``.
+
+    ``None`` means no cap. Fail-open: a malformed value (non-dict settings,
+    string, float, bool) or a missing org returns ``None`` with a warning and
+    never raises. An out-of-range ``int`` is clamped to ``[1, 100]`` so a
+    direct-DB edit cannot crash the capacity claim.
+    """
+    org = await get_organisation(session, org_id)
+    if org is None:
+        _log.warning("sandbox_concurrency.org_not_found", extra={"org_id": str(org_id)})
+        return None
+    settings = org.settings_json
+    if not isinstance(settings, dict):
+        _log.warning("sandbox_concurrency.settings_not_dict", extra={"org_id": str(org_id)})
+        return None
+    raw = settings.get(_SANDBOX_CONCURRENCY_KEY)
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        _log.warning(
+            "sandbox_concurrency.invalid_type",
+            extra={"org_id": str(org_id), "value": repr(raw)},
+        )
+        return None
+    if raw < _SANDBOX_CONCURRENCY_MIN or raw > _SANDBOX_CONCURRENCY_MAX:
+        _log.warning(
+            "sandbox_concurrency.out_of_range",
+            extra={"org_id": str(org_id), "value": raw},
+        )
+        return max(_SANDBOX_CONCURRENCY_MIN, min(_SANDBOX_CONCURRENCY_MAX, raw))
+    return raw
 
 
 def _percentile(sorted_data: list[float], p: float) -> float:
