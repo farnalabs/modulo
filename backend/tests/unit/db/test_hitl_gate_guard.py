@@ -76,12 +76,15 @@ _GATE = {
             ["eval_condition"],
         ),
         ({"eval_condition": None}, {"eval_condition": {"name": "x"}}, ["eval_condition"]),
-        # claim_expiry_minutes is NOT weakening: a shorter expiry is stricter —
-        # on expiry the claim is reset (run returns to awaiting_human), it never
-        # releases the gate or auto-approves the run (plan §1, review finding).
+        # claim_expiry_minutes is NOT weakening when shortened: a shorter expiry
+        # is stricter — on expiry the claim is reset (run returns to
+        # awaiting_human), it never releases the gate or auto-approves the run
+        # (plan §1, review finding). REMOVING the field IS weakening: it drops
+        # the expiry requirement without tightening anything.
         ({"claim_expiry_minutes": 60}, {"claim_expiry_minutes": 30}, []),
         ({"claim_expiry_minutes": 30}, {"claim_expiry_minutes": 60}, []),
         ({"claim_expiry_minutes": 30}, {"claim_expiry_minutes": 30}, []),
+        ({"claim_expiry_minutes": 60}, {"claim_expiry_minutes": None}, ["claim_expiry_minutes"]),
     ],
 )
 async def test_field_weakening_detection(old_cfg: dict, new_cfg: dict, expected: list[str]) -> None:
@@ -100,6 +103,22 @@ async def test_field_weakening_detection(old_cfg: dict, new_cfg: dict, expected:
         assert diff.denied is False  # privileged caller is allowed
     else:
         assert not diff.has_weakening
+
+
+async def test_claim_expiry_minutes_field_removed_is_weakening() -> None:
+    """REMOVING the claim_expiry_minutes key entirely (old=60 -> new absent)
+    drops the expiry requirement and is flagged as weakening."""
+    old_cfg = {**_GATE, "claim_expiry_minutes": 60}
+    new_cfg = {k: v for k, v in _GATE.items() if k != "claim_expiry_minutes"}
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg=old_cfg)],
+        [_new_edge("a", "b", cfg=new_cfg)],
+        is_privileged=True,
+        caller_type="rest",
+    )
+    assert diff.has_weakening
+    assert diff.weakened_edges[0].weakening_types == ["claim_expiry_minutes"]
 
 
 async def test_condition_weakening_on_human_only_false_edge() -> None:
