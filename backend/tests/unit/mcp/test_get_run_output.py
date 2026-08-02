@@ -205,12 +205,9 @@ class TestGetRunOutputSuccess:
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_cm = AsyncMock()
-        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
-        mock_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session.return_value = mock_cm
-
         result = await get_run_output(run_id="not-a-uuid", node_id="node1")
 
         assert result["error"] == "invalid_id"
         assert result["field"] == "run_id"
+        # Validation fails before any session is opened.
+        mock_session.assert_not_called()
