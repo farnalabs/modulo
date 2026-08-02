@@ -21,6 +21,7 @@ from modulo.connectors.base import (
 from modulo.core.connector_hub import (
     ConnectorHub,
     ConnectorNotFoundError,
+    _build_connector,
 )
 from modulo.core.secrets_backend import create_secrets_backend
 
@@ -70,7 +71,12 @@ class _FakeCI:
             ConnectorType.CONFLUENCE,
         ),
         ("shortcut", {}, {"token": "shortcut_token"}, ConnectorType.SHORTCUT),
-        ("youtrack", {}, {"token": "yt_perm_token_123"}, ConnectorType.YOUTRACK),
+        (
+            "youtrack",
+            {"base_url": "https://youtrack.example.com/api"},
+            {"token": "yt_perm_token_123"},
+            ConnectorType.YOUTRACK,
+        ),
     ],
 )
 async def test_initialise_creates_connector(connector_type_id, config_json, credentials_json, expected_type, tmp_path):
@@ -88,6 +94,18 @@ async def test_initialise_creates_connector(connector_type_id, config_json, cred
         await hub.initialise([ci])
     connector = hub.get(ci.id)
     assert connector.connector_type == expected_type
+
+
+def test_build_youtrack_requires_base_url():
+    """_build_connector requires base_url for youtrack — no placeholder default."""
+    with pytest.raises(ValueError, match="requires 'base_url'"):
+        _build_connector("youtrack", {}, {"token": "yt_perm_token_123"})
+    connector = _build_connector(
+        "youtrack",
+        {"base_url": "https://youtrack.example.com/api"},
+        {"token": "yt_perm_token_123"},
+    )
+    assert connector.connector_type == ConnectorType.YOUTRACK
 
 
 async def test_get_unknown_raises():
