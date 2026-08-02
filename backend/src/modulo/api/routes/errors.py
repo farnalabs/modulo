@@ -15,7 +15,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.models.error import (
     ErrorEventListResponse,
     ErrorGroupDetail,
@@ -26,7 +26,6 @@ from modulo.api.models.error import (
     ErrorListResponse,
     SessionKeyResponse,
 )
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 from modulo.db.crud.error_tracking import (
@@ -92,7 +91,7 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
 @handle_db_errors("errors.create_session_key")
 @router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
 async def create_session_key(
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("errors.resolve"),
 ) -> dict[str, Any]:
     """Generate a per-session HMAC key for signing error ingest requests.
 
@@ -110,7 +109,7 @@ async def create_session_key(
 async def ingest_errors(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("errors.resolve"),
 ) -> dict[str, Any]:
     """Ingest one or more error events.
 
@@ -354,7 +353,7 @@ async def list_error_groups(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("errors.resolve"),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
@@ -428,7 +427,7 @@ async def list_error_groups(
 async def get_error_group_detail(
     error_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("errors.resolve"),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
@@ -482,7 +481,7 @@ async def patch_error_group(
     error_id: uuid.UUID,
     req: ErrorGroupUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("errors.resolve"),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
@@ -545,7 +544,7 @@ async def list_error_events(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("errors.resolve"),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
