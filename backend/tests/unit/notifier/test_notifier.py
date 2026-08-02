@@ -709,6 +709,37 @@ async def test_dispatch_event_no_subscribers_returns_empty(notifier: Notifier) -
     assert result == []
 
 
+async def test_dispatch_event_creates_in_app_notification_with_zero_webhook_endpoints(
+    notifier: Notifier,
+) -> None:
+    """hitl-gate-removal-guard-plan.md v19 §5 Notifier silent-loss fix: the
+    early `if not endpoints: return []` is gone, so in-app Notification creation
+    runs even when an org has zero webhook subscribers."""
+    mapper_instance = MagicMock()
+    mapper_instance.create_from_event = AsyncMock(return_value=None)
+
+    with (
+        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])),
+        patch(
+            "modulo.core.notifier.event_mapper.NotificationEventMapper",
+            return_value=mapper_instance,
+        ),
+        patch.object(notifier, "_session_factory") as factory,
+    ):
+        session = AsyncMock()
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        factory.return_value.__aenter__.return_value = session
+
+        results = await notifier.dispatch_event(_ORG, "hitl_overdue", {"run_id": str(_RUN)})
+
+    assert results == []  # no webhook dispatches...
+    mapper_instance.create_from_event.assert_awaited_once()  # ...but the in-app notification still runs
+    assert mapper_instance.create_from_event.call_args.kwargs["event_type"] == "hitl_overdue"
+
+
 async def test_dispatch_event_with_subscriber_sends_notification(notifier: Notifier) -> None:
     ep = _fake_endpoint()
 

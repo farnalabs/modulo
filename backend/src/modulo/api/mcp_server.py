@@ -13,6 +13,7 @@ Dual-layer enforcement:
 Org context validated per-event for streaming (SSE) connections.
 """
 
+import asyncio
 import contextvars
 import json
 import logging
@@ -85,6 +86,7 @@ from modulo.core.library_service import (
     list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from modulo.db.crud.hitl_gate_guard import HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import get_run
@@ -904,6 +906,47 @@ async def get_pipeline_graph_tool(
         return _tool_error("Failed to get pipeline graph")
 
 
+async def _append_mcp_hitl_denial_audit(
+    org_id: uuid.UUID, pipeline_id: uuid.UUID, exc: HitlGateWeakeningDenied
+) -> None:
+    """Append the hitl_gate_removal_denied audit event for an MCP denial.
+
+    Runs in a fresh ``_session`` after the guarded write's transaction rolled
+    back, so the denial is never lost (hitl-gate-removal-guard-plan.md v19 §5).
+    Best-effort: an audit failure is logged but never masks the denial.
+    """
+    try:
+        from modulo.core.audit_logger import append_audit_event
+
+        payload = exc.payload_json or {
+            "caller_type": "mcp",
+            "reason_code": exc.reason_code,
+            "denied": True,
+            "affected_edges": [
+                {"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys
+            ],
+            "weakening_types": exc.weakening_types,
+        }
+        async with _session(org_id) as s:
+            try:
+                actor_user_id = _ctx_user_id_val()
+            except McpAuthContextError:
+                actor_user_id = None
+            await append_audit_event(
+                s,
+                org_id=org_id,
+                event_type="hitl_gate_removal_denied",
+                actor_user_id=actor_user_id,
+                resource_type="pipeline",
+                resource_id=pipeline_id,
+                payload_json=payload,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("mcp.hitl_denial_audit_failed", extra={"org_id": str(org_id)})
+
+
 @mcp.tool(
     description="Set or replace the graph (nodes + edges) of an existing pipeline. "
     "Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), "
@@ -934,9 +977,11 @@ async def update_pipeline_graph(
         except ValueError:
             return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
-        # ADR 017 service-layer backstop: operator+ is privileged (may weaken a
-        # HITL gate). Resolved from the live ContextVar role, NOT the
-        # kill-switched scope check, so the HITL guard stays live.
+        # ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
+        # the MCP surface is structurally excluded from gate weakening. The
+        # guarded function hardcodes is_privileged=False when
+        # caller_type=="mcp" (no DB query); the literal below is enforced by a
+        # .semgrep/ rule (mcp call site must pass the literal, not a variable).
         from modulo.api.routes.pipelines import PipelineGraphUpdate, _is_privileged
 
         is_privileged = _is_privileged(_ctx_role_val())
@@ -952,34 +997,46 @@ async def update_pipeline_graph(
                 "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
             }
 
-        async with _session(org_id) as s:
-            from modulo.db.crud.pipeline import get_pipeline
+        try:
+            async with _session(org_id) as s:
+                from modulo.db.crud.pipeline import get_pipeline
 
-            pipeline = await get_pipeline(s, pid)
-            if pipeline is None:
-                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            mismatches = await find_connector_team_mismatches(
-                s,
-                org_id=org_id,
-                pipeline_owner_team_id=pipeline.owner_team_id,
-                connector_bindings=extract_connector_bindings(nodes),
-            )
-            if mismatches:
-                return {
-                    "error": CONNECTOR_TEAM_MISMATCH,
-                    "detail": connector_team_mismatch_detail(mismatches),
-                }
-            result = await replace_pipeline_graph(
-                s,
-                pipeline_id=pid,
-                org_id=org_id,
-                nodes=nodes,
-                edges=edges,
-                is_privileged=is_privileged,
-            )
-            if result is None:
-                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            updated_nodes, updated_edges = result
+                pipeline = await get_pipeline(s, pid)
+                if pipeline is None:
+                    return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+                mismatches = await find_connector_team_mismatches(
+                    s,
+                    org_id=org_id,
+                    pipeline_owner_team_id=pipeline.owner_team_id,
+                    connector_bindings=extract_connector_bindings(nodes),
+                )
+                if mismatches:
+                    return {
+                        "error": CONNECTOR_TEAM_MISMATCH,
+                        "detail": connector_team_mismatch_detail(mismatches),
+                    }
+                result = await replace_pipeline_graph(
+                    s,
+                    pipeline_id=pid,
+                    org_id=org_id,
+                    nodes=nodes,
+                    edges=edges,
+                    is_privileged=is_privileged,
+                    caller_type="mcp",
+                )
+                if result is None:
+                    return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+                updated_nodes, updated_edges = result
+        except HitlGateWeakeningDenied as exc:
+            await _append_mcp_hitl_denial_audit(org_id, pid, exc)
+            return {
+                "error": "hitl_gate_removal_denied",
+                "detail": str(exc),
+                "reason_code": exc.reason_code,
+                "affected_edges": [
+                    {"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys
+                ],
+            }
 
         return {
             "pipeline_id": pipeline_id,

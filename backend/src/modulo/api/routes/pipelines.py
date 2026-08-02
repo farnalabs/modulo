@@ -41,6 +41,10 @@ from modulo.core.team_visibility import (
     find_connector_team_mismatches,
 )
 from modulo.db.crud.composite_template import create_composite_template
+from modulo.db.crud.hitl_gate_guard import (
+    HitlGateWeakeningDenied,
+    denial_http_status,
+)
 from modulo.db.crud.pipeline import (
     archive_pipeline,
     check_pipeline_name_available,
@@ -97,6 +101,59 @@ def _is_privileged(role: str | None) -> bool:
     if role is None:
         return False
     return org_role_level(role) >= _OPERATOR_LEVEL
+
+
+async def _deny_hitl_gate(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    exc: HitlGateWeakeningDenied,
+    request_id: str | None = None,
+) -> None:
+    """Append the denial audit event and translate to HTTP (hitl-gate-removal-guard-plan.md v19 §5).
+
+    The guarded write already rolled back (guard-runs-before-delete), so the
+    denial audit event is written in a fresh transaction immediately after the
+    denial — it must never be lost with the rolled-back write.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            payload = exc.payload_json or {
+                "caller_type": "rest",
+                "reason_code": exc.reason_code,
+                "denied": True,
+                "affected_edges": [
+                    {
+                        "source_node_id": k[0],
+                        "target_node_id": k[1],
+                        "edge_type": k[2],
+                    }
+                    for k in exc.correlation_keys
+                ],
+                "weakening_types": exc.weakening_types,
+            }
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="hitl_gate_removal_denied",
+                actor_user_id=account_id,
+                resource_type="pipeline",
+                resource_id=pipeline_id,
+                payload_json=payload,
+                request_id=request_id,
+            )
+    except Exception:
+        logger.exception("routes.pipelines.hitl_denial_audit_failed")
+    detail = f"Gate weakening denied ({exc.reason_code})."
+    if exc.detail:
+        detail += f" Affected edges: {exc.detail}"
+    raise HTTPException(
+        status_code=denial_http_status(exc.reason_code),
+        detail=detail,
+    ) from None
 
 
 class PipelineCreate(BaseModel):
@@ -752,6 +809,14 @@ async def replace_pipeline_graph_endpoint(
     principal: TenantPrincipal = require_permission("pipeline.graph.update"),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineGraphResponse:
+    # Route layer carries the operator baseline ("pipeline.graph.update") for
+    # defense-in-depth breadth; actual gate-weakening enforcement is the
+    # service-layer backstop (operator+ privileged under the row lock, non-
+    # privileged callers denied — hitl-gate-removal-guard-plan.md v19 §3 item
+    # 5). There is deliberately no admin-only route gate here: operators are
+    # "privileged" for weakening by design, and equivalent weakening remains
+    # reachable via update_pipeline / convert_to_agent / revert_to_manual, so an
+    # admin-only gate would only block the operator's primary graph-edit path.
     node_data = [node.model_dump(mode="json") for node in req.nodes]
     edge_data = [
         {
@@ -763,6 +828,7 @@ async def replace_pipeline_graph_endpoint(
             "hitl_gate_config": (
                 edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
             ),
+            "hitl_gate_config_present": "hitl_gate_config" in edge.model_fields_set,
         }
         for edge in req.edges
     ]
@@ -808,6 +874,8 @@ async def replace_pipeline_graph_endpoint(
                 nodes=node_data,
                 edges=edge_data,
                 is_privileged=_is_privileged(principal.org_role),
+                caller_type="rest",
+                account_id=principal.account_id,
             )
             if graph is not None:
                 validation = await GraphValidator().validate_definition(
@@ -816,6 +884,15 @@ async def replace_pipeline_graph_endpoint(
                     connector_bindings=connector_bindings,
                     model_backend_pins=model_backend_pins,
                 )
+    except HitlGateWeakeningDenied as exc:
+        await _deny_hitl_gate(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            pipeline_id=pipeline_id,
+            exc=exc,
+            request_id=getattr(principal, "request_id", None),
+        )
     except ProgrammingError:
         logger.exception("routes.pipelines")
 
@@ -951,6 +1028,7 @@ async def update_pipeline_endpoint(
                         "hitl_gate_config": (
                             edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None
                         ),
+                        "hitl_gate_config_present": "hitl_gate_config" in edge.model_fields_set,
                     }
                     for edge in req.graph_json.edges
                 ]
@@ -971,10 +1049,21 @@ async def update_pipeline_endpoint(
                     nodes=node_data,
                     edges=edge_data,
                     is_privileged=_is_privileged(principal.org_role),
+                    caller_type="rest",
+                    account_id=principal.account_id,
                 )
                 if graph is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
             pipeline = await update_pipeline(session, pipeline_id, updates)
+    except HitlGateWeakeningDenied as exc:
+        await _deny_hitl_gate(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            pipeline_id=pipeline_id,
+            exc=exc,
+            request_id=getattr(principal, "request_id", None),
+        )
     except ProgrammingError:
         logger.exception("routes.pipelines")
 
@@ -1554,6 +1643,13 @@ async def rollback_snapshot_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("pipeline.graph.update"),
 ) -> SnapshotResponse:
+    # Route layer carries the operator baseline ("pipeline.graph.update") for
+    # defense-in-depth breadth; actual gate-weakening enforcement is the
+    # service-layer backstop (operator+ privileged under the row lock, non-
+    # privileged callers denied — hitl-gate-removal-guard-plan.md v19 §3 item
+    # 5). There is deliberately no admin-only route gate here, matching the
+    # graph-replace endpoint: operators are "privileged" for weakening by
+    # design (equivalent weakening stays reachable via update_pipeline).
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1564,7 +1660,17 @@ async def rollback_snapshot_endpoint(
                 snapshot_id,
                 account_id=principal.account_id,
                 is_privileged=_is_privileged(principal.org_role),
+                caller_type="rest",
             )
+    except HitlGateWeakeningDenied as exc:
+        await _deny_hitl_gate(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            pipeline_id=pipeline_id,
+            exc=exc,
+            request_id=getattr(principal, "request_id", None),
+        )
     except ProgrammingError:
         logger.exception("routes.pipelines")
 
@@ -1794,7 +1900,18 @@ async def convert_node_to_agent_endpoint(
                 nodes,
                 edges,
                 is_privileged=_is_privileged(principal.org_role),
+                caller_type="rest",
+                account_id=principal.account_id,
             )
+    except HitlGateWeakeningDenied as exc:
+        await _deny_hitl_gate(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            pipeline_id=pipeline_id,
+            exc=exc,
+            request_id=getattr(principal, "request_id", None),
+        )
     except ProgrammingError:
         logger.exception("routes.pipelines")
 
@@ -1897,7 +2014,18 @@ async def revert_node_to_manual_endpoint(
                 nodes,
                 edges,
                 is_privileged=_is_privileged(principal.org_role),
+                caller_type="rest",
+                account_id=principal.account_id,
             )
+    except HitlGateWeakeningDenied as exc:
+        await _deny_hitl_gate(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            pipeline_id=pipeline_id,
+            exc=exc,
+            request_id=getattr(principal, "request_id", None),
+        )
     except ProgrammingError:
         logger.exception("routes.pipelines")
 
@@ -1932,6 +2060,7 @@ def _edge_to_dict(e: Any) -> dict[str, Any]:
         "edge_type": e.edge_type,
         "condition_expression": getattr(e, "condition_expression", None),
         "hitl_gate_config": dict(e.hitl_gate_config) if isinstance(e.hitl_gate_config, dict) else e.hitl_gate_config,
+        "hitl_gate_config_present": True,
     }
 
 
@@ -1942,11 +2071,14 @@ async def _save_graph(
     nodes: list[dict[str, Any]],
     edges: list[Any],
     is_privileged: bool,
+    caller_type: Literal["rest", "mcp"],
+    account_id: uuid.UUID | None = None,
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
     Accepts edges as either ORM model instances (PipelineEdge) or plain dicts.
-    Forwards is_privileged to the underlying graph write (ADR 017 backstop).
+    Forwards is_privileged + caller_type + account_id to the underlying graph
+    write (ADR 017 backstop / hitl-gate-removal-guard-plan.md v19).
     """
     edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
     return await replace_pipeline_graph(
@@ -1956,4 +2088,6 @@ async def _save_graph(
         nodes=nodes,
         edges=edge_dicts,
         is_privileged=is_privileged,
+        caller_type=caller_type,
+        account_id=account_id,
     )

@@ -74,6 +74,8 @@ forbidden_modules =
 ignore_imports =
     modulo.db.crud.pipeline_snapshot -> modulo.core.exceptions
     modulo.db.crud.sso_provider -> modulo.core.audit_logger
+    modulo.db.crud.pipeline -> modulo.core.audit_logger
+    modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.audit_logger
     modulo.db.session -> modulo.core.audit_logger.append_only
 
 [importlinter:contract:connectors-do-not-import-core]

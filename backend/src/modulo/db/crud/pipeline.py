@@ -4,22 +4,34 @@ All functions assume the caller has set the RLS org context via set_rls_org()
 before calling. The session must be within an active transaction.
 """
 
+import asyncio
 import copy
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, cast
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.core.audit_logger import append_audit_event
 from modulo.db.crud.base import PageResult, apply_updates
+from modulo.db.crud.hitl_gate_guard import (
+    HitlGateWeakeningDenied,
+    apply_gated_edge_diff,
+    build_gate_diff_payload,
+    denial_detail,
+    resolve_effective_privilege,
+)
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
+from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
 
@@ -256,6 +268,27 @@ async def get_pipeline_graph(
     return list(pipeline.graph_nodes_json), edges
 
 
+@dataclass
+class _CloneSourceSnapshot:
+    """Plain-data snapshot of the source pipeline taken in the clone's short
+    step-(a) transaction, so the slower clone work (step b) never depends on a
+    lock or on live reads of the source (hitl-gate-removal-guard-plan.md §3 item 3)."""
+
+    name: str
+    description: str | None
+    visibility: str
+    owner_team_id: uuid.UUID | None
+    max_concurrent_runs: int
+    lock_wait_timeout_seconds: int
+    node_timeout_seconds: int
+    run_context_defaults: dict[str, Any]
+    graph_nodes_json: list[dict[str, Any]]
+    default_autonomy_level: str
+    stale_run_timeout_minutes: int
+    edges: list[dict[str, Any]]
+    snapshots: list[dict[str, Any]]
+
+
 async def clone_pipeline(
     session: AsyncSession,
     *,
@@ -263,111 +296,124 @@ async def clone_pipeline(
     pipeline_id: uuid.UUID,
     account_id: uuid.UUID,
     new_name: str | None = None,
+    _read_session_factory: Callable[[], AsyncSession] | None = None,
+    _on_step_a_held: Callable[[], Awaitable[None]] | None = None,
+    _on_step_a_committed: Callable[[], Awaitable[None]] | None = None,
 ) -> Pipeline | None:
     """Deep-copy a pipeline and its graph (nodes + first-class edges + snapshots).
 
     Returns the *new* Pipeline, or *None* if the source does not exist.
     Connector bindings are preserved by reference so users can rebind later.
     SnapshotSchemaPins are also copied for each cloned snapshot.
+
+    Torn-read fix (plan §3 item 3): the source reads (``FOR SHARE`` on the
+    pipeline row + nodes/edges/snapshots into plain data) run in a short,
+    separate transaction on a read session that commits immediately. The
+    slower clone work then runs on the caller's session using only the
+    plain-data snapshot, with no further lock dependency — a concurrent
+    ``replace_pipeline_graph``'s ``FOR UPDATE`` on the same row can proceed as
+    soon as the step-(a) transaction commits. All cloned gated edges emit ONE
+    batched ``edge_created_with_gate`` audit event.
     """
     _log.info("Cloning pipeline %s (org=%s, requested_name=%s)", pipeline_id, org_id, new_name)
 
-    source = await get_pipeline(session, pipeline_id)
-    if source is None:
+    snapshot = await _read_clone_source_snapshot(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        read_factory=_read_session_factory,
+        on_step_a_held=_on_step_a_held,
+    )
+    if snapshot is None:
         _log.warning("Clone aborted: source pipeline %s not found", pipeline_id)
         return None
 
-    name = new_name or f"Copy of {source.name}"
+    if _on_step_a_committed is not None:
+        await _on_step_a_committed()
+
+    name = new_name or f"Copy of {snapshot.name}"
     _log.info("Copying pipeline config for %s -> '%s'", pipeline_id, name)
     cloned = Pipeline(
         organisation_id=org_id,
         name=name,
         account_id=account_id,
-        description=source.description,
-        visibility=source.visibility,
-        owner_team_id=source.owner_team_id,
-        max_concurrent_runs=source.max_concurrent_runs,
-        lock_wait_timeout_seconds=source.lock_wait_timeout_seconds,
-        node_timeout_seconds=source.node_timeout_seconds,
-        run_context_defaults=copy.deepcopy(source.run_context_defaults),
-        graph_nodes_json=copy.deepcopy(source.graph_nodes_json),
-        default_autonomy_level=source.default_autonomy_level,
-        stale_run_timeout_minutes=source.stale_run_timeout_minutes,
+        description=snapshot.description,
+        visibility=snapshot.visibility,
+        owner_team_id=snapshot.owner_team_id,
+        max_concurrent_runs=snapshot.max_concurrent_runs,
+        lock_wait_timeout_seconds=snapshot.lock_wait_timeout_seconds,
+        node_timeout_seconds=snapshot.node_timeout_seconds,
+        run_context_defaults=copy.deepcopy(snapshot.run_context_defaults),
+        graph_nodes_json=copy.deepcopy(snapshot.graph_nodes_json),
+        default_autonomy_level=snapshot.default_autonomy_level,
+        stale_run_timeout_minutes=snapshot.stale_run_timeout_minutes,
     )
     session.add(cloned)
     await session.flush()
     _log.info("Pipeline config copied: new id=%s", cloned.id)
 
     _log.info("Copying edges for pipeline %s -> %s", pipeline_id, cloned.id)
-    edges = list(
-        (
-            await session.execute(
-                select(PipelineEdge)
-                .where(PipelineEdge.pipeline_id == pipeline_id)
-                .order_by(PipelineEdge.created_at, PipelineEdge.id)
-            )
-        ).scalars()
-    )
-    edge_count = 0
-    for edge in edges:
+    gated_cloned_edges: list[PipelineEdge] = []
+    for edge in snapshot.edges:
         cloned_edge = PipelineEdge(
             organisation_id=org_id,
             pipeline_id=cloned.id,
-            source_node_id=edge.source_node_id,
-            target_node_id=edge.target_node_id,
-            edge_type=edge.edge_type,
-            hitl_gate_config=copy.deepcopy(edge.hitl_gate_config),
+            source_node_id=edge["source_node_id"],
+            target_node_id=edge["target_node_id"],
+            edge_type=edge["edge_type"],
+            hitl_gate_config=copy.deepcopy(edge["hitl_gate_config"]),
         )
         session.add(cloned_edge)
-        edge_count += 1
+        if edge["hitl_gate_config"] is not None:
+            gated_cloned_edges.append(cloned_edge)
     await session.flush()
-    node_count = len(source.graph_nodes_json)
+    edge_count = len(snapshot.edges)
+    node_count = len(snapshot.graph_nodes_json)
+    if gated_cloned_edges:
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="edge_created_with_gate",
+            actor_user_id=account_id,
+            resource_type="pipeline",
+            resource_id=cloned.id,
+            payload_json={"edge_ids": [str(e.id) for e in gated_cloned_edges]},
+        )
+
     _log.info("Copying snapshots for pipeline %s -> %s", pipeline_id, cloned.id)
-    snapshots = list(
-        (
-            await session.execute(
-                select(PipelineSnapshot)
-                .where(PipelineSnapshot.pipeline_id == pipeline_id)
-                .order_by(PipelineSnapshot.snapshot_version)
-            )
-        ).scalars()
-    )
     snap_count = 0
-    for snap in snapshots:
+    for snap in snapshot.snapshots:
         cloned_snap = PipelineSnapshot(
             organisation_id=org_id,
             pipeline_id=cloned.id,
-            snapshot_version=snap.snapshot_version,
-            account_id=snap.account_id,
-            environment_profile_id=snap.environment_profile_id,
-            graph_json=copy.deepcopy(snap.graph_json),
-            connector_bindings_json=copy.deepcopy(snap.connector_bindings_json),
-            schema_pins_json=copy.deepcopy(snap.schema_pins_json),
-            prompt_pins_json=copy.deepcopy(snap.prompt_pins_json),
-            model_backend_pins_json=copy.deepcopy(snap.model_backend_pins_json),
-            composite_bindings_json=copy.deepcopy(snap.composite_bindings_json),
-            parameter_bindings_json=copy.deepcopy(snap.parameter_bindings_json),
-            tag=snap.tag,
-            notes=snap.notes,
-            default_autonomy_level=snap.default_autonomy_level,
-            config_json=copy.deepcopy(snap.config_json),
-            run_context_defaults=copy.deepcopy(snap.run_context_defaults),
+            snapshot_version=snap["snapshot_version"],
+            account_id=snap["account_id"],
+            environment_profile_id=snap["environment_profile_id"],
+            graph_json=copy.deepcopy(snap["graph_json"]),
+            connector_bindings_json=copy.deepcopy(snap["connector_bindings_json"]),
+            schema_pins_json=copy.deepcopy(snap["schema_pins_json"]),
+            prompt_pins_json=copy.deepcopy(snap["prompt_pins_json"]),
+            model_backend_pins_json=copy.deepcopy(snap["model_backend_pins_json"]),
+            composite_bindings_json=copy.deepcopy(snap["composite_bindings_json"]),
+            parameter_bindings_json=copy.deepcopy(snap["parameter_bindings_json"]),
+            tag=snap["tag"],
+            notes=snap["notes"],
+            default_autonomy_level=snap["default_autonomy_level"],
+            config_json=copy.deepcopy(snap["config_json"]),
+            run_context_defaults=copy.deepcopy(snap["run_context_defaults"]),
         )
         session.add(cloned_snap)
         await session.flush()
 
-        old_pins = list(
-            (await session.execute(select(SnapshotSchemaPin).where(SnapshotSchemaPin.snapshot_id == snap.id))).scalars()
-        )
-        for pin in old_pins:
+        for pin in snap["pins"]:
             session.add(
                 SnapshotSchemaPin(
                     organisation_id=org_id,
                     snapshot_id=cloned_snap.id,
-                    node_id=pin.node_id,
-                    direction=pin.direction,
-                    schema_id=pin.schema_id,
-                    schema_version=pin.schema_version,
+                    node_id=pin["node_id"],
+                    direction=pin["direction"],
+                    schema_id=pin["schema_id"],
+                    schema_version=pin["schema_version"],
                 )
             )
         snap_count += 1
@@ -384,6 +430,111 @@ async def clone_pipeline(
     return cloned
 
 
+async def _read_clone_source_snapshot(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    read_factory: Callable[[], AsyncSession] | None,
+    on_step_a_held: Callable[[], Awaitable[None]] | None,
+) -> _CloneSourceSnapshot | None:
+    """Step (a): short transaction that FOR SHARE-locks the source pipeline row,
+    reads nodes/edges/snapshots into plain data, and commits immediately."""
+    factory = read_factory
+    if factory is None:
+        bind = session.get_bind()
+        if asyncio.iscoroutine(bind):
+            bind = await bind
+        factory = async_sessionmaker(cast(AsyncEngine, bind), expire_on_commit=False, class_=AsyncSession)
+
+    async with factory() as read_session, read_session.begin():
+        await set_rls_org(read_session, org_id)
+        src_result = await read_session.execute(
+            select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None)).with_for_update(read=True)
+        )
+        source = src_result.scalar_one_or_none()
+        if source is None:
+            return None
+        if on_step_a_held is not None:
+            await on_step_a_held()
+
+        edges = [
+            {
+                "source_node_id": e.source_node_id,
+                "target_node_id": e.target_node_id,
+                "edge_type": e.edge_type,
+                "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
+            }
+            for e in (
+                await read_session.execute(
+                    select(PipelineEdge)
+                    .where(PipelineEdge.pipeline_id == pipeline_id)
+                    .order_by(PipelineEdge.created_at, PipelineEdge.id)
+                )
+            ).scalars()
+        ]
+        snap_rows = list(
+            (
+                await read_session.execute(
+                    select(PipelineSnapshot)
+                    .where(PipelineSnapshot.pipeline_id == pipeline_id)
+                    .order_by(PipelineSnapshot.snapshot_version)
+                )
+            ).scalars()
+        )
+        snapshots: list[dict[str, Any]] = []
+        for snap in snap_rows:
+            pins = [
+                {
+                    "node_id": p.node_id,
+                    "direction": p.direction,
+                    "schema_id": p.schema_id,
+                    "schema_version": p.schema_version,
+                }
+                for p in (
+                    await read_session.execute(
+                        select(SnapshotSchemaPin).where(SnapshotSchemaPin.snapshot_id == snap.id)
+                    )
+                ).scalars()
+            ]
+            snapshots.append(
+                {
+                    "snapshot_version": snap.snapshot_version,
+                    "account_id": snap.account_id,
+                    "environment_profile_id": snap.environment_profile_id,
+                    "graph_json": copy.deepcopy(snap.graph_json),
+                    "connector_bindings_json": copy.deepcopy(snap.connector_bindings_json),
+                    "schema_pins_json": copy.deepcopy(snap.schema_pins_json),
+                    "prompt_pins_json": copy.deepcopy(snap.prompt_pins_json),
+                    "model_backend_pins_json": copy.deepcopy(snap.model_backend_pins_json),
+                    "composite_bindings_json": copy.deepcopy(snap.composite_bindings_json),
+                    "parameter_bindings_json": copy.deepcopy(snap.parameter_bindings_json),
+                    "tag": snap.tag,
+                    "notes": snap.notes,
+                    "default_autonomy_level": snap.default_autonomy_level,
+                    "config_json": copy.deepcopy(snap.config_json),
+                    "run_context_defaults": copy.deepcopy(snap.run_context_defaults),
+                    "pins": pins,
+                }
+            )
+
+        return _CloneSourceSnapshot(
+            name=source.name,
+            description=source.description,
+            visibility=source.visibility,
+            owner_team_id=source.owner_team_id,
+            max_concurrent_runs=source.max_concurrent_runs,
+            lock_wait_timeout_seconds=source.lock_wait_timeout_seconds,
+            node_timeout_seconds=source.node_timeout_seconds,
+            run_context_defaults=copy.deepcopy(source.run_context_defaults),
+            graph_nodes_json=copy.deepcopy(list(source.graph_nodes_json or [])),
+            default_autonomy_level=str(source.default_autonomy_level or "manual_approval"),
+            stale_run_timeout_minutes=source.stale_run_timeout_minutes,
+            edges=edges,
+            snapshots=snapshots,
+        )
+
+
 async def replace_pipeline_graph(
     session: AsyncSession,
     *,
@@ -392,12 +543,19 @@ async def replace_pipeline_graph(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
     is_privileged: bool,
+    caller_type: Literal["rest", "mcp"],
+    account_id: uuid.UUID | None = None,
+    _on_lock_acquired: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
     """Atomically replace an editable graph while preserving first-class edges.
 
-    ADR 017 service-layer backstop: explicit is_privileged marks this write as
-    privileged-capable. The HITL gate guard (hitl-gate-removal-guard-plan.md)
-    consumes this to block gate-weakening by non-privileged callers.
+    ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19: the
+    HITL gate guard runs here, under the row lock and BEFORE any delete/insert.
+    ``caller_type`` is required (no default); ``"mcp"`` forces ``is_privileged``
+    to False with no live-role query. For ``"rest"`` with ``account_id`` the
+    caller's live org role is re-read under the lock (fail-closed on DB error,
+    no retry). A gate-weakening write by a non-privileged caller raises
+    ``HitlGateWeakeningDenied`` before the delete/insert executes.
     """
     result = await session.execute(
         select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None)).with_for_update()
@@ -405,6 +563,57 @@ async def replace_pipeline_graph(
     pipeline = result.scalar_one_or_none()
     if pipeline is None:
         return None
+
+    if _on_lock_acquired is not None:
+        await _on_lock_acquired()
+
+    effective_privileged = await resolve_effective_privilege(
+        session,
+        org_id=org_id,
+        account_id=account_id,
+        is_privileged=is_privileged,
+        caller_type=caller_type,
+    )
+
+    # Snapshot current edges into plain data BEFORE any write (defense in depth).
+    old_rows = list(
+        (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
+    )
+    old_edges: list[dict[str, Any]] = [
+        {
+            "source_node_id": str(e.source_node_id),
+            "target_node_id": str(e.target_node_id),
+            "edge_type": e.edge_type,
+            "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
+        }
+        for e in old_rows
+    ]
+
+    diff = await apply_gated_edge_diff(
+        session,
+        old_edges,
+        edges,
+        is_privileged=effective_privileged,
+        caller_type=caller_type,
+    )
+    if diff.denied:
+        raise HitlGateWeakeningDenied(
+            reason_code=diff.reason_code or "insufficient-role",
+            correlation_keys=[w.correlation_key for w in diff.weakened_edges],
+            weakening_types=sorted({t for w in diff.weakened_edges for t in w.weakening_types}),
+            detail=denial_detail(diff),
+            payload_json=build_gate_diff_payload(diff, caller_type),
+        )
+    if diff.has_weakening:
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="hitl_gate_removed",
+            actor_user_id=account_id,
+            resource_type="pipeline",
+            resource_id=pipeline_id,
+            payload_json=build_gate_diff_payload(diff, caller_type),
+        )
 
     pipeline.graph_nodes_json = nodes
     await session.execute(delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
