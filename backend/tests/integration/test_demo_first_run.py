@@ -7,6 +7,7 @@ onboarding flow, and demo pipeline lifecycle with a real database via testcontai
 import os
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -41,6 +42,80 @@ def _clean_onboarding_state() -> None:
         os.remove(_ONBOARDING_STATE_PATH)
 
 
+# Tables with a RESTRICT (blocking) foreign key to accounts.id that the demo
+# seed data or schema seed tests may populate for the demo account. Child rows
+# must be deleted before the account itself or the DELETE fails with
+# ForeignKeyViolationError. SET NULL / CASCADE FKs need no explicit cleanup.
+# Ordered so a table is deleted after the tables that reference it (RESTRICT
+# FKs between these tables: agents -> schema_versions/model_backends/
+# parameter_schemas, composite_templates & parameter_sets -> parameter_schemas,
+# nodes/eval_definitions/triggers -> pipelines, connector_instances/
+# environment_profiles/lifecycle_maps -> teams). Statements are fully static
+# (no interpolation) so ruff S608 cannot flag them.
+_DEMO_ACCOUNT_CHILD_SQL: tuple[str, ...] = (
+    "DELETE FROM feedback_records WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM agents WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM composite_templates WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM parameter_sets WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM schema_versions WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM parameter_schemas WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM node_categories WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM nodes WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM eval_definitions WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM triggers WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM org_api_keys WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM connector_instances WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM environment_profiles WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM lifecycle_maps WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM mcp_setup_tokens WHERE created_by IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM pipeline_folders WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM saved_views WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM model_backends WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM stages WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM pipelines WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM teams WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+    "DELETE FROM schemas WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
+)
+
+# Runs, snapshots and variant groups reference pipelines with RESTRICT FKs.
+# Workspace leases reference runs and environment profiles with RESTRICT FKs.
+# None of these have an account_id (or it is SET NULL), so they are keyed off
+# the demo account's pipelines / environment profiles instead of the account.
+# workspace_leases must be deleted before both runs and environment_profiles.
+_DEMO_PIPELINE_CHILD_SQL: tuple[str, ...] = (
+    "DELETE FROM workspace_leases WHERE run_id IN (SELECT id FROM runs WHERE "
+    "pipeline_id IN (SELECT id FROM pipelines WHERE account_id IN "
+    "(SELECT id FROM accounts WHERE email = 'demo'))) OR environment_profile_id "
+    "IN (SELECT id FROM environment_profiles WHERE account_id IN "
+    "(SELECT id FROM accounts WHERE email = 'demo'))",
+    "DELETE FROM runs WHERE pipeline_id IN ("
+    "SELECT id FROM pipelines WHERE account_id IN "
+    "(SELECT id FROM accounts WHERE email = 'demo'))",
+    "DELETE FROM pipeline_snapshots WHERE pipeline_id IN ("
+    "SELECT id FROM pipelines WHERE account_id IN "
+    "(SELECT id FROM accounts WHERE email = 'demo'))",
+    "DELETE FROM variant_groups WHERE pipeline_id IN ("
+    "SELECT id FROM pipelines WHERE account_id IN "
+    "(SELECT id FROM accounts WHERE email = 'demo'))",
+)
+
+
+async def _delete_demo_accounts(conn: Any) -> None:
+    """Delete every demo account after first removing rows that reference it.
+
+    Integration tests run with ``pytest -n 2`` against a shared Postgres, so a
+    prior module (demo seed data, schema seed tests) may have created child
+    rows (e.g. ``schemas``) that FK to the ``demo`` account. Deleting the
+    account before those child rows raises ForeignKeyViolationError. This
+    helper clears every RESTRICT-FK child row first, then the account.
+    """
+    for sql in _DEMO_PIPELINE_CHILD_SQL:
+        await conn.execute(text(sql))
+    for sql in _DEMO_ACCOUNT_CHILD_SQL:
+        await conn.execute(text(sql))
+    await conn.execute(text("DELETE FROM accounts WHERE email = 'demo'"))
+
+
 # ---------------------------------------------------------------------------
 # Module-level autouse: clean onboarding state before every test
 # ---------------------------------------------------------------------------
@@ -66,7 +141,7 @@ async def test_demo_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UU
     from modulo.auth.passwords import hash_password
 
     async with db_engine.connect() as conn:
-        await conn.execute(text("DELETE FROM accounts WHERE email = 'demo'"))
+        await _delete_demo_accounts(conn)
         await conn.commit()
 
     account_id = uuid.uuid4()
@@ -212,19 +287,7 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
 
     # Clean up the seed-created user to avoid cross-test contamination
     async with db_engine.connect() as conn:
-        demo_id_result = await conn.execute(
-            text("SELECT id FROM accounts WHERE email = 'demo' LIMIT 2"),
-        )
-        demo_ids = [row[0] for row in demo_id_result.fetchall()]
-        for did in demo_ids:
-            await conn.execute(
-                text("DELETE FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid"),
-                {"aid": str(did), "oid": str(org_id)},
-            )
-            await conn.execute(
-                text("DELETE FROM accounts WHERE id = :aid AND email = 'demo'"),
-                {"aid": str(did)},
-            )
+        await _delete_demo_accounts(conn)
         await conn.commit()
 
     deps._engine = None
@@ -272,7 +335,7 @@ async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_u
 
     # First, clean the demo user from previous test
     async with db_engine.connect() as conn:
-        await conn.execute(text("DELETE FROM accounts WHERE email = 'demo'"))
+        await _delete_demo_accounts(conn)
         await conn.commit()
 
     import modulo.api.dependencies as deps
@@ -335,19 +398,7 @@ async def test_seed_demo_data_idempotent(db_engine: AsyncEngine, db_url: str) ->
 
     # Clean up the seed-created user to avoid cross-test contamination
     async with db_engine.connect() as conn:
-        demo_id_result = await conn.execute(
-            text("SELECT id FROM accounts WHERE email = 'demo' LIMIT 2"),
-        )
-        demo_ids = [row[0] for row in demo_id_result.fetchall()]
-        for did in demo_ids:
-            await conn.execute(
-                text("DELETE FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid"),
-                {"aid": str(did), "oid": str(org_id)},
-            )
-            await conn.execute(
-                text("DELETE FROM accounts WHERE id = :aid AND email = 'demo'"),
-                {"aid": str(did)},
-            )
+        await _delete_demo_accounts(conn)
         await conn.commit()
 
     deps._engine = None

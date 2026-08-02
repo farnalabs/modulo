@@ -93,6 +93,7 @@ const AdminViewsView = () => import('../views/AdminViewsView.vue')
 const AdminModelBackendsView = () => import('../views/AdminModelBackendsView.vue')
 const AdminOrgSettingsView = () => import('../views/AdminOrgSettingsView.vue')
 const AdminRunRetentionView = () => import('../views/AdminRunRetentionView.vue')
+const AdminSandboxConcurrencyView = () => import('../views/AdminSandboxConcurrencyView.vue')
 const NotificationsPage = () => import('../views/NotificationsPage.vue')
 const MyProfileView = () => import('../views/MyProfileView.vue')
 const SettingsLicenseView = () => import('../views/SettingsLicenseView.vue')
@@ -360,6 +361,11 @@ const router = createRouter({
       path: '/admin/run-retention',
       name: 'admin-run-retention',
       component: AdminRunRetentionView,
+    },
+    {
+      path: '/admin/sandbox-concurrency',
+      name: 'admin-sandbox-concurrency',
+      component: AdminSandboxConcurrencyView,
     },
     {
       path: '/admin/parameter-schemas',

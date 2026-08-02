@@ -11,11 +11,10 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, update_api_key
 from modulo.auth.dependencies import get_current_tenant_user, resolve_role_from_membership
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -24,6 +23,25 @@ from modulo.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/api-keys", tags=["api-keys"])
+
+
+def _require_runner(principal: TenantPrincipal, permission: str) -> None:
+    """Thin compatibility wrapper: require the org role for a runner-level permission.
+
+    Endpoints now use the `require_permission` dependency; this wrapper is kept
+    for direct-call tests and documents the runner floor for API-key ops.
+    """
+    from fastapi import HTTPException
+
+    from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
+
+    try:
+        assert_org_role(principal.org_role, resolve_required(permission), permission)
+    except PermissionDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
 
 
 class ApiKeyCreate(BaseModel):
@@ -79,30 +97,6 @@ def _require_admin(principal: TenantPrincipal) -> None:
         )
 
 
-def _require_runner(principal: TenantPrincipal, permission: str) -> None:
-    """Gate api-key CRUD at the ``runner`` minimum (ADR 017 DECISION 4).
-
-    ``api_key.create``/``api_key.update``/``api_key.revoke`` all require the
-    ``runner`` org role. Uses the shared registry comparison so the gate stays
-    consistent with the MCP scope matrix.
-    """
-    try:
-        assert_org_role(principal.org_role, "runner", permission)
-    except PermissionDenied as exc:
-        logger.warning(
-            "permission.denied",
-            extra={
-                "permission": permission,
-                "required": "runner",
-                "actual": principal.org_role,
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Permission '{permission}' requires 'runner' role",
-        ) from exc
-
-
 async def _enforce_mint_cap(session: AsyncSession, principal: TenantPrincipal, requested_role: str) -> None:
     """Enforce the API-key role-cap: never mint above the caller's LIVE role.
 
@@ -142,10 +136,9 @@ async def _enforce_mint_cap(session: AsyncSession, principal: TenantPrincipal, r
 async def create_api_key_endpoint(
     req: ApiKeyCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("api_key.create"),
     settings: Settings = Depends(get_settings),
 ) -> ApiKeyCreatedResponse:
-    _require_runner(principal, "api_key.create")
     if req.role not in ("operator", "runner"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -215,7 +208,7 @@ async def create_api_key_endpoint(
 @router.get("", response_model=list[dict[str, Any]])
 async def list_api_keys_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("api_key.update"),
 ) -> list[dict[str, Any]]:
     try:
         async with session.begin():
@@ -251,10 +244,9 @@ async def update_api_key_endpoint(
     key_id: uuid.UUID,
     req: ApiKeyUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("api_key.revoke"),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    _require_runner(principal, "api_key.update")
     if req.role is not None and req.role not in ("operator", "runner"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -329,9 +321,8 @@ async def update_api_key_endpoint(
 async def revoke_api_key_endpoint(
     key_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("api_key.revoke"),
 ) -> ApiKeyRevokeResponse:
-    _require_runner(principal, "api_key.revoke")
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

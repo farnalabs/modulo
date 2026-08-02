@@ -374,6 +374,9 @@ class TestStaleRunRecoverySweep:
         class _AsyncResult:
             rowcount = 0
 
+            def all(self) -> list[Any]:
+                return []
+
         class _AsyncConn:
             async def __aenter__(self) -> Self:
                 return self
@@ -398,19 +401,36 @@ class TestStaleRunRecoverySweep:
 
         assert result["never_dispatched_swept"] == 0
         assert result["worker_lost_swept"] == 0
-        assert len(statements) == 2
+        assert result["capacity_timeout_swept"] == 0
+        assert result["stranded_capacity_redispatched"] == 0
+        assert len(statements) == 4
         never_sql = statements[0]
-        lost_sql = statements[1]
+        stranded_sql = statements[1]
+        capacity_sql = statements[2]
+        lost_sql = statements[3]
         assert "never_dispatched" in never_sql
+        assert "RETURNING id, organisation_id" in stranded_sql
+        assert "org_capacity_limited" in stranded_sql
+        assert "pipeline_capacity" in stranded_sql
+        assert "capacity_timeout" in capacity_sql
         assert "worker_lost" in lost_sql
         assert ":nd_window" in never_sql
+        assert ":redispatch_ttl" in stranded_sql
+        assert ":fail_ttl" in stranded_sql
+        assert ":ttl" in capacity_sql
         assert ":wl_window" in lost_sql
+        # never_dispatched must not kill reason-marked capacity-blocked runs.
+        assert "org_capacity_limited" in never_sql
+        assert "pipeline_capacity" in never_sql
 
     async def test_explicit_windows_override_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         params_seen: list[dict[str, object]] = []
 
         class _AsyncResult:
             rowcount = 1
+
+            def all(self) -> list[Any]:
+                return []
 
         class _AsyncConn:
             async def __aenter__(self) -> Self:
@@ -438,8 +458,134 @@ class TestStaleRunRecoverySweep:
 
         assert result["never_dispatched_swept"] == 1
         assert result["worker_lost_swept"] == 1
+        assert result["capacity_timeout_swept"] == 1
         assert params_seen[0]["nd_window"] == 300
-        assert params_seen[1]["wl_window"] == 900
+        assert params_seen[1]["redispatch_ttl"] == pe._STRANDED_REDISPATCH_TTL_MINUTES
+        assert params_seen[1]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        assert params_seen[2]["ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        assert params_seen[3]["wl_window"] == 900
+
+    async def test_stranded_capacity_blocked_run_is_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A stale-heartbeat capacity-marked pending run is re-dispatched, not failed."""
+        run_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        redispatch_mock = AsyncMock(return_value="enqueued")
+
+        class _Row:
+            id = run_id
+            organisation_id = org_id
+
+        class _AsyncResult:
+            def __init__(self, rowcount: int = 0, rows: list[Any] | None = None) -> None:
+                self.rowcount = rowcount
+                self._rows = rows or []
+
+            def all(self) -> list[Any]:
+                return self._rows
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                if "RETURNING id, organisation_id" in str(stmt):
+                    return _AsyncResult(rowcount=1, rows=[_Row()])
+                return _AsyncResult()
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
+        with patch.object(pe, "_re_dispatch_capacity_blocked", new=redispatch_mock):
+            result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
+
+        assert result["stranded_capacity_redispatched"] == 1
+        assert result["capacity_timeout_swept"] == 0
+        assert result["redispatch_outcomes"] == {"enqueued": 1}
+        redispatch_mock.assert_awaited_once_with(run_id, org_id)
+
+    async def test_fresh_heartbeat_capacity_blocked_run_is_not_redispatched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A live retry loop's fresh heartbeat is the fence — no re-dispatch."""
+        redispatch_mock = AsyncMock()
+
+        class _AsyncResult:
+            rowcount = 0
+
+            def all(self) -> list[Any]:
+                return []
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                return _AsyncResult()
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
+        with patch.object(pe, "_re_dispatch_capacity_blocked", new=redispatch_mock):
+            result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
+
+        assert result["stranded_capacity_redispatched"] == 0
+        redispatch_mock.assert_not_awaited()
+
+    async def test_capacity_timeout_eligible_run_is_not_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run already past the 120-min fail TTL must fail, never be resurrected."""
+        redispatch_mock = AsyncMock()
+        params_seen: list[dict[str, object]] = []
+
+        class _AsyncResult:
+            rowcount = 0
+
+            def all(self) -> list[Any]:
+                return []
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                params_seen.append(params or {})
+                return _AsyncResult()
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
+        with patch.object(pe, "_re_dispatch_capacity_blocked", new=redispatch_mock):
+            result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
+
+        assert result["stranded_capacity_redispatched"] == 0
+        assert result["capacity_timeout_swept"] == 0
+        # The stranded branch bounds its window with the same fail_ttl as the
+        # capacity_timeout branch so the two never overlap.
+        assert params_seen[1]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        redispatch_mock.assert_not_awaited()
 
     async def test_returns_error_dict_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class _AsyncConn:
@@ -720,6 +866,42 @@ class TestCountActiveRuns:
         session = _FakeAsyncSession()
         await count_active_runs_for_pipeline(session, uuid.uuid4(), include_pending=False, exclude_run_id=rid)  # type: ignore[arg-type]
         assert "id !=" in stmt_sql[0] or "runs.id !=" in stmt_sql[0]
+
+
+# ---------------------------------------------------------------------------
+# count_active_sandbox_runs_for_org — only sandbox-agent graph runs count
+# ---------------------------------------------------------------------------
+
+
+class TestCountActiveSandboxRuns:
+    async def _count(self, graphs: list[dict[str, Any] | None]) -> int:
+        from modulo.db.crud.run import count_active_sandbox_runs_for_org
+
+        class _ScalarResult:
+            def scalars(self) -> _ScalarResult:
+                return self
+
+            def __iter__(self):
+                return iter(graphs)
+
+        class _FakeAsyncSession:
+            async def execute(self, stmt: object) -> _ScalarResult:
+                return _ScalarResult()
+
+        session = _FakeAsyncSession()
+        return await count_active_sandbox_runs_for_org(session, uuid.uuid4())  # type: ignore[arg-type]
+
+    async def test_counts_only_running_sandbox_agent_runs(self) -> None:
+        sandbox = {"nodes": [{"id": "s", "node_type": "sandbox_agent"}]}
+        plain = {"nodes": [{"id": "a", "node_type": "agent"}]}
+        assert await self._count([sandbox, sandbox, plain, plain, None]) == 2
+
+    async def test_zero_when_no_sandbox_graphs(self) -> None:
+        plain = {"nodes": [{"id": "a", "node_type": "agent"}]}
+        assert await self._count([plain, {"nodes": []}, {}]) == 0
+
+    async def test_zero_when_no_running_runs(self) -> None:
+        assert await self._count([]) == 0
 
 
 # ---------------------------------------------------------------------------

@@ -32,7 +32,7 @@ from modulo.core.hitl_manager import (
     HITLManager,
     NotTeamMemberError,
 )
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from modulo.core.pipeline_engine.executor import PipelineExecutor, org_sandbox_capacity_free
 from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
@@ -100,6 +100,30 @@ class GateResponse(BaseModel):
 
 class PendingGatesResponse(BaseModel):
     gates: list[GateResponse]
+
+
+async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """Raise ``409`` when the org sandbox cap blocks a gate resume.
+
+    Runs BEFORE the HITL gate decision is committed so a capacity decline
+    never deadlocks the run (gate decided + run stuck). The gate stays
+    undecided and the human can retry once a slot frees.
+
+    409 Conflict (rather than 202 Accepted) is returned because nothing is
+    accepted or queued by this call — the request conflicts with the current
+    state (org at sandbox capacity) and no state is changed.
+
+    Applied to the resume actions (approve / approve-with-modification /
+    deliver-manual / submit-manual), which continue executing the sandbox
+    graph. ``reject_gate`` is deliberately exempt: a rejection routes the run
+    to its ``reject_target`` or terminates it — it does not resume sandbox
+    execution, so blocking it on capacity would only confuse the operator.
+    """
+    if not await org_sandbox_capacity_free(session, org_id, run_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Sandbox concurrency limit reached; gate left undecided. Retry when capacity frees up.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +234,7 @@ async def approve_gate(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
                 await mgr.approve(
                     session,
@@ -304,6 +329,7 @@ async def approve_gate_with_modification(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
                 await mgr.approve_with_modification(
                     session,
@@ -397,6 +423,10 @@ async def reject_gate(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # No org-sandbox-capacity gate here (unlike the resume actions):
+            # rejecting routes the run to its reject_target or terminates it —
+            # it must not be blocked (or 202-"queued") because the org is at
+            # sandbox capacity.
             try:
                 await mgr.reject(
                     session,
@@ -496,6 +526,7 @@ async def deliver_manual_output(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
                 await mgr.deliver_manual(
                     session,
@@ -583,6 +614,7 @@ async def submit_manual_output(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
                 await mgr.approve(
                     session,

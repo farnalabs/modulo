@@ -66,6 +66,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'admin-feature-flags': { icon: 'Flag', labelKey: 'components.SidebarNav.item_feature_flags' },
   'admin-environments': { icon: 'Container', labelKey: 'components.SidebarNav.item_environments' },
   'admin-run-retention': { icon: 'Clock', labelKey: 'components.SidebarNav.item_run_retention' },
+  'admin-sandbox-concurrency': { icon: 'Gauge', labelKey: 'components.SidebarNav.item_sandbox_concurrency' },
   'admin-pipelines': { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_admin_pipelines' },
   'admin-views': { icon: 'Eye', labelKey: 'components.SidebarNav.item_saved_views' },
   'admin-errors': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_dashboard' },

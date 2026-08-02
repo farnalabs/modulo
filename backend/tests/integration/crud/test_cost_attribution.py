@@ -174,6 +174,7 @@ async def test_get_daily_run_counts_filters(
         await upsert_daily_run_count(session, org_id=org, increment_count=1)
         await upsert_daily_run_count(session, org_id=org, team_id=team.id, increment_count=2)
         await session.flush()
+        await session.commit()
 
     # Query org-wide
     async with factory() as session:
@@ -225,6 +226,7 @@ async def test_get_org_spend_total_excludes_team_rows(
         await upsert_daily_run_count(session, org_id=org, increment_spend=Decimal(100))
         await upsert_daily_run_count(session, org_id=org, team_id=team.id, increment_spend=Decimal(50))
         await session.flush()
+        await session.commit()
 
     async with factory() as session:
         await session.execute(
@@ -256,6 +258,7 @@ async def test_check_and_record_spend_happy_path(
 
         assert approved is True
         assert reason is None
+        await session.commit()
 
     async with factory() as session:
         await session.execute(
@@ -283,6 +286,7 @@ async def test_check_and_record_spend_enforces_org_limit(
         )
         ok1, _ = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(60), team_id=None)
         assert ok1 is True
+        await session.commit()
 
     async with factory() as session:
         await session.execute(
@@ -292,6 +296,7 @@ async def test_check_and_record_spend_enforces_org_limit(
         ok2, err2 = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(50), team_id=None)
         assert ok2 is False
         assert "organisation" in (err2 or "").lower()
+        await session.commit()
 
     # Verify only the first spend was recorded
     async with factory() as session:
@@ -320,6 +325,7 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         team1 = await create_team(session, org_id=org, name="Team 1", account_id=user)
         team2 = await create_team(session, org_id=org, name="Team 2", account_id=user)
         await session.flush()
+        await session.commit()
 
     await _set_org_limit(db_engine, org, Decimal(1000))
     await _set_team_limit(db_engine, team1.id, Decimal(100))
@@ -333,6 +339,7 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         )
         ok, _ = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(80), team_id=team1.id)
         assert ok is True
+        await session.commit()
 
     # Team 2: under limit
     async with factory() as session:
@@ -342,6 +349,7 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         )
         ok, _ = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(30), team_id=team2.id)
         assert ok is True
+        await session.commit()
 
     # Team 1: exceeds team limit (80 + 30 = 110 > 100)
     async with factory() as session:
@@ -352,6 +360,7 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         ok, err = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(30), team_id=team1.id)
         assert ok is False
         assert "team" in (err or "").lower()
+        await session.commit()
 
     # Team 2: at exact limit (30 + 20 = 50)
     async with factory() as session:
@@ -361,6 +370,7 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         )
         ok, _ = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(20), team_id=team2.id)
         assert ok is True
+        await session.commit()
 
     # Verify team counts
     async with factory() as session:
@@ -406,6 +416,7 @@ async def test_get_cost_report_by_team(
         await check_and_record_spend(session, org_id=org, cost_usd=Decimal(100), team_id=team_a.id)
         await check_and_record_spend(session, org_id=org, cost_usd=Decimal(50), team_id=team_a.id)
         await check_and_record_spend(session, org_id=org, cost_usd=Decimal(75), team_id=team_b.id)
+        await session.commit()
 
     async with factory() as session:
         await session.execute(
@@ -441,6 +452,7 @@ async def test_get_cost_report_by_org(
         await check_and_record_spend(session, org_id=org, cost_usd=Decimal(200))
         # Team-level spend
         await check_and_record_spend(session, org_id=org, cost_usd=Decimal(100), team_id=team.id)
+        await session.commit()
 
     async with factory() as session:
         await session.execute(
@@ -518,6 +530,7 @@ async def test_daily_run_count_isolation_between_orgs(
         await session.flush()
         await upsert_daily_run_count(session, org_id=org_a, team_id=team_a.id, increment_count=5)
         await session.flush()
+        await session.commit()
 
     async with factory() as session:
         await session.execute(
@@ -528,6 +541,7 @@ async def test_daily_run_count_isolation_between_orgs(
         await session.flush()
         await upsert_daily_run_count(session, org_id=org_b, team_id=team_b.id, increment_count=3)
         await session.flush()
+        await session.commit()
 
     # Org A sees only its counts
     async with factory() as session:

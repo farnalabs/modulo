@@ -14,6 +14,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
 
 # Collection imports the FastAPI app before database fixtures run. Provide only
@@ -28,6 +29,19 @@ os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 
 BACKEND_ROOT = Path(__file__).parents[2]
+
+
+@pytest.fixture(scope="session")
+def session_monkeypatch() -> Generator[pytest.MonkeyPatch, None, None]:
+    """Session-scoped monkeypatch so session-scoped fixtures can set env vars.
+
+    The built-in ``monkeypatch`` fixture is function-scoped; requesting it from
+    a session-scoped fixture raises a ScopeMismatch. This mirror restores all
+    changes on session teardown.
+    """
+    mp = pytest.MonkeyPatch()
+    yield mp
+    mp.undo()
 
 
 @pytest.fixture(autouse=True)
@@ -57,10 +71,22 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 
 
 @pytest.fixture(scope="session")
-def db_url(postgres_container: PostgresContainer) -> str:
+def db_url(
+    postgres_container: PostgresContainer,
+    session_monkeypatch: pytest.MonkeyPatch,
+) -> str:
     url = postgres_container.get_connection_url()
     # Convert to asyncpg driver
-    return url.replace("postgresql://", "postgresql+asyncpg://", 1).replace("psycopg2", "asyncpg")
+    url = url.replace("postgresql://", "postgresql+asyncpg://", 1).replace("psycopg2", "asyncpg")
+    # Point every settings consumer (including the auth dependency's
+    # process-global engine, which reads get_settings().database_url directly
+    # and cannot be reached via app.dependency_overrides) at the migrated
+    # testcontainer. CI sets DATABASE_URL to a separate empty postgres
+    # (deploy.yml "Start Postgres"), so without this the live-role re-read in
+    # auth.dependencies._verify_identity hits tables that don't exist there and
+    # every API-backed integration test fails with a 503.
+    session_monkeypatch.setenv("DATABASE_URL", url)
+    return url
 
 
 @pytest.fixture(scope="session")
@@ -172,7 +198,12 @@ def migrated_db_url(db_url: str) -> str:
 
 @pytest_asyncio.fixture(scope="session")
 async def db_engine(migrated_db_url: str) -> AsyncEngine:
-    engine = create_async_engine(migrated_db_url, echo=False)
+    # NullPool: the session-scoped engine is created on the session loop but
+    # tests (and the auth dependency's process-global engine) run on function
+    # loops. A pooled connection checked out here would later be reused on a
+    # different event loop, raising "attached to a different loop" asyncpg
+    # errors. NullPool opens a fresh connection per checkout.
+    engine = create_async_engine(migrated_db_url, echo=False, poolclass=NullPool)
     yield engine
     await engine.dispose()
 

@@ -192,9 +192,7 @@ class TestBuild:
         assert index.entries == []
         assert "PRD not found" in caplog.text
 
-    def test_build_undecodable_file_returns_empty_index(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_build_undecodable_file_returns_empty_index(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         bad = tmp_path / "prd.md"
         bad.write_bytes(b"\xff\xfe invalid utf8 \x00\x01")
         with caplog.at_level("ERROR"):
