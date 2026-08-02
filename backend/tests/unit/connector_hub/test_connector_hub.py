@@ -70,7 +70,12 @@ class _FakeCI:
             ConnectorType.CONFLUENCE,
         ),
         ("shortcut", {}, {"token": "shortcut_token"}, ConnectorType.SHORTCUT),
-        ("youtrack", {}, {"token": "yt_perm_token_123"}, ConnectorType.YOUTRACK),
+        (
+            "youtrack",
+            {"base_url": "https://youtrack.example.com/api"},
+            {"token": "yt_perm_token_123"},
+            ConnectorType.YOUTRACK,
+        ),
     ],
 )
 async def test_initialise_creates_connector(connector_type_id, config_json, credentials_json, expected_type, tmp_path):
@@ -88,6 +93,22 @@ async def test_initialise_creates_connector(connector_type_id, config_json, cred
         await hub.initialise([ci])
     connector = hub.get(ci.id)
     assert connector.connector_type == expected_type
+
+
+async def test_initialise_youtrack_missing_base_url_is_skipped():
+    """YouTrack without base_url is skipped by initialise — no placeholder default."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="youtrack",
+        config_json={},
+        credentials_ciphertext=_encrypt({"token": "yt_perm_token_123"}),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value=json.dumps({"token": "yt_perm_token_123"})):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
 
 
 async def test_get_unknown_raises():
