@@ -2,13 +2,22 @@
 
 import copy
 import uuid
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, Literal
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.audit_logger import append_audit_event
+from modulo.db.crud.hitl_gate_guard import (
+    HitlGateWeakeningDenied,
+    apply_gated_edge_diff,
+    build_gate_diff_payload,
+    denial_detail,
+    resolve_effective_privilege,
+)
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
@@ -124,12 +133,17 @@ async def rollback_to_snapshot(
     account_id: uuid.UUID | None = None,
     *,
     is_privileged: bool,
+    caller_type: Literal["rest", "mcp"],
+    _on_lock_acquired: Callable[[], Awaitable[None]] | None = None,
 ) -> PipelineSnapshot | None:
     """Create a new snapshot that restores the graph from a previous snapshot.
 
-    ADR 017 service-layer backstop: explicit is_privileged marks this write as
-    privileged-capable. The HITL gate guard (hitl-gate-removal-guard-plan.md)
-    consumes this to block gate-weakening by non-privileged callers.
+    ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19: the
+    HITL gate guard runs here, under the row lock and BEFORE the graph mutation.
+    A historical snapshot's missing/``None`` gate fields are fail-closed
+    (treated as weakening) with the distinct reason code
+    ``legacy-snapshot-ambiguous``. ``caller_type == "mcp"`` forces
+    ``is_privileged`` to False.
 
     Does not affect in-flight runs (they continue on their original snapshot).
     Returns the new snapshot, or None if the target snapshot doesn't exist.
@@ -143,16 +157,80 @@ async def rollback_to_snapshot(
     if pipeline is None:
         return None
 
+    if _on_lock_acquired is not None:
+        await _on_lock_acquired()
+
+    effective_privileged = await resolve_effective_privilege(
+        session,
+        org_id=pipeline.organisation_id,
+        account_id=account_id,
+        is_privileged=is_privileged,
+        caller_type=caller_type,
+    )
+
+    old_rows = list(
+        (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
+    )
+    old_edges: list[dict[str, Any]] = [
+        {
+            "source_node_id": str(e.source_node_id),
+            "target_node_id": str(e.target_node_id),
+            "edge_type": e.edge_type,
+            "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
+        }
+        for e in old_rows
+    ]
+    # Historical snapshots: missing/None fields are fail-closed — a snapshot
+    # edge that omits a gate field (or carries None) is treated as a genuine
+    # removal when the live edge carried a gate.
+    new_edges: list[dict[str, Any]] = [
+        {
+            "source_node_id": edge_data.get("source") or edge_data.get("source_node_id", ""),
+            "target_node_id": edge_data.get("target") or edge_data.get("target_node_id", ""),
+            "edge_type": edge_data.get("edge_type", edge_data.get("type", "normal")),
+            "hitl_gate_config": edge_data.get("hitl_gate_config"),
+            "hitl_gate_config_present": True,
+        }
+        for edge_data in target.graph_json.get("edges", [])
+    ]
+
+    diff = await apply_gated_edge_diff(
+        session,
+        old_edges,
+        new_edges,
+        is_privileged=effective_privileged,
+        caller_type=caller_type,
+        legacy_snapshot=True,
+    )
+    if diff.denied:
+        raise HitlGateWeakeningDenied(
+            reason_code=diff.reason_code or "legacy-snapshot-ambiguous",
+            correlation_keys=[w.correlation_key for w in diff.weakened_edges],
+            weakening_types=sorted({t for w in diff.weakened_edges for t in w.weakening_types}),
+            detail=denial_detail(diff),
+            payload_json=build_gate_diff_payload(diff, caller_type),
+        )
+    if diff.has_weakening:
+        await append_audit_event(
+            session,
+            org_id=pipeline.organisation_id,
+            event_type="hitl_gate_removed",
+            actor_user_id=account_id,
+            resource_type="pipeline",
+            resource_id=pipeline_id,
+            payload_json=build_gate_diff_payload(diff, caller_type),
+        )
+
     pipeline.graph_nodes_json = copy.deepcopy(target.graph_json.get("nodes", []))
     await session.execute(sa_delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
-    for edge_data in target.graph_json.get("edges", []):
+    for edge_data in new_edges:
         new_edge = PipelineEdge(
             organisation_id=pipeline.organisation_id,
             pipeline_id=pipeline_id,
-            source_node_id=edge_data.get("source") or edge_data.get("source_node_id", ""),
-            target_node_id=edge_data.get("target") or edge_data.get("target_node_id", ""),
-            edge_type=edge_data.get("edge_type", edge_data.get("type", "normal")),
-            hitl_gate_config=edge_data.get("hitl_gate_config"),
+            source_node_id=edge_data["source_node_id"],
+            target_node_id=edge_data["target_node_id"],
+            edge_type=edge_data["edge_type"],
+            hitl_gate_config=edge_data["hitl_gate_config"],
         )
         session.add(new_edge)
     await session.flush()

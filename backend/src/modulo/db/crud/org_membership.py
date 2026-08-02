@@ -83,3 +83,22 @@ async def get_primary_membership(session: AsyncSession, account_id: uuid.UUID) -
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def resolve_role_from_membership(session: AsyncSession, account_id: str, organisation_id: str) -> str | None:
+    """Return the LIVE org role for the account in the org, or None if no active membership.
+
+    Filters ``deactivated_at IS NULL`` — a soft-deactivated membership must not
+    resolve a role (ADR 017). Lives in the db layer (pure ORM query) so the
+    service-layer backstop (db.crud.hitl_gate_guard) can reuse it without
+    importing ``auth.dependencies`` (which would transitively reach the api
+    layer, violating the import-linter contracts).
+    """
+    result = await session.execute(
+        select(OrgMembership.role).where(
+            OrgMembership.account_id == account_id,
+            OrgMembership.organisation_id == organisation_id,
+            OrgMembership.deactivated_at.is_(None),
+        )
+    )
+    return result.scalar_one_or_none()

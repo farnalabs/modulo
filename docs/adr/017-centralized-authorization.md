@@ -152,6 +152,8 @@ All variants tag `_dep.permission` + `_dep.permission_kind`. Introspection asser
 
 `replace_pipeline_graph`/`rollback_to_snapshot` take `is_privileged` (explicit kwarg, no default); guard **conditional** (only when the write removes/weakens an existing `hitl_gate_config`). Semgrep rule: every call passes `is_privileged=`. `is_privileged` from a flag-independent role check (live-read), NOT the kill-switched `assert_org_role` — HITL guard non-disableable.
 
+**Concrete spec**: `hitl-gate-removal-guard-plan.md` (v19, copied to `docs/hitl-gate-removal-guard-plan.md` at implementation time; canonical copy at `Repos/admin/strategy/competition/`) is the implementation reference for this section — the shared `apply_gated_edge_diff()` primitive, the four-field weakening definition, the `(source_node_id, target_node_id, edge_type)` topology correlation key, the presence-signal (`hitl_gate_config_present`) preserve semantics, the `caller_type: Literal["rest", "mcp"]` MCP exclusion (literal `"mcp"` at the MCP call site, semgrep-enforced), the fail-closed live-role re-read under the row lock, and the clone torn-read fix. The guard ships with the audit events `hitl_gate_removed` / `hitl_gate_removal_denied` (`scope: admin`).
+
 ### Phase-1 sweep: ALL mutating user-principal endpoints — exact-path exclusions
 
 "All" = every endpoint that (a) mutates state and (b) resolves a user principal. **Exempt list is exact-path (or audited parameterized prefix) with a documented reason per entry.**

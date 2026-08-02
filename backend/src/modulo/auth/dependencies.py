@@ -263,21 +263,14 @@ async def resolve_role_from_membership(session: AsyncSession, account_id: str, o
     """Return the LIVE org role for the account in the org, or None if no active membership.
 
     Filters ``deactivated_at IS NULL`` — a soft-deactivated membership must not
-    resolve a role (ADR 017). Lazy-imports the ORM model to avoid the auth →
-    api circular import; the caller already holds a session from a live factory.
+    resolve a role (ADR 017). The canonical implementation lives in the db
+    layer (``db.crud.org_membership``) so the service-layer HITL backstop can
+    reuse it without reaching through the api layer; this re-export keeps the
+    ``auth.dependencies`` surface stable for existing callers.
     """
-    from sqlalchemy import select
+    from modulo.db.crud.org_membership import resolve_role_from_membership as _resolve
 
-    from modulo.db.models.org_membership import OrgMembership
-
-    result = await session.execute(
-        select(OrgMembership.role).where(
-            OrgMembership.account_id == account_id,
-            OrgMembership.organisation_id == organisation_id,
-            OrgMembership.deactivated_at.is_(None),
-        )
-    )
-    return result.scalar_one_or_none()
+    return await _resolve(session, account_id, organisation_id)
 
 
 async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
@@ -290,10 +283,10 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
     org role is read from ``org_memberships`` (deactivated rows excluded).
 
         Failure modes:
-    - missing/deactivated membership  raise 401 (removed users lose access immediately)
-    - SQLAlchemyError during the read  raise 503 (fail-closed; a DB blip must
+    - missing/deactivated membership -> raise 401 (removed users lose access immediately)
+    - SQLAlchemyError during the read -> raise 503 (fail-closed; a DB blip must
       not restore a removed user's stale role - ADR 017 review decision)
-    - any other exception  propagate (500)
+    - any other exception -> propagate (500)
     """
     try:
         from sqlalchemy import text as _text

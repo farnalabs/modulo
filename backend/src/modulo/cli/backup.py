@@ -153,7 +153,7 @@ def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
     ]
     try:
         with output.open("wb") as f:
-            result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list, not user input
+            result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, check=False, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list, not user input
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"pg_dump timed out after {timeout}s") from exc
     if result.returncode != 0:
@@ -165,7 +165,7 @@ def _run_psql(raw_url: str, input_path: Path, timeout: int = 600) -> None:
     cmd = ["psql", "-q", "-v", "ON_ERROR_STOP=1", raw_url]
     try:
         with input_path.open("rb") as f:
-            result = subprocess.run(cmd, stdin=f, capture_output=True, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list with trusted input
+            result = subprocess.run(cmd, stdin=f, capture_output=True, check=False, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list with trusted input
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"psql restore timed out after {timeout}s") from exc
     if result.returncode != 0:
