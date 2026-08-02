@@ -158,3 +158,97 @@ async def test_write_missing_project_data(connector):
 
 def test_connector_type(connector):
     assert connector.connector_type == ConnectorType.GITLAB
+
+
+@respx.mock
+async def test_query_projects_next_cursor(connector):
+    respx.get(f"{_API}/projects").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"id": 1}, {"id": 2}],
+            headers={"X-Next-Page": "2"},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="projects"))
+    assert result.next_cursor == "2"
+
+
+@respx.mock
+async def test_query_projects_no_next_page(connector):
+    respx.get(f"{_API}/projects").mock(
+        return_value=httpx.Response(200, json=[{"id": 1}], headers={"X-Next-Page": "0"})
+    )
+    result = await connector.query(ConnectorQuery(resource="projects"))
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_projects_passes_cursor_as_page(connector):
+    route = respx.get(f"{_API}/projects").mock(
+        return_value=httpx.Response(200, json=[{"id": 1}], headers={"X-Next-Page": "0"})
+    )
+    await connector.query(ConnectorQuery(resource="projects", cursor="3"))
+    assert route.calls.last.request.url.params.get("page") == "3"
+
+
+@respx.mock
+async def test_query_mrs_next_cursor(connector):
+    respx.get(f"{_API}/projects/group%2Fproject/merge_requests").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"id": 42}],
+            headers={"X-Next-Page": "4"},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="mrs", filters={"project": "group/project"}))
+    assert result.next_cursor == "4"
+
+
+@respx.mock
+async def test_query_issues_next_cursor(connector):
+    respx.get(f"{_API}/projects/group%2Fproject/issues").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"id": 7}],
+            headers={"X-Next-Page": "2"},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
+    assert result.next_cursor == "2"
+
+
+@respx.mock
+async def test_query_pipelines_next_cursor(connector):
+    respx.get(f"{_API}/projects/group%2Fproject/pipelines").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"id": 9}],
+            headers={"X-Next-Page": "3"},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="pipelines", filters={"project": "group/project"}))
+    assert result.next_cursor == "3"
+
+
+@respx.mock
+async def test_query_invalid_cursor_raises(connector):
+    with pytest.raises(ValueError, match="Invalid GitLab pagination cursor"):
+        await connector.query(ConnectorQuery(resource="projects", cursor="abc"))
+
+
+@respx.mock
+async def test_query_single_resource_no_next_cursor(connector):
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
+        return_value=httpx.Response(
+            200,
+            json={"content": "SGVsbG8="},
+            headers={"X-Next-Page": "2"},
+        )
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="file",
+            filters={"project": "group/project", "path": "README.md"},
+        )
+    )
+    assert result.next_cursor is None

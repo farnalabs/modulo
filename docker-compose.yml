@@ -46,6 +46,51 @@ services:
       - ./backend/src:/app/src
       - ./frontend/src/manifest.yaml:/app/manifest.yaml
 
+  # SAQ runs worker — executes run jobs (plan F8 local dev). Required for any
+  # pipeline execution after the Celery removal.
+  saq-runner:
+    build: ./backend
+    command: ["python", "-m", "saq", "modulo.core.saq_worker.runs_settings"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://modulo_app:modulo@db:5432/modulo
+      MODULO_DB: postgres
+      SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
+      FERNET_KEY: modulo-docker-compose-fernet-key-min-32-bytes!!
+      REDIS_URL: redis://redis:6379/0
+      MODULO_PUBLIC_URL: http://localhost:8000
+      MODULO_USERS: admin:admin
+      MODULO_DEMO_MODE: "true"
+    volumes:
+      - ./backend/src:/app/src
+
+  # SAQ system worker — owns the scheduler (fire_due_triggers) + reconcile +
+  # system crons (plan F8). REQUIRED for local cron/triggers after the Celery
+  # removal. Web UI bound to 127.0.0.1:8081 via the custom runner.
+  saq-system:
+    build: ./backend
+    command: ["python", "-m", "modulo.core.saq_worker"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://modulo_app:modulo@db:5432/modulo
+      MODULO_DB: postgres
+      SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
+      FERNET_KEY: modulo-docker-compose-fernet-key-min-32-bytes!!
+      REDIS_URL: redis://redis:6379/0
+      MODULO_PUBLIC_URL: http://localhost:8000
+      MODULO_USERS: admin:admin
+      MODULO_DEMO_MODE: "true"
+      SAQ_AUTH_USERNAME: admin
+      SAQ_AUTH_PASSWORD: modulo
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./backend/src:/app/src
+
   frontend:
     build: ./frontend
     depends_on:

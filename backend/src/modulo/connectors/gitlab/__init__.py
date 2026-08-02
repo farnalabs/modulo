@@ -40,6 +40,31 @@ def _parse_retry_after(response: httpx.Response) -> float | None:
     return None
 
 
+def _parse_next_page(response: httpx.Response) -> str | None:
+    """Parse the X-Next-Page header for pagination cursor on list endpoints.
+
+    GitLab reports ``X-Next-Page`` (the next page number) on paginated
+    responses. Absent or "0" means this is the last page.
+    """
+    value = response.headers.get("X-Next-Page", "")
+    if not value:
+        return None
+    try:
+        page = int(value)
+    except (ValueError, TypeError):
+        return None
+    return str(page) if page > 0 else None
+
+
+def _paginate_params(params: dict[str, Any], cursor: str | None) -> None:
+    """Add GitLab page param from a pagination cursor, if present."""
+    if cursor:
+        try:
+            params["page"] = int(cursor)
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid GitLab pagination cursor: {cursor!r}") from None
+
+
 def _safe_json(response: httpx.Response) -> Any:
     """Safely parse JSON response, handling decode errors."""
     try:
@@ -59,6 +84,10 @@ def _project_path(project_id: str) -> str:
 
 class GitLabConnector(ConnectorBase):
     """Read/write GitLab via the REST API v4.
+
+    List resources return ``next_cursor`` from GitLab's ``X-Next-Page``
+    header; pass it back as ``ConnectorQuery.cursor`` to fetch the next page
+    (GitLab ``page`` query param).
 
     Supported query resources:
       "projects"          — list projects accessible to the token
@@ -216,9 +245,10 @@ class GitLabConnector(ConnectorBase):
                     params["visibility"] = q.filters["visibility"]
                 if "owned" in q.filters:
                     params["owned"] = q.filters["owned"]
+                _paginate_params(params, q.cursor)
                 r = await self._call_api("GET", "/projects", params=params)
                 data = _safe_json(r)
-                return ConnectorResult(records=data, total=len(data))
+                return ConnectorResult(records=data, total=len(data), next_cursor=_parse_next_page(r))
             case "file":
                 project = self._require_filter(q.filters, "project", q.resource)
                 path = self._require_filter(q.filters, "path", q.resource)
@@ -243,13 +273,14 @@ class GitLabConnector(ConnectorBase):
                     mr_params["labels"] = q.filters["labels"]
                 if "milestone" in q.filters:
                     mr_params["milestone"] = q.filters["milestone"]
+                _paginate_params(mr_params, q.cursor)
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/merge_requests",
                     params=mr_params,
                 )
                 mrs = _safe_json(r)
-                return ConnectorResult(records=mrs, total=len(mrs))
+                return ConnectorResult(records=mrs, total=len(mrs), next_cursor=_parse_next_page(r))
             case "merge_request":
                 project = self._require_filter(q.filters, "project", q.resource)
                 mr_iid = self._require_filter(q.filters, "iid", q.resource)
@@ -266,13 +297,14 @@ class GitLabConnector(ConnectorBase):
                 for key in ("state", "labels", "milestone", "search", "sort", "order_by", "assignee_id"):
                     if key in q.filters:
                         params[key] = q.filters[key]
+                _paginate_params(params, q.cursor)
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/issues",
                     params=params,
                 )
                 issues = _safe_json(r)
-                return ConnectorResult(records=issues, total=len(issues))
+                return ConnectorResult(records=issues, total=len(issues), next_cursor=_parse_next_page(r))
             case "issue":
                 project = self._require_filter(q.filters, "project", q.resource)
                 issue_iid = self._require_filter(q.filters, "iid", q.resource)
@@ -285,13 +317,15 @@ class GitLabConnector(ConnectorBase):
             case "labels":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
+                label_params: dict[str, Any] = {"per_page": q.limit}
+                _paginate_params(label_params, q.cursor)
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/labels",
-                    params={"per_page": q.limit},
+                    params=label_params,
                 )
                 labels = _safe_json(r)
-                return ConnectorResult(records=labels, total=len(labels))
+                return ConnectorResult(records=labels, total=len(labels), next_cursor=_parse_next_page(r))
             case "label":
                 project = self._require_filter(q.filters, "project", q.resource)
                 label_id = self._require_filter(q.filters, "label_id", q.resource)
@@ -304,13 +338,15 @@ class GitLabConnector(ConnectorBase):
             case "milestones":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
+                milestone_params: dict[str, Any] = {"per_page": q.limit}
+                _paginate_params(milestone_params, q.cursor)
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/milestones",
-                    params={"per_page": q.limit},
+                    params=milestone_params,
                 )
                 milestones = _safe_json(r)
-                return ConnectorResult(records=milestones, total=len(milestones))
+                return ConnectorResult(records=milestones, total=len(milestones), next_cursor=_parse_next_page(r))
             case "issue_notes":
                 project = self._require_filter(q.filters, "project", q.resource)
                 issue_iid = self._require_filter(q.filters, "iid", q.resource)
@@ -319,24 +355,29 @@ class GitLabConnector(ConnectorBase):
                 for key in ("sort", "order_by"):
                     if key in q.filters:
                         params[key] = q.filters[key]
+                _paginate_params(params, q.cursor)
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/issues/{issue_iid}/notes",
                     params=params,
                 )
                 notes = _safe_json(r)
-                return ConnectorResult(records=notes, total=len(notes))
+                return ConnectorResult(records=notes, total=len(notes), next_cursor=_parse_next_page(r))
             case "issue_discussions":
                 project = self._require_filter(q.filters, "project", q.resource)
                 issue_iid = self._require_filter(q.filters, "iid", q.resource)
                 encoded = _project_path(project)
+                discussion_params: dict[str, Any] = {"per_page": q.limit}
+                _paginate_params(discussion_params, q.cursor)
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/issues/{issue_iid}/discussions",
-                    params={"per_page": q.limit},
+                    params=discussion_params,
                 )
                 discussions = _safe_json(r)
-                return ConnectorResult(records=discussions, total=len(discussions))
+                return ConnectorResult(
+                    records=discussions, total=len(discussions), next_cursor=_parse_next_page(r)
+                )
             case "branch":
                 project = self._require_filter(q.filters, "project", q.resource)
                 branch_name = self._require_filter(q.filters, "name", q.resource)
@@ -349,44 +390,52 @@ class GitLabConnector(ConnectorBase):
             case "branches":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
+                branch_params: dict[str, Any] = {"per_page": q.limit}
+                _paginate_params(branch_params, q.cursor)
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/repository/branches",
-                    params={"per_page": q.limit},
+                    params=branch_params,
                 )
                 branches = _safe_json(r)
-                return ConnectorResult(records=branches, total=len(branches))
+                return ConnectorResult(records=branches, total=len(branches), next_cursor=_parse_next_page(r))
             case "tags":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
+                tag_params: dict[str, Any] = {"per_page": q.limit}
+                _paginate_params(tag_params, q.cursor)
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/repository/tags",
-                    params={"per_page": q.limit},
+                    params=tag_params,
                 )
                 tags = _safe_json(r)
-                return ConnectorResult(records=tags, total=len(tags))
+                return ConnectorResult(records=tags, total=len(tags), next_cursor=_parse_next_page(r))
             case "pipelines":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
+                pipeline_params: dict[str, Any] = {"per_page": q.limit}
+                _paginate_params(pipeline_params, q.cursor)
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/pipelines",
-                    params={"per_page": q.limit},
+                    params=pipeline_params,
                 )
                 pipelines = _safe_json(r)
-                return ConnectorResult(records=pipelines, total=len(pipelines))
+                return ConnectorResult(records=pipelines, total=len(pipelines), next_cursor=_parse_next_page(r))
             case "jobs":
                 project = self._require_filter(q.filters, "project", q.resource)
                 pipeline_id = self._require_filter(q.filters, "pipeline_id", q.resource)
                 encoded = _project_path(project)
+                job_params: dict[str, Any] = {"per_page": q.limit}
+                _paginate_params(job_params, q.cursor)
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/pipelines/{pipeline_id}/jobs",
-                    params={"per_page": q.limit},
+                    params=job_params,
                 )
                 jobs = _safe_json(r)
-                return ConnectorResult(records=jobs, total=len(jobs))
+                return ConnectorResult(records=jobs, total=len(jobs), next_cursor=_parse_next_page(r))
             case _:
                 raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
 

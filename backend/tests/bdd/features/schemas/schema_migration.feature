@@ -29,6 +29,14 @@ Feature: Schema Migration
     Then the response status is 200
     And the plan contains a rename from "full_name" to "display_name"
 
+  Scenario: Migration plan pairs same-type renames deterministically
+    Given a source definition with fields {"a": "string", "b": "string"}
+    And a target definition with fields {"x": "string", "y": "string"}
+    When I POST /api/v1/schemas/migrate/plan
+    Then the response status is 200
+    And the plan contains a rename from "a" to "x"
+    And the plan contains a rename from "b" to "y"
+
   Scenario: Dry-run detects field additions
     Given a source schema version with fields {"name": "string"}
     And a target schema version with fields {"name": "string", "email": "string"}

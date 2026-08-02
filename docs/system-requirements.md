@@ -85,7 +85,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 | Deployment Type | Redis Required? | Reason |
 |----------------|-----------------|--------|
 | Single replica, single process | No | In-process fallbacks work |
-| Multiple replicas | **Yes** | Celery coordination, distributed rate limiting |
+| Multiple replicas | **Yes** | SAQ worker coordination, distributed rate limiting |
 | Horizontal scaling | **Yes** | Cross-replica event broker, cron triggers |
 | Production with 2+ backend pods | **Yes** | See [`docs/deployment.md`](./deployment.md) §Scaling |
 

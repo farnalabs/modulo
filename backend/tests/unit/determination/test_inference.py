@@ -33,8 +33,32 @@ def test_repos_detect_development_stage() -> None:
     assert stages[0].confidence == "high"
 
 
+def test_projects_detect_development_stage() -> None:
+    samples = [make_sample("projects", [{"name": "proj-1"}, {"name": "proj-2"}], connector_type=ConnectorType.GITLAB)]
+    findings = infer(samples)
+    stages = [f for f in findings if f.category == "stage" and "Development" in f.finding]
+    assert len(stages) == 1
+    assert "2 repositories" in stages[0].evidence
+
+
+def test_full_name_repo_records_detect_development_stage() -> None:
+    samples = [make_sample("repos", [{"full_name": "owner/repo1"}])]
+    findings = infer(samples)
+    stages = [f for f in findings if f.category == "stage" and "Development" in f.finding]
+    assert len(stages) == 1
+    assert "1 repository" in stages[0].evidence
+
+
 def test_pull_requests_detect_code_review() -> None:
     samples = [make_sample("pulls", [{"number": 1, "created_at": _iso(2)}])]
+    findings = infer(samples)
+    review = [f for f in findings if f.category == "stage" and "Code review" in f.finding]
+    assert len(review) == 1
+    assert "1 open PRs/MRs" in review[0].evidence
+
+
+def test_mrs_detect_code_review_stage() -> None:
+    samples = [make_sample("mrs", [{"title": "MR 1"}], connector_type=ConnectorType.GITLAB)]
     findings = infer(samples)
     review = [f for f in findings if f.category == "stage" and "Code review" in f.finding]
     assert len(review) == 1

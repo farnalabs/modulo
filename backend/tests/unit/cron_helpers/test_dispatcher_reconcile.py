@@ -89,7 +89,6 @@ def _run_row(run_id: uuid.UUID, status: str, *, dispatched: bool = True, stale: 
 
 def _settings(**overrides: object) -> MagicMock:
     base: dict[str, object] = {
-        "saq_enabled": True,
         "saq_runs_queue": "runs",
         "saq_reenqueue_window": 600,
         "saq_job_heartbeat": 300,
@@ -217,33 +216,6 @@ class TestReconcilePredicateMatrix:
         ingest.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_pending_undispatched_not_redispatched_in_shadow_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """In shadow mode a pending+undispatched run is a not-yet-sent Celery
-        dispatch, not a SAQ capacity deferral — reconcile must not touch it."""
-        _patch_env(monkeypatch)
-        session = _MockSession([_org_result([ORG]), _rows_result([])])
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-        q = _make_queue(redis_client)
-        redis_cls = MagicMock()
-        redis_cls.from_url.return_value = redis_client
-
-        with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings(saq_enabled=False)),
-            patch.object(ch, "AsyncRedis", redis_cls),
-            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
-            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock) as reenqueue,
-            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
-        ):
-            summary = await ch.dispatcher_reconcile()
-
-        assert summary["repaired"] == 0
-        assert summary["scanned"] == 0
-        reenqueue.assert_not_awaited()
-        ingest.assert_not_awaited()
-
-    @pytest.mark.asyncio
     async def test_job_still_exists_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         summary, reenqueue, ingest, _ = await _run_reconcile(
             monkeypatch,
@@ -348,6 +320,37 @@ class TestPartialEviction:
         assert summary["deduped"] == 1
         reenqueue.assert_awaited_once()  # gate-on-return: exactly one attempt
         ingest.assert_awaited_once()
+
+
+class TestCapacityMarkerExclusion:
+    """PR review: capacity-blocked runs must NEVER be re-dispatched.
+
+    A run demoted to ``pending`` with ``error_code`` in
+    (``org_capacity_limited``, ``pipeline_capacity``) has a LIVE in-process
+    retry accelerator (``_retry_pending``). If ``dispatcher_reconcile``
+    re-enqueues it, a second worker spawns a SECOND retry loop that can
+    double-execute the run. ``_reconcile_capacity_marker_exclusion()`` is the
+    WHERE-clause guard. These assertions fail if the exclusion is removed.
+    """
+
+    def _sql(self) -> str:
+        return str(ch._reconcile_capacity_marker_exclusion().compile(compile_kwargs={"literal_binds": True}))
+
+    def test_null_error_code_not_excluded(self) -> None:
+        """error_code IS NULL (no failure) must be allowed through."""
+        assert "IS NULL" in self._sql()
+
+    def test_org_capacity_limited_marker_excluded(self) -> None:
+        assert "org_capacity_limited" in self._sql()
+
+    def test_pipeline_capacity_marker_excluded(self) -> None:
+        assert "pipeline_capacity" in self._sql()
+
+    def test_markers_rendered_in_not_in_clause(self) -> None:
+        """Both markers live in a single NOT IN clause — a run carrying either
+        marker fails the whole exclusion predicate and is never re-dispatched."""
+        sql = self._sql()
+        assert "NOT IN ('org_capacity_limited', 'pipeline_capacity')" in sql
 
 
 class TestReconcilePrefixAware:

@@ -22,6 +22,7 @@ import traceback as _traceback
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import Any
 from urllib.parse import quote
 
@@ -432,39 +433,50 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         # Try API key first (backwards compatible).
         if token.startswith("mk_"):
             try:
-                # Validate the key without RLS first (the key's org is unknown).
+                # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and
+                # the key's org is unknown until the record is read — a plain
+                # lookup in an empty org context would be filtered out by RLS
+                # and reject every valid key. On Postgres the runtime app role
+                # is RLS-subject (a non-owner DML-granted role), so the org is
+                # resolved through a SECURITY DEFINER function owned by the
+                # migration role rather than SET row_security TO OFF (which
+                # only bypasses RLS for owners and raises for a regular role).
+                # On generic backends there is no RLS, so a plain prefix scan
+                # works. Then re-validate inside the org context before
+                # trusting the key.
+                from sqlalchemy import select, text
+
                 from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
+                from modulo.db.models.api_key import OrgApiKey
+                from modulo.db.rls import _ensure_active_transaction
 
                 prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
-                from sqlalchemy import select
-
-                from modulo.db.models.api_key import OrgApiKey
-
                 factory = _get_session_factory()
-                async with factory() as s:
-                    async with s.begin():
-                        from sqlalchemy import text
-
-                        await s.execute(text("SET LOCAL row_security TO OFF"))
-                        result = await s.execute(
-                            select(OrgApiKey).where(
-                                OrgApiKey.lookup_prefix == prefix,
-                                OrgApiKey.revoked_at.is_(None),
+                async with factory() as s, s.begin():
+                    dialect = await _ensure_active_transaction(s)
+                    if dialect == "postgresql":
+                        org_id = (
+                            await s.execute(
+                                text("SELECT public.lookup_api_key_org(:prefix)"),
+                                {"prefix": prefix},
                             )
-                        )
-                    key_record = result.scalar_one_or_none()
-                    if key_record is None:
-                        raise ApiKeyInvalidError()
-                    import hmac
-
-                    from modulo.auth.api_key import _hash_key
-
-                    if not hmac.compare_digest(key_record.hashed_secret, _hash_key(token)):
-                        raise ApiKeyInvalidError()
+                        ).scalar_one_or_none()
+                    else:
+                        key_record = (
+                            await s.execute(
+                                select(OrgApiKey).where(
+                                    OrgApiKey.lookup_prefix == prefix,
+                                    OrgApiKey.revoked_at.is_(None),
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        org_id = key_record.organisation_id if key_record is not None else None
+                if org_id is None:
+                    raise ApiKeyInvalidError()
 
                 # Now re-validate within the correct RLS context.
-                async with _session(key_record.organisation_id) as s:
-                    key = await validate_api_key(s, token, org_id=key_record.organisation_id)
+                async with _session(org_id) as s:
+                    key = await validate_api_key(s, token, org_id=org_id)
                     # ADR 017 DECISION 4 — live role-cap on EVERY MCP call. The
                     # stored key.role is the minted role; the effective role is
                     # min(minted, live). A demoted operator's key degrades to
@@ -1131,7 +1143,7 @@ async def trigger_pipeline(
             run_id = run.id
             thread_id = run.langgraph_thread_id
 
-        await dispatch_run(str(run_id), str(org_id), queue="runs", celery_queue="runs_manual")
+        await dispatch_run(str(run_id), str(org_id), queue="runs")
 
         return {
             "run_id": str(run_id),
@@ -1985,6 +1997,8 @@ async def create_trigger(
     active: bool = True,
     cron_expression: str | None = None,
     config_json: dict[str, Any] | None = None,
+    max_concurrent_runs: int = 1,
+    daily_spend_limit: float | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -1998,6 +2012,11 @@ async def create_trigger(
         except ValueError:
             return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
+        if max_concurrent_runs < 1:
+            return {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
+        if daily_spend_limit is not None and daily_spend_limit < 0:
+            return {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+
         from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
@@ -2006,6 +2025,8 @@ async def create_trigger(
                 pipeline_id=pid,
                 trigger_type=trigger_type,
                 active=active,
+                max_concurrent_runs=max_concurrent_runs,
+                daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
                 config_json=config_json or {},
                 account_id=account_id,
             )
@@ -2023,6 +2044,8 @@ async def create_trigger(
             "pipeline_id": str(trigger.pipeline_id),
             "trigger_type": trigger.trigger_type,
             "active": trigger.active,
+            "max_concurrent_runs": trigger.max_concurrent_runs,
+            "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
             "cron_expression": trigger.cron_expression,
         }
     except MCPAuthorizationError as exc:

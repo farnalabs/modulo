@@ -1,5 +1,6 @@
 """Unit tests for HITLManager using mocked AsyncSession."""
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -311,6 +312,15 @@ async def test_claim_gate_vanished_after_update_raises():
         await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
+async def test_claim_update_race_raises():
+    """claim() whose atomic UPDATE returns no id (concurrent claim) raises AlreadyClaimedError."""
+    unclaimed = _gate(account_id=None)
+    session = _session_update(rows_returned=0, gate=unclaimed, pre_check_gate=unclaimed)
+    mgr = HITLManager()
+    with pytest.raises(AlreadyClaimedError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
 # ---------------------------------------------------------------------------
 # Team-scoped gates
 # ---------------------------------------------------------------------------
@@ -487,6 +497,97 @@ async def test_claim_non_team_member_raises():
     with pytest.raises(NotTeamMemberError):
         await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert team_check_hit, "Team membership check was not performed"
+
+
+async def test_claim_locked_gate_vanished_raises():
+    """Team-scoped claim whose FOR UPDATE lock finds no row raises GateNotFoundError."""
+    gate = _gate(account_id=None, required_team_id=_TEAM)
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    call_no = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no
+        call_no += 1
+        if call_no == 1:
+            # Pre-check SELECT
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = gate
+            return r
+        if call_no == 2:
+            # FOR UPDATE row lock — row vanished
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = None
+            return r
+        raise AssertionError(f"Unexpected execute call #{call_no}")
+
+    session.execute = _execute
+    mgr = HITLManager()
+    with pytest.raises(GateNotFoundError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
+async def test_claim_locked_gate_already_decided_raises():
+    """Team-scoped claim whose FOR UPDATE lock sees a decided gate raises GateAlreadyDecidedError."""
+    gate = _gate(account_id=None, required_team_id=_TEAM)
+    locked_decided = _gate(account_id=None, required_team_id=_TEAM, decision="approved")
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    call_no = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no
+        call_no += 1
+        if call_no == 1:
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = gate
+            return r
+        if call_no == 2:
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = locked_decided
+            return r
+        raise AssertionError(f"Unexpected execute call #{call_no}")
+
+    session.execute = _execute
+    mgr = HITLManager()
+    with pytest.raises(GateAlreadyDecidedError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
+async def test_claim_locked_gate_already_claimed_raises():
+    """Team-scoped claim whose FOR UPDATE lock sees a claimed gate raises AlreadyClaimedError."""
+    gate = _gate(account_id=None, required_team_id=_TEAM)
+    locked_claimed = _gate(account_id=uuid.uuid4(), required_team_id=_TEAM)
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    call_no = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no
+        call_no += 1
+        if call_no == 1:
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = gate
+            return r
+        if call_no == 2:
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = locked_claimed
+            return r
+        raise AssertionError(f"Unexpected execute call #{call_no}")
+
+    session.execute = _execute
+    mgr = HITLManager()
+    with pytest.raises(AlreadyClaimedError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_no_required_team_still_works():
@@ -688,6 +789,34 @@ async def test_approve_with_modification_already_decided_raises():
             claim_token="tok",
             modified_output={"data": "x"},
         )
+
+
+async def test_approve_existing_claim_without_token_raises_expired():
+    """A gate that lost its claim token between claim and decide is treated as expired."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token=None, expires_at=future)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager()
+    with pytest.raises(ClaimTokenExpiredError):
+        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+
+
+async def test_approve_audit_cancellation_propagates():
+    """Cancellation while logging the audit event propagates instead of being swallowed."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
+    mgr = HITLManager()
+
+    with (
+        patch(
+            "modulo.core.hitl_manager.append_audit_event",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
 
 
 # ---------------------------------------------------------------------------
@@ -991,7 +1120,7 @@ def _mock_graph_validator() -> MagicMock:
     return mock_cls
 
 
-async def _bypass_capacity(mock_self: Any, *, run_id: Any, org_id: Any, pipeline_id: Any, max_concurrent: Any) -> Any:
+async def _bypass_capacity(mock_self: Any, **kwargs: Any) -> Any:
     run = MagicMock()
     run.status = "running"
     return run

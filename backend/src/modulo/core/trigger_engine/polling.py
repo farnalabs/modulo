@@ -1,7 +1,9 @@
 """Polling trigger -- connector-driven condition evaluation and run creation.
 
-Fire logic lives in ``fire_polling_trigger()`` -- used by Celery beat
-(``PollingFireTask`` / ``DatabasePollingScheduler``).
+Fire logic lives in ``fire_polling_trigger()`` -- enqueued as a per-item SAQ
+fire job by ``fire_due_triggers`` (system cron). The Celery beat path
+(``PollingFireTask`` / ``DatabasePollingScheduler``) was removed in PR C of the
+Celery->SAQ migration.
 """
 
 import asyncio
@@ -11,18 +13,17 @@ import json
 import logging
 import threading
 import uuid
+from decimal import Decimal
 from typing import Any
 
 import jmespath
 import jmespath.exceptions
 from sqlalchemy import func, select, text, update
-from sqlalchemy.exc import InterfaceError, OperationalError, TimeoutError
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorResult
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-from modulo.core.dispatch import dispatch_run_sync
-from modulo.core.pipeline_execution import SchedulerDBError
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -30,17 +31,6 @@ from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
-
-try:
-    from celery import Celery, Task
-    from celery.beat import ScheduleEntry, Scheduler
-except ImportError:
-    import typing
-
-    if typing.TYPE_CHECKING:
-        from celery import Celery, Task
-        from celery.beat import ScheduleEntry, Scheduler
-    Celery = Task = ScheduleEntry = Scheduler = object
 
 _log = logging.getLogger(__name__)
 
@@ -146,50 +136,8 @@ def evaluate_condition(
 
 
 # ---------------------------------------------------------------------------
-# Celery task — fire one polling trigger
+# Fire logic — shared async core (per-item SAQ fire job)
 # ---------------------------------------------------------------------------
-
-
-class PollingFireTask(Task):  # type: ignore[misc]
-    """Task that fires a single polling trigger.
-
-    Runs the poll query through the configured connector, evaluates the
-    JMESPath condition, and creates a Run when the condition is met.
-    """
-
-    name = "modulo.polling.fire_trigger"
-    autoretry_for = (ConnectionError, TimeoutError, OSError)
-    max_retries = 2
-    default_retry_delay = 30
-
-    def run(
-        self,
-        trigger_id: str,
-        org_id: str,
-        pipeline_id: str,
-        connector_instance_id: str,
-        poll_query: str,
-        condition_expression: str | None,
-    ) -> dict[str, Any]:
-        """Fire a polling trigger and dispatch the run to Celery."""
-        result = asyncio.run(
-            fire_polling_trigger(
-                trigger_id=uuid.UUID(trigger_id),
-                org_id=uuid.UUID(org_id),
-                pipeline_id=uuid.UUID(pipeline_id),
-                connector_instance_id=uuid.UUID(connector_instance_id),
-                poll_query=poll_query,
-                condition_expression=condition_expression,
-            )
-        )
-        if result.get("status") == "fired" and result.get("run_id"):
-            dispatch_run_sync(
-                result["run_id"],
-                org_id,
-                queue="runs",
-                celery_queue="runs_automated",
-            )
-        return result
 
 
 async def fire_polling_trigger(
@@ -247,6 +195,26 @@ async def fire_polling_trigger(
                 "active_runs": active_count,
             }
 
+        # Daily spend limit check (mirrors cron_helpers.fire_cron_trigger) — run
+        # before the connector query so an over-budget trigger stops polling the
+        # external service instead of running the query every cycle.
+        today_cost = await _daily_spend_limit_reached(session, trigger, org_id)
+        if today_cost is not None:
+            await _log_poll_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="spend_limit_reached",
+                error_detail=f"Daily spend limit {trigger.daily_spend_limit} reached (today: {today_cost})",
+            )
+            await _update_next_fire_no_last(session, trigger)
+            return {
+                "status": "skipped",
+                "reason": "spend_limit",
+                "daily_spend_limit": str(trigger.daily_spend_limit),
+                "today_cost": str(today_cost),
+            }
+
         # Load connector instance
         conn_result = await session.execute(
             select(ConnectorInstance).where(
@@ -300,7 +268,7 @@ async def fire_polling_trigger(
         try:
             query = ConnectorQuery(resource=poll_query)
             query_result = await asyncio.wait_for(connector.query(query), timeout=60)
-        except TimeoutError:
+        except SATimeoutError:
             _log.warning("Poll query timed out for trigger %s", trigger_id, exc_info=True)
             await _log_poll_event(
                 session,
@@ -438,215 +406,7 @@ async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> 
 
 
 # ---------------------------------------------------------------------------
-# Database-backed beat scheduler
-# ---------------------------------------------------------------------------
-
-
-class DatabasePollingEntry(ScheduleEntry):  # type: ignore[misc]
-    """A single schedule entry representing one polling trigger row."""
-
-    def __init__(
-        self,
-        trigger_id: uuid.UUID,
-        org_id: uuid.UUID,
-        pipeline_id: uuid.UUID,
-        connector_instance_id: uuid.UUID,
-        poll_query: str,
-        condition_expression: str | None,
-        next_fire_at: datetime.datetime,
-    ) -> None:
-        self._trigger_id = trigger_id
-        self._org_id = org_id
-        self._pipeline_id = pipeline_id
-        self._connector_instance_id = connector_instance_id
-        self._poll_query = poll_query
-        self._condition_expression = condition_expression
-        self._next_fire_at = next_fire_at
-
-    @property
-    def name(self) -> str:
-        return f"polling-{self._trigger_id}"
-
-    @property
-    def task(self) -> str:
-        return PollingFireTask.name
-
-    @property
-    def schedule(self) -> Any:
-        return self
-
-    @property
-    def args(self) -> list[str]:
-        return [
-            str(self._trigger_id),
-            str(self._org_id),
-            str(self._pipeline_id),
-            str(self._connector_instance_id),
-            self._poll_query,
-            self._condition_expression or "",
-        ]
-
-    @property
-    def kwargs(self) -> dict[str, Any]:
-        return {}
-
-    @property
-    def options(self) -> dict[str, Any]:
-        return {"task_id": f"polling-{self._trigger_id}-{self._next_fire_at.timestamp():.0f}"}
-
-    def is_due(self) -> tuple[bool, datetime.timedelta]:
-        now = datetime.datetime.now(datetime.UTC)
-        if self._next_fire_at <= now:
-            return (True, datetime.timedelta(seconds=0))
-        delay = (self._next_fire_at - now).total_seconds()
-        return (False, datetime.timedelta(seconds=max(delay, 0)))
-
-    def __repr__(self) -> str:
-        return f"<DatabasePollingEntry trigger={self._trigger_id} next={self._next_fire_at.isoformat()}>"
-
-
-class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
-    """Celery beat scheduler that reads polling triggers from the database.
-
-    Queries the ``triggers`` table for enabled polling rows whose
-    ``next_fire_at <= now()`` and creates one ``DatabasePollingEntry`` per match.
-
-    Used only when Celery + Redis are available. Falls back to the in-process
-    ``InProcessPollingScheduler`` when Redis is not configured.
-    """
-
-    Entry = DatabasePollingEntry
-
-    def __init__(self, app: Celery, **kwargs: Any) -> None:
-        # _schedule must exist before super().__init__ because it calls
-        # setup_schedule() -> _sync_with_db() which accesses self._schedule.
-        self._schedule: dict[str, DatabasePollingEntry] = {}
-        super().__init__(app, **kwargs)
-        # Re-set max_interval after super().__init__ since Celery's base
-        # class may overwrite it with app.conf.beat_max_loop_interval.
-        self.max_interval = 30
-
-    def setup_schedule(self) -> None:
-        """Populate the schedule from the database."""
-        self._sync_with_db()
-
-    def tick(self) -> float:
-        """Called periodically by Celery beat. Syncs with DB."""
-        self._sync_with_db()
-        return super().tick()  # type: ignore[no-any-return]
-
-    def _sync_with_db(self) -> None:
-        """Query the database and update the in-memory schedule."""
-        try:
-            rows = self._fetch_due_triggers()
-        except SchedulerDBError:
-            return
-
-        current_ids = set(self._schedule.keys())
-        db_ids: set[str] = set()
-
-        for row in rows:
-            entry_id = f"polling-{row['trigger_id']}"
-            db_ids.add(entry_id)
-
-            if entry_id in self._schedule:
-                existing = self._schedule[entry_id]
-                if existing._next_fire_at == row["next_fire_at"]:
-                    continue
-
-            entry = DatabasePollingEntry(
-                trigger_id=row["trigger_id"],
-                org_id=row["org_id"],
-                pipeline_id=row["pipeline_id"],
-                connector_instance_id=row["connector_instance_id"],
-                poll_query=row["poll_query"],
-                condition_expression=row["condition_expression"],
-                next_fire_at=row["next_fire_at"],
-            )
-            self._schedule[entry_id] = entry
-
-        stale = current_ids - db_ids
-        for sid in stale:
-            self._schedule.pop(sid, None)
-
-    def _fetch_due_triggers(self) -> list[dict[str, Any]]:
-        """Sync query for polling triggers due to fire — runs inside Celery beat."""
-        try:
-            import uuid
-            from datetime import UTC, datetime, timedelta
-
-            from modulo.core.pipeline_execution import SchedulerDBError, get_beat_sync_session
-            from modulo.db.models.trigger import Trigger
-            from modulo.db.models.trigger_event import TriggerEvent
-
-            session = get_beat_sync_session()
-            try:
-                now = datetime.now(UTC)
-                result = session.execute(
-                    select(
-                        Trigger.id,
-                        Trigger.organisation_id,
-                        Trigger.pipeline_id,
-                        Trigger.config_json,
-                        Trigger.next_fire_at,
-                    ).where(
-                        Trigger.trigger_type == "polling",
-                        Trigger.active,
-                        Trigger.next_fire_at <= now,
-                    )
-                )
-                rows = result.all()
-
-                triggers: list[dict[str, Any]] = []
-                for row in rows:
-                    config = row.config_json or {}
-                    ci_id_str = config.get("connector_instance_id")
-                    try:
-                        connector_instance_id = uuid.UUID(ci_id_str) if ci_id_str else None
-                    except (ValueError, TypeError):
-                        connector_instance_id = None
-                    if connector_instance_id is None:
-                        _log.warning("Polling trigger %s has no connector_instance_id", row.id, exc_info=True)
-                        event = TriggerEvent(
-                            organisation_id=row.organisation_id,
-                            trigger_id=row.id,
-                            trigger_type="polling",
-                            raw_payload_hash=hashlib.sha256(f"polling:{row.id}:poll_error".encode()).hexdigest(),
-                            validation_result="poll_error",
-                            error_detail="Polling trigger missing connector_instance_id in config_json",
-                        )
-                        session.add(event)
-                        interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-                        next_fire = datetime.now(UTC) + timedelta(seconds=interval)
-                        session.execute(update(Trigger).where(Trigger.id == row.id).values(next_fire_at=next_fire))
-                        session.commit()
-                        continue
-
-                    triggers.append(
-                        {
-                            "trigger_id": row.id,
-                            "org_id": row.organisation_id,
-                            "pipeline_id": row.pipeline_id,
-                            "connector_instance_id": connector_instance_id,
-                            "poll_query": config.get("poll_query", ""),
-                            "condition_expression": config.get("condition_expression"),
-                            "next_fire_at": row.next_fire_at,
-                        }
-                    )
-                return triggers
-            finally:
-                session.close()
-        except (
-            OperationalError,
-            InterfaceError,
-            TimeoutError,
-        ):
-            _log.exception("Failed to fetch polling triggers from database")
-            raise SchedulerDBError("Polling scheduler DB query failed") from None
-
-
-# ---------------------------------------------------------------------------
-# RLS + helpers (standalone copies, same pattern as cron_scheduler.py)
+# RLS + helpers (standalone copies, same pattern as cron_helpers.py)
 # ---------------------------------------------------------------------------
 
 
@@ -670,6 +430,33 @@ async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> in
         )
     )
     return int(result.scalar_one() or 0)
+
+
+async def _daily_spend_limit_reached(
+    session: AsyncSession,
+    trigger: Trigger,
+    org_id: uuid.UUID,
+) -> Decimal | None:
+    """Return today's total run cost when the trigger's daily spend limit is exceeded.
+
+    Returns ``None`` when no limit is configured or the limit has not been
+    reached yet — the trigger may fire.
+    """
+    limit = trigger.daily_spend_limit
+    if limit is None:
+        return None
+    today_start = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    cost_result = await session.execute(
+        select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
+            Run.trigger_id == trigger.id,
+            Run.organisation_id == org_id,
+            Run.created_at >= today_start,
+        )
+    )
+    today_cost = cost_result.scalar_one()
+    if today_cost is not None and today_cost >= limit:
+        return today_cost
+    return None
 
 
 async def _log_poll_event(

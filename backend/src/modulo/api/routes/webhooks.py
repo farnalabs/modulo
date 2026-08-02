@@ -182,7 +182,7 @@ async def receive_webhook(
     loop = asyncio.get_event_loop()
     loop.run_in_executor(
         None,
-        functools.partial(dispatch_run_sync, queue="runs", celery_queue="runs_automated", fail_fast=True),
+        functools.partial(dispatch_run_sync, queue="runs", fail_fast=True),
         str(run_id),
         str(org_id),
     )
@@ -337,7 +337,7 @@ async def replay_webhook(
     loop = asyncio.get_event_loop()
     loop.run_in_executor(
         None,
-        functools.partial(dispatch_run_sync, queue="runs", celery_queue="runs_automated", fail_fast=True),
+        functools.partial(dispatch_run_sync, queue="runs", fail_fast=True),
         str(run_id),
         str(org_id),
     )

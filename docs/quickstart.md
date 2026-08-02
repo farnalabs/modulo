@@ -57,6 +57,26 @@ uv run uvicorn modulo.api.main:app --reload --port 8000
 
 The API is now live at `http://localhost:8000`. OpenAPI docs at `http://localhost:8000/docs`.
 
+## 3b. Start the SAQ workers (required for pipeline execution + cron)
+
+Modulo executes pipeline runs through SAQ workers (Celery was removed). Start
+them in separate terminals:
+
+```powershell
+# Runs worker — executes run jobs (queue: runs)
+uv run python -m saq modulo.core.saq_worker.runs_settings
+
+# System worker — scheduler (fire_due_triggers) + reconcile + system crons
+$env:SAQ_AUTH_USERNAME = "admin"
+$env:SAQ_AUTH_PASSWORD = "admin"
+uv run python -m modulo.core.saq_worker
+```
+
+Notes:
+- `python -m saq` takes the **settings module** as its only positional arg — there is no `worker` subcommand in SAQ 0.26.4.
+- A local Redis is required (`REDIS_URL`, e.g. `redis://localhost:6380/0` from the compose `redis-local` service).
+- The compose stack (`docker-compose.local.yml`) ships `saq-runner` + `saq-system` services that launch both workers; `saq-system` is **required** for local cron/triggers to fire.
+
 ## 4. Start the frontend (optional)
 
 ```powershell

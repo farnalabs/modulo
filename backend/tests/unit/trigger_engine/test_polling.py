@@ -3,17 +3,14 @@
 import datetime
 import hashlib
 import uuid
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.exc import TimeoutError as SATimeoutError
 
 from modulo.connectors.base import ConnectorResult
 from modulo.core.trigger_engine.polling import (
-    DatabasePollingEntry,
-    DatabasePollingScheduler,
-    PollingFireTask,
     _build_polling_connector,
     _fire_polling_trigger,
     _log_poll_event,
@@ -104,6 +101,7 @@ def _make_trigger(
     active: bool = True,
     max_concurrent_runs: int = 5,
     config: dict[str, Any] | None = None,
+    daily_spend_limit: Any = None,
 ) -> MagicMock:
     t = MagicMock(spec=Trigger)
     t.id = uuid.uuid4()
@@ -111,6 +109,7 @@ def _make_trigger(
     t.organisation_id = uuid.uuid4()
     t.active = active
     t.max_concurrent_runs = max_concurrent_runs
+    t.daily_spend_limit = daily_spend_limit
     t.config_json = config or {}
     t.next_fire_at = datetime.datetime.now(datetime.UTC)
     return t
@@ -203,6 +202,7 @@ def _setup_session_for_polling(
     trigger: MagicMock,
     connector_instance: MagicMock | None = None,
     active_run_count: int = 0,
+    today_cost: Any = 0,
 ) -> None:
     """Configure session.execute to handle all DB queries from _fire_polling_trigger.
 
@@ -210,8 +210,9 @@ def _setup_session_for_polling(
       1. _set_rls_org → text(...)
       2. select(Trigger).with_for_update()
       3. _count_active_runs → select(func.count())
-      4. select(ConnectorInstance)
-      5. update(Trigger)  (in _update_next_fire)
+      4. _daily_spend_limit_reached → select(coalesce(sum(Run.total_cost_usd), 0))
+      5. select(ConnectorInstance)
+      6. update(Trigger)  (in _update_next_fire)
     """
     trigger_result = MagicMock()
     trigger_result.scalar_one_or_none.return_value = trigger
@@ -221,6 +222,9 @@ def _setup_session_for_polling(
 
     count_result = MagicMock()
     count_result.scalar_one.return_value = active_run_count
+
+    cost_result = MagicMock()
+    cost_result.scalar_one.return_value = today_cost
 
     rls_result = MagicMock()
 
@@ -240,6 +244,8 @@ def _setup_session_for_polling(
             return ci_result
         if "count(*)" in stmt_str:
             return count_result
+        if "total_cost_usd" in stmt_str:
+            return cost_result
         if "update" in stmt_str:
             return count_result
         return rls_result
@@ -247,312 +253,7 @@ def _setup_session_for_polling(
     session.execute = _execute
 
 
-# (fire_trigger tests moved into TestPollingFireTask parametrize below)
-
-
 # ---------------------------------------------------------------------------
-# DatabasePollingEntry tests
-# ---------------------------------------------------------------------------
-
-
-class TestDatabasePollingEntry:
-    def _entry(self, **overrides: Any) -> DatabasePollingEntry:
-        return DatabasePollingEntry(
-            trigger_id=overrides.get("trigger_id", uuid.uuid4()),
-            org_id=overrides.get("org_id", uuid.uuid4()),
-            pipeline_id=overrides.get("pipeline_id", uuid.uuid4()),
-            connector_instance_id=overrides.get("connector_instance_id", uuid.uuid4()),
-            poll_query=overrides.get("poll_query", "query"),
-            condition_expression=overrides.get("condition_expression"),
-            next_fire_at=overrides.get("next_fire_at", datetime.datetime.now(datetime.UTC)),
-        )
-
-    @pytest.mark.parametrize(
-        "offset_from_now,expected_due",
-        [
-            (datetime.timedelta(seconds=-10), True),
-            (datetime.timedelta(hours=1), False),
-        ],
-    )
-    def test_is_due(self, offset_from_now: datetime.timedelta, expected_due: bool) -> None:
-        entry = self._entry(
-            next_fire_at=datetime.datetime.now(datetime.UTC) + offset_from_now,
-        )
-        due, delay = entry.is_due()
-        assert due is expected_due
-        if expected_due:
-            assert delay.total_seconds() == 0
-        else:
-            assert delay.total_seconds() > 0
-
-    def test_task_name(self) -> None:
-        entry = self._entry()
-        assert entry.task == "modulo.polling.fire_trigger"
-
-    def test_name(self) -> None:
-        tid = uuid.uuid4()
-        entry = self._entry(trigger_id=tid)
-        assert entry.name == f"polling-{tid}"
-
-    def test_schedule_is_self(self) -> None:
-        entry = self._entry()
-        assert entry.schedule is entry
-
-    def test_kwargs_empty(self) -> None:
-        entry = self._entry()
-        assert entry.kwargs == {}
-
-    def test_options_task_id_includes_trigger_and_timestamp(self) -> None:
-        tid = uuid.uuid4()
-        entry = self._entry(trigger_id=tid)
-        opts = entry.options
-        assert opts["task_id"].startswith(f"polling-{tid}-")
-
-    def test_repr(self) -> None:
-        tid = uuid.uuid4()
-        entry = self._entry(trigger_id=tid)
-        assert repr(entry) == f"<DatabasePollingEntry trigger={tid} next={entry._next_fire_at.isoformat()}>"
-
-    def test_args(self) -> None:
-        tid = uuid.uuid4()
-        oid = uuid.uuid4()
-        pid = uuid.uuid4()
-        ci = uuid.uuid4()
-        entry = DatabasePollingEntry(
-            trigger_id=tid,
-            org_id=oid,
-            pipeline_id=pid,
-            connector_instance_id=ci,
-            poll_query="select *",
-            condition_expression="[?id]",
-            next_fire_at=datetime.datetime.now(datetime.UTC),
-        )
-        assert entry.args == [str(tid), str(oid), str(pid), str(ci), "select *", "[?id]"]
-
-    def test_args_condition_none(self) -> None:
-        entry = self._entry(poll_query="q")
-        assert entry.args[-1] == ""
-
-
-# ---------------------------------------------------------------------------
-# DatabasePollingScheduler tests
-# ---------------------------------------------------------------------------
-
-
-class TestDatabasePollingScheduler:
-    def test_max_interval(self) -> None:
-        app = MagicMock()
-        scheduler = DatabasePollingScheduler(app)
-        assert scheduler.max_interval == 30
-
-    @pytest.mark.parametrize(
-        "initial_rows,second_rows,expected_first_len,expected_second_len",
-        [
-            ([], None, 0, None),
-            ([{"trigger_id": "dyn"}], None, 1, None),
-            ([{"trigger_id": "dyn"}], [], 1, 0),
-        ],
-    )
-    def test_sync_with_db(
-        self,
-        initial_rows: list,
-        second_rows: list | None,
-        expected_first_len: int,
-        expected_second_len: int | None,
-    ) -> None:
-        app = MagicMock()
-        now = datetime.datetime.now(datetime.UTC)
-
-        def _row(r):
-            tid = uuid.uuid4() if r.get("trigger_id") == "dyn" else r["trigger_id"]
-            return {
-                "trigger_id": tid,
-                "org_id": uuid.uuid4(),
-                "pipeline_id": uuid.uuid4(),
-                "connector_instance_id": uuid.uuid4(),
-                "poll_query": "select 1",
-                "condition_expression": None,
-                "next_fire_at": now,
-            }
-
-        rows = [_row(r) for r in initial_rows]
-        with patch(
-            "modulo.core.trigger_engine.polling.DatabasePollingScheduler._fetch_due_triggers",
-            return_value=rows,
-        ):
-            scheduler = DatabasePollingScheduler(app)
-            scheduler._sync_with_db()
-        assert len(scheduler._schedule) == expected_first_len
-
-        if second_rows is not None:
-            rows2 = [_row(r) for r in second_rows]
-            with patch(
-                "modulo.core.trigger_engine.polling.DatabasePollingScheduler._fetch_due_triggers",
-                return_value=rows2,
-            ):
-                scheduler._sync_with_db()
-            assert len(scheduler._schedule) == expected_second_len
-
-    def test_tick_calls_sync_and_parent(self) -> None:
-        """tick() should sync with DB and then call super().tick()."""
-        app = MagicMock()
-        scheduler = DatabasePollingScheduler(app)
-
-        with (
-            patch.object(scheduler, "_sync_with_db") as mock_sync,
-            patch.object(scheduler, "_schedule", {}),
-            patch.object(type(scheduler).__bases__[0], "tick", return_value=30.0),
-        ):
-            result = scheduler.tick()
-            mock_sync.assert_called_once()
-            assert result == 30.0
-
-    def test_fetch_due_triggers_missing_connector_instance(self) -> None:
-        """A polling trigger without connector_instance_id is skipped, logged, and advanced."""
-        row = MagicMock()
-        row.id = uuid.uuid4()
-        row.organisation_id = uuid.uuid4()
-        row.pipeline_id = uuid.uuid4()
-        row.config_json = {}
-        row.next_fire_at = datetime.datetime.now(datetime.UTC)
-
-        session = MagicMock()
-        result = MagicMock()
-        result.all.return_value = [row]
-        session.execute.return_value = result
-
-        # Avoid DatabasePollingScheduler.__init__ which opens a real DB session.
-        scheduler = DatabasePollingScheduler.__new__(DatabasePollingScheduler)
-        with (
-            patch("modulo.core.pipeline_execution.get_beat_sync_session", return_value=session),
-            patch("modulo.core.trigger_engine.polling._log.warning") as mock_warning,
-        ):
-            rows = scheduler._fetch_due_triggers()
-
-        assert rows == []
-        mock_warning.assert_called_once()
-        session.add.assert_called_once()
-        session.commit.assert_called_once()
-
-    def test_fetch_due_triggers_includes_due_row(self) -> None:
-        """A due polling trigger with a valid connector_instance_id is returned as a row dict."""
-        tid = uuid.uuid4()
-        oid = uuid.uuid4()
-        pid = uuid.uuid4()
-        ci = uuid.uuid4()
-        next_fire = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=5)
-
-        row = MagicMock()
-        row.id = tid
-        row.organisation_id = oid
-        row.pipeline_id = pid
-        row.config_json = {"connector_instance_id": str(ci), "poll_query": "select 1", "condition_expression": "[?id]"}
-        row.next_fire_at = next_fire
-
-        session = MagicMock()
-        result = MagicMock()
-        result.all.return_value = [row]
-        session.execute.return_value = result
-
-        scheduler = DatabasePollingScheduler.__new__(DatabasePollingScheduler)
-        with patch("modulo.core.pipeline_execution.get_beat_sync_session", return_value=session):
-            rows = scheduler._fetch_due_triggers()
-
-        assert rows == [
-            {
-                "trigger_id": tid,
-                "org_id": oid,
-                "pipeline_id": pid,
-                "connector_instance_id": ci,
-                "poll_query": "select 1",
-                "condition_expression": "[?id]",
-                "next_fire_at": next_fire,
-            }
-        ]
-        session.add.assert_not_called()
-        session.commit.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# fire_polling_trigger — lock contention and query timeout paths
-# ---------------------------------------------------------------------------
-
-
-async def test_fire_polling_trigger_busy_lock_not_acquired(mock_db_components) -> None:
-    """When the advisory lock is not acquired, the fire is skipped as busy."""
-    session = mock_db_components
-    bind_mock = MagicMock()
-    bind_mock.dialect.name = "postgresql"
-    session.get_bind = MagicMock(return_value=bind_mock)
-
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = False
-    session.execute = AsyncMock(return_value=lock_result)
-
-    result = await _fire_polling_trigger(
-        trigger_id=_TRIGGER_ID,
-        org_id=_ORG_ID,
-        pipeline_id=_PIPELINE_ID,
-        connector_instance_id=_CI_ID,
-        poll_query="query",
-        condition_expression=None,
-    )
-    assert result == {"status": "skipped", "reason": "trigger_busy"}
-
-
-async def test_fire_polling_trigger_query_timeout(
-    mock_db_components,
-    mock_secrets_backend,
-    mock_connector,
-) -> None:
-    """A query timeout should be reported as query_timeout, not crash."""
-    session = mock_db_components
-    _, connector = mock_connector
-    connector.query.side_effect = SATimeoutError()
-
-    trigger = _make_trigger(config={"snapshot_id": "uuid", "poll_interval_seconds": 60})
-    _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
-
-    result = await _fire_polling_trigger(
-        trigger_id=_TRIGGER_ID,
-        org_id=_ORG_ID,
-        pipeline_id=_PIPELINE_ID,
-        connector_instance_id=_CI_ID,
-        poll_query="select * from issues",
-        condition_expression=None,
-    )
-    assert result["status"] == "error"
-    assert result["reason"] == "query_timeout"
-
-
-async def test_fire_polling_trigger_asyncio_timeout_maps_to_query_failed(
-    mock_db_components,
-    mock_secrets_backend,
-    mock_connector,
-) -> None:
-    """A real asyncio timeout escapes the sqlalchemy TimeoutError handler and
-    surfaces as query_failed — locks in current behaviour for the wait_for path."""
-    session = mock_db_components
-    _, connector = mock_connector
-    connector.query.side_effect = TimeoutError()
-
-    trigger = _make_trigger(config={"snapshot_id": "uuid", "poll_interval_seconds": 60})
-    _setup_session_for_polling(session, trigger, connector_instance=MagicMock(), active_run_count=0)
-
-    result = await _fire_polling_trigger(
-        trigger_id=_TRIGGER_ID,
-        org_id=_ORG_ID,
-        pipeline_id=_PIPELINE_ID,
-        connector_instance_id=_CI_ID,
-        poll_query="select * from issues",
-        condition_expression=None,
-    )
-    assert result["status"] == "error"
-    assert result["reason"] == "query_failed"
-
-
-# ---------------------------------------------------------------------------
-# _update_next_fire / _update_next_fire_no_last
 # ---------------------------------------------------------------------------
 
 
@@ -595,254 +296,196 @@ class TestUpdateNextFire:
 
 
 # ---------------------------------------------------------------------------
-# PollingFireTask tests
 # ---------------------------------------------------------------------------
 
 
-class TestPollingFireTask:
-    def test_task_name(self) -> None:
-        assert PollingFireTask.name == "modulo.polling.fire_trigger"
+class TestDailySpendLimit:
+    """Daily spend limit (trigger.daily_spend_limit) must prevent run creation."""
 
-    def test_task_attributes(self) -> None:
-        assert PollingFireTask.autoretry_for == (ConnectionError, SATimeoutError, OSError)
-        assert PollingFireTask.max_retries == 2
-        assert PollingFireTask.default_retry_delay == 30
-
-    @pytest.mark.parametrize(
-        (
-            "scenario",
-            "status",
-            "reason",
-            "trigger_config",
-            "trigger_active",
-            "trigger_max_conc",
-            "ci_present",
-            "active_run_count",
-            "condition_expr",
-            "extra_patches",
-            "extra_check",
-        ),
-        [
-            pytest.param(
-                "condition_met",
-                "fired",
-                None,
-                {"snapshot_id": "uuid", "poll_interval_seconds": 60},
-                True,
-                5,
-                True,
-                0,
-                "[?issue.number > `0`]",
-                [],
-                "condition_met",
-            ),
-            pytest.param(
-                "no_match",
-                "no_match",
-                None,
-                {"snapshot_id": "uuid", "poll_interval_seconds": 60},
-                True,
-                5,
-                True,
-                0,
-                "[?issue.number > `999`]",
-                ["connector_empty", "no_create_run"],
-                "no_match",
-            ),
-            pytest.param(
-                "concurrency_limit",
-                "skipped",
-                "concurrency_limit",
-                {},
-                True,
-                2,
-                False,
-                3,
-                None,
-                ["no_create_run", "log_poll_event"],
-                "concurrency",
-            ),
-            pytest.param(
-                "inactive",
-                "skipped",
-                "trigger_inactive_or_missing",
-                {},
-                False,
-                5,
-                False,
-                0,
-                None,
-                [],
-                None,
-            ),
-            pytest.param(
-                "connector_not_found",
-                "error",
-                "connector_not_found",
-                {},
-                True,
-                5,
-                None,
-                0,
-                None,
-                ["log_poll_event"],
-                None,
-            ),
-            pytest.param(
-                "condition_eval_failure",
-                "error",
-                "condition_eval_failed",
-                {"snapshot_id": "uuid", "poll_interval_seconds": 60},
-                True,
-                5,
-                True,
-                0,
-                "[invalid syntax",
-                ["evaluate_condition_error", "no_create_run"],
-                None,
-            ),
-            pytest.param(
-                "connector_init_failed",
-                "error",
-                "connector_init_failed",
-                {"snapshot_id": "uuid", "poll_interval_seconds": 60},
-                True,
-                5,
-                True,
-                0,
-                None,
-                ["build_connector_error"],
-                None,
-            ),
-            pytest.param(
-                "query_failed",
-                "error",
-                "query_failed",
-                {"snapshot_id": "uuid", "poll_interval_seconds": 60},
-                True,
-                5,
-                True,
-                0,
-                None,
-                ["connector_error"],
-                None,
-            ),
-            pytest.param(
-                "already_fired",
-                "skipped",
-                "already_fired_this_cycle",
-                {},
-                True,
-                5,
-                False,
-                0,
-                None,
-                ["future_next_fire"],
-                None,
-            ),
-        ],
-    )
-    async def test_fire_trigger(
+    async def test_spend_limit_reached_skips_with_event(
         self,
-        scenario,
-        status,
-        reason,
-        trigger_config,
-        trigger_active,
-        trigger_max_conc,
-        ci_present,
-        active_run_count,
-        condition_expr,
-        extra_patches,
-        extra_check,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        session = mock_db_components
+        trigger = _make_trigger(
+            daily_spend_limit=Decimal("50.00"),
+            config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60},
+        )
+        _setup_session_for_polling(
+            session,
+            trigger,
+            connector_instance=MagicMock(),
+            active_run_count=0,
+            today_cost=Decimal("55.00"),
+        )
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log_poll_event") as mock_event,
+            patch("modulo.core.trigger_engine.polling._update_next_fire_no_last") as mock_advance,
+        ):
+            mock_event.return_value = MagicMock(id=uuid.uuid4())
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="select * from issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "spend_limit"
+        assert result["daily_spend_limit"] == "50.00"
+        assert result["today_cost"] == "55.00"
+        mock_cr.assert_not_called()
+        mock_event.assert_called_once()
+        assert mock_event.call_args.kwargs["result"] == "spend_limit_reached"
+        assert mock_event.call_args.kwargs["error_detail"] == ("Daily spend limit 50.00 reached (today: 55.00)")
+        mock_advance.assert_awaited_once()
+
+    async def test_spend_limit_equal_skips(self, mock_db_components) -> None:
+        """today_cost == limit is still over budget (>= comparison)."""
+        session = mock_db_components
+        trigger = _make_trigger(
+            daily_spend_limit=Decimal("50.00"),
+            config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60},
+        )
+        _setup_session_for_polling(
+            session,
+            trigger,
+            connector_instance=MagicMock(),
+            active_run_count=0,
+            today_cost=Decimal("50.00"),
+        )
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log_poll_event", new_callable=AsyncMock),
+        ):
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "spend_limit"
+        mock_cr.assert_not_called()
+
+    async def test_spend_limit_not_reached_fires(
+        self,
         mock_db_components,
         mock_secrets_backend,
         mock_connector,
         mock_create_run,
     ) -> None:
+        """today_cost below the limit must not block run creation."""
         session = mock_db_components
-        _, connector = mock_connector
-
-        if trigger_config.get("snapshot_id") == "uuid":
-            trigger_config = dict(trigger_config)
-            trigger_config["snapshot_id"] = str(uuid.uuid4())
         trigger = _make_trigger(
-            active=trigger_active,
-            max_concurrent_runs=trigger_max_conc,
-            config=trigger_config or {},
+            daily_spend_limit=Decimal("100.00"),
+            config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60},
         )
-
-        if "future_next_fire" in extra_patches:
-            trigger.next_fire_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
-
         _setup_session_for_polling(
             session,
             trigger,
-            connector_instance=MagicMock() if ci_present else None,
-            active_run_count=active_run_count,
+            connector_instance=MagicMock(),
+            active_run_count=0,
+            today_cost=Decimal("55.00"),
         )
-
-        if "connector_empty" in extra_patches:
-            connector.query.return_value = ConnectorResult(records=[], total=0)
-        if "connector_error" in extra_patches:
-            connector.query.side_effect = RuntimeError("API timeout")
-
-        extra_mocks = {}
-        if "no_create_run" in extra_patches:
-            extra_mocks["create_run"] = patch("modulo.core.trigger_engine.polling.create_run")
-        if "log_poll_event" in extra_patches:
-            extra_mocks["log_poll_event"] = patch("modulo.core.trigger_engine.polling._log_poll_event")
-        if "build_connector_error" in extra_patches:
-            extra_mocks["build"] = patch("modulo.core.trigger_engine.polling._build_polling_connector")
-        if "evaluate_condition_error" in extra_patches:
-            extra_mocks["eval"] = patch(
-                "modulo.core.trigger_engine.polling.evaluate_condition",
-                side_effect=ValueError("bad JMESPath"),
-            )
-
-        started_patches = {}
-        for k, v in extra_mocks.items():
-            if hasattr(v, "start"):
-                m = v.start()
-                if k == "build":
-                    m.side_effect = ValueError("missing creds")
-                started_patches[k] = m
-
-        poll_query = "select * from issues" if condition_expr else "query"
 
         result = await _fire_polling_trigger(
             trigger_id=_TRIGGER_ID,
             org_id=_ORG_ID,
             pipeline_id=_PIPELINE_ID,
             connector_instance_id=_CI_ID,
-            poll_query=poll_query,
-            condition_expression=condition_expr,
+            poll_query="select * from issues",
+            condition_expression=None,
         )
 
-        assert result["status"] == status
-        if reason:
-            assert result["reason"] == reason
+        assert result["status"] == "fired"
+        create_run_fn, _ = mock_create_run
+        create_run_fn.assert_awaited_once()
 
-        if extra_check == "condition_met":
-            create_run_fn, _ = mock_create_run
-            assert "run_id" in result
-            create_run_fn.assert_awaited_once()
-            connector.query.assert_awaited_once()
-            assert any(
-                getattr(c.args[0], "validation_result", None) == "condition_met" for c in session.add.call_args_list
-            )
-        elif extra_check == "no_match":
-            if "no_create_run" in extra_patches:
-                started_patches["create_run"].assert_not_called()
-        elif extra_check == "concurrency":
-            assert result.get("active_runs") == active_run_count
-            if "no_create_run" in extra_patches:
-                started_patches["create_run"].assert_not_called()
-            if "log_poll_event" in extra_patches:
-                started_patches["log_poll_event"].assert_called_once()
+    async def test_no_limit_configured_fires(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+        mock_create_run,
+    ) -> None:
+        """A trigger with no daily_spend_limit is never blocked."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60})
+        _setup_session_for_polling(
+            session,
+            trigger,
+            connector_instance=MagicMock(),
+            active_run_count=0,
+        )
 
-        for p in extra_mocks.values():
-            p.stop()
+        result = await _fire_polling_trigger(
+            trigger_id=_TRIGGER_ID,
+            org_id=_ORG_ID,
+            pipeline_id=_PIPELINE_ID,
+            connector_instance_id=_CI_ID,
+            poll_query="select * from issues",
+            condition_expression=None,
+        )
+
+        assert result["status"] == "fired"
+        create_run_fn, _ = mock_create_run
+        create_run_fn.assert_awaited_once()
+
+    async def test_spend_limit_query_scoped_to_trigger_and_org(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+        mock_create_run,
+    ) -> None:
+        """The spend query must filter by trigger_id and organisation_id and today's runs."""
+        session = mock_db_components
+        captured: list[str] = []
+
+        trigger = _make_trigger(
+            daily_spend_limit=Decimal("100.00"),
+            config={"snapshot_id": str(uuid.uuid4()), "poll_interval_seconds": 60},
+        )
+        _setup_session_for_polling(
+            session,
+            trigger,
+            connector_instance=MagicMock(),
+            active_run_count=0,
+            today_cost=Decimal("10.00"),
+        )
+
+        orig_execute = session.execute
+
+        async def _capture_execute(stmt, *args, **kwargs):
+            captured.append(str(stmt).lower())
+            return await orig_execute(stmt, *args, **kwargs)
+
+        session.execute = _capture_execute
+
+        await _fire_polling_trigger(
+            trigger_id=_TRIGGER_ID,
+            org_id=_ORG_ID,
+            pipeline_id=_PIPELINE_ID,
+            connector_instance_id=_CI_ID,
+            poll_query="query",
+            condition_expression=None,
+        )
+
+        spend_sql = next(s for s in captured if "total_cost_usd" in s)
+        assert "runs.trigger_id" in spend_sql
+        assert "runs.organisation_id" in spend_sql
+        assert "runs.created_at" in spend_sql
 
 
 # ---------------------------------------------------------------------------

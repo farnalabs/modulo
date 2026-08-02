@@ -1,21 +1,20 @@
-"""Shared pipeline execution core for Celery and SAQ.
+"""Shared pipeline execution core for SAQ.
 
 This module is the single home for the claim / execute / heartbeat / complete /
 stale-sweep logic that was historically embedded in
 :mod:`modulo.core.pipeline_executor_task` (the Celery task module deleted by
-PR C of the Celery->SAQ migration). SAQ workers (PR B) and the Celery task both
-delegate here.
+PR C of the Celery->SAQ migration). The SAQ workers delegate here.
 
-NOT here: ``dispatch_run`` (PR B), cron firing (PR B), fire/report jobs.
+NOT here: ``dispatch_run``, cron firing, fire/report jobs.
 
 Engine injection: every entry point takes its engine(s) explicitly so the
-Celery prefork path can keep using its sync claim pool + async execution pool
-while the SAQ path passes its own async engine. No module-level engine globals.
+legacy sync claim pool + async execution pool helpers stay usable while the SAQ
+path passes its own async engine. No module-level engine globals.
 
 Staleness constants (plan F4 / F1 ordering):
 
     RUN_CLAIM_STALE_SECONDS        = 450  SAQ runs only
-    LEGACY_RUN_CLAIM_STALE_SECONDS = 180  Celery/legacy path (today's 3-minute window)
+    LEGACY_RUN_CLAIM_STALE_SECONDS = 180  legacy sync claim helpers
     SAQ_JOB_HEARTBEAT              = 300  SAQ job heartbeat knob
     RUN_HEARTBEAT_SECONDS          = 30   DB heartbeat cadence
 
@@ -30,14 +29,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import threading
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from sqlalchemy.orm import Session
 
 from modulo.db.crud.run import get_run
 
@@ -56,6 +53,28 @@ SAQ_JOB_HEARTBEAT = 300
 # status CHECK constraint ('complete', NOT 'completed'). See
 # db/models/run.py:ck_runs_status.
 RUN_COMPLETE_STATUS = "complete"
+
+# Durable backstop for capacity-blocked pending runs. Sized to exceed the
+# worst-case queue wait: (max_concurrent - 1) * node timeout, with margin for
+# the 120->600s exponential retry backoff plus worker restarts.
+CAPACITY_TIMEOUT_TTL_MINUTES = 120
+
+# Re-dispatch TTL for stranded capacity-blocked runs. A run demoted to
+# ``pending`` with a capacity marker is normally retried in-process by
+# ``PipelineExecutor._retry_pending``, which refreshes ``heartbeat_at`` on each
+# attempt. If the worker process hosting that loop dies (deploy/crash/restart)
+# the run would otherwise sit ``pending`` until the 120-min capacity_timeout
+# sweep TERMINAL-FAILS a legitimate never-executed run. This window re-dispatches
+# a stranded run long before that — but ONLY when its heartbeat is stale (the
+# in-process loop is provably gone), and never once it is already past the
+# capacity_timeout TTL (those must fail, not be resurrected forever).
+#
+# Sized ABOVE the retry loop's worst-case backoff sleep (600s) plus the 15s
+# poll interval, so a LIVE loop's per-attempt heartbeat refresh never trips the
+# fence (a 10-minute TTL would race the 600s backoff and risk double-retry
+# loops). A genuinely stranded run gets ~10 re-dispatch attempts (120/12) before
+# the capacity_timeout backstop fails it.
+_STRANDED_REDISPATCH_TTL_MINUTES = 12
 
 _DEFAULT_CLAIM_CAP = 5
 
@@ -86,44 +105,6 @@ def _make_sync_url(database_url: str) -> str:
     return (
         database_url.replace("+asyncpg", "+psycopg").replace("+aiomysql", "+mysqldb").replace("+aiosqlite", "+pysqlite")
     )
-
-
-_sync_beat_engine: Any = None
-_sync_beat_lock = threading.Lock()
-
-
-def get_beat_sync_session() -> Session:
-    """Return a sync SQLAlchemy session for the Celery beat scheduler.
-
-    Uses a dedicated engine separate from the worker's sync pool to avoid
-    contention between beat polling and task execution. Relocated from
-    ``modulo.core.pipeline_executor_task`` (PR B-2, plan F1).
-    """
-    global _sync_beat_engine
-    if _sync_beat_engine is None:
-        with _sync_beat_lock:
-            if _sync_beat_engine is None:
-                s = get_settings()
-                sync_url = _make_sync_url(str(s.database_url))
-                _sync_beat_engine = create_engine(
-                    sync_url,
-                    pool_size=s.modulo_celery_db_pool_sync_size,
-                    max_overflow=s.modulo_celery_db_pool_sync_overflow,
-                    pool_pre_ping=True,
-                    pool_recycle=300,
-                    pool_use_lifo=False,
-                    pool_timeout=s.modulo_celery_db_pool_sync_timeout,
-                )
-    from sqlalchemy.orm import sessionmaker
-
-    return sessionmaker(bind=_sync_beat_engine)()
-
-
-def dispose_beat_sync_engine() -> None:
-    global _sync_beat_engine
-    if _sync_beat_engine is not None:
-        _sync_beat_engine.dispose()
-        _sync_beat_engine = None
 
 
 def _resolve_claim_stale_seconds(*, legacy: bool, stale_seconds: int | None) -> int:
@@ -372,6 +353,37 @@ async def execute_run(
     await mark_complete(async_engine, str(rid), str(oid))
 
 
+async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
+    """Re-dispatch a stranded capacity-blocked run through ``dispatch_run``.
+
+    Re-enters ``claim_run`` → ``execute()`` → ``_check_capacity``, which
+    re-checks the org/pipeline cap and either admits the run when a slot frees
+    or re-demotes it back to ``pending``. This is the SAME mechanism
+    ``dispatcher_reconcile`` uses; the beat sweep is the durable liveness owner
+    for capacity-blocked runs because ``dispatcher_reconcile`` deliberately
+    excludes them (its exclusion prevents the double-execution double-retry-loop
+    race and must stay — see cron_helpers._reconcile_capacity_marker_exclusion).
+
+    Double-execution safety: ``dispatch_run`` enqueues with the deterministic
+    ``run:{id}`` SAQ key (deduped if a job already exists) and the worker's
+    ``claim_run`` is an atomic ``UPDATE ... WHERE status='pending' OR
+    (running AND stale heartbeat)`` — a run already claimed by a live loop
+    simply loses the claim.
+
+    Returns the outcome string (``enqueued``/``deferred``/``deduped``/``failed``).
+    """
+    from modulo.core.dispatch import dispatch_run
+
+    try:
+        outcome, _job_id = await dispatch_run(run_id, org_id)
+        return outcome
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.redispatched_capacity_blocked_failed run=%s", run_id)
+        return "failed"
+
+
 async def stale_run_recovery_sweep(
     async_engine: AsyncEngine,
     *,
@@ -382,18 +394,28 @@ async def stale_run_recovery_sweep(
 
     - Pending runs older than the never-dispatched window with no
       ``dispatched_at`` are marked ``failed`` with ``never_dispatched``.
+    - Stranded capacity-blocked pending runs (``error_code`` in
+      ``org_capacity_limited``/``pipeline_capacity``) whose heartbeat is stale
+      are RE-DISPATCHED (durable restart durability — see
+      :func:`_re_dispatch_capacity_blocked`), never failed.
+    - Capacity-blocked pending runs past ``CAPACITY_TIMEOUT_TTL_MINUTES`` are
+      marked ``failed`` with ``capacity_timeout``.
     - Running runs with a heartbeat older than the worker-lost window and
       5+ claims are marked ``failed`` with ``worker_lost``.
 
     Legacy windows default to today's beat-sweep values — never_dispatched=300s
     (settings ``SAQ_NEVER_DISPATCHED_WINDOW``), worker_lost=600s (settings
     ``SAQ_WORKER_LOST_WINDOW``) — and are deliberately decoupled from
-    ``RUN_CLAIM_STALE_SECONDS=450`` (SAQ runs only). PR B scopes this sweep to
-    legacy-dispatched runs once the ``dispatcher`` column exists.
+    ``RUN_CLAIM_STALE_SECONDS=450`` (SAQ runs only). The never-dispatched and
+    worker-lost branches are scoped to legacy-dispatched rows
+    (``dispatcher IS NULL OR dispatcher != 'saq'``) — SAQ runs never carry
+    worker_lost/never_dispatched (plan F1). The capacity-timeout backstop is
+    SAQ-relevant (capacity-deferred runs) and is NOT dispatcher-scoped.
     """
     settings = get_settings()
     nd_window = never_dispatched_window if never_dispatched_window is not None else settings.saq_never_dispatched_window
     wl_window = worker_lost_window if worker_lost_window is not None else settings.saq_worker_lost_window
+    stranded_rows: list[Any] = []
     try:
         async with async_engine.connect() as conn, conn.begin():
             never_result = await conn.execute(
@@ -402,11 +424,62 @@ async def stale_run_recovery_sweep(
                     "SET status = 'failed', error_code = 'never_dispatched', completed_at = now() "
                     "WHERE status = 'pending' "
                     "AND created_at < now() - (:nd_window * interval '1 second') "
-                    "AND dispatched_at IS NULL"
+                    "AND dispatched_at IS NULL "
+                    "AND cancellation_requested = false "
+                    "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
+                    "AND (dispatcher IS NULL OR dispatcher != 'saq')"
                 ),
                 {"nd_window": nd_window},
             )
             never_count = never_result.rowcount
+
+            # Re-dispatch stranded capacity-blocked runs. Runs demoted to
+            # ``pending`` with a capacity marker are normally retried by the
+            # in-process ``PipelineExecutor._retry_pending`` loop, which
+            # refreshes ``heartbeat_at`` per attempt. A stale heartbeat is the
+            # fence that proves that loop is GONE (worker died): only then is
+            # the run re-dispatched so it re-enters claim -> execute ->
+            # _check_capacity. Runs already past the capacity_timeout TTL are
+            # excluded — they fail below, they are not resurrected forever. The
+            # heartbeat stamp both fences against a live loop and backs off the
+            # sweep when the re-dispatch defers (capacity still full) instead of
+            # hot-looping every cron tick.
+            stranded_result = await conn.execute(
+                text(
+                    "UPDATE runs "
+                    "SET heartbeat_at = now() "
+                    "WHERE status = 'pending' "
+                    "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+                    "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:redispatch_ttl * interval '1 minute')) "
+                    "AND created_at >= now() - (:fail_ttl * interval '1 minute') "
+                    "AND cancellation_requested = false "
+                    "RETURNING id, organisation_id"
+                ),
+                {
+                    "redispatch_ttl": _STRANDED_REDISPATCH_TTL_MINUTES,
+                    "fail_ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
+                },
+            )
+            stranded_rows = list(stranded_result.all())
+            stranded_count = len(stranded_rows)
+
+            # Durable backstop for capacity-blocked runs. The in-process retry
+            # accelerator (PipelineExecutor._retry_pending) handles normal slot
+            # pickup; this branch terminal-fails reason-marked pending runs that
+            # outlived the TTL (e.g. stranded by a worker restart). Anchored on
+            # created_at — the re-dispatch cycle rewrites updated_at/last marker.
+            capacity_timeout_result = await conn.execute(
+                text(
+                    "UPDATE runs "
+                    "SET status = 'failed', error_code = 'capacity_timeout', completed_at = now() "
+                    "WHERE status = 'pending' "
+                    "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+                    "AND created_at < now() - (:ttl * interval '1 minute') "
+                    "AND cancellation_requested = false"
+                ),
+                {"ttl": CAPACITY_TIMEOUT_TTL_MINUTES},
+            )
+            capacity_timeout_count = capacity_timeout_result.rowcount
 
             lost_result = await conn.execute(
                 text(
@@ -414,21 +487,37 @@ async def stale_run_recovery_sweep(
                     "SET status = 'failed', error_code = 'worker_lost', completed_at = now() "
                     "WHERE status = 'running' "
                     "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
-                    "AND claim_count >= 5"
+                    "AND claim_count >= 5 "
+                    "AND (dispatcher IS NULL OR dispatcher != 'saq')"
                 ),
                 {"wl_window": wl_window},
             )
             lost_count = lost_result.rowcount
 
-        if never_count or lost_count:
+        # Re-dispatch AFTER the sweep transaction commits so dispatch_run's own
+        # sessions (and the row lock the UPDATE held) never overlap a live
+        # transaction.
+        redispatch_outcomes: dict[str, int] = {}
+        for row in stranded_rows:
+            outcome = await _re_dispatch_capacity_blocked(str(row.id), str(row.organisation_id))
+            redispatch_outcomes[outcome] = redispatch_outcomes.get(outcome, 0) + 1
+
+        if never_count or lost_count or capacity_timeout_count or stranded_count:
             _log.info(
-                "Stale run recovery: %d never-dispatched, %d worker-lost runs swept",
+                "Stale run recovery: %d never-dispatched, %d capacity-timeout, %d worker-lost runs swept, "
+                "%d stranded capacity-blocked runs re-dispatched (%s)",
                 never_count,
+                capacity_timeout_count,
                 lost_count,
+                stranded_count,
+                redispatch_outcomes,
             )
         return {
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
+            "capacity_timeout_swept": capacity_timeout_count,
+            "stranded_capacity_redispatched": stranded_count,
+            "redispatch_outcomes": redispatch_outcomes,
         }
     except asyncio.CancelledError:
         raise
@@ -437,6 +526,9 @@ async def stale_run_recovery_sweep(
         return {
             "never_dispatched_swept": 0,
             "worker_lost_swept": 0,
+            "capacity_timeout_swept": 0,
+            "stranded_capacity_redispatched": 0,
+            "redispatch_outcomes": {},
             "error": "sweep_failed",
         }
 
