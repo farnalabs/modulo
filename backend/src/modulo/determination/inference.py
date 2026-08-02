@@ -69,7 +69,7 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
         match s.resource:
             case "repos" | "projects":
                 for rec in s.records:
-                    name = rec.get("name") or rec.get("path_with_namespace") or ""
+                    name = rec.get("name") or rec.get("path_with_namespace") or rec.get("full_name") or ""
                     if name:
                         repo_names.append(name)
 
@@ -137,7 +137,7 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
         if s.resource in ("repos", "projects"):
             for rec in s.records:
                 desc = (rec.get("description") or "").lower()
-                name = rec.get("name", "").lower()
+                name = (rec.get("name") or rec.get("path_with_namespace") or rec.get("full_name") or "").lower()
                 if any(ci in desc or ci in name for ci in _CI_FILES):
                     has_ci_config = True
                     break
