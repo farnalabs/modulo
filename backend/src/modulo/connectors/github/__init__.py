@@ -73,6 +73,9 @@ class GitHubConnector(ConnectorBase):
       "issue_events"    — list issue events; filters: {"repo": ..., "issue_number": ...}
       "assignees"       — list assignees; filters: {"repo": ...}
       "timeline"        — list issue timeline; filters: {"repo": ..., "issue_number": ...}
+      "pr_diff"         — get raw diff of a PR; filters: {"repo": ..., "pull_number": ...}
+      "search_issues"   — search issues via the Search API; filters: {"q": ..., optional sort/order/state/labels}
+                          (returns total_count and Link-header pagination)
 
     Supported write resources:
       "file"            — create/update a file; data: {"repo": ..., "path": ..., "content": <base64>,
@@ -93,6 +96,12 @@ class GitHubConnector(ConnectorBase):
       "pr_comment"      — review comment on a PR; data: {"repo": ..., "pull_number": ..., "body": ...}
       "pr_update"       — update a pull request; data: {"repo": ..., "pull_number": ..., "title": ...,
                            "body": ..., "state": ..., "base": ...}
+      "pr_merge"        — merge a pull request; data: {"repo": ..., "pull_number": ..., optional
+                           "commit_title", "commit_message", "merge_method", "sha"}
+      "pr_review_request" — request reviewers on a PR; data: {"repo": ..., "pull_number": ...,
+                           "reviewers": [...] and/or "team_reviewers": [...]}
+      "pr_label"        — add labels to a pull request; data: {"repo": ..., "pull_number": ..., "labels": [...]}
+      "issue_assign"    — assign an issue; data: {"repo": ..., "issue_number": ..., "assignees": [...]}
     """
 
     def __init__(self, token: str, base_url: str = _GITHUB_API) -> None:
@@ -351,6 +360,26 @@ class GitHubConnector(ConnectorBase):
                 timeline: list[dict[str, Any]] = await self._parse_json(r)
                 links = _parse_link_header(r)
                 return ConnectorResult(records=timeline, total=len(timeline), next_cursor=links.get("next"))
+            case "pr_diff":
+                owner_repo = self._require_filter(q.filters, "repo", "pr_diff")
+                pull_number = self._require_filter(q.filters, "pull_number", "pr_diff")
+                r = await self._call_api(
+                    "GET",
+                    f"/repos/{owner_repo}/pulls/{pull_number}",
+                    headers={"Accept": "application/vnd.github.v3.diff"},
+                )
+                return ConnectorResult(records=[{"diff": r.text}], total=1)
+            case "search_issues":
+                search_query = self._require_filter(q.filters, "q", "search_issues")
+                params = {"q": search_query, "per_page": q.limit}
+                for key in ("sort", "order", "state", "labels", "assignee", "created", "updated"):
+                    if key in q.filters:
+                        params[key] = q.filters[key]
+                r = await self._call_api("GET", "/search/issues", params=params)
+                body = await self._parse_json_object(r)
+                items = cast(list[dict[str, Any]], body.get("items", []))
+                links = _parse_link_header(r)
+                return ConnectorResult(records=items, total=body.get("total_count"), next_cursor=links.get("next"))
             case _:
                 raise ValueError(f"Unsupported GitHub resource: {q.resource!r}")
 
@@ -511,6 +540,55 @@ class GitHubConnector(ConnectorBase):
                     if key in payload.data:
                         update[key] = payload.data[key]
                 r = await self._call_api("PATCH", f"/repos/{owner_repo}/pulls/{pull_number}", json=update)
+                return await self._parse_json_object(r)
+            case "pr_merge":
+                owner_repo = self._require_write_filter(payload.data, "repo", "pr_merge")
+                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_merge")
+                merge_body: dict[str, Any] = {}
+                for key in ("commit_title", "commit_message", "merge_method", "sha"):
+                    if key in payload.data:
+                        merge_body[key] = payload.data[key]
+                r = await self._call_api("PUT", f"/repos/{owner_repo}/pulls/{pull_number}/merge", json=merge_body)
+                return await self._parse_json_object(r)
+            case "pr_review_request":
+                owner_repo = self._require_write_filter(payload.data, "repo", "pr_review_request")
+                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_review_request")
+                reviewers = payload.data.get("reviewers")
+                team_reviewers = payload.data.get("team_reviewers")
+                if not reviewers and not team_reviewers:
+                    raise ValueError("GitHub pr_review_request write requires 'reviewers' or 'team_reviewers' in data")
+                request_body: dict[str, Any] = {}
+                if reviewers:
+                    request_body["reviewers"] = self._require_string_list(
+                        payload.data, "reviewers", "pr_review_request"
+                    )
+                if team_reviewers:
+                    request_body["team_reviewers"] = self._require_string_list(
+                        payload.data, "team_reviewers", "pr_review_request"
+                    )
+                r = await self._call_api(
+                    "POST",
+                    f"/repos/{owner_repo}/pulls/{pull_number}/requested_reviewers",
+                    json=request_body,
+                )
+                return await self._parse_json_object(r)
+            case "pr_label":
+                owner_repo = self._require_write_filter(payload.data, "repo", "pr_label")
+                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_label")
+                r = await self._call_api(
+                    "POST",
+                    f"/repos/{owner_repo}/issues/{pull_number}/labels",
+                    json={"labels": self._require_string_list(payload.data, "labels", "pr_label")},
+                )
+                return await self._parse_json_object(r)
+            case "issue_assign":
+                owner_repo = self._require_write_filter(payload.data, "repo", "issue_assign")
+                issue_number = self._require_write_filter(payload.data, "issue_number", "issue_assign")
+                r = await self._call_api(
+                    "POST",
+                    f"/repos/{owner_repo}/issues/{issue_number}/assignees",
+                    json={"assignees": self._require_string_list(payload.data, "assignees", "issue_assign")},
+                )
                 return await self._parse_json_object(r)
             case _:
                 raise ValueError(f"Unsupported GitHub write resource: {payload.resource!r}")
