@@ -1315,7 +1315,7 @@ def step_slack_non_json_response(ctx):
 
 
 # ============================================================================
-# connectors/gitlab_issues.feature  —  23 scenarios
+# connectors/gitlab_issues.feature  —  32 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/gitlab_issues.feature")
@@ -1435,6 +1435,14 @@ def step_gitlab_connector(ctx):
                 return {"id": 99, "ref": payload.data.get("ref", ""), "status": "pending"}
             case "mr" | "merge_request":
                 return {"id": 50, "iid": 25, "title": payload.data.get("title", ""), "state": "opened"}
+            case "file_delete":
+                return {"file_path": payload.data.get("path", ""), "branch": payload.data.get("branch", "main")}
+            case "mr_merge":
+                return {"id": 50, "iid": int(payload.data.get("iid", 0)), "state": "merged"}
+            case "mr_approve":
+                return {"id": 50, "iid": int(payload.data.get("iid", 0)), "approved": True}
+            case "mr_comment":
+                return {"id": 300, "body": payload.data.get("body", ""), "author": {"id": 1}}
             case _:
                 raise ValueError(f"Unsupported GitLab write: {payload.resource!r}")
 
@@ -1686,6 +1694,82 @@ def step_gitlab_trigger_pipeline(project, ref, ctx):
     payload = ConnectorPayload(
         resource="pipeline_run",
         data={"project": project, "ref": ref},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab file_delete for project "{project}" and path "{path}"'))
+def step_gitlab_write_file_delete(project, path, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="file_delete",
+        data={"project": project, "path": path},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab mr_merge for project "{project}" and iid "{iid}"'))
+def step_gitlab_write_mr_merge(project, iid, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="mr_merge",
+        data={"project": project, "iid": iid},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab mr_approve for project "{project}" and iid "{iid}"'))
+def step_gitlab_write_mr_approve(project, iid, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="mr_approve",
+        data={"project": project, "iid": iid},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitLab mr_comment for project "{project}" and iid "{iid}" and body "{body}"'))
+def step_gitlab_write_mr_comment(project, iid, body, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="mr_comment",
+        data={"project": project, "iid": iid, "body": body},
     )
     import asyncio
 
