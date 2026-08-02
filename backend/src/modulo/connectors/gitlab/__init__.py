@@ -38,9 +38,6 @@ _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
 _MAX_DELAY = 30.0
 
-# GitLab rate-limit headers sent on 429 responses (and some 200s for quota info)
-_RATELIMIT_HEADERS = ("RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Observed", "RateLimit-ResetTime")
-
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from GitLab API response."""
@@ -54,12 +51,13 @@ def _parse_retry_after(response: httpx.Response) -> float | None:
 
 
 def _parse_rate_limit_reset(response: httpx.Response) -> float | None:
-    """Parse GitLab's RateLimit-ResetTime header (epoch seconds) into a retry delay.
+    """Parse GitLab's rate-limit reset header (epoch seconds) into a retry delay.
 
-    When a 429 response includes ``RateLimit-ResetTime``, the client can wait
-    until the quota window resets instead of guessing with backoff.
+    When a 429 response includes ``RateLimit-ResetTime`` (or ``RateLimit-Reset``
+    from some proxies), the client can wait until the quota window resets
+    instead of guessing with backoff.
     """
-    value = response.headers.get("RateLimit-ResetTime")
+    value = response.headers.get("RateLimit-ResetTime") or response.headers.get("RateLimit-Reset")
     if not value:
         return None
     try:
@@ -73,7 +71,7 @@ def _parse_rate_limit_reset(response: httpx.Response) -> float | None:
 def _rate_limit_detail(response: httpx.Response) -> str:
     """Summarise GitLab rate-limit quota headers for error/health detail strings."""
     parts = []
-    for header in _RATELIMIT_HEADERS:
+    for header in _RATE_LIMIT_HEADERS:
         value = response.headers.get(header)
         if value:
             parts.append(f"{header}={value}")
@@ -189,8 +187,29 @@ class GitLabConnector(ConnectorBase):
         self._base_url = base_url.rstrip("/")
 
     @staticmethod
-    def _jitter(delay: float) -> float:
+    def _jitter(delay: float, *, tight: bool = False) -> float:
+        """Add jitter to a retry delay.
+
+        Full jitter (``[0, delay)``) is used for exponential backoff to avoid
+        the thundering herd. Server-derived waits (quota reset / Retry-After)
+        use tight jitter around the requested value so the window is honoured
+        instead of being collapsed to near-immediate retries.
+        """
+        if tight:
+            return random.uniform(delay * 0.9, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
         return random.uniform(0, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
+
+    @staticmethod
+    def _has_server_delay(response: httpx.Response) -> bool:
+        """Whether the response carries an explicit server-provided retry delay."""
+        return _parse_retry_after(response) is not None or _parse_rate_limit_reset(response) is not None
+
+    def _sleep_delay(self, response: httpx.Response, attempt: int) -> float:
+        """Compute the sleep before a retry, honouring server-provided wait times."""
+        delay = self._retry_delay(response, attempt)
+        if self._has_server_delay(response):
+            return self._jitter(delay, tight=True)
+        return self._jitter(delay)
 
     def _require_filter(self, filters: dict[str, Any], key: str, resource: str) -> Any:
         try:
@@ -214,14 +233,14 @@ class GitLabConnector(ConnectorBase):
                     if r.status_code == 304:
                         raise ValueError("GitLab API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                        await asyncio.sleep(self._jitter(self._retry_delay(r, attempt)))
+                        await asyncio.sleep(self._sleep_delay(r, attempt))
                         continue
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(self._retry_delay(exc.response, attempt)))
+                    await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
                 detail = exc.response.text[:200]
                 if exc.response.status_code == 429:
@@ -253,8 +272,9 @@ class GitLabConnector(ConnectorBase):
     def _retry_delay(response: httpx.Response, attempt: int) -> float:
         """Compute the delay before the next retry attempt.
 
-        Prefers ``Retry-After``, then GitLab's ``RateLimit-ResetTime`` (only on
-        HTTP 429 — the quota reset window), then exponential backoff.
+        Prefers ``Retry-After``, then GitLab's rate-limit reset headers
+        (``RateLimit-ResetTime`` / ``RateLimit-Reset`` — only on HTTP 429, the
+        quota reset window), then exponential backoff.
         """
         if response.status_code == 429:
             reset_delay = _parse_rate_limit_reset(response)
