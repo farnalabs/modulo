@@ -578,7 +578,7 @@ async def test_handle_webhook_validation_raises(
             None,
             lambda: str(int(time.time())),
             None,  # no longer raises - run is queued
-            "concurrency_limit_reached_queued",
+            "concurrency_limit_reached",
         ),
     ],
 )
