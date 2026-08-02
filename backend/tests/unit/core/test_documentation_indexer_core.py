@@ -1,10 +1,12 @@
 """Unit tests for the documentation indexer (modulo.core.documentation_indexer).
 
-The module builds a searchable index from ``docs/prd.md`` headings. The existing
-coverage (remy MCP context-source tests and BDD steps) only exercised
-``DocumentationIndex.search`` and ``format_results``; this package covers the
-parser (``_parse`` / ``_extract_first_paragraph``), the ``build`` I/O and
-failure paths, and the search/formatting edge cases end to end.
+The module builds a searchable index from ``docs/prd.md`` headings. Existing
+coverage — the unit tests in ``tests/unit/remy/test_documentation_indexer.py``,
+the remy MCP context-source tests in ``tests/unit/remy/test_context_tools.py``,
+and the BDD steps in ``tests/bdd/steps/test_remy_context_sources.py`` — only
+exercises ``DocumentationIndex.search`` and ``format_results``. This test module
+adds focused coverage of the parser (``_parse`` / ``_extract_first_paragraph``),
+the ``build`` I/O and failure paths, and the search/formatting edge cases.
 """
 
 from pathlib import Path
@@ -126,18 +128,16 @@ class TestSearch:
 
 class TestFormatResults:
     def test_empty_results_returns_empty_string(self) -> None:
-        assert DocumentationIndex(entries=[]).format_results([]) == ""
+        assert DocumentationIndex.format_results([]) == ""
 
     def test_single_entry_formats_markdown(self) -> None:
-        index = DocumentationIndex(entries=[])
-        out = index.format_results(
+        out = DocumentationIndex.format_results(
             [DocEntry(heading_path="Pipelines", heading="Pipelines", first_paragraph="The core unit.")]
         )
         assert out == "### Pipelines\n\nPipelines\n\nThe core unit."
 
     def test_multiple_entries_joined_with_separator(self) -> None:
-        index = DocumentationIndex(entries=[])
-        out = index.format_results(
+        out = DocumentationIndex.format_results(
             [
                 DocEntry(heading_path="A", heading="Alpha", first_paragraph="One."),
                 DocEntry(heading_path="B", heading="Beta", first_paragraph="Two."),
@@ -146,28 +146,27 @@ class TestFormatResults:
         assert out == "### A\n\nAlpha\n\nOne.\n\n---\n\n### B\n\nBeta\n\nTwo."
 
     def test_truncates_entry_larger_than_budget(self) -> None:
-        index = DocumentationIndex(entries=[])
         big_paragraph = "x" * 20_000
         prefix = "### Big\n\nHuge\n\n"
-        out = index.format_results([DocEntry(heading_path="Big", heading="Huge", first_paragraph=big_paragraph)])
+        out = DocumentationIndex.format_results(
+            [DocEntry(heading_path="Big", heading="Huge", first_paragraph=big_paragraph)]
+        )
         assert out.startswith(prefix + "x" * (DocumentationIndex._TOKEN_BUDGET_CHARS - len(prefix)))
         assert out.endswith("\n\n*(truncated — results exceed token budget)*")
         assert "---" not in out
 
     def test_truncates_later_entry_when_budget_exhausted(self) -> None:
-        index = DocumentationIndex(entries=[])
         small = DocEntry(heading_path="A", heading="Alpha", first_paragraph="One.")
         large = DocEntry(heading_path="B", heading="Beta", first_paragraph="y" * 20_000)
-        out = index.format_results([small, large])
+        out = DocumentationIndex.format_results([small, large])
         assert out.startswith("### A\n\nAlpha\n\nOne.\n\n---\n\n### B")
         assert out.endswith("\n\n*(truncated — results exceed token budget)*")
 
     def test_entries_that_fit_are_all_included(self) -> None:
-        index = DocumentationIndex(entries=[])
         entries = [
             DocEntry(heading_path=f"S{i}", heading=f"Section {i}", first_paragraph=f"Para {i}.") for i in range(10)
         ]
-        out = index.format_results(entries)
+        out = DocumentationIndex.format_results(entries)
         assert out.count("---") == len(entries) - 1
         assert "Section 9" in out
 

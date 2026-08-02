@@ -45,8 +45,9 @@ class DocumentationIndex:
 
         return results
 
-    def format_results(self, results: list[DocEntry]) -> str:
-        chars_remaining = self._TOKEN_BUDGET_CHARS
+    @staticmethod
+    def format_results(results: list[DocEntry]) -> str:
+        chars_remaining = DocumentationIndex._TOKEN_BUDGET_CHARS
         parts: list[str] = []
 
         for entry in results:
