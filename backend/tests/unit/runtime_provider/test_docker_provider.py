@@ -531,3 +531,111 @@ async def test_get_client_lazily_initializes_once(mock_docker_client: MagicMock)
     assert second is mock_docker_client
     assert p._client is mock_docker_client
     docker_cls.assert_called_once_with(url="unix:///var/run/docker.sock")
+
+
+# ------------------------------------------------------------------
+# Cancellation propagation
+# ------------------------------------------------------------------
+
+
+async def test_create_workspace_cancellation_propagates(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    mock_docker_client.containers.create.side_effect = asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.create_workspace(
+            WorkspaceSpec(
+                environment_profile_id=uuid.uuid4(),
+                organisation_id=uuid.uuid4(),
+            )
+        )
+
+    assert provider._workspaces == {}
+
+
+async def test_exec_command_failure_propagates(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    stream = mock_container.exec.return_value.start.return_value
+    stream.read_out = AsyncMock(side_effect=RuntimeError("exec exploded"))
+
+    with pytest.raises(RuntimeError, match="exec exploded"):
+        await provider.exec_command(ref, ["echo", "hi"])
+
+    assert "exec_command failed for container" in caplog.text
+
+
+async def test_exec_command_cancellation_propagates(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    mock_container.exec.side_effect = asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.exec_command(ref, ["echo", "hi"])
+
+
+async def test_exec_command_stream_cancellation_propagates(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    """Cancellation raised mid-stream must propagate through exec_command."""
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    stream = mock_container.exec.return_value.start.return_value
+    stream.read_out = AsyncMock(side_effect=asyncio.CancelledError)
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.exec_command(ref, ["echo", "hi"])
+
+
+async def test_destroy_workspace_cancellation_propagates(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    mock_container.stop.side_effect = asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.destroy_workspace(ref)
+
+
+async def test_get_workspace_status_cancellation_propagates(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    mock_container.show.side_effect = asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.get_workspace_status(ref)
