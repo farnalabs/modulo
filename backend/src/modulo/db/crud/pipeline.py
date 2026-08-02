@@ -535,6 +535,35 @@ async def _read_clone_source_snapshot(
         )
 
 
+def _preserve_omitted_gate_config(
+    edge: dict[str, Any],
+    old_by_key: dict[tuple[str, str, str], Any],
+) -> Any:
+    """Resolve the ``hitl_gate_config`` to persist for a proposed edge.
+
+    Mirrors ``hitl_gate_guard._normalize_edge`` presence semantics: when the
+    client omits the ``hitl_gate_config`` key (or sends
+    ``hitl_gate_config_present=False``) for an edge whose topology key matches
+    a pre-existing gated edge, the stored value is preserved; for an edge with
+    no prior gate the omission persists ``None``. Any ``hitl_gate_config`` value
+    carried alongside an omission signal is ignored, exactly as the guard
+    ignores it — a client cannot sneak a gate value past an explicit
+    ``present=False``. The delete+reinsert write path must honour the guard's
+    "omission = preserve" contract (hitl-gate-removal-guard-plan.md §3 item 6)
+    — otherwise a client that simply omits the key would silently wipe the
+    gate with zero audit.
+    """
+    present = edge.get("hitl_gate_config_present", "hitl_gate_config" in edge)
+    if present:
+        return edge.get("hitl_gate_config")
+    key = (
+        str(edge["source_node_id"]),
+        str(edge["target_node_id"]),
+        str(edge["edge_type"]),
+    )
+    return old_by_key.get(key)
+
+
 async def replace_pipeline_graph(
     session: AsyncSession,
     *,
@@ -617,6 +646,11 @@ async def replace_pipeline_graph(
 
     pipeline.graph_nodes_json = nodes
     await session.execute(delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
+    old_by_key = {
+        (str(e["source_node_id"]), str(e["target_node_id"]), str(e["edge_type"])): e["hitl_gate_config"]
+        for e in old_edges
+        if e.get("hitl_gate_config") is not None
+    }
     persisted_edges = [
         PipelineEdge(
             id=edge["id"],
@@ -625,7 +659,7 @@ async def replace_pipeline_graph(
             source_node_id=edge["source_node_id"],
             target_node_id=edge["target_node_id"],
             edge_type=edge["edge_type"],
-            hitl_gate_config=edge.get("hitl_gate_config"),
+            hitl_gate_config=_preserve_omitted_gate_config(edge, old_by_key),
         )
         for edge in edges
     ]
