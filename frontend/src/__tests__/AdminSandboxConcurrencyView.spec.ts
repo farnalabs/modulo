@@ -31,15 +31,16 @@ import AdminSandboxConcurrencyView from '../views/AdminSandboxConcurrencyView.vu
 
 describe('AdminSandboxConcurrencyView', () => {
   beforeEach(() => {
-    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
   function mountView() {
+    const pinia = createPinia()
+    setActivePinia(pinia)
     const store = usePlanStore()
     store.$patch({ currentTier: 'team', features: { environment_profiles: true } })
     return mount(AdminSandboxConcurrencyView, {
-      global: { plugins: [createPinia()] },
+      global: { plugins: [pinia] },
     })
   }
 

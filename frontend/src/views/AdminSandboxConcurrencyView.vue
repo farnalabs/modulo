@@ -46,7 +46,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, watch } from 'vue'
-import { api } from '../lib/api/client'
+import { api, type components } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
@@ -59,12 +59,10 @@ import { Button } from '../components/ui/button'
 
 const planStore = usePlanStore()
 
-interface SandboxConcurrencyConfig {
-  sandbox_concurrency_limit: number | null
-}
+type SandboxConcurrencyConfig = components['schemas']['SandboxConcurrencyResponse']
 
 const { data: limitData, loading, error: loadError, load: loadData } = useDataFetch<SandboxConcurrencyConfig>(
-  () => (api as any).GET('/api/v1/admin/org/sandbox-concurrency') as Promise<{ data?: SandboxConcurrencyConfig; error?: { detail?: string } }>,
+  () => api.GET('/api/v1/admin/org/sandbox-concurrency'),
 )
 
 const limitInput = ref<number | null>(null)
@@ -78,12 +76,14 @@ const saveError = ref<string | null>(null)
 const saveSuccess = ref(false)
 
 async function saveLimit() {
+  const clamped = limitInput.value !== null ? Math.min(100, Math.max(1, limitInput.value)) : null
+  limitInput.value = clamped
   saving.value = true
   saveError.value = null
   saveSuccess.value = false
   try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/org/sandbox-concurrency', {
-      body: { sandbox_concurrency_limit: limitInput.value },
+    const { error: err } = await api.PUT('/api/v1/admin/org/sandbox-concurrency', {
+      body: { sandbox_concurrency_limit: clamped },
     })
     if (err) {
       saveError.value = `Failed to save: ${formatApiError(err)}`
