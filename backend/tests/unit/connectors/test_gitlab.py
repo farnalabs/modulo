@@ -303,13 +303,27 @@ async def test_single_resource_metadata_rate_limit(connector):
 
 @respx.mock
 async def test_self_hosted_base_url():
-    base_url = "https://gitlab.example.com/api/v4"
-    self_hosted = GitLabConnector(token=TOKEN, base_url=base_url)
-    respx.get(f"{base_url}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
-    respx.get(f"{base_url}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    result = await self_hosted.health_check()
+    """Self-hosted GitLab instances must be reachable via configurable base_url."""
+    custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
+    respx.get("https://gitlab.example.com/api/v4/user").mock(
+        return_value=httpx.Response(200, json={"username": "selfhosted"})
+    )
+    respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    result = await custom.health_check()
     assert result.ok is True
-    assert result.detail == "myuser"
+    assert result.detail == "selfhosted"
+
+
+@respx.mock
+async def test_self_hosted_base_url_trailing_slash():
+    """base_url with a trailing slash must be normalised (rstrip)."""
+    custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4/")
+    respx.get("https://gitlab.example.com/api/v4/user").mock(
+        return_value=httpx.Response(200, json={"username": "selfhosted"})
+    )
+    respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    result = await custom.health_check()
+    assert result.ok is True
 
 
 @respx.mock
@@ -321,36 +335,52 @@ async def test_self_hosted_base_url_query_routes(connector):
     assert result.records[0]["id"] == 1
 
 
+@respx.mock
+async def test_default_base_url_unchanged(connector):
+    """Default connector still targets the hosted GitLab endpoint."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    result = await connector.health_check()
+    assert result.ok is True
+
+
 def test_default_base_url_is_gitlab_com(connector):
     assert connector._base_url == _API
 
 
 @respx.mock
 async def test_write_file_delete(connector):
-    route = respx.delete(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(204, text="")
+    """DELETE /repository/files/{path} with branch, sha, and commit_message."""
+    route = respx.delete(f"{_API}/projects/group%2Fproject/repository/files/src%2Fold.py").mock(
+        return_value=httpx.Response(200, json={"file_path": "src/old.py", "branch": "main"})
     )
     result = await connector.write(
         ConnectorPayload(
             resource="file_delete",
-            data={"project": "group/project", "path": "src/main.py", "ref": "main", "message": "Remove file"},
+            data={
+                "project": "group/project",
+                "path": "src/old.py",
+                "ref": "main",
+                "sha": "abc123",
+                "message": "Remove file",
+            },
         )
     )
-    assert result == {"status": "deleted"}
+    assert result["file_path"] == "src/old.py"
     assert route.calls.last.request.method == "DELETE"
     assert route.calls.last.request.url.params.get("branch") == "main"
-    assert route.calls.last.request.url.params.get("ref") is None
+    assert json.loads(route.calls.last.request.content) == {"commit_message": "Remove file"}
 
 
 @respx.mock
 async def test_write_file_delete_defaults_ref(connector):
     route = respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
-        return_value=httpx.Response(204, text="")
+        return_value=httpx.Response(200, json={"file_path": "README.md", "branch": "main"})
     )
     result = await connector.write(
         ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
     )
-    assert result == {"status": "deleted"}
+    assert result["file_path"] == "README.md"
     assert route.calls.last.request.url.params.get("branch") == "main"
 
 
@@ -391,18 +421,67 @@ async def test_write_mr_note(connector):
 
 @respx.mock
 async def test_write_mr_merge(connector):
-    merge_response = {"id": 5, "state": "merged"}
-    route = respx.put(f"{_API}/projects/group%2Fproject/merge_requests/5/merge").mock(
-        return_value=httpx.Response(200, json=merge_response)
+    """PUT /merge_requests/{iid}/merge with squash option."""
+    route = respx.put(f"{_API}/projects/group%2Fproject/merge_requests/7/merge").mock(
+        return_value=httpx.Response(200, json={"id": 99, "state": "merged"})
     )
     result = await connector.write(
         ConnectorPayload(
             resource="mr_merge",
-            data={"project": "group/project", "iid": "5", "squash": True},
+            data={"project": "group/project", "iid": "7", "squash": True},
         )
     )
     assert result["state"] == "merged"
     assert json.loads(route.calls.last.request.content) == {"squash": True}
+
+
+@respx.mock
+async def test_write_mr_approve(connector):
+    """POST /merge_requests/{iid}/approve."""
+    respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/approve").mock(
+        return_value=httpx.Response(200, json={"approved": True})
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="mr_approve",
+            data={"project": "group/project", "iid": "7"},
+        )
+    )
+    assert result["approved"] is True
+
+
+@respx.mock
+async def test_write_mr_comment(connector):
+    """POST /merge_requests/{iid}/notes with body."""
+    respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/notes").mock(
+        return_value=httpx.Response(200, json={"id": 500, "body": "LGTM"})
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="mr_comment",
+            data={"project": "group/project", "iid": "7", "body": "LGTM"},
+        )
+    )
+    assert result["id"] == 500
+
+
+@respx.mock
+async def test_write_file_delete_missing_branch_defaults_main(connector):
+    """file_delete without branch defaults to main."""
+    respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
+        return_value=httpx.Response(200, json={"file_path": "README.md", "branch": "main"})
+    )
+    await connector.write(
+        ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
+    )
+    request = respx.calls.last.request
+    assert request.url.params.get("branch") == "main"
+
+
+@respx.mock
+async def test_write_mr_merge_missing_iid(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.write(ConnectorPayload(resource="mr_merge", data={"project": "group/project"}))
 
 
 @respx.mock
