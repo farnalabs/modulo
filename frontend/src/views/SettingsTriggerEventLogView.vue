@@ -189,13 +189,13 @@ const { loading, error, data: responseData, load: loadEvents } = useDataFetch(
   },
 )
 
-const items = computed(() => (responseData.value as any)?.items ?? [])
-const total = computed(() => (responseData.value as any)?.total ?? 0)
+const items = computed(() => responseData.value?.items ?? [])
+const total = computed(() => responseData.value?.total ?? 0)
 
 const filterTriggerType = ref('__all__')
 const filterResult = ref('__all__')
 
-function formatTimestamp(ts: string | null): string {
+function formatTimestamp(ts: string | null | undefined): string {
   if (!ts) return '—'
   const d = new Date(ts)
   return d.toLocaleString(undefined, {

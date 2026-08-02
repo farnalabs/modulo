@@ -124,9 +124,9 @@ const notifications = ref<NotificationResponse[]>([])
 
 watch(data, (d) => {
   if (d) {
-    notifications.value = (d as any).items ?? []
-    total.value = (d as any).total ?? 0
-    page.value = (d as any).page ?? 1
+    notifications.value = d.items
+    total.value = d.total
+    page.value = d.page
   }
 }, { immediate: true })
 

@@ -12,13 +12,21 @@ export interface ChatSession {
   updated_at: string
 }
 
+export interface ToolResult {
+  tool_call_id: string
+  tool_name: string
+  success: boolean
+  result?: unknown
+  error?: string
+}
+
 export interface ChatMessage {
   id: string
   session_id: string
   role: 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'summary'
   content: string | null
   tool_calls_json: Record<string, unknown> | null
-  tool_results_json: Record<string, unknown> | null
+  tool_results_json: ToolResult | null
   token_count: number | null
   parent_id: string | null
   created_at: string
