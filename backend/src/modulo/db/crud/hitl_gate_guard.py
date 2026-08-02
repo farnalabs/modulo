@@ -162,8 +162,12 @@ def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[s
     - ``condition``: changed at all (evaluated before ``human_only`` is
       consulted, so any change can silently gate off a formerly-always-on gate).
     - ``eval_condition``: changed at all (same reasoning).
-    - ``claim_expiry_minutes``: decreased (expiry is set once at claim creation,
-      so a decrease is not retroactive — it only narrows future claims).
+    - ``claim_expiry_minutes``: decreased. Deliberate conservative
+      classification (plan §1): expiry is set once at claim creation, so a
+      decrease is non-retroactive against outstanding claims — it only
+      narrows future claims. Flagged as weakening to keep the guard
+      fail-closed: a shorter expiry is treated as a privilege-requiring
+      change rather than silently allowed.
     """
     types: list[str] = []
     if old_cfg.get("human_only") is True and new_cfg.get("human_only") is not True:
