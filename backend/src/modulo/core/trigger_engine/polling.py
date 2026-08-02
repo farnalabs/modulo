@@ -81,7 +81,10 @@ def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[s
         case "github":
             return GitHubConnector(token=creds["token"])
         case "gitlab":
-            return GitLabConnector(token=creds["token"])
+            return GitLabConnector(
+                token=creds["token"],
+                base_url=config.get("base_url", "https://gitlab.com/api/v4"),
+            )
         case "linear":
             return LinearConnector(api_key=creds["api_key"])
         case "jira":
