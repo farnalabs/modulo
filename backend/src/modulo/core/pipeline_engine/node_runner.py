@@ -597,8 +597,8 @@ def make_sandbox_agent_fn(
     The node_def must have:
       - agent_prompt: str —  Jinja2 template rendered against state
       - template_id: str —  E2B sandbox template ID (default "base")
-      - agent_command: str —  command to run inside the sandbox
-        (default: "claude --output-json /home/user/prompt.md")
+      - agent_command: str —  REQUIRED command to run inside the sandbox
+        (no default — a sandbox agent cannot run without an explicit command)
       - output_schema_json: dict | None —  optional output schema validation
       - timeout_seconds: int —  max wall-clock time (default 600)
       - context_files: dict[str, str] —  optional files to write into the sandbox
@@ -641,7 +641,10 @@ def make_sandbox_agent_fn(
     elif agent_command_raw:
         agent_command = agent_command_raw
     else:
-        agent_command = "claude --output-json /home/user/prompt.md"
+        raise ValueError(
+            f"sandbox_agent node '{node_def.get('id')}' is missing required 'agent_command' "
+            "(or 'agent_commands') — a sandbox agent cannot run without an explicit command"
+        )
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
     context_files: dict[str, str] = node_def.get("context_files") or {}
