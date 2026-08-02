@@ -3,6 +3,18 @@ Feature: GitLab Issues Connector
   I want to interact with GitLab issues, labels, milestones, notes, and CI via the connector
   So that I can manage project tracking and pipelines
 
+  Scenario: Paginated query returns next page cursor
+    Given a GitLab connector with valid token
+    When I query GitLab resource "projects" on page "2"
+    Then the result has records
+    And the result reports a next page cursor
+
+  Scenario: Last page has no next page cursor
+    Given a GitLab connector with valid token
+    When I query GitLab resource "merge_requests" with project "group/project"
+    Then the result has records
+    And the result reports no next page cursor
+
   Scenario: Query issues returns list
     Given a GitLab connector with valid token
     When I query GitLab resource "issues" with project "group/project" and state "opened"
