@@ -80,6 +80,39 @@ class TestCryptoV2:
         expected_fp = hashlib.sha256(bytes.fromhex(kp["public_key"])).hexdigest()[:16]
         assert fp == expected_fp
 
+    def test_sign_primitive_rejects_invalid_private_key_hex(self):
+        with pytest.raises(ValueError, match="invalid private key hex"):
+            sign_primitive({"name": "test"}, "not-hex")
+
+    def test_sign_primitive_rejects_non_serializable_data(self):
+        kp = generate_keypair()
+        with pytest.raises(ValueError, match="non-serializable"):
+            sign_primitive({"name": "test", "payload": object()}, kp["private_key"])
+
+    def test_verify_signature_rejects_invalid_public_key_hex(self):
+        kp = generate_keypair()
+        sig = sign_primitive({"name": "test"}, kp["private_key"])
+        assert verify_signature({"name": "test"}, sig, "not-hex") is False
+
+    def test_verify_signature_rejects_invalid_signature_hex(self):
+        kp = generate_keypair()
+        assert verify_signature({"name": "test"}, "not-hex", kp["public_key"]) is False
+
+    def test_verify_signature_rejects_non_serializable_data(self):
+        kp = generate_keypair()
+        sig = sign_primitive({"name": "test"}, kp["private_key"])
+        assert verify_signature({"name": "test", "payload": object()}, sig, kp["public_key"]) is False
+
+    def test_verify_signature_empty_signature_returns_false(self):
+        kp = generate_keypair()
+        assert verify_signature({"name": "test"}, "", kp["public_key"]) is False
+
+    def test_canonical_json_rejects_non_serializable_values(self):
+        from modulo.core.registry.crypto import _canonical_json
+
+        with pytest.raises(ValueError, match="non-serializable"):
+            _canonical_json({"payload": object()})
+
 
 class TestCryptoV2WithRegistry:
     """Verify that crypto.py can sign entries compatible with the existing registry."""
