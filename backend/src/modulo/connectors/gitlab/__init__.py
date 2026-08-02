@@ -499,14 +499,14 @@ class GitLabConnector(ConnectorBase):
                 path = self._require_filter(payload.data, "path", payload.resource)
                 encoded = _project_path(project)
                 delete_params = {"ref": payload.data.get("ref", "main")}
-                body: dict[str, Any] = {
+                delete_body: dict[str, Any] = {
                     "commit_message": payload.data.get("message", f"Delete {path} via Modulo"),
                 }
                 r = await self._call_api(
                     "DELETE",
                     f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
                     params=delete_params,
-                    json=body,
+                    json=delete_body,
                 )
                 return _safe_json_object(r)
             case "mr" | "merge_request":
