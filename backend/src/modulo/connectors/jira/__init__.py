@@ -220,14 +220,14 @@ class JiraConnector(ConnectorBase):
         """Compute the sleep before a retry, honouring server-provided wait times.
 
         On HTTP 429 with Jira Cloud's ``X-RateLimit-Reset`` present, wait until
-        the quota window resets (tight jitter so the window is honoured).
-        Otherwise fall back to ``_compute_delay`` (``Retry-After`` then
-        exponential backoff + jitter).
+        the quota window resets (tight jitter so the window is honoured), capped
+        at ``_MAX_DELAY`` like ``Retry-After``. Otherwise fall back to
+        ``_compute_delay`` (``Retry-After`` then exponential backoff + jitter).
         """
         if response.status_code == 429:
             reset_delay = _parse_rate_limit_reset(response)
             if reset_delay is not None:
-                return _jitter(reset_delay, tight=True)
+                return _jitter(min(reset_delay, _MAX_DELAY), tight=True)
         return _compute_delay(attempt, response)
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:

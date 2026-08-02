@@ -257,6 +257,16 @@ def test_sleep_delay_uses_rate_limit_reset_on_429(connector, monkeypatch):
     assert 9.0 <= delay <= 10.0, "tight jitter should stay within the quota window"
 
 
+def test_sleep_delay_rate_limit_reset_capped(connector, monkeypatch):
+    """A far-future X-RateLimit-Reset is capped at _MAX_DELAY like Retry-After."""
+    from modulo.connectors.jira import _MAX_DELAY, time
+
+    monkeypatch.setattr(time, "time", lambda: 1_000_000)
+    resp = httpx.Response(429, headers={"X-RateLimit-Reset": "1003600"})
+    delay = connector._sleep_delay(resp, 0)
+    assert delay <= _MAX_DELAY, "reset-derived wait must be capped at _MAX_DELAY"
+
+
 def test_sleep_delay_falls_back_to_backoff_on_429(connector):
     """On 429 without X-RateLimit-Reset, fall back to blind backoff + jitter."""
     resp = httpx.Response(429)
