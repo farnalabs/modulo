@@ -720,3 +720,23 @@ def test_list_triggers_returns_daily_spend_limit(client: TestClient) -> None:
     body = resp.json()
     assert body["items"][0]["daily_spend_limit"] == 15.25
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_list_pipeline_triggers_returns_daily_spend_limit(client: TestClient) -> None:
+    trigger = _make_mock_trigger(trigger_type="polling", daily_spend_limit=Decimal("7.5"))
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/triggers")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["items"][0]["daily_spend_limit"] == 7.5
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
