@@ -170,8 +170,8 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
         await conn.execute(
             text(
                 "INSERT INTO environment_profiles "
-                "(id, organisation_id, name, image_ref, capabilities_json, config_json, account_id) "
-                "VALUES (:id, :org_id, :name, :image, '[]'::json, '{}'::json, :account_id)",
+                "(id, organisation_id, name, image_ref, capabilities_json, secret_refs_json, config_json, account_id) "
+                "VALUES (:id, :org_id, :name, :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -188,8 +188,8 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
         await conn.execute(
             text(
                 "INSERT INTO environment_profiles "
-                "(id, organisation_id, name, image_ref, capabilities_json, config_json, account_id) "
-                "VALUES (:id, :org_id, :name, :image, '[]'::json, '{}'::json, :account_id)",
+                "(id, organisation_id, name, image_ref, capabilities_json, secret_refs_json, config_json, account_id) "
+                "VALUES (:id, :org_id, :name, :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
             ),
             {
                 "id": str(b_id),

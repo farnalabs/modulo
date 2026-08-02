@@ -18,7 +18,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import create_run
@@ -131,7 +131,40 @@ async def fire_agent_signal(
                 )
                 continue
         else:
-            snapshot_id = uuid.UUID(int=0)
+            # No snapshot pinned in config — fall back to the target pipeline's
+            # latest snapshot (same resolution cron triggers use). A zero-UUID
+            # here would fail the cross-org FK trigger on runs.snapshot_id.
+            snap_result = await session.execute(
+                text(
+                    "SELECT id FROM pipeline_snapshots "
+                    "WHERE pipeline_id = :pid "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"pid": str(trigger.pipeline_id)},
+            )
+            latest_snapshot_id = snap_result.scalar_one_or_none()
+            if latest_snapshot_id is None:
+                _log.warning(
+                    "Agent signal trigger %s has no snapshot for pipeline %s — skipping",
+                    trigger.id,
+                    trigger.pipeline_id,
+                )
+                await _log_signal_event(
+                    session,
+                    trigger,
+                    org_id,
+                    result="poll_error",
+                    error_detail=f"No snapshot found for pipeline {trigger.pipeline_id}",
+                )
+                results.append(
+                    {
+                        "trigger_id": str(trigger.id),
+                        "status": "skipped",
+                        "reason": "no_snapshot",
+                    }
+                )
+                continue
+            snapshot_id = uuid.UUID(str(latest_snapshot_id))
 
         # Create child run linked to source via parent_run_id.
         #
@@ -161,7 +194,7 @@ async def fire_agent_signal(
                 session,
                 trigger,
                 org_id,
-                result="error",
+                result="validation_failed",
                 error_detail=str(exc)[:200],
             )
             results.append(

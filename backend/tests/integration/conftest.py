@@ -61,7 +61,16 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 def db_url(postgres_container: PostgresContainer) -> str:
     url = postgres_container.get_connection_url()
     # Convert to asyncpg driver
-    return url.replace("postgresql://", "postgresql+asyncpg://", 1).replace("psycopg2", "asyncpg")
+    url = url.replace("postgresql://", "postgresql+asyncpg://", 1).replace("psycopg2", "asyncpg")
+    # Point every settings consumer (including the auth dependency's
+    # process-global engine, which reads get_settings().database_url directly
+    # and cannot be reached via app.dependency_overrides) at the migrated
+    # testcontainer. CI sets DATABASE_URL to a separate empty postgres
+    # (deploy.yml "Start Postgres"), so without this the live-role re-read in
+    # auth.dependencies._verify_identity hits tables that don't exist there and
+    # every API-backed integration test fails with a 503.
+    os.environ["DATABASE_URL"] = url
+    return url
 
 
 @pytest.fixture(scope="session")
