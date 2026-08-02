@@ -103,7 +103,7 @@ describe('AgentOutputDiffView', () => {
   })
 
   it('shows identical banner when has_diff is false', async () => {
-    vi.mocked(api.POST).mockResolvedValue({
+    vi.mocked(api.POST as unknown as () => Promise<unknown>).mockResolvedValue({
       data: {
         run_id_a: 'aaa',
         run_id_b: 'bbb',
@@ -140,7 +140,7 @@ describe('AgentOutputDiffView', () => {
   })
 
   it('shows error when API returns an error', async () => {
-    vi.mocked(api.POST).mockResolvedValue({
+    vi.mocked(api.POST as unknown as () => Promise<unknown>).mockResolvedValue({
       data: null,
       error: { status: 404, detail: 'Run not found' },
     })

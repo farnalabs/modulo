@@ -150,7 +150,7 @@ describe('TeamNotificationEndpoints', () => {
 
   it('shows test result after testing an endpoint', async () => {
     const { api } = await import('../lib/api/client')
-    vi.mocked(api.POST).mockResolvedValue({
+    vi.mocked(api.POST as unknown as () => Promise<unknown>).mockResolvedValue({
       data: { success: true, status_code: 200, response_body: 'OK', error: null },
       error: undefined,
     })
