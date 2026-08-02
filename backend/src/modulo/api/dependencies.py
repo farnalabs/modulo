@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import (
 
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.api.team_scope import TeamScopeProvider, team_membership_exists
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.permissions import (
     PermissionConfigurationError,
@@ -110,6 +110,55 @@ def require_permission(permission: str) -> Any:
                 reset_authz_enforce(token)
 
     return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant")
+
+
+def require_permission_any_credential(permission: str) -> DependsParameter:
+    """FastAPI dependency factory — require the org role for JWT OR API-key callers.
+
+    Resolves the principal via `get_current_tenant_user_or_api_key` so both
+    user JWTs and `mk_` org API keys are accepted (the documented CI/CD
+    credential path, PRD \u00a75.2). API-key roles are clamped to the key owner's
+    LIVE org role via `_clamp_role` (a demoted operator's key degrades). The
+    org-role floor and kill-switch ContextVar behave identically to
+    `require_permission`.
+
+    .. code-block:: python
+
+       principal: TenantPrincipal = Depends(require_permission_any_credential("run.trigger"))
+    """
+    required = resolve_required(permission)
+
+    async def _check(
+        principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> TenantPrincipal:
+        token: Token[bool | None] | None = None
+        try:
+            if principal.organisation_id is not None:
+                async with session.begin():
+                    enforce = await resolve_authz_enforce(session, principal.organisation_id)
+                token = set_authz_enforce(enforce)
+            try:
+                assert_org_role(principal.org_role, required, permission)
+            except PermissionDenied as exc:
+                logger.warning(
+                    "permission.denied",
+                    extra={
+                        "permission": permission,
+                        "required": required,
+                        "actual": principal.org_role,
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Permission '{permission}' requires '{required}' role",
+                ) from exc
+            return principal
+        finally:
+            if token is not None:
+                reset_authz_enforce(token)
+
+    return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant_or_api_key")
 
 
 def require_system_permission(permission: str) -> DependsParameter:

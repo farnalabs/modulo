@@ -23,6 +23,7 @@ from modulo.api.dependencies import (
     _get_session_factory,
     get_db_session,
     require_permission,
+    require_permission_any_credential,
 )
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
 from modulo.auth.dependencies import get_current_tenant_user
@@ -311,7 +312,7 @@ async def trigger_run(
     req: TriggerRunRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: TenantPrincipal = require_permission("run.trigger"),
+    principal: TenantPrincipal = require_permission_any_credential("run.trigger"),
 ) -> RunResponse:
     """Manually trigger a pipeline run.
 
@@ -479,7 +480,7 @@ async def get_run_heatmap_endpoint(
 async def get_run_status(
     run_id: uuid.UUID,
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
-    principal: TenantPrincipal = require_permission("run.status"),
+    principal: TenantPrincipal = require_permission_any_credential("run.status"),
 ) -> RunResponse:
     try:
         run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))

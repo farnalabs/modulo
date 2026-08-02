@@ -420,7 +420,7 @@ async def update_eval_definition(
     eval_id: uuid.UUID,
     req: UpdateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission("eval.definition.update"),
 ) -> dict[str, Any]:
     """Update an eval definition. Admin only."""
     if principal.org_role != "admin":
@@ -480,7 +480,7 @@ async def update_eval_definition(
 async def delete_eval_definition(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission("eval.definition.delete"),
 ) -> None:
     """Delete an eval definition. Admin only."""
     if principal.org_role != "admin":
