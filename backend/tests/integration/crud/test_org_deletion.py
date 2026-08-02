@@ -63,16 +63,15 @@ async def _create_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, name: str)
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, slug, "
+                "INSERT INTO pipelines (id, organisation_id, name, "
                 "visibility, max_concurrent_runs, lock_wait_timeout_seconds, "
                 "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :org_id, :name, :slug, 'org', 1, 30, '{}'::json, '[]'::json)",
+                "VALUES (:id, :org_id, :name, 'org', 1, 30, '{}'::json, '[]'::json)",
             ),
             {
                 "id": str(pid),
                 "org_id": str(org_id),
                 "name": name,
-                "slug": f"pipe-{pid.hex[:8]}",
             },
         )
     return pid
