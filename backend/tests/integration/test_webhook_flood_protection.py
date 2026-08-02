@@ -18,7 +18,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.trigger_engine import (
-    ConcurrentRunLimitError,
     DuplicateWebhookError,
     HmacValidationError,
     TimestampExpiredError,
@@ -303,7 +302,7 @@ class TestWebhookFloodProtection:
             await set_rls_org(session, test_org)
             for i in range(count):
                 run_id = uuid.uuid4()
-                tid_str = f"{test_org}:{tag}-{i}"
+                tid_str = f"{test_org}:{tag}-{i}-{uuid.uuid4().hex[:6]}"
                 await session.execute(
                     text(
                         "INSERT INTO runs (id, organisation_id, pipeline_id, "
@@ -324,7 +323,7 @@ class TestWebhookFloodProtection:
                     },
                 )
 
-    async def test_flood_protection_rejects_when_at_limit(
+    async def test_flood_protection_accepts_when_at_limit_and_queues(
         self,
         db_engine: AsyncEngine,
         test_org: uuid.UUID,
@@ -343,18 +342,20 @@ class TestWebhookFloodProtection:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, test_org)
-            with pytest.raises(ConcurrentRunLimitError) as exc_info:
-                await engine.handle_webhook(
-                    session,
-                    trigger_id=trigger_id,
-                    org_id=test_org,
-                    raw_body=body,
-                    raw_payload={"event": "flood-test"},
-                    hmac_signature=sig,
-                    modulo_timestamp=ts,
-                    snapshot_id=test_snapshot,
-                )
-            assert exc_info.value.limit == 20
+            run, event, _ = await engine.handle_webhook(
+                session,
+                trigger_id=trigger_id,
+                org_id=test_org,
+                raw_body=body,
+                raw_payload={"event": "flood-test"},
+                hmac_signature=sig,
+                modulo_timestamp=ts,
+                snapshot_id=test_snapshot,
+            )
+        # Flood protection accepts-and-queues instead of returning a 429.
+        assert run is not None
+        assert run.status == "pending"
+        assert event.validation_result == "accepted"
 
     async def test_flood_protection_logs_concurrency_limit_event(
         self,
@@ -375,18 +376,18 @@ class TestWebhookFloodProtection:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, test_org)
-            with pytest.raises(ConcurrentRunLimitError):
-                await engine.handle_webhook(
-                    session,
-                    trigger_id=trigger_id,
-                    org_id=test_org,
-                    raw_body=body,
-                    raw_payload={"event": "log-test"},
-                    hmac_signature=sig,
-                    modulo_timestamp=ts,
-                    snapshot_id=test_snapshot,
-                )
-            # Event was flushed and committed (exception caught by pytest.raises)
+            run, _event, _ = await engine.handle_webhook(
+                session,
+                trigger_id=trigger_id,
+                org_id=test_org,
+                raw_body=body,
+                raw_payload={"event": "log-test"},
+                hmac_signature=sig,
+                modulo_timestamp=ts,
+                snapshot_id=test_snapshot,
+            )
+            # The concurrency-limit event is logged before run creation (run_id
+            # NULL); the queued run is accepted with its own event.
             result = await session.execute(
                 text(
                     "SELECT validation_result, trigger_type, run_id "
@@ -400,6 +401,17 @@ class TestWebhookFloodProtection:
             assert row is not None, "Expected concurrency_limit_reached TriggerEvent"
             assert row.trigger_type == "webhook"
             assert row.run_id is None
+            accepted = await session.execute(
+                text(
+                    "SELECT validation_result, run_id FROM trigger_events "
+                    "WHERE trigger_id = :tid AND validation_result = 'accepted' "
+                    "ORDER BY created_at DESC LIMIT 1",
+                ),
+                {"tid": str(trigger_id)},
+            )
+            accepted_row = accepted.fetchone()
+            assert accepted_row is not None, "Expected accepted TriggerEvent for the queued run"
+            assert accepted_row.run_id == run.id
 
 
 # ---------------------------------------------------------------------------
