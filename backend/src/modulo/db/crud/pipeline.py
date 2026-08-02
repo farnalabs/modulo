@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import Connection, delete, func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
@@ -454,14 +454,22 @@ async def _read_clone_source_snapshot(
             factory = async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession)
         else:
             if bind is None:
-                bind = session.get_bind()
-                if asyncio.iscoroutine(bind):
-                    bind = await bind
+                raw = session.get_bind()
+                if asyncio.iscoroutine(raw):
+                    raw = await raw
+                if isinstance(raw, Connection):
+                    async_url = raw.engine.url
+                else:
+                    async_url = raw.url
             elif isinstance(bind, AsyncConnection):
-                bind = bind.sync_connection
-            assert bind is not None
+                conn = bind.sync_connection
+                assert conn is not None
+                async_url = conn.engine.url
+            else:
+                async_url = None
+            assert async_url is not None
             factory = async_sessionmaker(
-                create_async_engine(bind.url, poolclass=NullPool),
+                create_async_engine(async_url, poolclass=NullPool),
                 expire_on_commit=False,
                 class_=AsyncSession,
             )
