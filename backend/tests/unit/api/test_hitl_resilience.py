@@ -92,6 +92,21 @@ class TestApproveGateSQLAlchemyError:
         assert resp.status_code == 503
 
 
+class TestApproveGateAtSandboxCapacity:
+    @patch(
+        "modulo.api.routes.hitl.org_sandbox_capacity_free",
+        new=AsyncMock(return_value=False),
+    )
+    def test_approve_gate_at_capacity_returns_409(self, client: TestClient) -> None:
+        """At org sandbox capacity the gate is left undecided — 409, not 202."""
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+            json={"claim_token": "test-token", "notes": "approved"},
+        )
+        assert resp.status_code == 409
+        assert "gate left undecided" in resp.json()["detail"]
+
+
 class TestApproveWithModificationSQLAlchemyError:
     @patch(
         "modulo.api.routes.hitl.HITLManager.approve_with_modification",
