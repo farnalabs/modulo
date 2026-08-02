@@ -51,7 +51,7 @@ _TEAM_SCOPED: tuple[str, ...] = (
 def _team_policy_using() -> str:
     strict_org = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
     return (
-        f"({strict_org}) AND ("  # noqa: S608 - policy body built from constant fragments
+        f"({strict_org}) AND ("  # noqa: S608  # nosec B608 - policy body built from constant fragments
         "(visibility = 'org' OR visibility IS NULL) "
         "OR (owner_team_id IS NULL) "
         "OR (owner_team_id IN ("
