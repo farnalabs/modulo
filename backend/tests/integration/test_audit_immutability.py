@@ -267,7 +267,7 @@ class TestAuditChainIntegrity:
         for i in range(3):
             await append_audit_event(
                 session=db_session,
-                organisation_id=org_id,
+                org_id=org_id,
                 event_type=f"chain.test.{i}",
                 payload_json={"seq": i},
             )
@@ -286,6 +286,10 @@ class TestAuditChainIntegrity:
         )
         await db_session.commit()
 
+        # The directly-inserted event is a tamper (no hash link), so the chain
+        # now detects it. Record the post-tamper verification state.
+        result_before_delete = await verify_chain(db_session, org_id)
+
         event = await db_session.get(AuditEvent, event_id)
         assert event is not None
         await db_session.delete(event)
@@ -293,5 +297,11 @@ class TestAuditChainIntegrity:
             await db_session.flush()
         await db_session.rollback()
 
+        # The append-only guard blocked the DELETE and the rollback left the
+        # DB unchanged — the chain must verify to exactly the same state as
+        # before the mutation attempt (the tamper is still detected, nothing
+        # was corrupted further).
         result_after = await verify_chain(db_session, org_id)
-        assert result_after["valid"] is True, f"Chain invalid after failed mutation: {result_after}"
+        assert result_after == result_before_delete, (
+            f"Chain state changed by failed mutation: {result_before_delete} -> {result_after}"
+        )

@@ -124,10 +124,12 @@ async def test_staled_running_run_with_evicted_job_is_redistpatched(
     finally:
         await redis_client.aclose()
 
-    # Reconcile must repair + re-dispatch (staled heartbeat, no job).
+    # Reconcile must repair + re-dispatch (staled heartbeat, no job). The
+    # summary counts are GLOBAL (dispatcher_reconcile scans every org), so other
+    # tests in the same session may add staled runs; assert only that OUR run
+    # was among the repaired set via the deterministic job key.
     summary = await ch.dispatcher_reconcile()
-    assert summary["scanned"] >= 1
-    assert summary["repaired"] == 1
+    assert summary["repaired"] >= 1
 
     # The job now exists again (fresh dispatch), key deterministic.
     assert await _job_exists(saq_settings_env, f"run:{run_id}")
@@ -157,8 +159,10 @@ async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(
     finally:
         await redis_client.aclose()
 
-    summary = await ch.dispatcher_reconcile()
-    assert summary["repaired"] == 0
+    # Reconcile must NOT repair our run (awaiting_human is never auto-
+    # redispatched). The summary's global "repaired" count may include other
+    # orgs' staled runs from the same session, so assert on OUR run directly.
+    await ch.dispatcher_reconcile()
 
     # The run must NOT be re-dispatched — no job appears and the claim token is
     # untouched (the gate stays pending on a human).
@@ -197,8 +201,9 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
         dispatcher=None,
     )
 
-    summary = await ch.dispatcher_reconcile()
-    assert summary["repaired"] == 1
+    # Re-dispatch happens (summary count is global across orgs, so assert on our
+    # run's job + row state instead of the exact global "repaired" number).
+    await ch.dispatcher_reconcile()
 
     # A fresh dispatch records dispatcher='saq' + a fresh claim token, and the
     # deterministic job key now exists.
@@ -234,5 +239,7 @@ async def test_live_job_not_repaired(
     finally:
         await redis_client.aclose()
 
-    summary = await ch.dispatcher_reconcile()
-    assert summary["repaired"] == 0
+    # A live (non-staled) job must NOT be repaired — the job survives reconcile
+    # untouched (fresh heartbeat + live job = not staled).
+    await ch.dispatcher_reconcile()
+    assert await _job_exists(saq_settings_env, f"run:{run_id}")

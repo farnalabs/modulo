@@ -888,9 +888,7 @@ class TestNotifyImportersOfUpdate:
         assert updater.await_args.args[1] == copy1.id
         assert updater.await_args.args[2]["update_available_version_id"] == prim.id
 
-    async def test_per_copy_update_error_is_logged_not_raised(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_per_copy_update_error_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
         session = _mock_session()
         group_id = uuid.uuid4()
         prim = _fake_primitive(version="1.1")
@@ -913,10 +911,7 @@ class TestNotifyImportersOfUpdate:
         ):
             await notify_importers_of_update(session, uuid.uuid4(), uuid.uuid4())
 
-        assert any(
-            "failed to update copy" in rec.message and str(copy.id) in rec.message
-            for rec in caplog.records
-        )
+        assert any("failed to update copy" in rec.message and str(copy.id) in rec.message for rec in caplog.records)
 
     async def test_programming_error_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
         session = _mock_session()
@@ -932,9 +927,7 @@ class TestNotifyImportersOfUpdate:
         ):
             await notify_importers_of_update(session, uuid.uuid4(), uuid.uuid4())
 
-        assert any(
-            "failed (DB not migrated)" in rec.message for rec in caplog.records
-        )
+        assert any("failed (DB not migrated)" in rec.message for rec in caplog.records)
 
     async def test_cancellation_propagates(self) -> None:
         session = _mock_session()
@@ -964,6 +957,4 @@ class TestNotifyImportersOfUpdate:
         ):
             await notify_importers_of_update(session, uuid.uuid4(), uuid.uuid4())
 
-        assert any(
-            "unexpected error" in rec.message for rec in caplog.records
-        )
+        assert any("unexpected error" in rec.message for rec in caplog.records)
