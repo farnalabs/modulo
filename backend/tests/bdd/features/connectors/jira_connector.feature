@@ -38,3 +38,15 @@ Feature: Jira Connector
     Given a Jira connector that returns API errors
     When I write resource "issue" with empty data
     Then the result is an error
+
+  Scenario: Query results expose rate-limit headers
+    Given a Jira connector that reports rate-limit headers
+    When I query resource "issue" with issue_key "PROJ-123"
+    Then the result has records
+    And the result reports rate-limit metadata
+
+  Scenario: Rate-limited query fails with quota details
+    Given a Jira connector that is rate limited
+    When I query resource "issue" with issue_key "PROJ-123"
+    Then the result is an error
+    And the error reports the Jira rate-limit quota
