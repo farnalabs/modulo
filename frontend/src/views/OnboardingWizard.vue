@@ -643,6 +643,8 @@ async function createPipeline() {
         lock_wait_timeout_seconds: 30,
         node_timeout_seconds: 300,
         default_autonomy_level: 'balanced',
+        max_duration_seconds: 3600,
+        stale_run_timeout_minutes: 30,
       },
     })
     if (err) throw err

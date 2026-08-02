@@ -312,7 +312,6 @@ const connectors = ref<ConnectorItem[]>([])
 const connectorTypes = ref<{id: string, display_name: string}[]>([])
 
 async function loadConnectorTypes() {
-  // @ts-expect-error TS2589 - deep type from openapi-typescript
   const resp = await api.GET('/api/v1/connectors/types')
   if (resp.data?.items) {
     connectorTypes.value = resp.data.items as {id: string, display_name: string}[]

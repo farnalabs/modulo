@@ -187,4 +187,43 @@ describe('RunDetailView', () => {
     expect(writeText.mock.calls[0][0]).toContain('helpful assistant')
     wrapper.unmount()
   })
+
+  it('shows waiting-for-capacity banner for pending capacity-blocked runs', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            run_id: 'test-run-id',
+            pipeline_id: 'test-pipeline',
+            status: 'pending',
+            error_code: 'org_capacity_limited',
+            error_detail: 'Org sandbox concurrency limit reached: 3 active, cap 2',
+            total_cost_usd: null,
+            token_consumption: null,
+            node_token_usage: null,
+            trace_id: null,
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const banner = wrapper.find('[data-testid="run-detail-waiting-for-capacity"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Waiting for capacity')
+    expect(banner.text()).toContain('Org sandbox concurrency limit reached: 3 active, cap 2')
+    wrapper.unmount()
+  })
 })
