@@ -18,6 +18,7 @@ from modulo.db.crud.pipeline import (
     replace_pipeline_graph,
     update_pipeline,
 )
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 pytestmark = pytest.mark.integration
 
@@ -178,35 +179,37 @@ async def test_clone_pipeline_returns_new_id_and_name_prefix(
         caller_type="rest",
     )
 
-    # clone_pipeline's torn-read fix (PR #535) reads the source through a
-    # separate short-lived session that commits immediately — the source row
-    # must be committed here or that read session cannot see it. Re-establish
-    # RLS afterwards because SET LOCAL is transaction-scoped.
+    # The clone's step-(a) read session is a separate connection (its own pool
+    # checkout), so under READ COMMITTED it cannot see rls_session's uncommitted
+    # rows. Mirror production, where the source is already committed when the
+    # clone endpoint runs: commit the source, then re-establish the RLS context
+    # that SET LOCAL reset at commit.
     await rls_session.commit()
-    from modulo.db.rls import set_rls_org
-
     async with rls_session.begin():
         await set_rls_org(rls_session, test_org)
+        await set_rls_user_context(rls_session, test_user, "admin")
 
-    cloned = await clone_pipeline(
-        rls_session,
-        org_id=test_org,
-        pipeline_id=source.id,
-        account_id=test_user,
-    )
-    assert cloned is not None
-    assert cloned.id != source.id
-    assert cloned.name == "Copy of Original Pipeline"
-    assert cloned.organisation_id == test_org
+        cloned = await clone_pipeline(
+            rls_session,
+            org_id=test_org,
+            pipeline_id=source.id,
+            account_id=test_user,
+            org_role="admin",
+        )
 
-    # Cloned graph nodes match original
-    cloned_graph = await get_pipeline_graph(rls_session, cloned.id)
-    assert cloned_graph is not None
-    cloned_nodes, cloned_edges = cloned_graph
-    assert len(cloned_nodes) == 2
-    assert len(cloned_edges) == 1
-    assert cloned_edges[0].source_node_id == first_node
-    assert cloned_edges[0].target_node_id == second_node
+        assert cloned is not None
+        assert cloned.id != source.id
+        assert cloned.name == "Copy of Original Pipeline"
+        assert cloned.organisation_id == test_org
+
+        # Cloned graph nodes match original
+        cloned_graph = await get_pipeline_graph(rls_session, cloned.id)
+        assert cloned_graph is not None
+        cloned_nodes, cloned_edges = cloned_graph
+        assert len(cloned_nodes) == 2
+        assert len(cloned_edges) == 1
+        assert cloned_edges[0].source_node_id == first_node
+        assert cloned_edges[0].target_node_id == second_node
 
 
 async def test_clone_pipeline_independent_from_original(
@@ -232,43 +235,42 @@ async def test_clone_pipeline_independent_from_original(
         caller_type="rest",
     )
 
-    # clone_pipeline's torn-read fix (PR #535) reads the source through a
-    # separate short-lived session that commits immediately — the source row
-    # must be committed here or that read session cannot see it. Re-establish
-    # RLS afterwards because SET LOCAL is transaction-scoped.
+    # Commit the source so the clone's separate step-(a) read connection can
+    # see it (READ COMMITTED hides rls_session's uncommitted rows), then
+    # re-establish the RLS context that SET LOCAL reset at commit.
     await rls_session.commit()
-    from modulo.db.rls import set_rls_org
-
     async with rls_session.begin():
         await set_rls_org(rls_session, test_org)
+        await set_rls_user_context(rls_session, test_user, "admin")
 
-    cloned = await clone_pipeline(
-        rls_session,
-        org_id=test_org,
-        pipeline_id=source.id,
-        account_id=test_user,
-    )
-    assert cloned is not None
+        cloned = await clone_pipeline(
+            rls_session,
+            org_id=test_org,
+            pipeline_id=source.id,
+            account_id=test_user,
+            org_role="admin",
+        )
+        assert cloned is not None
 
-    # Modify original: rename and replace graph
-    await update_pipeline(rls_session, source.id, {"name": "Modified Original"})
-    await replace_pipeline_graph(
-        rls_session,
-        pipeline_id=source.id,
-        org_id=test_org,
-        nodes=[],
-        edges=[],
-        is_privileged=True,
-        caller_type="rest",
-    )
+        # Modify original: rename and replace graph
+        await update_pipeline(rls_session, source.id, {"name": "Modified Original"})
+        await replace_pipeline_graph(
+            rls_session,
+            pipeline_id=source.id,
+            org_id=test_org,
+            nodes=[],
+            edges=[],
+            is_privileged=True,
+            caller_type="rest",
+        )
 
-    # Check clone is unchanged
-    reloaded_clone = await get_pipeline(rls_session, cloned.id)
-    assert reloaded_clone is not None
-    assert reloaded_clone.name == "Copy of Independent Test"
-    clone_graph = await get_pipeline_graph(rls_session, cloned.id)
-    assert clone_graph is not None
-    assert len(clone_graph[0]) == 1  # Clone still has its original node
+        # Check clone is unchanged
+        reloaded_clone = await get_pipeline(rls_session, cloned.id)
+        assert reloaded_clone is not None
+        assert reloaded_clone.name == "Copy of Independent Test"
+        clone_graph = await get_pipeline_graph(rls_session, cloned.id)
+        assert clone_graph is not None
+        assert len(clone_graph[0]) == 1  # Clone still has its original node
 
 
 async def test_clone_pipeline_not_found_returns_none(

@@ -112,6 +112,26 @@ Feature: GitLab Issues Connector
     When I write GitLab label with project "group/project" and name "bug"
     Then the write succeeds
 
+  Scenario: Write deletes a file
+    Given a GitLab connector with valid token
+    When I write GitLab file_delete for project "group/project" and path "src/old.py"
+    Then the write succeeds
+
+  Scenario: Write merges a merge request
+    Given a GitLab connector with valid token
+    When I write GitLab mr_merge for project "group/project" and iid "7"
+    Then the write succeeds
+
+  Scenario: Write approves a merge request
+    Given a GitLab connector with valid token
+    When I write GitLab mr_approve for project "group/project" and iid "7"
+    Then the write succeeds
+
+  Scenario: Write comments on a merge request
+    Given a GitLab connector with valid token
+    When I write GitLab mr_comment for project "group/project" and iid "7" and body "LGTM"
+    Then the write succeeds
+
   Scenario: Write creates a milestone
     Given a GitLab connector with valid token
     When I write GitLab milestone with project "group/project" and title "Sprint 1"

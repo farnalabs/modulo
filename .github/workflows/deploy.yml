@@ -115,6 +115,7 @@ jobs:
           TESTCONTAINERS_RYUK_DISABLED: "true"
 
       - name: Schemathesis API fuzz testing
+        working-directory: backend
         shell: bash
         run: uv run --no-sync pytest tests/integration/test_schemathesis.py -x --timeout=120
         env:

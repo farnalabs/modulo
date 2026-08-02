@@ -369,6 +369,7 @@ class ConnectorResult:
     records: list[dict[str, Any]] = field(default_factory=list)
     next_cursor: str | None = None
     total: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

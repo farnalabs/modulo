@@ -12,9 +12,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from sqlalchemy import delete, func, select, update
-from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy import Connection, delete, func, select, update
+from sqlalchemy.exc import InvalidRequestError, ProgrammingError
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import NullPool
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.crud.base import PageResult, apply_updates
@@ -30,7 +37,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
 
@@ -294,6 +301,7 @@ async def clone_pipeline(
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
     account_id: uuid.UUID,
+    org_role: str | None = None,
     new_name: str | None = None,
     _read_session_factory: Callable[[], AsyncSession] | None = None,
     _on_step_a_held: Callable[[], Awaitable[None]] | None = None,
@@ -313,6 +321,13 @@ async def clone_pipeline(
     ``replace_pipeline_graph``'s ``FOR UPDATE`` on the same row can proceed as
     soon as the step-(a) transaction commits. All cloned gated edges emit ONE
     batched ``edge_created_with_gate`` audit event.
+
+    The step-(a) read session is a separate connection, so ``set_rls_org`` is
+    not enough: pipelines are team-scoped, so their RLS policy also checks the
+    caller's ``app.user_id`` / ``app.org_role``, which must be re-applied via
+    ``set_rls_user_context`` for the source to be visible. Pass ``org_role``
+    (the caller's org role) and the read session re-applies the caller's full
+    RLS context; ``account_id`` doubles as the caller's user.
     """
     _log.info("Cloning pipeline %s (org=%s, requested_name=%s)", pipeline_id, org_id, new_name)
 
@@ -320,6 +335,8 @@ async def clone_pipeline(
         session,
         org_id=org_id,
         pipeline_id=pipeline_id,
+        user_id=account_id,
+        org_role=org_role,
         read_factory=_read_session_factory,
         on_step_a_held=_on_step_a_held,
     )
@@ -434,105 +451,145 @@ async def _read_clone_source_snapshot(
     *,
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    org_role: str | None,
     read_factory: Callable[[], AsyncSession] | None,
     on_step_a_held: Callable[[], Awaitable[None]] | None,
 ) -> _CloneSourceSnapshot | None:
     """Step (a): short transaction that FOR SHARE-locks the source pipeline row,
-    reads nodes/edges/snapshots into plain data, and commits immediately."""
+    reads nodes/edges/snapshots into plain data, and commits immediately.
+
+    The read session is a separate connection/pool checkout, so it must
+    re-apply the caller's full RLS context: ``set_rls_org`` scopes the org, and
+    ``set_rls_user_context`` (when *org_role* is given) makes team-scoped
+    pipelines visible via ``app.user_id`` / ``app.org_role``.
+    """
     factory = read_factory
+    read_engine: AsyncEngine | None = None
     if factory is None:
         # ``session.bind`` is the AsyncEngine the session was created with;
         # ``session.get_bind()`` returns the *sync* ``Engine`` (SQLAlchemy 2.0)
         # which ``async_sessionmaker`` rejects ("AsyncEngine expected").
         bind = session.bind
-        factory = async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession)
+        if isinstance(bind, AsyncEngine):
+            factory = async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession)
+        else:
+            if bind is None:
+                try:
+                    raw = session.get_bind()
+                except InvalidRequestError:
+                    raise RuntimeError("cannot derive an async read URL from the clone source session") from None
+                async_url = raw.engine.url if isinstance(raw, Connection) else raw.url
+            elif isinstance(bind, AsyncConnection):
+                conn = bind.sync_connection
+                if conn is None:
+                    raise RuntimeError("AsyncConnection has no bound sync connection; cannot derive read URL")
+                async_url = conn.engine.url
+            else:
+                async_url = None
+            if async_url is None:
+                raise RuntimeError("cannot derive an async read URL from the clone source session")
+            read_engine = create_async_engine(async_url, poolclass=NullPool)
+            factory = async_sessionmaker(read_engine, expire_on_commit=False, class_=AsyncSession)
 
-    async with factory() as read_session, read_session.begin():
-        await set_rls_org(read_session, org_id)
-        src_result = await read_session.execute(
-            select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None)).with_for_update(read=True)
-        )
-        source = src_result.scalar_one_or_none()
-        if source is None:
-            return None
-        if on_step_a_held is not None:
-            await on_step_a_held()
+    try:
+        async with factory() as read_session, read_session.begin():
+            await set_rls_org(read_session, org_id)
+            # The guard is intentionally more permissive than the endpoint,
+            # which always passes a non-None org_role (TenantPrincipal). Non-API
+            # callers and unit tests may omit it, so only re-apply the user
+            # context when both identity parts are available.
+            if user_id is not None and org_role is not None:
+                await set_rls_user_context(read_session, user_id, org_role)
+            src_result = await read_session.execute(
+                select(Pipeline)
+                .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None))
+                .with_for_update(read=True)
+            )
+            source = src_result.scalar_one_or_none()
+            if source is None:
+                return None
+            if on_step_a_held is not None:
+                await on_step_a_held()
 
-        edges = [
-            {
-                "source_node_id": e.source_node_id,
-                "target_node_id": e.target_node_id,
-                "edge_type": e.edge_type,
-                "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
-            }
-            for e in (
-                await read_session.execute(
-                    select(PipelineEdge)
-                    .where(PipelineEdge.pipeline_id == pipeline_id)
-                    .order_by(PipelineEdge.created_at, PipelineEdge.id)
-                )
-            ).scalars()
-        ]
-        snap_rows = list(
-            (
-                await read_session.execute(
-                    select(PipelineSnapshot)
-                    .where(PipelineSnapshot.pipeline_id == pipeline_id)
-                    .order_by(PipelineSnapshot.snapshot_version)
-                )
-            ).scalars()
-        )
-        snapshots: list[dict[str, Any]] = []
-        for snap in snap_rows:
-            pins = [
+            edges = [
                 {
-                    "node_id": p.node_id,
-                    "direction": p.direction,
-                    "schema_id": p.schema_id,
-                    "schema_version": p.schema_version,
+                    "source_node_id": e.source_node_id,
+                    "target_node_id": e.target_node_id,
+                    "edge_type": e.edge_type,
+                    "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
                 }
-                for p in (
+                for e in (
                     await read_session.execute(
-                        select(SnapshotSchemaPin).where(SnapshotSchemaPin.snapshot_id == snap.id)
+                        select(PipelineEdge)
+                        .where(PipelineEdge.pipeline_id == pipeline_id)
+                        .order_by(PipelineEdge.created_at, PipelineEdge.id)
                     )
                 ).scalars()
             ]
-            snapshots.append(
-                {
-                    "snapshot_version": snap.snapshot_version,
-                    "account_id": snap.account_id,
-                    "environment_profile_id": snap.environment_profile_id,
-                    "graph_json": copy.deepcopy(snap.graph_json),
-                    "connector_bindings_json": copy.deepcopy(snap.connector_bindings_json),
-                    "schema_pins_json": copy.deepcopy(snap.schema_pins_json),
-                    "prompt_pins_json": copy.deepcopy(snap.prompt_pins_json),
-                    "model_backend_pins_json": copy.deepcopy(snap.model_backend_pins_json),
-                    "composite_bindings_json": copy.deepcopy(snap.composite_bindings_json),
-                    "parameter_bindings_json": copy.deepcopy(snap.parameter_bindings_json),
-                    "tag": snap.tag,
-                    "notes": snap.notes,
-                    "default_autonomy_level": snap.default_autonomy_level,
-                    "config_json": copy.deepcopy(snap.config_json),
-                    "run_context_defaults": copy.deepcopy(snap.run_context_defaults),
-                    "pins": pins,
-                }
+            snap_rows = list(
+                (
+                    await read_session.execute(
+                        select(PipelineSnapshot)
+                        .where(PipelineSnapshot.pipeline_id == pipeline_id)
+                        .order_by(PipelineSnapshot.snapshot_version)
+                    )
+                ).scalars()
             )
+            snapshots: list[dict[str, Any]] = []
+            for snap in snap_rows:
+                pins = [
+                    {
+                        "node_id": p.node_id,
+                        "direction": p.direction,
+                        "schema_id": p.schema_id,
+                        "schema_version": p.schema_version,
+                    }
+                    for p in (
+                        await read_session.execute(
+                            select(SnapshotSchemaPin).where(SnapshotSchemaPin.snapshot_id == snap.id)
+                        )
+                    ).scalars()
+                ]
+                snapshots.append(
+                    {
+                        "snapshot_version": snap.snapshot_version,
+                        "account_id": snap.account_id,
+                        "environment_profile_id": snap.environment_profile_id,
+                        "graph_json": copy.deepcopy(snap.graph_json),
+                        "connector_bindings_json": copy.deepcopy(snap.connector_bindings_json),
+                        "schema_pins_json": copy.deepcopy(snap.schema_pins_json),
+                        "prompt_pins_json": copy.deepcopy(snap.prompt_pins_json),
+                        "model_backend_pins_json": copy.deepcopy(snap.model_backend_pins_json),
+                        "composite_bindings_json": copy.deepcopy(snap.composite_bindings_json),
+                        "parameter_bindings_json": copy.deepcopy(snap.parameter_bindings_json),
+                        "tag": snap.tag,
+                        "notes": snap.notes,
+                        "default_autonomy_level": snap.default_autonomy_level,
+                        "config_json": copy.deepcopy(snap.config_json),
+                        "run_context_defaults": copy.deepcopy(snap.run_context_defaults),
+                        "pins": pins,
+                    }
+                )
 
-        return _CloneSourceSnapshot(
-            name=source.name,
-            description=source.description,
-            visibility=source.visibility,
-            owner_team_id=source.owner_team_id,
-            max_concurrent_runs=source.max_concurrent_runs,
-            lock_wait_timeout_seconds=source.lock_wait_timeout_seconds,
-            node_timeout_seconds=source.node_timeout_seconds,
-            run_context_defaults=copy.deepcopy(source.run_context_defaults),
-            graph_nodes_json=copy.deepcopy(list(source.graph_nodes_json or [])),
-            default_autonomy_level=str(source.default_autonomy_level or "manual_approval"),
-            stale_run_timeout_minutes=source.stale_run_timeout_minutes,
-            edges=edges,
-            snapshots=snapshots,
-        )
+            return _CloneSourceSnapshot(
+                name=source.name,
+                description=source.description,
+                visibility=source.visibility,
+                owner_team_id=source.owner_team_id,
+                max_concurrent_runs=source.max_concurrent_runs,
+                lock_wait_timeout_seconds=source.lock_wait_timeout_seconds,
+                node_timeout_seconds=source.node_timeout_seconds,
+                run_context_defaults=copy.deepcopy(source.run_context_defaults),
+                graph_nodes_json=copy.deepcopy(list(source.graph_nodes_json or [])),
+                default_autonomy_level=str(source.default_autonomy_level or "manual_approval"),
+                stale_run_timeout_minutes=source.stale_run_timeout_minutes,
+                edges=edges,
+                snapshots=snapshots,
+            )
+    finally:
+        if read_engine is not None:
+            await read_engine.dispose()
 
 
 def _preserve_omitted_gate_config(
