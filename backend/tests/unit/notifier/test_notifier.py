@@ -16,9 +16,12 @@ from httpx import Response
 from modulo.core.notifier import (
     MAX_ATTEMPTS,
     MAX_DEAD_LETTERS,
+    RETRY_DELAYS,
     DispatchResult,
     Notifier,
 )
+from modulo.core.notifier.event_mapper import NotificationEventMapper
+from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 
 _KEY = Fernet.generate_key().decode()
@@ -381,6 +384,67 @@ async def test_dispatch_429_honors_retry_after_before_dead_letter(notifier: Noti
     assert sleeps[0] == 3.0
 
 
+async def test_dispatch_429_retry_after_capped_at_60(notifier: Notifier) -> None:
+    """A Retry-After larger than 60s must be clamped to 60s."""
+    ep = _fake_endpoint()
+    sleeps: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    with (
+        patch.object(notifier, "_record_delivery", AsyncMock()),
+        patch.object(notifier, "_increment_dead_letter", AsyncMock()),
+        patch("modulo.core.notifier.asyncio.sleep", _fake_sleep),
+    ):
+        async with respx.mock:
+            respx.post(ep.url).mock(Response(429, headers={"Retry-After": "120"}))
+            await _do_dispatch(notifier, ep)
+
+    assert sleeps, "expected at least one retry delay"
+    assert sleeps == [60.0] * (MAX_ATTEMPTS - 1)
+
+
+async def test_dispatch_429_invalid_retry_after_uses_default_backoff(notifier: Notifier) -> None:
+    """A non-numeric Retry-After must fall back to the default backoff schedule."""
+    ep = _fake_endpoint()
+    sleeps: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    with (
+        patch.object(notifier, "_record_delivery", AsyncMock()),
+        patch.object(notifier, "_increment_dead_letter", AsyncMock()),
+        patch("modulo.core.notifier.asyncio.sleep", _fake_sleep),
+    ):
+        async with respx.mock:
+            respx.post(ep.url).mock(Response(429, headers={"Retry-After": "soon"}))
+            await _do_dispatch(notifier, ep)
+
+    assert sleeps == RETRY_DELAYS
+
+
+async def test_dispatch_429_missing_retry_after_uses_default_backoff(notifier: Notifier) -> None:
+    """A 429 without a Retry-After header must use the default backoff schedule."""
+    ep = _fake_endpoint()
+    sleeps: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    with (
+        patch.object(notifier, "_record_delivery", AsyncMock()),
+        patch.object(notifier, "_increment_dead_letter", AsyncMock()),
+        patch("modulo.core.notifier.asyncio.sleep", _fake_sleep),
+    ):
+        async with respx.mock:
+            respx.post(ep.url).mock(Response(429))
+            await _do_dispatch(notifier, ep)
+
+    assert sleeps == RETRY_DELAYS
+
+
 # ---------------------------------------------------------------------------
 # _increment_dead_letter
 # ---------------------------------------------------------------------------
@@ -452,6 +516,189 @@ async def test_increment_dead_letter_auto_disables_at_threshold(notifier: Notifi
 
 
 # ---------------------------------------------------------------------------
+# _reset_dead_letter
+# ---------------------------------------------------------------------------
+
+
+async def test_reset_dead_letter_resets_counter(notifier: Notifier) -> None:
+    ep = _fake_endpoint()
+    session = AsyncMock()
+    _configure_rls_session(session)
+    executed: list[Any] = []
+
+    async def _capture(stmt: Any) -> MagicMock:
+        executed.append(stmt)
+        return MagicMock()
+
+    session.execute = AsyncMock(side_effect=_capture)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    with patch.object(notifier, "_session_factory", factory):
+        await notifier._reset_dead_letter(ep)
+
+    assert len(executed) == 1
+    stmt = str(executed[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "consecutive_dead_letter_count=0" in stmt
+
+
+async def test_reset_dead_letter_only_touches_positive_counters(notifier: Notifier) -> None:
+    """The UPDATE must be guarded by count > 0 so zero counters are not rewritten."""
+    ep = _fake_endpoint()
+    session = AsyncMock()
+    _configure_rls_session(session)
+    executed: list[Any] = []
+
+    async def _capture(stmt: Any) -> MagicMock:
+        executed.append(stmt)
+        return MagicMock()
+
+    session.execute = AsyncMock(side_effect=_capture)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    with patch.object(notifier, "_session_factory", factory):
+        await notifier._reset_dead_letter(ep)
+
+    assert len(executed) == 1
+    stmt = str(executed[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "consecutive_dead_letter_count > 0" in stmt
+
+
+async def test_reset_dead_letter_survives_db_error(notifier: Notifier) -> None:
+    ep = _fake_endpoint()
+    session = AsyncMock()
+    _configure_rls_session(session)
+    session.execute = AsyncMock(side_effect=RuntimeError("db down"))
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    with (
+        patch.object(notifier, "_session_factory", factory),
+        patch("modulo.core.notifier._log.exception") as mock_log,
+    ):
+        await notifier._reset_dead_letter(ep)
+
+    mock_log.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _record_delivery
+# ---------------------------------------------------------------------------
+
+
+async def test_record_delivery_adds_log_entry(notifier: Notifier) -> None:
+    ep = _fake_endpoint()
+    session = AsyncMock()
+    _configure_rls_session(session)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock()
+    session.add = MagicMock()
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    with patch.object(notifier, "_session_factory", factory):
+        await notifier._record_delivery(ep, "hitl_awaiting", _RUN, "delivered", 1, 200, None, None)
+
+    session.add.assert_called_once()
+    entry = session.add.call_args.args[0]
+    assert isinstance(entry, NotificationDeliveryLog)
+    assert entry.organisation_id == ep.organisation_id
+    assert entry.endpoint_id == ep.id
+    assert entry.event_type == "hitl_awaiting"
+    assert entry.run_id == _RUN
+    assert entry.status == "delivered"
+    assert entry.attempt_count == 1
+    assert entry.response_code == 200
+    assert entry.last_error is None
+    assert entry.payload_ciphertext is None
+
+
+async def test_record_delivery_retains_payload_ciphertext(notifier: Notifier) -> None:
+    ep = _fake_endpoint()
+    ciphertext = b"encrypted-payload-bytes"
+    session = AsyncMock()
+    _configure_rls_session(session)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock()
+    session.add = MagicMock()
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    with patch.object(notifier, "_session_factory", factory):
+        await notifier._record_delivery(ep, "run_failed", _RUN, "dead_lettered", 4, 500, "HTTP 500", ciphertext)
+
+    entry = session.add.call_args.args[0]
+    assert entry.payload_ciphertext == ciphertext
+    assert entry.status == "dead_lettered"
+    assert entry.last_error == "HTTP 500"
+
+
+async def test_record_delivery_survives_db_error(notifier: Notifier) -> None:
+    ep = _fake_endpoint()
+    session = AsyncMock()
+    _configure_rls_session(session)
+    session.add = MagicMock(side_effect=RuntimeError("db down"))
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock()
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    with (
+        patch.object(notifier, "_session_factory", factory),
+        patch("modulo.core.notifier._log.exception") as mock_log,
+    ):
+        await notifier._record_delivery(ep, "hitl_awaiting", _RUN, "delivered", 1, 200, None, None)
+
+    mock_log.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # dispatch_event (integration of the above)
 # ---------------------------------------------------------------------------
 
@@ -481,6 +728,45 @@ async def test_dispatch_event_with_subscriber_sends_notification(notifier: Notif
     assert len(results) == 1
     assert results[0].status == "delivered"
     mock_get.assert_called_once_with(_ORG, "hitl_awaiting", team_id=None)
+
+
+async def test_dispatch_event_in_app_failure_does_not_abort_webhooks(notifier: Notifier) -> None:
+    """A failure creating the in-app notification must not drop webhook results."""
+    ep = _fake_endpoint()
+
+    session = AsyncMock()
+    _configure_rls_session(session)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    with (
+        patch.object(notifier, "_session_factory", factory),
+        patch.object(notifier, "_get_client", AsyncMock(return_value=AsyncMock())),
+        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])),
+        patch.object(notifier, "_dispatch_to_endpoint") as mock_dispatch,
+        patch.object(NotificationEventMapper, "create_from_event", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch("modulo.core.notifier._log.exception") as mock_log,
+    ):
+        mock_dispatch.return_value = DispatchResult(
+            endpoint_id=ep.id,
+            status="delivered",
+            attempt_count=1,
+            response_code=200,
+        )
+
+        results = await notifier.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)})
+
+    assert len(results) == 1
+    assert results[0].status == "delivered"
+    mock_log.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +865,30 @@ async def test_get_subscribed_endpoints(
 def test_init_raises_on_invalid_fernet_key() -> None:
     with pytest.raises(ValueError, match="Invalid Fernet key"):
         Notifier(MagicMock(), "not-a-valid-fernet-key-1234")
+
+
+async def test_get_client_creates_and_reuses(notifier: Notifier) -> None:
+    first_client = MagicMock()
+    first_client.is_closed = False
+    with patch("modulo.core.notifier.httpx.AsyncClient", return_value=first_client) as client_cls:
+        first = await notifier._get_client()
+        second = await notifier._get_client()
+    assert first is second is first_client
+    client_cls.assert_called_once()
+
+
+async def test_get_client_recreates_closed_client(notifier: Notifier) -> None:
+    closed = MagicMock()
+    closed.is_closed = True
+    notifier._http_client = closed
+    fresh = MagicMock()
+    fresh.is_closed = False
+
+    with patch("modulo.core.notifier.httpx.AsyncClient", return_value=fresh) as client_cls:
+        got = await notifier._get_client()
+
+    assert got is fresh
+    client_cls.assert_called_once()
 
 
 async def test_close_noop_when_client_never_created() -> None:
