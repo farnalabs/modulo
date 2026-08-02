@@ -258,7 +258,8 @@ class ExecuteRunTask(Task):  # type: ignore[misc]
                     text(
                         "UPDATE runs SET status='failed', error_code=:code, completed_at=now() "
                         "WHERE id=:rid AND organisation_id=:oid "
-                        "AND status NOT IN ('completed', 'cancelled')"
+                        "AND status NOT IN ('completed', 'cancelled') "
+                        "AND NOT (status='pending' AND error_code IN ('org_capacity_limited', 'pipeline_capacity'))"
                     ),
                     {"code": "task_failure", "rid": run_id, "oid": org_id},
                 )

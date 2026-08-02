@@ -1155,6 +1155,28 @@ def _resolve_snapshot_id(row: Any, latest_snapshots: dict[uuid.UUID, uuid.UUID])
 # ---------------------------------------------------------------------------
 
 
+def _reconcile_capacity_marker_exclusion() -> Any:
+    """Exclude capacity-block reason markers from re-dispatch.
+
+    A capacity-blocked run (demoted to ``pending`` with ``error_code`` in
+    (``org_capacity_limited``, ``pipeline_capacity``)) has a LIVE in-process
+    retry accelerator (``_retry_pending``). If ``dispatcher_reconcile``
+    re-enqueues it, a second worker claims it and spawns a SECOND
+    ``_retry_pending`` loop — two loops can double-execute the same run when
+    a slot frees. These runs are therefore NEVER re-dispatched here; the
+    120-min ``capacity_timeout`` sweep is their backstop. Literal markers,
+    matching the stale-run sweep in ``pipeline_execution.py``.
+    """
+    from sqlalchemy import or_
+
+    from modulo.db.models.run import Run
+
+    return or_(
+        Run.error_code.is_(None),
+        Run.error_code.not_in(("org_capacity_limited", "pipeline_capacity")),
+    )
+
+
 async def dispatcher_reconcile() -> dict[str, Any]:
     """System cron — re-dispatch runs whose SAQ job is missing (every 60s).
 
@@ -1250,6 +1272,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 Run.organisation_id == org_id,
                                 Run.status.in_(("pending", "running")),
                                 re_dispatch_predicate,
+                                _reconcile_capacity_marker_exclusion(),
                             )
                         )
                     ).all()
