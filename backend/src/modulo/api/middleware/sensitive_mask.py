@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import get_db_session, require_system_or_org_admin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import SecretStorageError, decode_stored_secret
 from modulo.db.models.sso_provider import SsoProvider
@@ -164,7 +164,7 @@ async def _fetch_value(
 @router.post("/reveal", response_model=RevealResponse)
 async def reveal_sensitive_value(
     payload: RevealRequest,
-    principal: TenantPrincipal = require_permission("admin.sensitive.manage"),
+    principal: TenantPrincipal = require_system_or_org_admin("admin.sensitive.manage"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> RevealResponse:

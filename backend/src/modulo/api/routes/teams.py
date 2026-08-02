@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, TEAM_ROLE_HIERARCHY
 from modulo.db.crud.team import (
@@ -597,7 +598,7 @@ async def list_members_endpoint(
 async def add_member_endpoint(
     team_id: uuid.UUID,
     req: AddMemberRequest,
-    current_user: TenantPrincipal = require_permission("team.members.manage"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
     user_id = uuid.UUID(req.user_id)
@@ -695,7 +696,7 @@ async def add_member_endpoint(
 async def remove_member_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
-    current_user: TenantPrincipal = require_permission("team.members.manage"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
@@ -767,7 +768,7 @@ async def change_member_role_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
     req: ChangeMemberRoleRequest,
-    current_user: TenantPrincipal = require_permission("team.members.manage"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
     try:
