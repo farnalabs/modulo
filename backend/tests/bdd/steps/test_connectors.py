@@ -385,6 +385,13 @@ def step_github_connector(ctx):
                     ],
                     total=2,
                 )
+            case "pr_diff":
+                return ConnectorResult(records=[{"diff": "diff --git a/README.md b/README.md"}], total=1)
+            case "search_issues":
+                return ConnectorResult(
+                    records=[{"number": 9, "title": "Search hit"}],
+                    total=1,
+                )
             case _:
                 raise ValueError(f"Unsupported resource: {q.resource!r}")
 
@@ -396,6 +403,15 @@ def step_github_connector(ctx):
                 "content": {"name": "new.md"},
                 "commit": {"sha": "abc123"},
             }
+        if payload.resource in (
+            "pr",
+            "pr_merge",
+            "pr_review_request",
+            "pr_label",
+            "pr_comment",
+            "issue_assign",
+        ):
+            return {"number": 1, "ok": True}
         raise ValueError(f"Unsupported write: {payload.resource!r}")
 
     mock_connector.write = mock_write
@@ -501,6 +517,109 @@ def step_github_write_file(resource, content, path, ctx):
         ctx["query_error"] = None
     except Exception as exc:
         ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with head "{head}" and base "{base}"'))
+def step_github_write_pr(resource, head, base, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    connector = ctx["connector"]
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"repo": "owner/repo", "head": head, "base": base},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" on pull number {number:d}'))
+def step_github_write_on_pr(resource, number, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    connector = ctx["connector"]
+    payload = ConnectorPayload(
+        resource=resource,
+        data={
+            "repo": "owner/repo",
+            "pull_number": str(number),
+            "labels": ["ready", "review"],
+            "reviewers": ["alice"],
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" on issue number {number:d}'))
+def step_github_write_on_issue(resource, number, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    connector = ctx["connector"]
+    payload = ConnectorPayload(
+        resource=resource,
+        data={
+            "repo": "owner/repo",
+            "issue_number": str(number),
+            "assignees": ["alice"],
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and pull number {number:d}'))
+def step_github_query_pr_with_pull_number(resource, repo, number, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    q = ConnectorQuery(resource=resource, filters={"repo": repo, "pull_number": str(number)})
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with search query "{search_query}"'))
+def step_github_query_search(resource, search_query, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    q = ConnectorQuery(resource=resource, filters={"q": search_query})
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
         ctx["query_error"] = str(exc)
 
 

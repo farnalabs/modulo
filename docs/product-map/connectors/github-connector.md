@@ -58,10 +58,10 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] List commits on a PR via `query("pr_commits")` with `repo` and `pull_number`
 - [x] List changed files on a PR via `query("pr_files")` with `repo` and `pull_number`
 - [x] `query("pulls")` supports pagination via Link header parsing — `next_cursor` is populated
-- [ ] Merge PR — no implementation
-- [ ] Get PR diff — not implemented
-- [ ] Request PR review — not implemented
-- [ ] Add PR labels — not implemented
+- [x] Merge PR via `write("pr_merge")` with `repo`, `pull_number`, optional `commit_title`, `commit_message`, `merge_method`, `sha` — calls `PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge`
+- [x] Get PR diff via `query("pr_diff")` with `repo` and `pull_number` — fetches raw diff via `Accept: application/vnd.github.v3.diff`, returned as `records[0]["diff"]`
+- [x] Request PR review via `write("pr_review_request")` with `repo`, `pull_number` and `reviewers` and/or `team_reviewers` — calls `POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers`
+- [x] Add PR labels via `write("pr_label")` with `repo`, `pull_number`, `labels` — calls `POST /repos/{owner}/{repo}/issues/{pull_number}/labels`
 
 ### File Operations — read and write via Contents API
 
@@ -94,8 +94,8 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] React to issue via `write("issue_reaction")` with `repo`, `issue_number`, `reaction` content
 - [x] Create label via `write("label")` with `repo`, `name`, `color`, optional `description`
 - [x] Create milestone via `write("milestone")` with `repo`, `title`, optional `description`, `due_on`
-- [ ] Search issues — not implemented
-- [ ] Assign issue — not implemented (`assignees` filter is query-only)
+- [x] Search issues via `query("search_issues")` with required `q` filter and optional `sort`, `order`, `state`, `labels`, `assignee`, `created`, `updated` — uses GitHub Search API (`GET /search/issues`), returns `total_count` and Link-header pagination
+- [x] Assign issue via `write("issue_assign")` with `repo`, `issue_number`, `assignees` — calls `POST /repos/{owner}/{repo}/issues/{issue_number}/assignees`
 
 ### Health Check — connectivity and credential validation
 
@@ -183,12 +183,6 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all raise `ValueError` — no distinct structured error types
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
-- [ ] **Merge PR not implemented**: no `write("pr_merge")` resource handler
-- [ ] **Get PR diff not implemented**: no `query("pr_diff")` resource
-- [ ] **Request PR review not implemented**: no `write("pr_review_request")` resource
-- [ ] **Add PR labels not implemented**: no `write("pr_label")` or `query("pr_labels")` resource
-- [ ] **Search issues not implemented**: no `query("search_issues")` resource — would use GitHub Search API
-- [ ] **Assign issue not implemented**: no `write("issue_assign")` resource
 - [ ] **File content encoding**: caller must base64-encode file content; no encode/decode helper in connector
 - [ ] **Recursive file listing**: `GET /contents` only returns one level; no tree API integration
 - [ ] **Path traversal protection**: relies on GitHub API server-side; no local validation before sending request
@@ -199,6 +193,18 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **`github.feature` (5 scenarios)** and **`github_issues.feature` (15 scenarios)** now in `bdd:` frontmatter — were previously missing
 
 ## QA History
+
+### 2026-08-02 — improve-architecture: 6 known gaps RESOLVED (PR ops, search, assign)
+
+**RESOLVED known gaps** "Merge PR not implemented", "Get PR diff not implemented", "Request PR review not implemented", "Add PR labels not implemented", "Search issues not implemented", "Assign issue not implemented". Added 6 new resource handlers to `connectors/github/__init__.py`:
+- `query("pr_diff")` — fetches raw PR diff via `Accept: application/vnd.github.v3.diff` (`GET /repos/{owner}/{repo}/pulls/{pull_number}`), returned as `records[0]["diff"]`.
+- `query("search_issues")` — GitHub Search API (`GET /search/issues?q=...`) with required `q` filter, optional `sort`/`order`/`state`/`labels`/`assignee`/`created`/`updated`, returns `total_count` + Link-header pagination.
+- `write("pr_merge")` — `PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge` with optional `commit_title`, `commit_message`, `merge_method`, `sha`.
+- `write("pr_review_request")` — `POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers` with `reviewers` and/or `team_reviewers` (at least one required).
+- `write("pr_label")` — `POST /repos/{owner}/{repo}/issues/{pull_number}/labels` with `labels`.
+- `write("issue_assign")` — `POST /repos/{owner}/{repo}/issues/{issue_number}/assignees` with `assignees`.
+
+Added 19 unit tests (`test_github.py`: pr_diff text + Accept header, search_issues records/empty/pagination/optional params, pr_merge body variants, pr_review_request reviewers/team/both/missing, pr_label, issue_assign, plus missing-filter/data validation). Added 6 BDD scenarios in `github_connector.feature` (merge, review request, labels, assign, pr_diff, search) with 5 new step definitions in `test_connectors.py`, and **fixed 2 pre-existing broken scenarios** ("Create a pull request" and "Comment on a pull request" referenced steps that didn't exist in the step file). Updated product map (6 behaviours `[ ]`→`[x]`, Known Gaps 22→16, QA History). 61/61 `test_github.py` unit tests + 139/139 github connector unit tests pass, ruff clean. Status: partial (no OAuth flow, fine-grained PAT, scope verification, rate-limit budget, circuit breaker, recursive/batch file ops, path traversal remain).
 
 ### 2026-07-07 — Cross-cutting QA feat-connectors-github (index 296)
 
