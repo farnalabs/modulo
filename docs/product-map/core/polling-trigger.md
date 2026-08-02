@@ -65,6 +65,10 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 - [x] Active run count checked against `trigger.max_concurrent_runs` before firing
 - [x] Concurrency limit reached -> `concurrency_limit_reached` logged and task returns `skipped`
 - [x] Daily spend limit (`trigger.daily_spend_limit`) checked before the connector query — over-budget trigger logs `spend_limit_reached`, advances `next_fire_at`, and returns `skipped`
+- [x] `daily_spend_limit` is settable/readable via the trigger CRUD API — `POST /pipelines/{id}/triggers` and `PUT /triggers/{id}` accept it on create/update (explicit `null` clears it) and every trigger response echoes it (`list_triggers`, `create_trigger`, `update_trigger`, `restore_trigger`, `list_pipeline_triggers`)
+- [x] `daily_spend_limit` is settable/readable via `PATCH /triggers/{id}/polling` (explicit `null` clears it)
+- [x] Negative `daily_spend_limit` is rejected with 422 by FastAPI validation (`ge=0`)
+- [x] `Trigger.daily_spend_limit` defaults to `None` (unlimited) on the MCP `create_trigger` tool, which also accepts `max_concurrent_runs` and `daily_spend_limit`
 - [ ] Queue depth / rejection mechanism for polling (webhook has it; polling does not)
 
 ### TriggerEvent Audit
@@ -140,9 +144,13 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 - `DatabasePollingScheduler._sync_with_db()` calls `asyncio.run()` per tick — new event loop every 30s
 - No queue depth / rejection mechanism for polling
 - Redis mid-session failure not handled (triggers stop firing, no reconnection)
-- Trigger-level `daily_spend_limit` is enforced at fire time but not exposed via the trigger CRUD/polling-config API — set only via the DB or admin paths
 
 ## QA History
+
+### 2026-08-02 (round 2) — Cross-cutting QA (improve-architecture)
+
+**Findings fixed:**
+- MINOR: RESOLVED the Known Gap "Trigger-level `daily_spend_limit` is enforced at fire time but not exposed via the trigger CRUD/polling-config API — set only via the DB or admin paths". `daily_spend_limit` is now accepted on `TriggerCreate`, `TriggerUpdate`, and `PollingConfigUpdate` (validated `ge=0`; explicit `null` clears it via `model_fields_set`, omitted `None` leaves it unchanged) and echoed as `daily_spend_limit` on every trigger response (`list_triggers`, `create_trigger`, `update_trigger`, `restore_trigger`, `update_polling_config`, `list_pipeline_triggers`). Added the same exposure to the MCP `create_trigger` tool (`max_concurrent_runs` + `daily_spend_limit` params, validated). Added 7 unit tests in `test_triggers_endpoint.py` (create echo + constructor arg, negative → 422, update set/clear, polling-config set/clear, list echo). Updated product map (`polling-trigger.md` + `trigger-system.md`).
 
 ### 2026-08-02 — Cross-cutting QA (improve-architecture)
 
@@ -152,7 +160,7 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 - MINOR: Added 5 unit tests in `test_polling.py` (`TestDailySpendLimit`): limit reached skip + event + next_fire advance, `today_cost == limit` boundary, below-limit fires, no-limit fires, spend query SQL scoping (trigger_id/org/created_at). Updated `_make_trigger` (defaults `daily_spend_limit=None`) and `_setup_session_for_polling` (routes `total_cost_usd` spend query).
 - MINOR: Updated product map (behaviours `[ ]`→`[x]`, Error Handling / TriggerEvent Audit / Edge Cases sections, Known Gaps RESOLVED, `bdd:` + `unit-tests:` frontmatter).
 
-**Test results:** 63/63 polling unit tests pass (58 + 5 new); 9/9 polling BDD scenarios pass. Status: partial (queue-depth + spend-limit API exposure remain open).
+**Test results:** 63/63 polling unit tests pass (58 + 5 new); 9/9 polling BDD scenarios pass. Status: partial (queue-depth mechanism remains open; spend-limit API exposure resolved 2026-08-02 round 2).
 
 ### 2026-07-05 — Cross-cutting QA (improve-architecture index 156)
 

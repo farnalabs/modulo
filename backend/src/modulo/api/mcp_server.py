@@ -22,6 +22,7 @@ import traceback as _traceback
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import Any
 from urllib.parse import quote
 
@@ -1996,6 +1997,8 @@ async def create_trigger(
     active: bool = True,
     cron_expression: str | None = None,
     config_json: dict[str, Any] | None = None,
+    max_concurrent_runs: int = 1,
+    daily_spend_limit: float | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -2009,6 +2012,11 @@ async def create_trigger(
         except ValueError:
             return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
+        if max_concurrent_runs < 1:
+            return {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
+        if daily_spend_limit is not None and daily_spend_limit < 0:
+            return {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+
         from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
@@ -2017,6 +2025,8 @@ async def create_trigger(
                 pipeline_id=pid,
                 trigger_type=trigger_type,
                 active=active,
+                max_concurrent_runs=max_concurrent_runs,
+                daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
                 config_json=config_json or {},
                 account_id=account_id,
             )
@@ -2034,6 +2044,8 @@ async def create_trigger(
             "pipeline_id": str(trigger.pipeline_id),
             "trigger_type": trigger.trigger_type,
             "active": trigger.active,
+            "max_concurrent_runs": trigger.max_concurrent_runs,
+            "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
             "cron_expression": trigger.cron_expression,
         }
     except MCPAuthorizationError as exc:
