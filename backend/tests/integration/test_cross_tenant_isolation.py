@@ -135,7 +135,7 @@ async def _seed_pipeline(
 @pytest_asyncio.fixture
 async def integration_client(
     db_url: str,
-    db_engine: AsyncEngine,
+    app_engine: AsyncEngine,
 ) -> AsyncClient:
     from modulo.api.dependencies import _get_engine, get_db_session
     from modulo.api.main import app
@@ -152,12 +152,15 @@ async def integration_client(
     )
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        # app_engine sessions run as a non-superuser role, so the RLS policies
+        # actually filter cross-org rows (the testcontainers superuser bypasses
+        # RLS even under FORCE ROW LEVEL SECURITY).
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session:
             yield session
 
     app.dependency_overrides[get_settings] = lambda: settings
-    app.dependency_overrides[_get_engine] = lambda: db_engine
+    app.dependency_overrides[_get_engine] = lambda: app_engine
     app.dependency_overrides[get_db_session] = override_session
 
     transport = ASGITransport(app=app)
@@ -294,13 +297,13 @@ class TestOrgDataIsolation:
 
 
 class TestSystemAdminAccess:
-    """System admin (no org_id claim) bypasses RLS and sees all orgs."""
+    """System admin (no org_id claim) bypasses tenant scoping via admin routes."""
 
-    async def test_system_admin_sees_all_pipelines(
+    async def test_system_admin_lists_all_orgs(
         self,
         integration_client: AsyncClient,
-        pipeline_a: uuid.UUID,
-        pipeline_b: uuid.UUID,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
     ) -> None:
         sys_admin_id = uuid.uuid4()
         token = _token(
@@ -310,13 +313,13 @@ class TestSystemAdminAccess:
             is_system_admin=True,
         )
         resp = await integration_client.get(
-            "/api/v1/pipelines",
+            "/api/v1/admin/orgs",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 200
-        ids = {p["id"] for p in resp.json()["items"]}
-        assert str(pipeline_a) in ids, "System admin should see pipeline A"
-        assert str(pipeline_b) in ids, "System admin should see pipeline B"
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        org_ids = {o["id"] for o in resp.json()}
+        assert str(org_a) in org_ids, "System admin should see org A"
+        assert str(org_b) in org_ids, "System admin should see org B"
 
 
 # ===================================================================

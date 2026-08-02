@@ -121,9 +121,19 @@ async def _delete_demo_accounts(conn: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _clean_onboarding_before_test() -> None:
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_onboarding_before_test(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+) -> None:
+    """Reset onboarding state before every test (file-based + DB progress rows)."""
     _clean_onboarding_state()
+    async with db_engine.connect() as conn:
+        await conn.execute(
+            text("DELETE FROM onboarding_progress WHERE organisation_id = :oid"),
+            {"oid": str(test_org)},
+        )
+        await conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -471,14 +481,23 @@ class TestDemoAuth:
 
 
 class TestDemoOnboarding:
-    """Test the onboarding/first-run flow with a demo user."""
+    """Test the action-based first-run onboarding flow with a demo user."""
+
+    _ACTION_IDS = (
+        "login",
+        "add_ai_model",
+        "create_first_agent",
+        "create_first_schema",
+        "create_first_pipeline",
+        "run_first_pipeline",
+    )
 
     @pytest_asyncio.fixture(autouse=True)
     async def _ensure_demo_user(self, test_demo_user: uuid.UUID) -> None:
         pass
 
     async def test_onboarding_status_first_run(self, demo_client: AsyncClient) -> None:
-        """Onboarding should report is_first_run=True when no pipelines exist."""
+        """A fresh org reports is_first_run=True and lists all six actions."""
         token = await _demo_login(demo_client)
         resp = await demo_client.get(
             "/api/v1/onboarding/status",
@@ -487,61 +506,52 @@ class TestDemoOnboarding:
         assert resp.status_code == 200, f"/onboarding/status failed: {resp.text}"
         data = resp.json()
         assert data["is_first_run"] is True
-        assert data["completed_steps"] == []
-        assert data["current_step"] == 1
-        assert data["total_steps"] == 4
+        assert data["dismissed"] is False
+        assert len(data["actions"]) == 6
+        assert {a["id"] for a in data["actions"]} == set(self._ACTION_IDS)
 
     async def test_onboarding_mark_step(self, demo_client: AsyncClient) -> None:
+        """Completing an action is reflected in the response."""
         token = await _demo_login(demo_client)
         resp = await demo_client.post(
-            "/api/v1/onboarding/step",
-            json={"step_id": "connect_tools"},
+            "/api/v1/onboarding/actions/add_ai_model/complete",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 200, f"Mark step failed: {resp.text}"
+        assert resp.status_code == 200, f"Mark action failed: {resp.text}"
         data = resp.json()
-        assert data["step_id"] == "connect_tools"
+        assert data["action_id"] == "add_ai_model"
         assert data["completed"] is True
-        assert "connect_tools" in data["completed_steps"]
 
     async def test_onboarding_mark_invalid_step(self, demo_client: AsyncClient) -> None:
+        """Unknown action ids are rejected with 422."""
         token = await _demo_login(demo_client)
         resp = await demo_client.post(
-            "/api/v1/onboarding/step",
-            json={"step_id": "invalid_step"},
+            "/api/v1/onboarding/actions/invalid_step/complete",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 422
 
     async def test_onboarding_get_step_data(self, demo_client: AsyncClient) -> None:
+        """Status lists every onboarding action with its metadata."""
         token = await _demo_login(demo_client)
         resp = await demo_client.get(
-            "/api/v1/onboarding/step/connect_tools",
+            "/api/v1/onboarding/status",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 200, f"Get step data failed: {resp.text}"
-        data = resp.json()
-        assert data["step_id"] == "connect_tools"
-        assert "data" in data
-        assert "connectors" in data["data"]
-
-    async def test_onboarding_get_invalid_step_data(self, demo_client: AsyncClient) -> None:
-        token = await _demo_login(demo_client)
-        resp = await demo_client.get(
-            "/api/v1/onboarding/step/invalid_step",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        actions = {a["id"]: a for a in resp.json()["actions"]}
+        assert "add_ai_model" in actions
+        assert actions["add_ai_model"]["route"] == "/settings/model-backends"
 
     async def test_onboarding_complete_all_steps(self, demo_client: AsyncClient) -> None:
+        """Completing every action flips is_first_run to False."""
         token = await _demo_login(demo_client)
-        for step_id in ["connect_tools", "select_template", "configure_agent", "run_demo"]:
+        for action_id in self._ACTION_IDS:
             resp = await demo_client.post(
-                "/api/v1/onboarding/step",
-                json={"step_id": step_id},
+                f"/api/v1/onboarding/actions/{action_id}/complete",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            assert resp.status_code == 200, f"Mark step {step_id} failed: {resp.text}"
+            assert resp.status_code == 200, f"Mark action {action_id} failed: {resp.text}"
 
         resp = await demo_client.get(
             "/api/v1/onboarding/status",
@@ -551,17 +561,16 @@ class TestDemoOnboarding:
         assert data["is_first_run"] is False
 
     async def test_onboarding_current_step_updates(self, demo_client: AsyncClient) -> None:
+        """Completing one action is persisted and shown in the status response."""
         token = await _demo_login(demo_client)
-
         resp = await demo_client.get(
             "/api/v1/onboarding/status",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.json()["current_step"] == 1
+        assert resp.json()["is_first_run"] is True
 
         await demo_client.post(
-            "/api/v1/onboarding/step",
-            json={"step_id": "connect_tools"},
+            "/api/v1/onboarding/actions/add_ai_model/complete",
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -569,7 +578,9 @@ class TestDemoOnboarding:
             "/api/v1/onboarding/status",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.json()["current_step"] == 2
+        data = resp.json()
+        assert "add_ai_model" in data["completed_actions"]
+        assert data["is_first_run"] is False
 
     async def test_onboarding_unauthorized(self, demo_client: AsyncClient) -> None:
         """Unauthenticated requests to onboarding should be rejected."""
@@ -636,6 +647,7 @@ class TestDemoPipeline:
         demo_client: AsyncClient,
         demo_pipeline: uuid.UUID,
     ) -> None:
+        """An existing pipeline auto-completes the create_first_pipeline action."""
         token = await _demo_login(demo_client)
         resp = await demo_client.get(
             "/api/v1/onboarding/status",
@@ -643,4 +655,5 @@ class TestDemoPipeline:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["is_first_run"] is False
+        actions = {a["id"]: a for a in data["actions"]}
+        assert actions["create_first_pipeline"]["completed"] is True

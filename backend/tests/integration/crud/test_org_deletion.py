@@ -4,6 +4,7 @@ Tests the full deletion workflow: request → soft-delete → confirm → hard-d
 including token validation, export capture, and run retention cleanup.
 """
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -58,20 +59,26 @@ async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) ->
     return account_id
 
 
-async def _create_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, name: str) -> uuid.UUID:
+async def _create_pipeline(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    name: str,
+    account_id: uuid.UUID,
+) -> uuid.UUID:
     pid = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, "
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
                 "visibility, max_concurrent_runs, lock_wait_timeout_seconds, "
                 "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :org_id, :name, 'org', 1, 30, '{}'::json, '[]'::json)",
+                "VALUES (:id, :org_id, :name, :account_id, 'org', 1, 30, '{}'::json, '[]'::json)",
             ),
             {
                 "id": str(pid),
                 "org_id": str(org_id),
                 "name": name,
+                "account_id": str(account_id),
             },
         )
     return pid
@@ -133,7 +140,7 @@ class TestRequestOrgDeletion:
         org_id = await _create_org(db_engine, "already-deleted")
         user_id = await _create_user(db_engine, org_id, "gone@test.com")
 
-        # First deletion request succeeds
+        # First deletion request succeeds (must commit so the soft-delete sticks)
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             await session.execute(
@@ -141,7 +148,7 @@ class TestRequestOrgDeletion:
                 {"oid": str(org_id)},
             )
             await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            await session.commit()
 
         # Second request raises
         async with factory() as session:
@@ -165,7 +172,7 @@ class TestRequestOrgDeletion:
                 {"oid": str(org_id)},
             )
             result = await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            await session.commit()
 
         assert "token" in result
         assert len(result["token"]) > 20
@@ -179,12 +186,12 @@ class TestRequestOrgDeletion:
         assert state["deletion_token_expires_at"] is not None
         assert state["export_bundle_json"] is not None
 
-    async def test_soft_marks_child_rows(self, db_engine: AsyncEngine) -> None:
+    async def test_soft_delete_retains_child_rows(self, db_engine: AsyncEngine) -> None:
         from modulo.db.crud.org_deletion import request_org_deletion
 
         org_id = await _create_org(db_engine, "child-rows")
         user_id = await _create_user(db_engine, org_id, "child@test.com")
-        await _create_pipeline(db_engine, org_id, "Child Pipeline")
+        await _create_pipeline(db_engine, org_id, "Child Pipeline", user_id)
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
@@ -193,16 +200,22 @@ class TestRequestOrgDeletion:
                 {"oid": str(org_id)},
             )
             await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            await session.commit()
 
-        # Check that pipelines are soft-deleted
+        # The org is deactivated (soft-delete)...
+        state = await _get_org_status(db_engine, org_id)
+        assert state["status"] == "deleted"
+        assert state["deleted_at"] is not None
+
+        # ...but child data is retained during the grace window (PRD §org
+        # deletion: "Data retained for 30 days"). Child rows are not hard-deleted
+        # until confirmation.
         async with db_engine.connect() as conn:
             result = await conn.execute(
-                text("SELECT COUNT(*) FROM pipelines WHERE organisation_id = :oid AND deleted_at IS NOT NULL"),
+                text("SELECT COUNT(*) FROM pipelines WHERE organisation_id = :oid"),
                 {"oid": str(org_id)},
             )
-            deleted_pipelines = result.scalar_one()
-            assert deleted_pipelines == 1
+            assert result.scalar_one() == 1
 
     async def test_export_bundle_contains_all_sections(self, db_engine: AsyncEngine) -> None:
         from modulo.db.crud.org_deletion import request_org_deletion
@@ -217,11 +230,11 @@ class TestRequestOrgDeletion:
                 {"oid": str(org_id)},
             )
             result = await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            await session.commit()
 
         export = result["export"]
         assert "organisation" in export
-        assert "users" in export
+        assert "memberships" in export
         assert "pipelines" in export
         assert "runs" in export
         assert "audit_events" in export
@@ -274,11 +287,12 @@ class TestConfirmOrgDeletion:
                 text("SELECT set_config('app.organisation_id', :oid, true)"),
                 {"oid": str(org_id)},
             )
-            req = await request_org_deletion(session, org_id, user_id)
-            await session.flush()
+            result = await request_org_deletion(session, org_id, user_id)
+            await session.commit()
 
         async with factory() as session:
-            result = await confirm_org_deletion(session, org_id=org_id, token=req["token"])
+            result = await confirm_org_deletion(session, org_id=org_id, token=result["token"])
+            await session.commit()
         assert result["deleted_organisation_id"] == str(org_id)
 
         # Org should be gone
@@ -306,6 +320,7 @@ class TestConfirmOrgDeletion:
 
         async with factory() as session:
             result = await confirm_org_deletion(session, org_id=org_id, token="ignored", immediate=True)
+            await session.commit()
         assert result["deleted_organisation_id"] == str(org_id)
 
     async def test_raises_when_token_expired(self, db_engine: AsyncEngine) -> None:
@@ -329,7 +344,7 @@ class TestConfirmOrgDeletion:
                     "id": str(org_id),
                 },
             )
-            await session.flush()
+            await session.commit()
 
         async with factory() as session:
             with pytest.raises(ValueError, match="has expired"):
@@ -358,11 +373,11 @@ class TestExportOrgData:
             await session.execute(
                 text("UPDATE organisations SET export_bundle_json = :bundle WHERE id = :id"),
                 {
-                    "bundle": {"organisation": [{"name": "Cached Org"}]},
+                    "bundle": json.dumps({"organisation": [{"name": "Cached Org"}]}),
                     "id": str(org_id),
                 },
             )
-            await session.flush()
+            await session.commit()
 
         async with factory() as session:
             bundle = await export_org_data(session, org_id)
@@ -372,16 +387,16 @@ class TestExportOrgData:
         from modulo.db.crud.org_deletion import export_org_data
 
         org_id = await _create_org(db_engine, "live-export")
-        await _create_user(db_engine, org_id, "live-export@test.com")
-        await _create_pipeline(db_engine, org_id, "Live Pipeline")
+        user_id = await _create_user(db_engine, org_id, "live-export@test.com")
+        await _create_pipeline(db_engine, org_id, "Live Pipeline", user_id)
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             bundle = await export_org_data(session, org_id)
         assert "organisation" in bundle
-        assert "users" in bundle
+        assert "memberships" in bundle
         assert "pipelines" in bundle
-        assert len(bundle["users"]) >= 1
+        assert len(bundle["memberships"]) >= 1
         assert len(bundle["pipelines"]) >= 1
 
 
