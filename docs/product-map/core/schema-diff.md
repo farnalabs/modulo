@@ -75,7 +75,7 @@ Compute structural diffs between two JSON Schema definitions and transform data 
 - [x] Same source and target schema — empty migration plan (no changes detected)
 - [x] Single-field schema — diff detected correctly
 - [x] Large schemas (1000+ fields) — diff computation and apply scale test
-- [ ] Circular rename chains (A→B, B→A) — may produce unpredictable results
+- [x] Circular rename chains (A→B, B→A) — detected via `_detect_rename_cycles` and applied as a value rotation (swap), no data loss
 - [x] Non-existent version in migration chain gap detection — MissingMigrationError raised
 - [x] Audit table missing (ProgrammingError on append) — logged, migration succeeds
 
@@ -87,7 +87,11 @@ Compute structural diffs between two JSON Schema definitions and transform data 
 
 ## Known Gaps
 
-- Circular rename chains (A→B, B→A) produce a deterministic-but-unpredictable result (each removed field is greedily matched to the first same-type added field, so a full swap is applied). No cycle detection.
+- Circular rename chains (A→B, B→A) — **RESOLVED 2026-08-02**: `apply_migration` now detects rename cycles via `_detect_rename_cycles()` and applies them as value rotations (a full A↔B swap preserves both values) instead of the previous overwrite that lost one field; rename *detection* in `create_migration` is now deterministic (candidate names sorted) so the same schema pair always yields the same plan across runs/hash seeds. Covered by `TestApplyMigration` (swap/3-cycle/chain) + `TestDetectRenameCycles` + determinism tests + BDD scenario (8 scenarios in `schema_migration.feature`).
 - POST /api/v1/schemas/migrate/plan is stateless and unaudited by design — it only previews a plan from inline definitions and never touches persisted schemas.
 - The `/migrate/plan` endpoint has no auth dependency (pure compute on request bodies). Confirm this is acceptable before shipping in a public deployment.
 - MigrationRegistry's `validate_chain` reports gaps but callers have no degraded fallback — a partial chain is an error, never a best-effort migration.
+
+## QA History
+
+- 2026-08-02 (improve-architecture): Resolved the circular-rename-chain gap — deterministic rename detection + cycle-safe value-rotation application in `apply_migration` (`_apply_renames`/`_detect_rename_cycles`), 11 new core unit tests, 1 new BDD scenario + plural `fields` step definitions. 89/89 core schema-migration unit tests + 8/8 BDD scenarios pass; ruff clean.

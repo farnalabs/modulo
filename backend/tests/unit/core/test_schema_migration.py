@@ -10,6 +10,7 @@ from modulo.core.schema_registry.migration import (
     MigrationRegistry,
     MissingMigrationError,
     SchemaMigration,
+    _detect_rename_cycles,
     add_field,
     apply_migration,
     convert_field,
@@ -125,6 +126,44 @@ class TestCreateMigration:
         assert plan.field_removals == []
         assert plan.type_changes == {}
         assert plan.renames == {}
+
+    def test_rename_matching_is_deterministic(self) -> None:
+        old = {
+            "type": "object",
+            "properties": {
+                "a": {"type": "string"},
+                "b": {"type": "string"},
+                "c": {"type": "integer"},
+            },
+        }
+        new = {
+            "type": "object",
+            "properties": {
+                "x": {"type": "string"},
+                "y": {"type": "string"},
+                "z": {"type": "integer"},
+            },
+        }
+        plans = {tuple(create_migration(old, new).renames.items()) for _ in range(50)}
+        assert len(plans) == 1
+
+    def test_rename_matching_pairs_sorted_by_name(self) -> None:
+        old = {
+            "type": "object",
+            "properties": {
+                "a": {"type": "string"},
+                "b": {"type": "string"},
+            },
+        }
+        new = {
+            "type": "object",
+            "properties": {
+                "x": {"type": "string"},
+                "y": {"type": "string"},
+            },
+        }
+        plan = create_migration(old, new)
+        assert plan.renames == {"a": "x", "b": "y"}
 
     def test_handles_missing_properties(self) -> None:
         plan = create_migration({"type": "object"}, {"type": "object"})
@@ -245,6 +284,26 @@ class TestApplyMigration:
         assert result["display_name"] == "Alice"
         assert result["age"] == 30
 
+    def test_apply_circular_rename_swaps_values(self) -> None:
+        plan = MigrationPlan(renames={"a": "b", "b": "a"})
+        result = apply_migration({"a": 1, "b": 2}, plan)
+        assert result == {"a": 2, "b": 1}
+
+    def test_apply_circular_rename_preserves_both_fields(self) -> None:
+        plan = MigrationPlan(renames={"a": "b", "b": "a"})
+        result = apply_migration({"a": "x", "b": "y", "keep": "z"}, plan)
+        assert result == {"a": "y", "b": "x", "keep": "z"}
+
+    def test_apply_three_node_rename_cycle_rotates_values(self) -> None:
+        plan = MigrationPlan(renames={"a": "b", "b": "c", "c": "a"})
+        result = apply_migration({"a": 1, "b": 2, "c": 3}, plan)
+        assert result == {"a": 3, "b": 1, "c": 2}
+
+    def test_apply_rename_chain_forwards_values(self) -> None:
+        plan = MigrationPlan(renames={"a": "b", "b": "c"})
+        result = apply_migration({"a": 1, "b": 2, "c": 3}, plan)
+        assert result == {"b": 1, "c": 2}
+
     def test_apply_idempotent(self) -> None:
         plan = MigrationPlan(
             field_additions={"email": "string"},
@@ -283,6 +342,23 @@ class TestTransformField:
         result = transform_field(data, "missing", int)
         assert result == data
         assert result is not data
+
+
+class TestDetectRenameCycles:
+    def test_empty_renames_no_cycles(self) -> None:
+        assert _detect_rename_cycles({}) == []
+
+    def test_plain_rename_no_cycle(self) -> None:
+        assert _detect_rename_cycles({"a": "b"}) == []
+
+    def test_two_node_cycle(self) -> None:
+        assert _detect_rename_cycles({"a": "b", "b": "a"}) == [["a", "b"]]
+
+    def test_three_node_cycle(self) -> None:
+        assert _detect_rename_cycles({"a": "b", "b": "c", "c": "a"}) == [["a", "b", "c"]]
+
+    def test_chain_with_cycle_only_returns_cycle(self) -> None:
+        assert _detect_rename_cycles({"a": "b", "b": "a", "x": "y"}) == [["a", "b"]]
 
 
 # ---------------------------------------------------------------------------
