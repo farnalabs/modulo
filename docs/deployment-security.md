@@ -6,7 +6,6 @@ basic deployment instructions in `docs/deployment.md`.
 
 **Prerequisite reading:**
 - `docs/deployment.md` — base deployment reference
-- `docs/deployment/k8s.md` — Kubernetes-specific config
 - `docs/security/secret-management.md` — key rotation, leak response
 - `docs/operations/network-egress.md` — data residency verification
 - `docs/system-requirements.md` — hardware and platform requirements
@@ -26,7 +25,6 @@ expects a proxy to handle it.
 |-------|-------|
 | **Caddy** | Automatic ACME (Let's Encrypt). Reference Caddyfile in `deploy/caddy/`. |
 | **nginx** | Manual cert + `ssl_certificate` directives. See `docs/deployment.md` §TLS/HTTPS. |
-| **K8s Ingress** | cert-manager `ClusterIssuer`. See `docs/deployment/k8s.md` §6. |
 
 Cipher requirements (from `configs/nginx/ssl.conf` where shipped):
 
@@ -231,7 +229,7 @@ other applications sharing the same Postgres instance.
 - Always test migrations against a staging copy of production data.
 - If a migration fails mid-flight, the advisory lock is released at transaction
   end — the next attempt will re-acquire it.
-- See `docs/deployment/k8s.md` §9 for rollback procedures.
+- See `docs/upgrade-process.md` for rollback procedures.
 
 ### 3.5 Backup Encryption
 
@@ -564,7 +562,7 @@ downgrade path, **do not force it** — write a forward-fix migration instead.
 **Prefer a forward-fix over downgrading** — write a new migration that reverts
 the schema change rather than using `alembic downgrade`.
 
-See `docs/deployment/k8s.md` §9 for the full K8s rollback guide.
+See `docs/upgrade-process.md` for the full rollback guide.
 
 ### 7.3 Zero-Downtime Considerations
 
@@ -666,7 +664,6 @@ before marking a production deployment as complete.
 | Topic | Document |
 |-------|----------|
 | Deployment basics | `docs/deployment.md` |
-| K8s deployment | `docs/deployment/k8s.md` |
 | VPC isolation checklist | `docs/deployment/vpc-checklist.md` |
 | Secret management | `docs/security/secret-management.md` |
 | Input validation | `docs/security/input-validation-guide.md` |

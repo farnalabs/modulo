@@ -4,7 +4,7 @@
 
 - Python 3.12+
 - PostgreSQL 16+
-- Redis 7+ (SAQ broker, rate limiting, caches)
+- Redis 7+ (for Celery task queue)
 
 ## Installation
 
@@ -269,7 +269,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `FERNET_KEY` | **Yes** | — | 44-char base64 Fernet key for credential encryption |
 | `MODULO_USERS` | Alpha | — | Comma-separated `user:pass` pairs for initial user seed |
 | `MODULO_DB` | No | `postgres` | Database backend (`postgres` or `sqlite`) |
-| `REDIS_URL` | Required | - | `redis://host:port/db` for the SAQ broker |
+| `REDIS_URL` | With Celery | — | `redis://host:port/db` for task queue |
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |
@@ -324,26 +324,20 @@ curl https://modulo.run/install.sh | bash
 | Component | How it runs |
 |---|---|
 | Database | PostgreSQL 16 (separate container) |
-| Task scheduling | SAQ system worker `fire_due_triggers` cron |
-| Task queue | SAQ workers (runs + system) |
+| Task scheduling | In-process asyncio loops (default) or Celery beat (with Redis) |
+| Task queue | In-process (default) or Celery workers (with Redis) |
 | Rate limiting | In-memory (default) or Redis token bucket (with Redis) |
 | Concurrency | Single backend replica, multiple simultaneous requests |
 
-Modulo requires Redis: `REDIS_URL` must be set in production. The SAQ workers (runs + system) provide scheduling, queuing, and run dispatch. If Redis is absent, everything still works via in-process fallbacks with a startup notice.
+If Redis is configured (`REDIS_URL` set), the app automatically upgrades scheduling, queuing, and rate limiting to use Celery + Redis. If Redis is absent, everything still works via in-process fallbacks with a startup notice.
 
 ### Kubernetes (production, multi-replica)
 
-See `docs/deployment/k8s.md` and the Helm chart at `helm/modulo/`.
-
-| Component | How it runs |
-|---|---|
-| Database | PostgreSQL 16 (Bitnami sub-chart or external) |
-| Task scheduling | SAQ system worker `fire_due_triggers` (Redis required) |
-| Task queue | SAQ workers (runs + system, Redis required) |
-| Rate limiting | Redis token bucket (Redis required) |
-| Concurrency | Multiple backend replicas, horizontal scaling |
-
-**Redis is required for multi-replica deployments.** See the Scaling section below.
+The Kubernetes/Helm example deployment configs were removed — they were never
+exercised by CI or used in production. Modulo's only managed deployment path is
+Fly.io. For self-hosting, use the Docker Compose configuration
+(`docker-compose.prod.yml`). Kubernetes/Helm support can be re-added later as a
+properly maintained example config.
 
 ---
 
@@ -355,9 +349,9 @@ For more than one backend replica, **Redis is mandatory.** Here's why:
 
 | Feature | Without Redis | With Redis | What goes wrong at 2+ replicas |
 |---|---|---|---|
-| Cron triggers | SAQ `fire_due_triggers` | Multi-machine atomic `next_fire_at` | Exactly one fire per epoch (atomic advance at enqueue). |
-| Polling triggers | SAQ per-item fire job | Runs queue | Fires via the runs worker. |
-| Task queue | SAQ broker (Redis) | Runs + system queues | Jobs are enqueued to Redis; any machine's worker dequeues them. If that replica crashes or is scaled down, the task disappears. |
+| Cron triggers | In-process asyncio loop | Celery beat | Both replicas fire every trigger. Runs execute twice. |
+| Polling triggers | In-process asyncio loop | Celery worker | Same — duplicate execution. |
+| Task queue | In-process | Celery broker + result backend | Tasks are scheduled in the replica that received the request. If that replica crashes or is scaled down, the task disappears. |
 | Rate limiting | In-memory dict | Redis token bucket | Each replica has its own counter. A user hitting both replicas effectively doubles their rate limit. |
 | Lock coordination | PG advisory locks | PG advisory locks | These work across replicas via PostgreSQL — no Redis needed for locks. |
 

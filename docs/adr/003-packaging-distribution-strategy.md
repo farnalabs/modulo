@@ -155,5 +155,4 @@ Adopt a **tiered distribution strategy** with three tiers corresponding to user 
 - ADR 002 — Multi-Backend Database Abstraction Strategy (SQLite foundation)
 - `backend/Dockerfile` — needs production multi-stage rewrite
 - `frontend/Dockerfile.prod` — nginx config broken (`/tmp/nginx-template`)
-- `helm/modulo/values.yaml` — references `ghcr.io/anomalyco/modulo-*`
 - `docker-compose.yml` — dev-mode, builds from source

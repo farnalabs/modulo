@@ -38,7 +38,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. This doc
 ┌──────────────────────▼───────────────────────────────────────┐
 │              PostgreSQL 16 + Redis 7                          │
 │  Models → Migrations → RLS → LangGraph checkpoints            │
-│  SAQ broker + job queue (Redis)                      │
+│  Celery broker + result backend (optional)                    │
 │  Rate limiting (Redis token bucket or in-memory)              │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -52,7 +52,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. This doc
 | **Graph execution** | LangGraph (StateGraph) | Pipeline agent orchestration |
 | **ORM** | SQLAlchemy 2.0 (async) | Database access |
 | **Migrations** | Alembic | Schema versioning |
-| **Task queue** | SAQ + Redis | Async run dispatch, cron firing |
+| **Task queue** | Celery + Redis | Async task processing (optional) |
 | **Auth** | PyJWT[crypto], authlib (v1) | JWT, OAuth 2.0 |
 | **LLM SDKs** | anthropic, openai | Model backend integrations |
 | **Observability** | OpenTelemetry | Tracing, metrics |
@@ -62,7 +62,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. This doc
 | **Routing** | Vue Router | Client-side routing |
 | **Styling** | CSS custom properties | Theming (standard/agent) |
 | **Database** | PostgreSQL 16 | Primary data store |
-| **Cache/queue** | Redis 7 | SAQ broker, rate limiting |
+| **Cache/queue** | Redis 7 | Celery broker, rate limiting |
 | **Container** | Docker Compose | Local dev, production |
 | **Orchestration** | Helm + Kubernetes | Production (multi-replica) |
 
@@ -299,7 +299,7 @@ Redis-backed token bucket. In-memory fallback with startup warning for single-pr
 |------|-----------|----------|
 | **Standalone** | Single process + SQLite file | Local dev, quick evaluation |
 | **Docker Compose** | Backend + Frontend + PostgreSQL 16 + (optional) Redis 7 + (optional) OTel stack | Single-server production |
-| **Kubernetes** | Multiple replicas + SAQ workers + Redis + PostgreSQL 16 (Bitnami sub-chart) | Multi-replica production |
+| **Kubernetes** | Multiple replicas + Celery workers + Redis + PostgreSQL 16 (Bitnami sub-chart) | Multi-replica production |
 
 ### Docker Compose
 
@@ -311,14 +311,9 @@ Three compose files:
 
 ### Kubernetes (Helm)
 
-Helm chart at `helm/modulo/`. Referenced images: `ghcr.io/anomalyco/modulo-backend` and `modulo-frontend`.
-
-| Component | Replicas | Dependencies |
-|-----------|----------|-------------|
-| Backend API | 2+ | PostgreSQL, Redis |
-| SAQ runs worker | 1+ | Redis |
-| SAQ system worker | 1 | Redis |
-| Frontend (nginx) | 2+ | Backend API |
+The Kubernetes/Helm example deployment configs were removed — they were never
+exercised by CI or used in production. Self-hosting is via Docker Compose
+(`docker-compose.prod.yml`); the managed deployment path is Fly.io.
 
 ### Redis dependency
 

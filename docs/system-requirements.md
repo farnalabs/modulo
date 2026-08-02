@@ -9,7 +9,6 @@ Supported platforms, minimum resources, and database backends for running Modulo
 | Platform | Status | Documentation |
 |----------|--------|---------------|
 | **Docker Compose** | Production-ready | [`docs/deployment.md`](./deployment.md) |
-| **Kubernetes** | Production-ready | [`docs/deployment/k8s.md`](./deployment/k8s.md) |
 | **Self-hosted (bare metal / VM)** | Production-ready | [`docs/operations/self-hosted-admin.md`](./operations/self-hosted-admin.md) |
 | **Fly.io** | Production-ready | [`docs/deployment-journey.md`](./deployment-journey.md) |
 | **Railway** | Production-ready | [`docs/deployment-journey.md`](./deployment-journey.md) |
@@ -37,17 +36,6 @@ Supported platforms, minimum resources, and database backends for running Modulo
 | RAM | 8 GB | 16 GB | More RAM for larger pipeline states |
 | Disk | 20 GB SSD | 50 GB SSD | Database grows with run history |
 | Network | 100 Mbps | 1 Gbps | Webhook delivery, connector calls |
-
-### Kubernetes (Multi-Replica)
-
-| Resource | Minimum per node | Recommended | Notes |
-|----------|------------------|-------------|-------|
-| CPU | 4 vCPU | 8 vCPU | Shared across backend replicas |
-| RAM | 8 GB | 16 GB | Redis + Postgres + backend pods |
-| Disk | 50 GB SSD | 100 GB SSD | PVC for Postgres, pod ephemeral storage |
-| Nodes | 3 | 5 | Spread for HA |
-
-See [`docs/deployment/k8s.md`](./deployment/k8s.md) for Kubernetes-specific sizing guidance.
 
 ---
 
@@ -143,7 +131,6 @@ With default settings and no connectors configured, Modulo makes **zero external
 |-------|----------|
 | Quickstart | [`docs/quickstart.md`](./quickstart.md) |
 | Deployment guide | [`docs/deployment.md`](./deployment.md) |
-| K8s deployment | [`docs/deployment/k8s.md`](./deployment/k8s.md) |
 | Deployment journeys | [`docs/deployment-journey.md`](./deployment-journey.md) |
 | Configuration reference | [`docs/configuration-reference.md`](./configuration-reference.md) |
 | Public launch checklist | [`docs/public-launch-checklist.md`](./public-launch-checklist.md) |
