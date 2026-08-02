@@ -1,10 +1,11 @@
 """Tests for the admin org sandbox-concurrency endpoint contract."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
@@ -148,3 +149,49 @@ async def test_viewer_forbidden_on_put(client_viewer):
         json={"sandbox_concurrency_limit": 3},
     )
     assert resp.status_code == 403
+
+
+def _raise(exc: Exception):
+    async def _raises(*_args, **_kwargs):
+        raise exc
+
+    return _raises
+
+
+@pytest.mark.anyio
+async def test_get_programming_error_returns_501(client_admin):
+    """Migration-required errors on GET surface as 501."""
+    with patch(
+        "modulo.api.routes.admin.get_sandbox_concurrency_limit",
+        new=_raise(ProgrammingError("stmt", {}, Exception("missing table"))),
+    ):
+        resp = await client_admin.get("/api/v1/admin/org/sandbox-concurrency")
+    assert resp.status_code == 501
+
+
+@pytest.mark.anyio
+async def test_get_sqlalchemy_error_returns_503(client_admin):
+    """Generic SQLAlchemy errors on GET surface as 503."""
+    with patch(
+        "modulo.api.routes.admin.get_sandbox_concurrency_limit",
+        new=_raise(SQLAlchemyError("mock", {}, "")),
+    ):
+        resp = await client_admin.get("/api/v1/admin/org/sandbox-concurrency")
+    assert resp.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_get_integrity_error_returns_503_not_409(client_admin):
+    """The read-only GET has no IntegrityError→409 'already exists' mapping.
+
+    IntegrityError is a subclass of SQLAlchemyError, so it must fall through
+    to the 503 branch — a read-only GET can never produce a duplicate-value
+    conflict, and must not surface the write-handler 409 boilerplate.
+    """
+    with patch(
+        "modulo.api.routes.admin.get_sandbox_concurrency_limit",
+        new=_raise(IntegrityError("stmt", {}, Exception("fk violation"))),
+    ):
+        resp = await client_admin.get("/api/v1/admin/org/sandbox-concurrency")
+    assert resp.status_code == 503
+    assert "already exists" not in resp.text
