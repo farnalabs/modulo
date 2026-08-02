@@ -24,6 +24,26 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/api-keys", tags=["api-keys"])
 
+def _require_runner(principal: TenantPrincipal, permission: str) -> None:
+    """Thin compatibility wrapper: require the org role for a runner-level permission.
+
+    Endpoints now use the `require_permission` dependency; this wrapper is kept
+    for direct-call tests and documents the runner floor for API-key ops.
+    """
+    from fastapi import HTTPException
+    from fastapi import status as http_status
+
+    from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
+
+    try:
+        assert_org_role(principal.org_role, resolve_required(permission), permission)
+    except PermissionDenied as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+
+
 
 class ApiKeyCreate(BaseModel):
     name: str = Field(min_length=1)
