@@ -49,8 +49,13 @@ async def create_variant_group(
     return group
 
 
-async def get_variant_group(session: AsyncSession, group_id: uuid.UUID) -> VariantGroup | None:
-    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group_id))
+async def get_variant_group(
+    session: AsyncSession, group_id: uuid.UUID, *, include_deleted: bool = False
+) -> VariantGroup | None:
+    stmt = select(VariantGroup).where(VariantGroup.id == group_id)
+    if not include_deleted:
+        stmt = stmt.where(VariantGroup.deleted_at.is_(None))
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -128,7 +133,7 @@ async def soft_delete_variant_group(session: AsyncSession, group_id: uuid.UUID) 
 
 
 async def restore_variant_group(session: AsyncSession, group_id: uuid.UUID) -> VariantGroup | None:
-    group = await get_variant_group(session, group_id)
+    group = await get_variant_group(session, group_id, include_deleted=True)
     if group is None or group.deleted_at is None:
         return None
     group.deleted_at = None

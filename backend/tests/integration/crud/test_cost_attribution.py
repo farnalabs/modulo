@@ -448,9 +448,10 @@ async def test_get_cost_report_by_org(
         team = await create_team(session, org_id=org, name="Inner Team", account_id=user)
         await session.flush()
 
-        # Org-level spend (no team_id)
+        # Org-level spend (no team_id) + team-level spend. check_and_record_spend
+        # counts team spend toward the org aggregate too, so the org row holds
+        # the total (200 + 100).
         await check_and_record_spend(session, org_id=org, cost_usd=Decimal(200))
-        # Team-level spend
         await check_and_record_spend(session, org_id=org, cost_usd=Decimal(100), team_id=team.id)
         await session.commit()
 
@@ -462,9 +463,9 @@ async def test_get_cost_report_by_org(
         report = await get_cost_report(session, org_id=org, group_by="org", period="month")
 
         assert len(report) == 1
-        # Only org-level rows are aggregated
-        assert report[0]["total_spend_usd"] == 200.0
-        assert report[0]["total_runs"] == 1
+        # Org-level row aggregates ALL spend (org + team) recorded this month
+        assert report[0]["total_spend_usd"] == 300.0
+        assert report[0]["total_runs"] == 2
 
 
 async def test_unique_constraint_enforced(

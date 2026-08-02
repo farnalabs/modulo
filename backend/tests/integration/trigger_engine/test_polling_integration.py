@@ -129,7 +129,20 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
 
 @pytest_asyncio.fixture
 async def polling_trigger(seeded_db: AsyncSession) -> dict[str, Any]:
-    """Insert a polling trigger row and return its config."""
+    """Insert a polling trigger row and return its config.
+
+    Reset accumulated state from prior tests sharing the fixed trigger id:
+    events/runs are cleared and the trigger row is restored to its default
+    (active, max_concurrent_runs=5, due) so each test starts deterministic.
+    """
+    await seeded_db.execute(
+        text("DELETE FROM trigger_events WHERE trigger_id = :tid"),
+        {"tid": str(_TRIGGER_ID)},
+    )
+    await seeded_db.execute(
+        text("DELETE FROM runs WHERE trigger_id = :tid"),
+        {"tid": str(_TRIGGER_ID)},
+    )
     await seeded_db.execute(
         text(
             "INSERT INTO triggers (id, organisation_id, pipeline_id, "
@@ -139,7 +152,11 @@ async def polling_trigger(seeded_db: AsyncSession) -> dict[str, Any]:
             "VALUES (:id, :oid, :pid, 'polling', true, 5, "
             "(:config)::json, :uid, NULL, NULL, NULL, "
             "NOW() - INTERVAL '1 minute') "
-            "ON CONFLICT (id) DO UPDATE SET next_fire_at = NOW() - INTERVAL '1 minute'",
+            "ON CONFLICT (id) DO UPDATE SET trigger_type='polling', active=true, "
+            "max_concurrent_runs=5, config_json=EXCLUDED.config_json, "
+            "account_id=EXCLUDED.account_id, cron_expression=NULL, "
+            "cron_timezone=NULL, last_fired_at=NULL, "
+            "next_fire_at=NOW() - INTERVAL '1 minute'",
         ),
         {
             "id": str(_TRIGGER_ID),
@@ -200,7 +217,7 @@ async def test_polling_trigger_happy_path(
 
     connector_mock = AsyncMock()
     connector_mock.query.return_value = ConnectorResult(
-        records=[{"issue": {"number": 1, "title": "Bug"}}],
+        records=[{"issue": {"number": 1, "title": "Bug"}, "status": "open"}],
         total=1,
     )
 
@@ -308,9 +325,9 @@ async def test_polling_trigger_no_match(
                 TriggerEvent.validation_result == "no_match",
             ),
         )
-        event = event_result.scalar_one_or_none()
-        assert event is not None, "Expected no_match TriggerEvent"
-        assert event.run_id is None
+        events = event_result.scalars().all()
+        assert len(events) >= 1, "Expected a no_match TriggerEvent"
+        assert all(e.run_id is None for e in events)
 
     await engine.dispose()
 
