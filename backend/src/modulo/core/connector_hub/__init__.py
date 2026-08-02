@@ -440,7 +440,8 @@ def _build_connector(
             base_url = config.get("base_url", "https://gitlab.com/api/v4")
             return GitLabCIRunner(token=_get_cred(creds, "token", type_id), base_url=base_url)
         case "gitlab":
-            return GitLabConnector(token=_get_cred(creds, "token", type_id))
+            base_url = config.get("base_url", "https://gitlab.com/api/v4")
+            return GitLabConnector(token=_get_cred(creds, "token", type_id), base_url=base_url)
         case "shell":
             allowed = config.get("allowed_commands")
             env_profile_id = config.get("environment_profile_id")
