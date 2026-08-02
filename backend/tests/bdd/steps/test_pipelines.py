@@ -1685,12 +1685,63 @@ def rollback_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, reques
     new_snapshot.graph_json = target.graph_json
 
     _patch_set_rls(patches)
-    p = patch("modulo.api.routes.pipelines.rollback_to_snapshot", return_value=new_snapshot)
+    if getattr(request.node, "_rollback_denied", False):
+        # hitl-gate-removal-guard-plan.md v19: a gate-weakening rollback by a
+        # non-privileged caller is denied at the service layer.
+        from modulo.db.crud.hitl_gate_guard import REASON_INSUFFICIENT_ROLE, HitlGateWeakeningDenied
+
+        p = patch(
+            "modulo.api.routes.pipelines.rollback_to_snapshot",
+            side_effect=HitlGateWeakeningDenied(
+                reason_code=REASON_INSUFFICIENT_ROLE,
+                correlation_keys=[("a", "b", "normal")],
+                weakening_types=["human_only"],
+            ),
+        )
+    else:
+        p = patch("modulo.api.routes.pipelines.rollback_to_snapshot", return_value=new_snapshot)
     p.start()
     patches.append(p)
 
     resp = client.post(f"/api/v1/pipelines/{pipeline.id}/snapshots/{uuid.uuid5(pipeline.id, snap_ref)}/rollback")
     _store_response(request, resp)
+
+
+@given("the rollback would weaken a HITL gate for a non-privileged caller")
+def rollback_would_weaken_hitl_gate(request: pytest.FixtureRequest) -> None:
+    request.node._rollback_denied = True
+
+
+@when(parsers.parse('I clone pipeline "{name}"'))
+def clone_pipeline_endpoint_bdd(name: str, client, request, patches) -> None:
+    """Clone a pipeline and record the audit assertion handle."""
+    from tests.bdd.conftest import make_mock_pipeline
+
+    pipeline = request.node._mock_pipeline
+    cloned = make_mock_pipeline(name=f"Copy of {pipeline.name}")
+    cloned.id = uuid.uuid4()
+
+    _patch_set_rls(patches)
+    p = patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned)
+    p.start()
+    patches.append(p)
+
+    audit = AsyncMock()
+    p2 = patch("modulo.api.routes.pipelines.append_audit_event", audit)
+    p2.start()
+    patches.append(p2)
+    request.node._clone_audit = audit
+
+    resp = client.post(f"/api/v1/pipelines/{pipeline.id}/clone", json={})
+    _store_response(request, resp)
+
+
+@then("a clone audit event is recorded")
+def clone_audit_recorded(request: pytest.FixtureRequest) -> None:
+    audit = getattr(request.node, "_clone_audit", None)
+    assert audit is not None, "clone audit mock was not installed"
+    event_types = [c.kwargs.get("event_type") for c in audit.call_args_list]
+    assert "pipeline.cloned" in event_types, f"expected pipeline.cloned audit, got {event_types}"
 
 
 @when(parsers.re(r"I DELETE /api/pipelines/snapshots/(?P<snap_ref>\S+)"))

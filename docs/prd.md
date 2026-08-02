@@ -1085,6 +1085,16 @@ Each gate carries:
 
 **`human_only` + `required_team_id` — additive**: when both are set, approval requires both conditions to hold independently: (a) authenticated as a human via browser (not MCP), AND (b) a member of `required_team_id` with `runner`+. Neither condition alone is sufficient. Both are enforced at the ViewModel command layer.
 
+#### HITL Gate Integrity Guard
+Removing or weakening an existing HITL gate is a security-sensitive write guarded by the service-layer backstop (`hitl-gate-removal-guard-plan.md` v19 — concrete spec for ADR 017's "Service-layer backstop" section):
+
+- **Gate weakening is governed by the service-layer backstop**: the route layer carries the operator baseline (`pipeline.graph.update` on the graph-write endpoints) for defense-in-depth breadth, and **operator+ privilege is required under the row lock** in `replace_pipeline_graph()` / `rollback_to_snapshot()`. A non-privileged caller that weakens an existing gate is denied before any delete/insert executes (guard-runs-before-delete). There is deliberately no admin-only route gate — operators are "privileged" for weakening by design (equivalent weakening stays reachable via `update_pipeline`, `convert_to_agent`, `revert_to_manual`).
+- **Weakening** is any change to an existing `hitl_gate_config` that reduces its effect: `human_only` true→false; `required_team_id` cleared or changed; `condition`/`eval_condition` changed at all (both are evaluated before `human_only` is consulted); or the gated edge's topology key `(source_node_id, target_node_id, edge_type)` removed / its config nulled. Edge creation with no prior row is never weakening. `claim_expiry_minutes` is not weakening: a shorter expiry is stricter (on expiry the claim resets to `awaiting_human` — it never releases the gate).
+- **MCP can never weaken gates**: the MCP call site passes the literal `caller_type="mcp"` and the guard hardcodes `is_privileged=False` for MCP callers (no DB query).
+- **Denied attempts are audited** as `hitl_gate_removal_denied` (reason-coded: `insufficient-role` / `role-changed-reauth-required` / `role-check-db-error` / `correlation-key-mismatch` / `legacy-snapshot-ambiguous` / `mcp-weakening-not-permitted`); allowed weakening is audited as `hitl_gate_removed`. Both are registered as `scope: admin` notification events.
+- **Rollback is fail-closed**: a historical snapshot with missing/`None` gate fields is treated as weakening (`legacy-snapshot-ambiguous`).
+- **Non-liftable**: the guard never consults `authz_enforce` — it is an always-on carve-out (ADR 017 Decision 3).
+
 #### HITL Flow
 1. LangGraph `interrupt()` fires. State → `awaiting_human`.
 2. Outbound notification webhook dispatched (HMAC-signed).
