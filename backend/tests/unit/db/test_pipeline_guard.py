@@ -540,3 +540,248 @@ async def test_edge_deletion_denied_with_correlation_key_mismatch(monkeypatch: p
         )
     assert excinfo.value.reason_code == REASON_CORRELATION_KEY_MISMATCH
     assert excinfo.value.payload_json["affected_edges"][0]["weakening_types"] == ["structural:edge_deleted"]
+
+
+# ---------------------------------------------------------------------------
+# Preserve-write: an omitted hitl_gate_config key must NOT wipe the stored gate
+# ---------------------------------------------------------------------------
+
+
+async def test_replace_preserves_gate_when_config_key_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Writing new edges that OMIT the hitl_gate_config key on an existing gated
+    edge preserves the stored gate (guard contract: omission = preserve). No
+    weakening, no audit, no denial."""
+    pipeline = _PipelineRow()
+    old = [_EdgeRow(cfg=dict(_GATE))]
+    new = [
+        {
+            "id": uuid.uuid4(),
+            "source_node_id": _NODE_A,
+            "target_node_id": _NODE_B,
+            "edge_type": "normal",
+            # hitl_gate_config key deliberately omitted (untouched edge)
+        }
+    ]
+    session = _build_session(_pipeline_result(pipeline), _edges_result(old))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    result = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline.id,
+        org_id=uuid.uuid4(),
+        nodes=[],
+        edges=new,
+        is_privileged=False,
+        caller_type="rest",
+    )
+    assert result is not None
+    persisted = result[1]
+    assert len(persisted) == 1
+    assert persisted[0].hitl_gate_config == _GATE, "omitted key must preserve the stored gate, not write None"
+    audit.assert_not_awaited()
+
+
+async def test_replace_preserves_gate_when_presence_flag_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """hitl_gate_config_present=False on a matching topology key also preserves
+    the stored gate even when the dict carries an explicit null value."""
+    pipeline = _PipelineRow()
+    old = [_EdgeRow(cfg=dict(_GATE))]
+    new = [
+        {
+            "id": uuid.uuid4(),
+            "source_node_id": _NODE_A,
+            "target_node_id": _NODE_B,
+            "edge_type": "normal",
+            "hitl_gate_config": None,
+            "hitl_gate_config_present": False,
+        }
+    ]
+    session = _build_session(_pipeline_result(pipeline), _edges_result(old))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    result = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline.id,
+        org_id=uuid.uuid4(),
+        nodes=[],
+        edges=new,
+        is_privileged=False,
+        caller_type="rest",
+    )
+    assert result is not None
+    persisted = result[1]
+    assert persisted[0].hitl_gate_config == _GATE
+    audit.assert_not_awaited()
+
+
+async def test_replace_omitted_key_on_new_edge_still_writes_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A brand-new edge (no prior stored gate) with an omitted key persists
+    None — preservation only applies to matching gated edges."""
+    pipeline = _PipelineRow()
+    old = []  # no prior edges at all
+    new = [
+        {
+            "id": uuid.uuid4(),
+            "source_node_id": _NODE_A,
+            "target_node_id": _NODE_B,
+            "edge_type": "normal",
+        }
+    ]
+    session = _build_session(_pipeline_result(pipeline), _edges_result(old))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    result = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline.id,
+        org_id=uuid.uuid4(),
+        nodes=[],
+        edges=new,
+        is_privileged=False,
+        caller_type="rest",
+    )
+    assert result is not None
+    persisted = result[1]
+    assert persisted[0].hitl_gate_config is None
+    audit.assert_not_awaited()
+
+
+async def test_replace_explicit_null_still_denies_for_non_privileged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An EXPLICIT hitl_gate_config: None (present) on a gated edge is a genuine
+    removal — non-privileged callers are still denied."""
+    pipeline = _PipelineRow()
+    old = [_EdgeRow(cfg=dict(_GATE))]
+    new = [
+        {
+            "id": uuid.uuid4(),
+            "source_node_id": _NODE_A,
+            "target_node_id": _NODE_B,
+            "edge_type": "normal",
+            "hitl_gate_config": None,
+            "hitl_gate_config_present": True,
+        }
+    ]
+    session = _build_session(_pipeline_result(pipeline), _edges_result(old))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+        await replace_pipeline_graph(
+            session,
+            pipeline_id=pipeline.id,
+            org_id=uuid.uuid4(),
+            nodes=[],
+            edges=new,
+            is_privileged=False,
+            caller_type="rest",
+        )
+    assert excinfo.value.reason_code == REASON_CORRELATION_KEY_MISMATCH
+    audit.assert_not_awaited()
+
+
+async def test_replace_explicit_null_writes_none_for_privileged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An EXPLICIT hitl_gate_config: None is a genuine removal — a privileged
+    caller's write persists None (not the old gate) and the allowed-weakening
+    audit fires."""
+    pipeline = _PipelineRow()
+    old = [_EdgeRow(cfg=dict(_GATE))]
+    new = [
+        {
+            "id": uuid.uuid4(),
+            "source_node_id": _NODE_A,
+            "target_node_id": _NODE_B,
+            "edge_type": "normal",
+            "hitl_gate_config": None,
+            "hitl_gate_config_present": True,
+        }
+    ]
+    session = _build_session(_pipeline_result(pipeline), _edges_result(old))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    result = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline.id,
+        org_id=uuid.uuid4(),
+        nodes=[],
+        edges=new,
+        is_privileged=True,
+        caller_type="rest",
+    )
+    assert result is not None
+    persisted = result[1]
+    assert persisted[0].hitl_gate_config is None
+    audit.assert_awaited_once()
+    assert audit.call_args.kwargs["event_type"] == "hitl_gate_removed"
+    assert audit.call_args.kwargs["payload_json"]["affected_edges"][0]["weakening_types"] == ["structural:gate_removed"]
+
+
+async def test_replace_explicit_null_still_denies_for_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An MCP caller cannot strip a gate via an explicit null either — the
+    structural exclusion forces denial even though the caller is 'privileged'."""
+    pipeline = _PipelineRow()
+    old = [_EdgeRow(cfg=dict(_GATE))]
+    new = [
+        {
+            "id": uuid.uuid4(),
+            "source_node_id": _NODE_A,
+            "target_node_id": _NODE_B,
+            "edge_type": "normal",
+            "hitl_gate_config": None,
+            "hitl_gate_config_present": True,
+        }
+    ]
+    session = _build_session(_pipeline_result(pipeline), _edges_result(old))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+        await replace_pipeline_graph(
+            session,
+            pipeline_id=pipeline.id,
+            org_id=uuid.uuid4(),
+            nodes=[],
+            edges=new,
+            is_privileged=True,
+            caller_type="mcp",
+        )
+    assert excinfo.value.reason_code == REASON_MCP_NOT_PERMITTED
+    audit.assert_not_awaited()
+
+
+async def test_replace_present_false_with_config_on_new_edge_ignores_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Contradictory input (hitl_gate_config_present=False alongside a non-null
+    hitl_gate_config) on a brand-new edge is ignored by the write path, matching
+    the guard which treats present=False as omission. The provided value must
+    NOT be persisted via the no-old-value fallback."""
+    pipeline = _PipelineRow()
+    old = []  # brand-new edge: no prior gate to preserve
+    new = [
+        {
+            "id": uuid.uuid4(),
+            "source_node_id": _NODE_A,
+            "target_node_id": _NODE_B,
+            "edge_type": "normal",
+            "hitl_gate_config": dict(_GATE),
+            "hitl_gate_config_present": False,
+        }
+    ]
+    session = _build_session(_pipeline_result(pipeline), _edges_result(old))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    result = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline.id,
+        org_id=uuid.uuid4(),
+        nodes=[],
+        edges=new,
+        is_privileged=False,
+        caller_type="rest",
+    )
+    assert result is not None
+    persisted = result[1]
+    assert persisted[0].hitl_gate_config is None, "present=False must ignore the provided gate value"
+    audit.assert_not_awaited()

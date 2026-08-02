@@ -163,10 +163,12 @@ def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[s
       consulted, so any change can silently gate off a formerly-always-on gate).
     - ``eval_condition``: changed at all (same reasoning).
 
-    ``claim_expiry_minutes`` is deliberately NOT weakening: a shorter expiry is
-    stricter, not weaker. On expiry the claim is reset (run returns to
+    ``claim_expiry_minutes`` is NOT weakening when shortened: a shorter expiry
+    is stricter, not weaker. On expiry the claim is reset (run returns to
     ``awaiting_human``) — it never releases the gate or auto-approves the run,
     so a decrease cannot weaken the HITL control (plan §1, review finding).
+    REMOVING the field entirely (old non-null -> new null/absent) IS weakening
+    because it drops the expiry requirement without tightening anything.
     """
     types: list[str] = []
     if old_cfg.get("human_only") is True and new_cfg.get("human_only") is not True:
@@ -179,6 +181,8 @@ def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[s
         types.append("condition")
     if old_cfg.get("eval_condition") != new_cfg.get("eval_condition"):
         types.append("eval_condition")
+    if old_cfg.get("claim_expiry_minutes") is not None and new_cfg.get("claim_expiry_minutes") is None:
+        types.append("claim_expiry_minutes")
     return types
 
 
@@ -234,6 +238,9 @@ async def apply_gated_edge_diff(
             continue
         if not new_edge["hitl_gate_config_present"]:
             # Key omitted by the client -> preserve the existing stored value.
+            # The delete+reinsert write paths MUST mirror this contract and
+            # merge the stored value back (see pipeline._preserve_omitted_gate_config).
+            # An omitted key is never a gate removal.
             continue
         new_cfg = new_edge["hitl_gate_config"]
         if new_cfg is None:
