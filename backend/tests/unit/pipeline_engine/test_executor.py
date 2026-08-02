@@ -14,8 +14,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunNotFoundError,
+    _graph_contains_sandbox_agent,
     _seed_state,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_retry_semaphore():
+    """Reset the module-global retry semaphore between tests.
+
+    A leaked ``_RETRY_SEMAPHORE`` (permits never released after a killed
+    retry loop) starves the shared ``Semaphore(2)`` and breaks later tests.
+    """
+    import modulo.core.pipeline_engine.executor as executor_mod
+
+    executor_mod._RETRY_SEMAPHORE = None
+    yield
+    executor_mod._RETRY_SEMAPHORE = None
 
 
 class _InterruptState(TypedDict, total=False):
@@ -666,7 +681,7 @@ async def test_execute_sets_cancelled_on_run_cancelled_error():
 # ---------------------------------------------------------------------------
 
 
-async def _bypass_capacity(mock_self, *, run_id, org_id, pipeline_id, max_concurrent):
+async def _bypass_capacity(mock_self, **kwargs):
     """Return a run with status='running' to bypass the capacity check."""
     run = MagicMock()
     run.status = "running"
@@ -842,3 +857,578 @@ async def test_execute_fails_on_checkpointer_connection_error():
     # Should have been marked failed, not stuck in running
     failed_update = mock_update.call_args_list[-1]
     assert failed_update.args[2] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# _graph_contains_sandbox_agent — pure top-level sandbox-node detection
+# ---------------------------------------------------------------------------
+
+
+def test_graph_contains_sandbox_agent_false_for_none():
+    assert _graph_contains_sandbox_agent(None) is False
+
+
+def test_graph_contains_sandbox_agent_false_for_non_dict():
+    assert _graph_contains_sandbox_agent([]) is False
+    assert _graph_contains_sandbox_agent("sandbox") is False
+    assert _graph_contains_sandbox_agent(42) is False
+
+
+def test_graph_contains_sandbox_agent_false_when_missing_nodes():
+    assert _graph_contains_sandbox_agent({"edges": []}) is False
+    assert _graph_contains_sandbox_agent({}) is False
+
+
+def test_graph_contains_sandbox_agent_true_for_sandbox_agent_node():
+    graph = {"nodes": [{"id": "a", "node_type": "sandbox_agent"}]}
+    assert _graph_contains_sandbox_agent(graph) is True
+
+
+def test_graph_contains_sandbox_agent_false_for_other_node_types():
+    graph = {"nodes": [{"id": "a", "node_type": "agent"}, {"id": "b", "node_type": "connector"}]}
+    assert _graph_contains_sandbox_agent(graph) is False
+
+
+# ---------------------------------------------------------------------------
+# get_sandbox_concurrency_limit — fail-open setting reader
+# ---------------------------------------------------------------------------
+
+
+def _org_with_settings(settings: Any) -> MagicMock:
+    org = MagicMock()
+    org.settings_json = settings
+    return org
+
+
+async def test_get_sandbox_concurrency_limit_unset_returns_none():
+    from modulo.db.crud.run import get_sandbox_concurrency_limit
+
+    with patch("modulo.db.crud.run.get_organisation", return_value=_org_with_settings({})):
+        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
+
+
+async def test_get_sandbox_concurrency_limit_returns_int():
+    from modulo.db.crud.run import get_sandbox_concurrency_limit
+
+    org = _org_with_settings({"sandbox_concurrency_limit": 5})
+    with patch("modulo.db.crud.run.get_organisation", return_value=org):
+        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) == 5
+
+
+async def test_get_sandbox_concurrency_limit_clamps_out_of_range():
+    from modulo.db.crud.run import get_sandbox_concurrency_limit
+
+    org_high = _org_with_settings({"sandbox_concurrency_limit": 9999})
+    with patch("modulo.db.crud.run.get_organisation", return_value=org_high):
+        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) == 100
+    org_low = _org_with_settings({"sandbox_concurrency_limit": 0})
+    with patch("modulo.db.crud.run.get_organisation", return_value=org_low):
+        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) == 1
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    ["3", 3.0, True, False, [3], {"v": 3}],
+)
+async def test_get_sandbox_concurrency_limit_fail_open_on_bad_type(bad_value):
+    from modulo.db.crud.run import get_sandbox_concurrency_limit
+
+    with patch(
+        "modulo.db.crud.run.get_organisation",
+        return_value=_org_with_settings({"sandbox_concurrency_limit": bad_value}),
+    ):
+        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
+
+
+async def test_get_sandbox_concurrency_limit_fail_open_on_non_dict_settings():
+    from modulo.db.crud.run import get_sandbox_concurrency_limit
+
+    with patch("modulo.db.crud.run.get_organisation", return_value=_org_with_settings("not-a-dict")):
+        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
+
+
+# ---------------------------------------------------------------------------
+# _check_capacity — org sandbox cap enforcement
+# ---------------------------------------------------------------------------
+
+
+def _make_capacity_session() -> AsyncMock:
+    session = AsyncMock(spec=AsyncSession)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+def _make_capacity_executor(session: AsyncMock) -> PipelineExecutor:
+    @asynccontextmanager
+    async def _ctx():
+        yield session
+
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = MagicMock(side_effect=lambda: _ctx())
+    executor._capacity_poll_interval = 0.001
+    executor._retry_initial_delay = 0.001
+    executor._retry_max_delay = 0.002
+    executor._retry_max_attempts = 3
+    return executor
+
+
+def _capacity_run(status: str = "pending") -> MagicMock:
+    run = MagicMock()
+    run.id = uuid.uuid4()
+    run.status = status
+    run.cancellation_requested = False
+    return run
+
+
+def _make_update_status(run: MagicMock, calls: list[tuple[str, dict[str, Any]]]):
+    async def _update_status(_session: Any, run_id: Any, status: str, **kwargs: Any) -> Any:
+        run.status = status
+        if kwargs.get("clear_error_code"):
+            run.error_code = None
+            run.error_detail = None
+        if "error_code" in kwargs:
+            run.error_code = kwargs["error_code"]
+        if "error_detail" in kwargs:
+            run.error_detail = kwargs["error_detail"]
+        calls.append((status, kwargs))
+        return run
+
+    return _update_status
+
+
+async def test_check_capacity_skips_org_path_when_no_sandbox_node():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+    cap_read = AsyncMock(return_value=5)
+    org_count = AsyncMock(return_value=0)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", new=org_count),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", new=cap_read),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "running"
+    cap_read.assert_not_awaited()
+    org_count.assert_not_awaited()
+
+
+async def test_check_capacity_skips_org_count_when_cap_none():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+    cap_read = AsyncMock(return_value=None)
+    org_count = AsyncMock(return_value=99)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", new=org_count),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", new=cap_read),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == "running"
+    cap_read.assert_awaited_once()
+    org_count.assert_not_awaited()
+
+
+async def test_check_capacity_org_cap_blocks_on_org_count():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=2),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=10,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == "pending"
+    assert calls[-1][0] == "pending"
+    assert calls[-1][1]["error_code"] == "org_capacity_limited"
+    assert "cap 2" in calls[-1][1]["error_detail"]
+
+
+async def test_check_capacity_pipeline_cap_blocks_before_org():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=10),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=2,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == "pending"
+    assert calls[-1][1]["error_code"] == "pipeline_capacity"
+    assert "limit 2" in calls[-1][1]["error_detail"]
+
+
+async def test_check_capacity_unlimited_pipeline_still_enforces_org_cap():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=3),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=3),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=0,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == "pending"
+    assert calls[-1][1]["error_code"] == "org_capacity_limited"
+
+
+async def test_check_capacity_admission_clears_marker():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    run.error_code = "org_capacity_limited"
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=5),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == "running"
+    assert calls[-1][0] == "running"
+    assert calls[-1][1].get("clear_error_code") is True
+    assert run.error_code is None
+
+
+@pytest.mark.parametrize("terminal_status", ["complete", "failed", "cancelled", "eval_failed"])
+async def test_check_capacity_never_resurrects_terminal_run(terminal_status: str):
+    """A run that went terminal while a retry backed off must stay terminal."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run(status=terminal_status)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=5),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == terminal_status, "terminal run must not be re-admitted"
+    assert calls == [], "no status update may be issued for a terminal run"
+
+
+async def test_check_capacity_fail_open_when_settings_read_raises():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+
+    async def _raise_cap(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("settings boom")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, [])),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", side_effect=_raise_cap),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == "running"
+
+
+async def test_check_capacity_fail_open_when_org_count_raises():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+
+    async def _raise_count(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("count boom")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, [])),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", side_effect=_raise_count),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=2),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == "running"
+
+
+async def test_check_capacity_fail_open_when_graph_scan_raises():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    cap_read = AsyncMock(return_value=2)
+    org_count = AsyncMock(return_value=99)
+
+    def _raise_graph(_g: Any) -> bool:
+        raise RuntimeError("graph boom")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, [])),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", new=org_count),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", new=cap_read),
+        patch("modulo.core.pipeline_engine.executor._graph_contains_sandbox_agent", side_effect=_raise_graph),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == "running"
+    cap_read.assert_not_awaited()
+    org_count.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# _retry_pending — single-flight admission retry loop
+# ---------------------------------------------------------------------------
+
+
+async def test_retry_pending_exits_on_running():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run(status="running")
+    running_run = _capacity_run(status="running")
+    mock_exec = AsyncMock(return_value=running_run)
+    mock_fail = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(executor, "execute", new=mock_exec),
+        patch.object(executor, "_fail_capacity_timeout", new=mock_fail),
+    ):
+        await executor._retry_pending(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    mock_exec.assert_awaited_once()
+    mock_fail.assert_not_awaited()
+
+
+async def test_retry_pending_exits_on_terminal_status():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run(status="failed")
+    mock_exec = AsyncMock()
+    mock_fail = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(executor, "execute", new=mock_exec),
+        patch.object(executor, "_fail_capacity_timeout", new=mock_fail),
+    ):
+        await executor._retry_pending(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    # A terminal run is never re-admitted — the status pre-check returns early.
+    mock_exec.assert_not_awaited()
+    mock_fail.assert_not_awaited()
+
+
+async def test_retry_pending_passes_from_retry_flag():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run(status="pending")
+    running_run = _capacity_run(status="running")
+    mock_exec = AsyncMock(return_value=running_run)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(executor, "execute", new=mock_exec),
+        patch.object(executor, "_fail_capacity_timeout", new=AsyncMock()),
+    ):
+        await executor._retry_pending(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    assert mock_exec.await_args.kwargs.get("from_retry") is True
+
+
+async def test_retry_pending_exhaustion_fails_capacity_timeout():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run(status="pending")
+    still_pending = _capacity_run(status="pending")
+    mock_exec = AsyncMock(return_value=still_pending)
+    mock_fail = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(executor, "execute", new=mock_exec),
+        patch.object(executor, "_fail_capacity_timeout", new=mock_fail),
+    ):
+        await executor._retry_pending(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    assert mock_exec.await_count == 3
+    mock_fail.assert_awaited_once()
+
+
+async def test_retry_pending_skips_when_run_no_longer_retryable():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run(status="complete")
+    mock_exec = AsyncMock()
+    mock_fail = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(executor, "execute", new=mock_exec),
+        patch.object(executor, "_fail_capacity_timeout", new=mock_fail),
+    ):
+        await executor._retry_pending(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    mock_exec.assert_not_awaited()
+    mock_fail.assert_not_awaited()
+
+
+async def test_execute_does_not_spawn_retry_when_called_from_retry():
+    run = _make_run()
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    create_task = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=999),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=None),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor.asyncio.create_task", new=create_task),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            input_payload={},
+            from_retry=True,
+        )
+
+    assert result.status == "pending"
+    create_task.assert_not_awaited()

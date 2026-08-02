@@ -24,6 +24,7 @@ Max concurrent runs per pipeline, lock wait timeout, node timeout, admission con
 
 - [x] §8.7 `max_concurrent_runs` per pipeline — new run requests blocked at limit (default: 5)
 - [x] §8.7 `max_concurrent_runs` per trigger — new trigger fires blocked at limit (default: 1)
+- [x] §8.7 `sandbox_concurrency_limit` per organisation — max concurrently `running` sandbox-agent runs across all pipelines (default: `null` = unlimited); runs beyond the cap demote to `pending` with `error_code='org_capacity_limited'` and are retried in the background
 - [ ] §8.7 Write lock per connector instance + target resource — advisory lock via `pg_try_advisory_lock`
 - [ ] §8.7 `waiting_for_lock` sub-state when lock cannot be acquired
 - [x] §8.7 `lock_wait_timeout_seconds` per pipeline (default: 300, min: 30, max: 3600)
@@ -33,6 +34,7 @@ Max concurrent runs per pipeline, lock wait timeout, node timeout, admission con
 ## Error Handling
 
 - [x] Capacity timeout (lock_wait_seconds exceeded) transitions run to failed with error_code lock_timeout
+- [x] Capacity-blocked runs demote to `pending` with a non-terminal reason marker (`pipeline_capacity` / `org_capacity_limited`); terminal-fail with `capacity_timeout` after the TTL
 - [x] Missing DB table returns 501 Not Implemented on run trigger
 - [x] Auth 401/403 enforced on run trigger endpoints
 - [x] 422 validation for invalid concurrency parameters
