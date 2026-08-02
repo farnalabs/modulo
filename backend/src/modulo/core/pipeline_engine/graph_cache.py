@@ -300,7 +300,9 @@ def build_graph_from_json(
         timeout: int | None = node_def.get("timeout_seconds")
         if timeout is None:
             timeout = pipeline_node_timeout_seconds
-        node_type: str = node_def.get("node_type", "agent")
+        node_type: str | None = node_def.get("node_type")
+        if not node_type:
+            raise ValueError(f"Node {node_id!r} is missing required 'node_type'")
         max_input_length: int | None = node_def.get("max_input_length")
         token_budget: int | None = node_def.get("token_budget")
 
