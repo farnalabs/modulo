@@ -709,9 +709,8 @@ class GraphValidator:
                 for ot in out_type:
                     if ot not in in_type:
                         errors.append(f"{path}: output type '{ot}' not in input types {in_type}")
-            else:
-                if out_type not in in_type:
-                    errors.append(f"{path}: output type '{out_type}' not in input types {in_type}")
+            elif out_type not in in_type:
+                errors.append(f"{path}: output type '{out_type}' not in input types {in_type}")
             return errors
 
         if isinstance(out_type, list):

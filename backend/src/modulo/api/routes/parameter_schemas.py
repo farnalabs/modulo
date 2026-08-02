@@ -475,7 +475,7 @@ async def diff_parameter_schema_endpoint(
     if from_version == to_version:
         return {"from_version": from_version, "to_version": to_version, "changes": changes}
 
-    if from_version != schema.version and to_version != schema.version:
+    if schema.version not in (from_version, to_version):
         return {
             "from_version": from_version,
             "to_version": to_version,

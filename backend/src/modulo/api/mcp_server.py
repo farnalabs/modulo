@@ -2522,7 +2522,7 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
         key_prefixes: list[str] | None = None
         if section == "remy":
             key_prefixes = [f"remy_config:{org_ctx}", "remy_config"]
-        elif section == "plan" or section == "rate_limits":
+        elif section in {"plan", "rate_limits"}:
             key_prefixes = ["feature_flags", "default_plan", "rate_limits"]
 
         filtered = []

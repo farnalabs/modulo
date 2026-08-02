@@ -290,10 +290,10 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
     org role is read from ``org_memberships`` (deactivated rows excluded).
 
         Failure modes:
-    - missing/deactivated membership  raise 401 (removed users lose access immediately)
-    - SQLAlchemyError during the read  raise 503 (fail-closed; a DB blip must
+    - missing/deactivated membership -> raise 401 (removed users lose access immediately)
+    - SQLAlchemyError during the read -> raise 503 (fail-closed; a DB blip must
       not restore a removed user's stale role - ADR 017 review decision)
-    - any other exception  propagate (500)
+    - any other exception -> propagate (500)
     """
     try:
         from sqlalchemy import text as _text
