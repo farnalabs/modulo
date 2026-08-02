@@ -32,7 +32,6 @@ def _require_runner(principal: TenantPrincipal, permission: str) -> None:
     for direct-call tests and documents the runner floor for API-key ops.
     """
     from fastapi import HTTPException
-    from fastapi import status as http_status
 
     from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
 
@@ -40,7 +39,7 @@ def _require_runner(principal: TenantPrincipal, permission: str) -> None:
         assert_org_role(principal.org_role, resolve_required(permission), permission)
     except PermissionDenied as exc:
         raise HTTPException(
-            status_code=http_status.HTTP_403_FORBIDDEN,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
 
