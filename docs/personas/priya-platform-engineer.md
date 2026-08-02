@@ -13,7 +13,7 @@
 
 - Evaluate and deploy a governed agentic SDLC platform after a near-miss audit (AI-generated code reached production unreviewed)
 - Prove to CISO and legal that AI agents can operate within defined boundaries with full auditability
-- Self-host on the org's existing Kubernetes infrastructure — no data leaves their VPC
+- Self-host on the org's existing infrastructure (Docker Compose / VMs) — no data leaves their VPC
 - Integrate with existing identity provider (OIDC/Okta), issue tracker (Jira/Linear), and code host (GitHub Enterprise / GitLab Self-Managed)
 - Roll out agentic delivery team-by-team with central policy controls
 - Evaluate agent output quality systematically before expanding autonomy
@@ -53,4 +53,4 @@
 
 ## What success looks like
 
-Priya deploys Modulo on the org's EKS cluster, configures Okta SSO, connects to GitHub Enterprise and Jira, and enables the first 3 teams with approved pipelines (PRD→tickets, code review, deploy gate). CISO sees the audit trail and lifts the AI ban. Priya's dashboard shows team A has 92% eval pass rate and saved 8 engineer-hours/week on release notes. She adds 3 more teams and schedules a quarterly eval review.
+Priya deploys Modulo on the org's existing infrastructure (Docker Compose on VPC-hosted VMs), configures Okta SSO, connects to GitHub Enterprise and Jira, and enables the first 3 teams with approved pipelines (PRD→tickets, code review, deploy gate). CISO sees the audit trail and lifts the AI ban. Priya's dashboard shows team A has 92% eval pass rate and saved 8 engineer-hours/week on release notes. She adds 3 more teams and schedules a quarterly eval review.

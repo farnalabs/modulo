@@ -138,12 +138,6 @@ FLAGS: list[dict[str, str | None]] = [
         "depends_on": None,
     },
     {
-        "name": "helm_deployment",
-        "description": "Helm chart for production Kubernetes deployment",
-        "tier_id": "community",
-        "depends_on": None,
-    },
-    {
         "name": "environment_profiles",
         "description": "Sandbox environment profiles for code execution",
         "tier_id": "team",

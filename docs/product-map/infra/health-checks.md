@@ -32,4 +32,4 @@ Liveness and readiness endpoints for deployment health monitoring. Liveness (`/h
 
 - **No PRD section reference.** PRD section 10.5 is "Opt-In Telemetry" — not related to health checks. The health endpoints are an internal infrastructure concern spanning deployment, monitoring, and operations docs (PRD §§5–6). No single PRD section covers liveness/readiness.
 - **No BDD feature files.** Health endpoints use FastAPI `TestClient` unit tests (`backend/tests/unit/api/test_health.py`) with patched check functions. No pytest-bdd scenarios exist.
-- **No integration with deployment orchestrator.** The health endpoint does not report to any orchestrator (e.g. Fly.io bluegreen, K8s readiness gate) beyond serving the HTTP status code and JSON body.
+- **No integration with deployment orchestrator.** The health endpoint does not report to any orchestrator (e.g. Fly.io bluegreen) beyond serving the HTTP status code and JSON body.

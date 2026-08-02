@@ -9,10 +9,10 @@
 ## 1. Telemetry & Observability
 
 - [ ] **`MODULO_TELEMETRY_ENABLED` is not set** (defaults to `false`)
-  - verify: `kubectl exec deploy/modulo-backend -- env | grep MODULO_TELEMETRY`
+  - verify: `docker compose -f docker-compose.prod.yml exec modulo env | grep MODULO_TELEMETRY`
   - expected: no output or `MODULO_TELEMETRY_ENABLED=false`
 - [ ] **`OTEL_EXPORTER_OTLP_ENDPOINT` is not set**
-  - verify: `kubectl exec deploy/modulo-backend -- env | grep OTEL_EXPORTER_OTLP`
+  - verify: `docker compose -f docker-compose.prod.yml exec modulo env | grep OTEL_EXPORTER_OTLP`
   - expected: no output
 - [ ] **No OTel config saved in database** (if DB was migrated from non-VPC env)
   - verify: query `otel_config` table — `otlp_endpoint` should be empty string
@@ -29,7 +29,7 @@
 ## 3. Webhooks & Notifications
 
 - [ ] **All webhook URLs point to VPC-internal endpoints**
-  - verify: `GET /api/v1/admin/notifications` — ensure every `url` field is an internal address (`https://internal-alb.*`, `http://service.namespace.svc.cluster.local`, etc.)
+  - verify: `GET /api/v1/admin/notifications` — ensure every `url` field is an internal address (`https://internal-alb.*`, VPC-internal hostnames, etc.)
 - [ ] **No external webhook delivery logs show successful deliveries**
   - verify: check notification delivery log for external URLs
 
@@ -42,34 +42,33 @@
 
 ## 5. Network Policy (defense in depth)
 
-- [ ] **Kubernetes NetworkPolicy blocks all egress except to known VPC services**
-  - verify: `kubectl get networkpolicy -n modulo-prod` shows an egress policy
-  - verify: policy allows outbound only to Postgres, Redis, and VPC-internal services
-- [ ] **No `0.0.0.0/0` egress rules** exist in the NetworkPolicy
-- [ ] **DNS resolution is restricted to VPC-internal DNS** (ClusterDNS or CoreDNS with stub domains)
-- [ ] **Cluster Ingress controller is configured for internal-only load balancer** (e.g., `alb.ingress.kubernetes.io/scheme: internal`)
+- [ ] **Host firewall / security group blocks all egress except to known VPC services**
+  - verify: host firewall (iptables/nftables) or security-group rules allow outbound only to Postgres, Redis, and VPC-internal services
+- [ ] **No `0.0.0.0/0` egress rules** exist in the host firewall or security groups
+- [ ] **DNS resolution is restricted to VPC-internal DNS** (VPC resolver / split-horizon zones)
+- [ ] **Reverse proxy is configured for internal-only load balancer** (e.g., AWS `alb.scheme: internal`)
 
 ## 6. Container image security
 
 - [ ] **Image is pulled from VPC-internal registry** (ECR, GAR, ACR) — not Docker Hub
-  - verify: `kubectl get pods -n modulo-prod -o jsonpath='{.items[*].spec.containers[*].image}'`
+  - verify: `docker compose -f docker-compose.prod.yml config | grep image`
   - expected: all images from internal registry URL
 
 ## 7. Secrets
 
 - [ ] **No secrets reference external key management services** across VPC boundaries
-  - verify: if using External Secrets Operator, ensure SecretStore points to VPC-internal KMS
+  - verify: secret references resolve to VPC-internal KMS / key vault, not external providers
 
 ## 8. Runtime verification
 
-- [ ] **Deployed pod can reach database and Redis**
-  - verify: `kubectl exec deploy/modulo-backend -- nc -zv modulo-postgres 5432`
-  - verify: `kubectl exec deploy/modulo-backend -- nc -zv modulo-redis 6379`
-- [ ] **Deployed pod can NOT reach the public internet**
-  - verify: `kubectl exec deploy/modulo-backend -- curl -s --connect-timeout 5 https://google.com`
+- [ ] **Deployed container can reach database and Redis**
+  - verify: `docker compose -f docker-compose.prod.yml exec modulo nc -zv postgres 5432`
+  - verify: `docker compose -f docker-compose.prod.yml exec modulo nc -zv redis 6379`
+- [ ] **Deployed container can NOT reach the public internet**
+  - verify: `docker compose -f docker-compose.prod.yml exec modulo curl -s --connect-timeout 5 https://google.com`
   - expected: connection timeout or refused
-- [ ] **Deployed pod can NOT resolve public DNS names**
-  - verify: `kubectl exec deploy/modulo-backend -- nslookup google.com`
+- [ ] **Deployed container can NOT resolve public DNS names**
+  - verify: `docker compose -f docker-compose.prod.yml exec modulo nslookup google.com`
   - expected: failure or NXDOMAIN (depending on DNS policy)
 
 ## 9. Documentation

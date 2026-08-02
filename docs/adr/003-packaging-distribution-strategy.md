@@ -13,7 +13,7 @@ Modulo currently has no automated publishing pipeline. Users can only run it by 
 - Download a pre-built artifact
 - Install via a package manager
 
-The project needs a distribution strategy that covers the spectrum from "try it in 30 seconds" to "deploy to production K8s." Every distribution channel must also answer the database dependency question — Modulo requires a database (PostgreSQL default, SQLite supported) and optionally Redis for Celery.
+The project needs a distribution strategy that covers the spectrum from "try it in 30 seconds" to "deploy to production (Docker Compose or Fly.io)." Every distribution channel must also answer the database dependency question — Modulo requires a database (PostgreSQL default, SQLite supported) and optionally Redis for Celery.
 
 The `MODULO_DB=sqlite` mode (implemented in `settings.py`, backed by `aiosqlite`) is the key technical enabler. It allows a zero-dependency standalone mode where the database is just a file on disk. Redis/Celery remains the tighter coupling — the `celery_app.py` module-level init crashes if Redis is unreachable, and the polling trigger engine depends on Celery beat.
 
@@ -30,7 +30,7 @@ Publish pre-built backend and frontend images to GitHub Container Registry. User
 | Matches existing architecture | Two-container setup (backend + frontend) |
 | Works on all OSes with Docker | Docker is a dependency |
 | Supports both PG and SQLite | Frontend API URL baked at build time |
-| K8s-compatible (Helm chart exists) | |
+| Deployable via Docker Compose / Fly.io | |
 
 **Database story:** PostgreSQL via a third container, or SQLite via a mounted volume.
 
@@ -115,7 +115,7 @@ Adopt a **tiered distribution strategy** with three tiers corresponding to user 
 
 ### Tier 1 — Ship (release-blocking)
 
-5. **Docker images published to ghcr.io** — `modulo-backend` and `modulo-frontend` (separate, as the Helm chart expects)
+5. **Docker images published to ghcr.io** — `modulo-backend` and `modulo-frontend` (separate backend and frontend images)
 6. **`docker-compose.prod.yml`** — references published images instead of building from source, includes `.env` template, health checks, Celery worker/beat services
 7. **Production single-container image** — backend + frontend combined, gunicorn with configurable workers, nginx sidecar or FastAPI-served static files with SPA catch-all
 8. **`install.sh`** — `curl https://modulo.run/install.sh | bash` that detects Docker, downloads `docker-compose.prod.yml` and runs `docker compose up`
@@ -141,7 +141,7 @@ Adopt a **tiered distribution strategy** with three tiers corresponding to user 
 ## Consequences
 
 - **Positive:** Anyone can run Modulo with one command after Tier 1 ships
-- **Positive:** Docker remains the canonical deployment for production (multi-container, PostgreSQL, Redis, K8s)
+- **Positive:** Docker remains the canonical deployment for production (multi-container, PostgreSQL, Redis)
 - **Positive:** SQLite-first for evaluation lowers the barrier to zero
 - **Positive:** The CI/CD pipeline gates all future releases — every PR gets linted, tested, and validated as publishable
 - **Negative:** We now maintain multiple distribution methods with different behaviours
