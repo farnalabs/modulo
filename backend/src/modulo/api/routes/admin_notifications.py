@@ -21,8 +21,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
@@ -45,14 +44,6 @@ AVAILABLE_EVENTS = [
     EVENT_BUDGET_EXCEEDED,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
 ]
-
-
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required for notification management",
-        )
 
 
 # ── Request / Response models ──────────────────────────────────────────
@@ -155,9 +146,8 @@ async def list_all_deliveries(
     date_from: str | None = Query(None, alias="from"),
     date_to: str | None = Query(None, alias="to"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
 ) -> DeliveryLogResponse:
-    _require_admin(principal)
     try:
         return await _list_deliveries(
             cursor=cursor,
@@ -308,11 +298,10 @@ async def _list_deliveries(
 @router.post("/deliveries/retry-all-failed")
 async def retry_all_failed_deliveries(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Retry all failed and dead_lettered deliveries across all webhooks in the org."""
-    _require_admin(principal)
 
     try:
         async with session.begin():
@@ -494,9 +483,8 @@ async def retry_all_failed_deliveries(
 @handle_db_errors("admin.notifications.list_available_events")
 @router.get("/available-events", response_model=list[str])
 async def list_available_events(
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
 ) -> list[str]:
-    _require_admin(principal)
     return AVAILABLE_EVENTS
 
 
@@ -507,9 +495,8 @@ async def list_available_events(
 @router.get("", response_model=list[WebhookResponse])
 async def list_webhooks(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
 ) -> list[WebhookResponse]:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -548,10 +535,9 @@ async def list_webhooks(
 async def create_webhook(
     req: WebhookCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
     settings: Settings = Depends(get_settings),
 ) -> WebhookResponse:
-    _require_admin(principal)
     fernet = Fernet(settings.fernet_key.encode())
     secret_ciphertext: bytes | None = None
     if req.secret:
@@ -601,9 +587,8 @@ async def create_webhook(
 async def get_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
 ) -> WebhookResponse:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -644,10 +629,9 @@ async def update_webhook(
     webhook_id: uuid.UUID,
     req: WebhookUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
     settings: Settings = Depends(get_settings),
 ) -> WebhookResponse:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -700,9 +684,8 @@ async def update_webhook(
 async def delete_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
 ) -> None:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -745,10 +728,9 @@ async def delete_webhook(
 async def test_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
     settings: Settings = Depends(get_settings),
 ) -> TestResult:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -826,9 +808,8 @@ async def test_webhook(
 async def re_enable_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
 ) -> WebhookResponse:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -878,9 +859,8 @@ async def list_deliveries(
     limit: int = Query(default=25, ge=1, le=100),
     status_filter: str | None = Query(None, alias="status"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
 ) -> DeliveryLogResponse:
-    _require_admin(principal)
 
     try:
         async with session.begin():
@@ -982,10 +962,9 @@ async def retry_delivery(
     webhook_id: uuid.UUID,
     delivery_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.notification.manage"),
     settings: Settings = Depends(get_settings),
 ) -> TestResult:
-    _require_admin(principal)
 
     try:
         async with session.begin():
