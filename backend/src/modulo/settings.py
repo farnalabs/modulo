@@ -61,36 +61,17 @@ class Settings(BaseSettings):
 
     modulo_max_local_concurrency: int = Field(2)
 
-    # Celery worker connection pool sizes (per prefork child)
-    modulo_celery_db_pool_sync_size: int = Field(default=2, alias="MODULO_CELERY_DB_POOL_SYNC_SIZE", ge=1, le=5)
-    modulo_celery_db_pool_async_size: int = Field(default=4, alias="MODULO_CELERY_DB_POOL_ASYNC_SIZE", ge=1, le=10)
-    modulo_celery_db_pool_sync_overflow: int = Field(default=1, alias="MODULO_CELERY_DB_POOL_SYNC_OVERFLOW", ge=0, le=3)
-    modulo_celery_db_pool_async_overflow: int = Field(
-        default=1, alias="MODULO_CELERY_DB_POOL_ASYNC_OVERFLOW", ge=0, le=3
-    )
-    # Connection budget: the validator conservatively sums sync+async pool
-    # sizes because both engines are used simultaneously in a task (sync
-    # for heartbeat + claim, async for execution).
-    modulo_celery_db_pool_connect_timeout: int = Field(
-        default=10, alias="MODULO_CELERY_DB_POOL_CONNECT_TIMEOUT", ge=1, le=30
-    )
-    modulo_celery_db_pool_sync_timeout: int = Field(default=10, alias="MODULO_CELERY_DB_POOL_SYNC_TIMEOUT", ge=1, le=30)
-
     # ------------------------------------------------------------------
-    # SAQ (Celery migration) — plan F4 Settings section
+    # SAQ (Celery removed in PR C) — plan F4 Settings section
     # ------------------------------------------------------------------
-    # SAQ_ENABLED is TRI-ROLE:
-    #   (1) dispatch routing — where dispatch_run sends execute/resume jobs,
-    #   (2) dispatcher-column write — whether the dispatcher column reads 'saq',
-    #   (3) Celery beat fire gate — whether the entrypoint starts Celery beat.
-    # The flag does NOT stop the SAQ workers.
-    saq_enabled: bool = Field(default=False, alias="SAQ_ENABLED")
+    # SAQ is the ONLY dispatch path — dispatch_run always enqueues to SAQ and
+    # the dispatcher column always reads 'saq' (plan F3e). No enable flag.
     # SAQ runs queue name — 'runs' or 'staging-runs' (staging isolation, plan F1).
     saq_runs_queue: str = Field(default="runs", alias="SAQ_RUNS_QUEUE")
-    # Staleness gate for re-claiming a SAQ run whose heartbeat is stale. SAQ
-    # runs only — legacy Celery keeps today's 180s window (see below).
+    # Staleness gate for re-claiming a SAQ run whose heartbeat is stale.
     run_claim_stale_seconds: int = Field(default=450, alias="RUN_CLAIM_STALE_SECONDS", ge=1, le=3600)
-    # Legacy Celery-path claim window (today's `interval '3 minutes'` = 180s).
+    # Legacy claim window kept for the shared sync claim helpers (claim_run /
+    # execute_run legacy path), which the SAQ worker does not use.
     legacy_run_claim_stale_seconds: int = Field(default=180, alias="LEGACY_RUN_CLAIM_STALE_SECONDS", ge=1, le=3600)
     # SAQ job heartbeat knob (per-job). The DB heartbeat cadence is
     # RUN_HEARTBEAT_SECONDS below.
@@ -98,8 +79,9 @@ class Settings(BaseSettings):
     # DB heartbeat cadence for execute_run — keep well below the 300s SAQ sweep
     # threshold (cadence equal to the sweep threshold leaves zero margin).
     run_heartbeat_seconds: int = Field(default=30, alias="RUN_HEARTBEAT_SECONDS", ge=1, le=120)
-    # Cutover hold gate: healthz/ready 503 gating on SAQ_ENABLED=true during the
-    # hold; relaxed to degraded via an explicit deploy-time flag after the hold.
+    # Cutover hold gate: healthz/ready 503-gates when THIS machine's SAQ workers
+    # are stale (default true during the hold). Set false via deploy-time flag
+    # after the hold to relax the gate to degraded (alerting continues).
     saq_hard_gate: bool = Field(default=True, alias="SAQ_HARD_GATE")
     # Web UI auth — FAIL-CLOSED (system worker refuses to boot without both).
     saq_auth_password: str | None = Field(default=None, alias="SAQ_AUTH_PASSWORD", repr=False)
@@ -110,8 +92,8 @@ class Settings(BaseSettings):
     saq_retry_delay: int = Field(default=60, alias="SAQ_RETRY_DELAY", ge=1, le=3600)
     # Per-claim E2B idempotency key run:{id}:e2b:{claim_token} (F3a).
     saq_e2b_idempotency: bool = Field(default=True, alias="SAQ_E2B_IDEMPOTENCY")
-    # TEST-ONLY pause flag — hard default off; refused when combined with
-    # SAQ_ENABLED=true outside test/staging (debug=false).
+    # TEST-ONLY pause flag — hard default off; refused outside test/staging
+    # (debug=false).
     saq_test_pause: bool = Field(default=False, alias="SAQ_TEST_PAUSE")
     # Legacy sweep windows (never_dispatched / worker_lost / re-enqueue) match
     # today's beat-sweep values (5 min / 10 min; re-enqueue is SAQ-only, 600 is
@@ -326,29 +308,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _saq_test_pause_guard(self) -> "Settings":
-        """SAQ_TEST_PAUSE is TEST-ONLY: refuse it with SAQ_ENABLED outside test/staging."""
-        if self.saq_test_pause and self.saq_enabled and not self.debug:
-            raise ValueError(
-                "SAQ_TEST_PAUSE is a TEST-ONLY flag and cannot be combined with SAQ_ENABLED=true "
-                "outside test/staging (set DEBUG=true in test/staging environments)."
-            )
-        return self
+        """SAQ_TEST_PAUSE is TEST-ONLY: refuse it outside test/staging.
 
-    @model_validator(mode="after")
-    def _check_connection_budget(self) -> "Settings":
-        per_child = (
-            self.modulo_celery_db_pool_sync_size
-            + self.modulo_celery_db_pool_sync_overflow
-            + self.modulo_celery_db_pool_async_size
-            + self.modulo_celery_db_pool_async_overflow
-        )
-        max_safe = 14
-        if per_child > max_safe:
+        SAQ is always the dispatch path post-cutover, so the guard is simply
+        ``debug=false`` (no SAQ_ENABLED to combine with).
+        """
+        if self.saq_test_pause and not self.debug:
             raise ValueError(
-                f"Total connections per Celery worker child ({per_child}) exceeds {max_safe}. "
-                f"Reduce MODULO_CELERY_DB_POOL_SYNC_SIZE, _ASYNC_SIZE, or _*_OVERFLOW. "
-                f"Current: sync={self.modulo_celery_db_pool_sync_size}+{self.modulo_celery_db_pool_sync_overflow}, "
-                f"async={self.modulo_celery_db_pool_async_size}+{self.modulo_celery_db_pool_async_overflow}"
+                "SAQ_TEST_PAUSE is a TEST-ONLY flag and cannot be used outside test/staging "
+                "(set DEBUG=true in test/staging environments)."
             )
         return self
 

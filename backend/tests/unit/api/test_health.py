@@ -80,6 +80,7 @@ class TestReadiness:
             ),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 200
@@ -95,6 +96,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 503
@@ -108,6 +110,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 200
@@ -122,6 +125,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
         ):
             resp = client.get("/healthz/ready")
         body = resp.json()
@@ -371,10 +375,10 @@ class TestCheckSaqWorkersPerQueue:
         self,
         live_by_queue: dict[str, set[str]],
         *,
-        saq_enabled: bool = True,
+        saq_hard_gate: bool = True,
         this_host: str = "machine-a",
     ) -> CheckResult:
-        settings = _make_settings().model_copy(update={"saq_enabled": saq_enabled})
+        settings = _make_settings().model_copy(update={"saq_hard_gate": saq_hard_gate})
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),
             patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
@@ -411,15 +415,15 @@ class TestCheckSaqWorkersPerQueue:
         assert result.status == "degraded"
         assert "machine-a" in result.detail
 
-    async def test_stale_four_probes_unavailable_when_enabled(self, reset_stale_probes: None) -> None:
+    async def test_stale_four_probes_unavailable_when_gated(self, reset_stale_probes: None) -> None:
         result: CheckResult | None = None
         for _ in range(4):
             result = await self._run({"runs": set(), "system": set()})
         assert result is not None
         assert result.status == "unavailable"
 
-    async def test_shadow_staleness_alert_only(self, reset_stale_probes: None) -> None:
-        result = await self._run({"runs": set(), "system": set()}, saq_enabled=False)
+    async def test_hard_gate_false_staleness_alert_only(self, reset_stale_probes: None) -> None:
+        result = await self._run({"runs": set(), "system": set()}, saq_hard_gate=False)
         assert result.status == "ok"
 
 
@@ -437,7 +441,7 @@ class TestCheckSaqWorkersEndToEnd:
         *,
         this_host: str = "machine-a",
     ) -> CheckResult:
-        settings = _make_settings().model_copy(update={"saq_enabled": True})
+        settings = _make_settings().model_copy(update={"saq_hard_gate": True})
         fake = _PerQueueFakeStatsRedis(stats, blobs)
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),

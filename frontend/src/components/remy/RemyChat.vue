@@ -51,14 +51,14 @@
           class="remy-tool-card"
         >
           <button class="remy-tool-header" @click="toggleToolExpand(msg.id)">
-            <span class="remy-tool-name">?? Tool Called: {{ (msg.tool_results_json as any).tool_name }}</span>
-            <span class="tool-badge" :class="(msg.tool_results_json as any).success ? 'success' : 'failed'">
-              {{ (msg.tool_results_json as any).success ? 'Completed' : 'Failed' }}
+            <span class="remy-tool-name">?? Tool Called: {{ (msg.tool_results_json as ToolResult).tool_name }}</span>
+            <span class="tool-badge" :class="(msg.tool_results_json as ToolResult).success ? 'success' : 'failed'">
+              {{ (msg.tool_results_json as ToolResult).success ? 'Completed' : 'Failed' }}
             </span>
             <span class="tool-chevron" :class="{ expanded: expandedTools.has(msg.id) }">?</span>
           </button>
           <div v-if="expandedTools.has(msg.id)" class="remy-tool-details">
-            <pre>{{ formatToolDetails(msg.tool_results_json as any) }}</pre>
+            <pre>{{ formatToolDetails(msg.tool_results_json as ToolResult) }}</pre>
           </div>
         </div>
         <div
@@ -165,11 +165,11 @@
             v-for="tool in store.pendingPermission.tools"
             :key="tool.name"
             class="remy-permission-tool"
-            :class="{ 'remy-permission-tool-nogo': (tool as any).nogo }"
+            :class="{ 'remy-permission-tool-nogo': tool.nogo }"
           >
             <div class="flex items-center gap-2 min-w-0">
               <span class="font-mono text-xs truncate">{{ tool.name }}</span>
-              <span v-if="(tool as any).nogo" class="remy-nogo-badge">?? Destructive Page</span>
+              <span v-if="tool.nogo" class="remy-nogo-badge">?? Destructive Page</span>
             </div>
             <span class="text-xs text-muted-foreground">{{ describeArgs(tool) }}</span>
           </div>
@@ -293,6 +293,7 @@ import { abortUiCommands } from "@/composables/useUiCommandExecutor";
 import { Button } from "@/components/ui/button";
 import { getAccessToken } from "@/lib/api/client";
 import { ShieldAlertIcon, LoaderIcon } from "@lucide/vue";
+import type { ToolResult } from "@/types/remy";
 
 const store = useRemyStore();
 const planStore = usePlanStore();
@@ -483,7 +484,7 @@ const nogoCountdown = ref(0)
 let nogoCountdownTimer: ReturnType<typeof setInterval> | null = null
 
 function hasNogoTool(): boolean {
-  return store.pendingPermission?.tools.some((t: any) => t.nogo) ?? false
+  return store.pendingPermission?.tools.some((t) => t.nogo) ?? false
 }
 
 function startNogoCountdown() {

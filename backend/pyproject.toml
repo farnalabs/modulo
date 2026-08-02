@@ -94,7 +94,7 @@ dependencies = [
     "click>=8.1.0",
     "tqdm>=4.68.3",
     "langchain-ibm>=1.1.0",
-    "redis>=6.4.0,<6.5",
+    "redis>=6.4.0",
     "saq[web]==0.26.4",
 ]
 
@@ -141,8 +141,7 @@ dev = [
 
 docker = ["aiodocker>=0.21.0"]
 redis = [
-    "celery[redis]>=5.4.0",
-    "redis>=6.4.0,<6.5",
+    "redis>=6.4.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -190,7 +189,6 @@ ignore = [
 "scripts/generate_remy_primer.py" = ["ASYNC240"]
 "deploy/*" = ["T20"]
 "tests/bdd/check-bdd-coverage.py" = ["N999"]
-"pipeline-scripts/**" = ["S", "T201", "RET"]
 "tests/unit/runtime_provider/*" = ["E402"]
 "tests/unit/secrets_backend/*" = ["E402"]
 "src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
@@ -212,7 +210,7 @@ exclude = ["migrations/"]
 mypy_path = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["langgraph.*", "langchain.*", "testcontainers.*", "factory.*", "passlib.*", "celery", "celery.*", "croniter", "croniter.*", "defusedxml", "defusedxml.*"]
+module = ["langgraph.*", "langchain.*", "testcontainers.*", "factory.*", "passlib.*", "croniter", "croniter.*", "defusedxml", "defusedxml.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -331,6 +329,5 @@ dev = [
     "hypothesis>=6.100.0",
     "schemathesis>=3.30.0",
     "pytest-recording>=0.13.0",
-    "celery[redis]>=5.4.0",
     "pip-audit>=2.9.0",
 ]

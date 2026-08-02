@@ -18,7 +18,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import create_run
@@ -65,6 +65,7 @@ async def fire_agent_signal(
 
     for trigger in triggers:
         config = trigger.config_json or {}
+        str_trigger_id = str(trigger.id)
         source_pid = config.get("source_pipeline_id")
         source_nid = config.get("source_node_id")
 
@@ -130,34 +131,75 @@ async def fire_agent_signal(
                 )
                 continue
         else:
-            snapshot_id = uuid.UUID(int=0)
+            # No snapshot pinned in config — fall back to the target pipeline's
+            # latest snapshot (same resolution cron triggers use). A zero-UUID
+            # here would fail the cross-org FK trigger on runs.snapshot_id.
+            snap_result = await session.execute(
+                text(
+                    "SELECT id FROM pipeline_snapshots "
+                    "WHERE pipeline_id = :pid "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"pid": str(trigger.pipeline_id)},
+            )
+            latest_snapshot_id = snap_result.scalar_one_or_none()
+            if latest_snapshot_id is None:
+                _log.warning(
+                    "Agent signal trigger %s has no snapshot for pipeline %s — skipping",
+                    trigger.id,
+                    trigger.pipeline_id,
+                )
+                await _log_signal_event(
+                    session,
+                    trigger,
+                    org_id,
+                    result="poll_error",
+                    error_detail=f"No snapshot found for pipeline {trigger.pipeline_id}",
+                )
+                results.append(
+                    {
+                        "trigger_id": str(trigger.id),
+                        "status": "skipped",
+                        "reason": "no_snapshot",
+                    }
+                )
+                continue
+            snapshot_id = uuid.UUID(str(latest_snapshot_id))
 
         # Create child run linked to source via parent_run_id.
+        #
+        # Wrap the insert in a SAVEPOINT so a failed create_run (constraint
+        # violation, deadlock, etc.) rolls back only the child-run insert and
+        # leaves the caller's transaction usable. Without this, the failed
+        # flush poisons the whole transaction and the exception-handling code
+        # below (which touches the same session) explodes with a misleading
+        # "Can't operate on closed transaction" error.
         try:
-            child_run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=trigger.pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="agent_signal",
-                trigger_id=trigger.id,
-                input_payload=input_payload,
-                parent_run_id=source_run_id,
-            )
+            async with session.begin_nested():
+                child_run = await create_run(
+                    session,
+                    org_id=org_id,
+                    pipeline_id=trigger.pipeline_id,
+                    snapshot_id=snapshot_id,
+                    trigger_type="agent_signal",
+                    trigger_id=trigger.id,
+                    input_payload=input_payload,
+                    parent_run_id=source_run_id,
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            _log.exception("Failed to create child run for agent signal trigger %s", trigger.id)
+            _log.exception("Failed to create child run for agent signal trigger %s", str_trigger_id)
             await _log_signal_event(
                 session,
                 trigger,
                 org_id,
-                result="error",
+                result="validation_failed",
                 error_detail=str(exc)[:200],
             )
             results.append(
                 {
-                    "trigger_id": str(trigger.id),
+                    "trigger_id": str_trigger_id,
                     "status": "error",
                     "reason": "create_run_failed",
                 }

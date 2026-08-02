@@ -609,3 +609,94 @@ def test_register_with_hub() -> None:
     hub.register("e2b", provider)
     assert hub.get("e2b") is provider
     assert hub.resolve(_DummyProfile(hint="e2b")) is provider
+
+
+# ---------------------------------------------------------------------------
+# Cancellation / failure propagation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_cancellation_propagates(
+    mock_sandbox_cls: MagicMock,
+    workspace_spec: WorkspaceSpec,
+) -> None:
+    mock_sandbox_cls.create.side_effect = asyncio.CancelledError
+
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    with pytest.raises(asyncio.CancelledError):
+        await provider.create_workspace(workspace_spec)
+    assert provider._sandboxes == {}
+
+
+@pytest.mark.asyncio
+async def test_exec_command_failure_returns_error_result(
+    mock_sandbox_cls: MagicMock,
+    mock_sandbox: MagicMock,
+    workspace_spec: WorkspaceSpec,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    mock_sandbox.commands.run.side_effect = RuntimeError("sandbox died")
+
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    ref = await provider.create_workspace(workspace_spec)
+    result = await provider.exec_command(ref, ["echo", "hi"])
+
+    assert result.exit_code == -1
+    assert "Command execution failed: sandbox died" in result.stderr
+    assert "exec_command failed in sandbox" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_exec_command_cancellation_propagates(
+    mock_sandbox_cls: MagicMock,
+    mock_sandbox: MagicMock,
+    workspace_spec: WorkspaceSpec,
+) -> None:
+    mock_sandbox.commands.run.side_effect = asyncio.CancelledError
+
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    ref = await provider.create_workspace(workspace_spec)
+    with pytest.raises(asyncio.CancelledError):
+        await provider.exec_command(ref, ["echo", "hi"])
+
+
+@pytest.mark.asyncio
+async def test_get_workspace_status_cancellation_propagates(
+    mock_sandbox_cls: MagicMock,
+    mock_sandbox: MagicMock,
+    workspace_spec: WorkspaceSpec,
+) -> None:
+    mock_sandbox.is_running = AsyncMock(side_effect=asyncio.CancelledError)
+
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    ref = await provider.create_workspace(workspace_spec)
+    with pytest.raises(asyncio.CancelledError):
+        await provider.get_workspace_status(ref)
+
+
+@pytest.mark.asyncio
+async def test_kill_sandbox_cancellation_propagates(mock_sandbox: MagicMock) -> None:
+    mock_sandbox.kill.side_effect = asyncio.CancelledError
+
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    with pytest.raises(asyncio.CancelledError):
+        await provider._kill_sandbox_best_effort(mock_sandbox, "test")
+
+
+@pytest.mark.asyncio
+async def test_clone_repo_cancellation_propagates(mock_sandbox: MagicMock) -> None:
+    mock_sandbox.commands.run.side_effect = asyncio.CancelledError
+
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    with pytest.raises(asyncio.CancelledError):
+        await provider._clone_repo(mock_sandbox, "https://example.com/repo.git", {})
+
+
+@pytest.mark.asyncio
+async def test_clone_repo_failure_wrapped_in_runtime_error(mock_sandbox: MagicMock) -> None:
+    mock_sandbox.commands.run.side_effect = RuntimeError("network down")
+
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    with pytest.raises(RuntimeError, match="Repo clone failed for"):
+        await provider._clone_repo(mock_sandbox, "https://example.com/repo.git", {})

@@ -987,7 +987,8 @@ export default {
       "status_label": "Status:",
       "sandbox_label": "Sandbox:",
       "duration_label": "Duration:",
-      "error_label": "Error:"
+      "error_label": "Error:",
+      "waiting_for_capacity": "Waiting for capacity"
     },
     "AdminRunRetentionView": {
       "run_retention": "Run Retention",
@@ -1007,6 +1008,15 @@ export default {
       "status_categories": "Status Categories",
       "estimated_storage_saved": "Estimated Storage Saved",
       "runs_by_status": "Runs by Status"
+    },
+    "AdminSandboxConcurrencyView": {
+      "max_concurrent_sandbox_runs": "Max concurrent sandbox runs",
+      "limit_how_many_sandbox_agent_runs_execute_at_once_across_the_org": "Limit how many sandbox-agent runs execute at once across the org. Leave empty for unlimited.",
+      "leave_empty_for_unlimited": "Leave empty for unlimited.",
+      "concurrent_run_limit": "Concurrent sandbox run limit",
+      "save": "Save",
+      "saving": "Saving\u2026",
+      "limit_updated": "Sandbox concurrency limit updated."
     },
     "SettingsObservabilityView": {
       "configure_opentelemetry_export_and_langsmith_integration": "Configure OpenTelemetry export and LangSmith integration",
@@ -2257,6 +2267,7 @@ export default {
       "item_environments": "Environments",
       "item_environment_profiles": "Environment Profiles",
       "item_run_retention": "Run Retention",
+      "item_sandbox_concurrency": "Sandbox Concurrency",
       "item_saved_views": "Saved Views",
       "item_error_dashboard": "Error Dashboard",
       "item_notification_log": "Notification Log",

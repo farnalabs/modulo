@@ -47,7 +47,8 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] List projects via `query("projects")` with optional search filter
 - [x] Return project ID, name, and web URL in results
 - [x] Raise `ValueError` for unsupported resources in `query()`
-- [ ] Support pagination cursor via `Link` header or pagination query params
+- [x] Support pagination via GitLab `X-Next-Page` header — list queries return `next_cursor`
+- [x] Accept `ConnectorQuery.cursor` as the GitLab `page` param to fetch the next page
 - [x] Filter projects by membership, visibility, or ownership
 - [x] Support `limit` parameter in project queries
 
@@ -77,8 +78,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] Set MR labels — not implemented
 - [ ] Request MR approval — not implemented
 - [ ] Approve MR via API — not implemented
-- [ ] `query("mrs")` does not support pagination cursor
-- [ ] Pagination for `query("mrs")` — `next_cursor` always `None`
+- [x] `query("mrs")` supports pagination — `next_cursor` from `X-Next-Page`, cursor forwarded as `page`
 
 ### Capability Declaration
 
@@ -100,6 +100,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 ### Error Handling
 
 - [x] Missing required filter key raises ValueError with descriptive message
+- [x] Invalid pagination cursor (non-numeric) raises ValueError with descriptive message
 - [x] HTTP 4xx/5xx API errors wrapped as ValueError with status code and detail (via _call_api)
 - [x] HTTP 304 Not Modified wrapped as ValueError with descriptive message
 - [x] Connection errors (ConnectError) wrapped as ValueError (via _call_api)
@@ -131,10 +132,23 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] **File deletion unimplemented**: no `write("file_delete")` or equivalent
 - [ ] **MR operations limited**: only listing and creation work — no comments, merges, approvals, or labels
 - [ ] **Scope verification incomplete**: health check doesn't verify individual scopes
-- [ ] **No pagination**: `query("projects")` and `query("mrs")` don't return `next_cursor`
 - [ ] **No RateLimit-* header inspection**: rate-limit retry is blind (no remaining/quota tracking from GitLab headers)
 
 ## QA History
+
+### 2026-08-02 — improve-architecture (index 142)
+
+**RESOLVED known gap "No pagination"**: `query("projects")` and `query("mrs")` didn't return `next_cursor`.
+
+- Added `_parse_next_page()` — reads GitLab's `X-Next-Page` header, returning `None` when absent or `"0"` (last page), and `_paginate_params()` — forwards `ConnectorQuery.cursor` as the GitLab `page` query param, raising `ValueError` for non-numeric cursors.
+- Wired both into all list resources: `projects`, `mrs`/`merge_requests`, `issues`, `labels`, `milestones`, `issue_notes`, `issue_discussions`, `branches`, `tags`, `pipelines`, `jobs`. Single-record resources (`file`, `issue`, `merge_request`, `label`, `branch`) still return `next_cursor=None`.
+- Updated connector docstring to document the `next_cursor` contract.
+
+**Product map updates:** behaviours `[ ]`→`[x]` (Project Operations pagination, MR pagination), Known Gaps removed the pagination entry.
+
+**Tests:** Added 8 unit tests in `test_gitlab.py` (projects/mrs/issues/pipelines `next_cursor` echo, `"0"`→`None` boundary, cursor→`page` param forwarding, invalid cursor → `ValueError`, single-resource no cursor) + 2 BDD scenarios in `gitlab_issues.feature` (paginated query returns next page cursor, last page has no cursor) with `When … on page "{page}"` step + `Then` next-cursor steps. Also fixed 2 pre-existing broken BDD scenarios (error-on-write/query — steps referenced didn't exist).
+
+**Status:** partial (5 known gaps remain). 23/23 gitlab unit tests + 6/6 new/fixed BDD scenarios pass, ruff clean.
 
 ### 2026-07-08 — Cross-cutting QA (improve-architecture index 266)
 

@@ -75,7 +75,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-notifications](core/notifications.md) => PRD 8.11
 - [feat-core-oidc-integration](core/oidc-integration.md) => PRD 9.4, 6.2, 9.2
 - [feat-core-pipeline-execution](core/pipeline-execution.md) => PRD 8.4
-- [feat-core-pkg0-celery-optional](core/pkg0-celery-optional.md) => PRD 8.5
+- [feat-core-pkg0-celery-optional](core/pkg0-celery-optional.md) => PRD 8.5 (Celery removed - SAQ cutover, PR C)
 - [feat-core-polling-trigger](core/polling-trigger.md) => PRD 8.5
 - [feat-core-prompt-optimization](core/prompt-optimization.md) => PRD 8.2
 - [feat-core-quality-report-slack](core/quality-report-slack.md) => PRD 8.6, 8.11

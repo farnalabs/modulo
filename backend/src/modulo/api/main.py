@@ -916,9 +916,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # NOTE: the in-process cron scheduler (run_scheduler) is intentionally NOT
     # started here. Plan F1 "single scheduler at a time": the SAQ system worker's
-    # fire_due_triggers cron is the scheduler in both shadow and SAQ_ENABLED
-    # modes, and Celery beat is gated off by the entrypoint. Running the
-    # in-process loop alongside SAQ would double-fire cron triggers.
+    # fire_due_triggers cron is the scheduler, and the entrypoint never starts
+    # Celery beat. Running the in-process loop alongside SAQ would double-fire
+    # cron triggers.
 
     # Initialise the graceful shutdown manager with the configured timeout.
     # Two session factories exist:

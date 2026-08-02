@@ -50,7 +50,7 @@ describe('SettingsObservabilityView', () => {
     vi.clearAllMocks()
     vi.mocked(api.GET as unknown as () => Promise<unknown>).mockResolvedValue(DEFAULT_GET_RESPONSE)
     vi.mocked(api.PUT).mockResolvedValue({ data: null, error: undefined } as never)
-    vi.mocked(api.POST).mockResolvedValue({ data: null, error: undefined })
+    vi.mocked(api.POST as unknown as () => Promise<unknown>).mockResolvedValue({ data: null, error: undefined })
   })
 
   it('renders without crashing', async () => {

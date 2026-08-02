@@ -1,7 +1,7 @@
 """Unit tests for pipeline draft generation from determination data."""
 
 from modulo.connectors.base import ConnectorType
-from modulo.determination.draft import generate_draft
+from modulo.determination.draft import DraftEdge, generate_draft
 from modulo.determination.inference import infer
 
 from .helpers import make_finding, make_sample
@@ -135,6 +135,44 @@ def test_development_node_has_required_capabilities() -> None:
     assert dev is not None
     assert dev.connector_type == "github"
     assert dev.required_capabilities == ["read", "write"]
+
+
+def test_development_node_uses_gitlab_connector() -> None:
+    samples = [make_sample("projects", [{"name": "proj-1"}], connector_type=ConnectorType.GITLAB)]
+    findings = infer(samples)
+    draft = generate_draft(samples, findings)
+    dev = next((n for n in draft.nodes if n.id == "development"), None)
+    assert dev is not None
+    assert dev.connector_type == "gitlab"
+
+
+def test_planning_suggestion_uses_linear_when_no_jira() -> None:
+    samples = [
+        make_sample(
+            "issues",
+            [{"state": {"name": "Todo"}, "title": "T1"}],
+            connector_type=ConnectorType.LINEAR,
+        )
+    ]
+    findings = infer(samples)
+    draft = generate_draft(samples, findings)
+    planning = next((s for s in draft.automation_suggestions if s["stage"] == "planning"), None)
+    assert planning is not None
+    assert planning["connector_type"] == "linear"
+
+
+def test_data_without_detectable_stages_falls_back_to_start_end_edge() -> None:
+    samples = [
+        make_sample(
+            "issues",
+            [{"fields": {"status": {"name": "Done"}, "summary": "T1"}}],
+            connector_type=ConnectorType.JIRA,
+        )
+    ]
+    findings = infer(samples)
+    draft = generate_draft(samples, findings)
+    assert {n.id for n in draft.nodes} == {"start", "end"}
+    assert draft.edges == [DraftEdge(source="start", target="end")]
 
 
 def test_draft_preserves_findings() -> None:

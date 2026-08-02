@@ -1,9 +1,9 @@
 """SAQ scheduler helpers — per-item fire jobs, fire_due_triggers, dispatcher_reconcile.
 
 Plan F1 / F3c / F3d. This module is the SAQ replacement for the Celery beat fire
-tasks (``CronFireTask`` / ``PollingFireTask`` / ``ReportFireTask``) and must NOT
-import ``celery_app`` (deleted in PR C). All fire logic is reimplemented async
-against the shared DB session pattern.
+tasks (``CronFireTask`` / ``PollingFireTask`` / ``ReportFireTask``, all removed
+in PR C). All fire logic is reimplemented async against the shared DB session
+pattern.
 
 Multi-machine safety (F1, the single most important invariant):
 ``fire_due_triggers`` (a system cron on EVERY machine) advances ``next_fire_at``
@@ -294,8 +294,8 @@ async def fire_cron_trigger(
     enqueue time; this job sets ``last_fired_at`` only.
 
     ``advance_next_fire_at=True`` preserves the legacy Celery behaviour used by
-    ``CronFireTask`` (which advances ``next_fire_at`` at fire time) until PR C
-    deletes the Celery beat path.
+    ``CronFireTask`` (which advances ``next_fire_at`` at fire time); the Celery
+    beat path was removed in PR C.
     """
     from sqlalchemy import update
 
@@ -1155,6 +1155,28 @@ def _resolve_snapshot_id(row: Any, latest_snapshots: dict[uuid.UUID, uuid.UUID])
 # ---------------------------------------------------------------------------
 
 
+def _reconcile_capacity_marker_exclusion() -> Any:
+    """Exclude capacity-block reason markers from re-dispatch.
+
+    A capacity-blocked run (demoted to ``pending`` with ``error_code`` in
+    (``org_capacity_limited``, ``pipeline_capacity``)) has a LIVE in-process
+    retry accelerator (``_retry_pending``). If ``dispatcher_reconcile``
+    re-enqueues it, a second worker claims it and spawns a SECOND
+    ``_retry_pending`` loop — two loops can double-execute the same run when
+    a slot frees. These runs are therefore NEVER re-dispatched here; the
+    120-min ``capacity_timeout`` sweep is their backstop. Literal markers,
+    matching the stale-run sweep in ``pipeline_execution.py``.
+    """
+    from sqlalchemy import or_
+
+    from modulo.db.models.run import Run
+
+    return or_(
+        Run.error_code.is_(None),
+        Run.error_code.not_in(("org_capacity_limited", "pipeline_capacity")),
+    )
+
+
 async def dispatcher_reconcile() -> dict[str, Any]:
     """System cron — re-dispatch runs whose SAQ job is missing (every 60s).
 
@@ -1214,15 +1236,14 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         # Capacity-deferred branch: pending + never dispatched. dispatch_run
         # returns deferred BEFORE recording dispatched_at/dispatcher, so these
         # rows carry dispatcher NULL and must be matched on their creation path
-        # (F3c) — but ONLY in SAQ mode, where every dispatch goes through
-        # dispatch_run's capacity gate. In shadow mode a pending+undispatched
-        # run is a not-yet-sent Celery dispatch, not a SAQ capacity deferral.
+        # (F3c). Post-cutover every dispatch goes through dispatch_run's
+        # capacity gate, so the branch is always active.
         capacity_deferred = and_(
             Run.status == "pending",
             Run.dispatched_at.is_(None),
         )
         re_dispatch_predicate = or_(
-            *([capacity_deferred] if bool(settings.saq_enabled) else []),
+            capacity_deferred,
             and_(
                 Run.status == "pending",
                 Run.dispatcher == "saq",
@@ -1250,6 +1271,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 Run.organisation_id == org_id,
                                 Run.status.in_(("pending", "running")),
                                 re_dispatch_predicate,
+                                _reconcile_capacity_marker_exclusion(),
                             )
                         )
                     ).all()

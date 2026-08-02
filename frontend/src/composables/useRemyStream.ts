@@ -136,7 +136,7 @@ export function useRemyStream() {
                   },
                   body,
                 })
-                if (resp.ok) { retries = 0; break }
+                if (resp.ok) break
                 if (retries >= maxRetries - 1) {
                   store.error = `Failed to submit UI command results (${resp.status})`
                 } else {
