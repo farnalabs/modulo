@@ -155,7 +155,10 @@ async def test_system_announcement_uses_message_payload(mapper: NotificationEven
     assert kwargs["action_url"] is None
 
 
-async def test_feedback_pending_no_action_url_requires_payload(mapper: NotificationEventMapper) -> None:
+async def test_feedback_pending_static_action_url_independent_of_payload(
+    mapper: NotificationEventMapper,
+) -> None:
+    """feedback_pending has a static action URL that does not depend on the payload."""
     _, mock_create = await _call(mapper, "feedback_pending", payload={})
     kwargs = mock_create.await_args.kwargs
     assert kwargs["action_url"] == "/feedback/inbox"
