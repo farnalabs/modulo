@@ -71,7 +71,6 @@ def _make_settings(**overrides: object) -> MagicMock:
         "legacy_run_claim_stale_seconds": 180,
         "saq_never_dispatched_window": 300,
         "saq_worker_lost_window": 600,
-        "saq_enabled": False,
         "saq_job_heartbeat": 300,
         "run_heartbeat_seconds": 30,
         "saq_worker_db_pool_size": 2,
@@ -582,7 +581,6 @@ class TestExecuteRun:
 _SAQ_SETTINGS_ENV = (
     "RUN_CLAIM_STALE_SECONDS",
     "LEGACY_RUN_CLAIM_STALE_SECONDS",
-    "SAQ_ENABLED",
     "SAQ_JOB_HEARTBEAT",
     "RUN_HEARTBEAT_SECONDS",
     "SAQ_HARD_GATE",
@@ -613,7 +611,6 @@ class TestSaqSettingsDefaults:
         for var in _SAQ_SETTINGS_ENV:
             monkeypatch.delenv(var, raising=False)
         s = self._settings(monkeypatch)
-        assert s.saq_enabled is False
         assert s.run_claim_stale_seconds == 450
         assert s.legacy_run_claim_stale_seconds == 180
         assert s.saq_job_heartbeat == 300
@@ -638,7 +635,7 @@ class TestSaqSettingsDefaults:
         assert s.run_claim_stale_seconds == 500
         assert s.saq_redis_pool_size == 8
 
-    def test_test_pause_refused_when_enabled_outside_debug(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_test_pause_refused_outside_debug(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic import ValidationError
 
         from modulo.settings import Settings
@@ -646,7 +643,6 @@ class TestSaqSettingsDefaults:
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
-        monkeypatch.setenv("SAQ_ENABLED", "true")
         monkeypatch.setenv("SAQ_TEST_PAUSE", "true")
         monkeypatch.delenv("DEBUG", raising=False)
         with pytest.raises(ValidationError):

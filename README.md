@@ -26,7 +26,7 @@ product-map entry and tests before relying on a capability.
 
 | Area | Technology |
 |---|---|
-| API and workers | Python 3.12, FastAPI, SQLAlchemy, Alembic, Celery |
+| API and workers | Python 3.12, FastAPI, SQLAlchemy, Alembic, SAQ |
 | Agent orchestration | LangGraph and provider-specific LangChain packages |
 | Web application | Vue 3, TypeScript, Pinia, Vite |
 | Data services | PostgreSQL 16 and Redis 7 |
@@ -52,6 +52,30 @@ Compose secrets are for local evaluation only.
 For a development setup with the API and frontend running outside containers,
 follow the [quick-start guide](docs/quickstart.md). The full setup requires
 Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 20+, and Docker Desktop.
+
+### Local SAQ workers (required for pipeline execution and cron)
+
+Modulo executes pipeline runs through **SAQ** workers (Celery was removed).
+After starting Postgres + Redis (e.g. `docker compose up -d` or
+`docker compose -f docker-compose.local.yml up -d`), launch the workers:
+
+```bash
+# Runs worker — executes run jobs (queue: runs)
+uv run python -m saq modulo.core.saq_worker.runs_settings
+
+# System worker — scheduler (fire_due_triggers) + reconcile + system crons.
+# The web UI binds 127.0.0.1:8081; requires SAQ_AUTH_USERNAME/SAQ_AUTH_PASSWORD.
+SAQ_AUTH_USERNAME=admin SAQ_AUTH_PASSWORD=admin \
+  uv run python -m modulo.core.saq_worker
+```
+
+Note: `python -m saq` takes the **settings module** as its only positional
+argument — there is no `worker` subcommand in SAQ 0.26.4. Running a local
+Redis is required (see `REDIS_URL`). The compose stack (`docker-compose.yml`
+and `docker-compose.local.yml`) includes `saq-runner` and `saq-system`
+services that launch both workers for you. The `saq-system` service is
+**required** for local cron/triggers to fire — a dev running only
+Postgres + Redis + uvicorn gets zero trigger firing.
 
 ## Documentation
 

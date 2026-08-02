@@ -1,9 +1,9 @@
 """SAQ scheduler helpers — per-item fire jobs, fire_due_triggers, dispatcher_reconcile.
 
 Plan F1 / F3c / F3d. This module is the SAQ replacement for the Celery beat fire
-tasks (``CronFireTask`` / ``PollingFireTask`` / ``ReportFireTask``) and must NOT
-import ``celery_app`` (deleted in PR C). All fire logic is reimplemented async
-against the shared DB session pattern.
+tasks (``CronFireTask`` / ``PollingFireTask`` / ``ReportFireTask``, all removed
+in PR C). All fire logic is reimplemented async against the shared DB session
+pattern.
 
 Multi-machine safety (F1, the single most important invariant):
 ``fire_due_triggers`` (a system cron on EVERY machine) advances ``next_fire_at``
@@ -294,8 +294,8 @@ async def fire_cron_trigger(
     enqueue time; this job sets ``last_fired_at`` only.
 
     ``advance_next_fire_at=True`` preserves the legacy Celery behaviour used by
-    ``CronFireTask`` (which advances ``next_fire_at`` at fire time) until PR C
-    deletes the Celery beat path.
+    ``CronFireTask`` (which advances ``next_fire_at`` at fire time); the Celery
+    beat path was removed in PR C.
     """
     from sqlalchemy import update
 
@@ -1236,15 +1236,14 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         # Capacity-deferred branch: pending + never dispatched. dispatch_run
         # returns deferred BEFORE recording dispatched_at/dispatcher, so these
         # rows carry dispatcher NULL and must be matched on their creation path
-        # (F3c) — but ONLY in SAQ mode, where every dispatch goes through
-        # dispatch_run's capacity gate. In shadow mode a pending+undispatched
-        # run is a not-yet-sent Celery dispatch, not a SAQ capacity deferral.
+        # (F3c). Post-cutover every dispatch goes through dispatch_run's
+        # capacity gate, so the branch is always active.
         capacity_deferred = and_(
             Run.status == "pending",
             Run.dispatched_at.is_(None),
         )
         re_dispatch_predicate = or_(
-            *([capacity_deferred] if bool(settings.saq_enabled) else []),
+            capacity_deferred,
             and_(
                 Run.status == "pending",
                 Run.dispatcher == "saq",

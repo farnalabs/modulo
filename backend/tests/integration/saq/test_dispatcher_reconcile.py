@@ -108,7 +108,6 @@ async def test_staled_running_run_with_evicted_job_is_redistpatched(
 ) -> None:
     # Reconcile re-dispatches through dispatch_run; the SAQ path is the one under
     # test (shadow routes execute_run to Celery, which creates no SAQ job).
-    monkeypatch.setenv("SAQ_ENABLED", "true")
     from redis import asyncio as aioredis
     from saq.queue.redis import RedisQueue
 
@@ -146,7 +145,6 @@ async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(
     (executor.aupdate_state({'_hitl_decision': {}}) -> approved). A human acts
     via the HITL approve/reject endpoint, which dispatches ``resume_run`` itself.
     """
-    monkeypatch.setenv("SAQ_ENABLED", "true")
     from redis import asyncio as aioredis
     from saq.queue.redis import RedisQueue
 
@@ -190,7 +188,6 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
     returns deferred BEFORE recording dispatched_at/dispatcher, so the
     capacity-deferred branch must match on the creation path, not
     dispatcher='saq'."""
-    monkeypatch.setenv("SAQ_ENABLED", "true")
     run_id, _ = await _seed_saq_run(
         db_engine,
         test_org,
@@ -226,7 +223,6 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
 async def test_live_job_not_repaired(
     saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SAQ_ENABLED", "true")
     from redis import asyncio as aioredis
     from saq.queue.redis import RedisQueue
 

@@ -394,7 +394,7 @@ async def trigger_run(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    await dispatch_run(str(run_id), str(org_id), queue="runs", celery_queue="runs_manual")
+    await dispatch_run(str(run_id), str(org_id), queue="runs")
 
     return _build_run_response(run)
 
@@ -1180,9 +1180,8 @@ async def recover_run_node(
         ) from None
     action = "skip" if req.input_data is None else "replay"
 
-    # Resume the graph with the recovery data. In shadow mode the resume runs
-    # in-process inside dispatch_run (the SAQ worker is not wired in this
-    # slice), so a resume failure surfaces here as 500 (pre-B-1 behaviour)
+    # Resume the graph with the recovery data. dispatch_run enqueues resume_run
+    # to SAQ (the recover-node path); a resume failure surfaces here as 500
     # rather than fire-and-forget 200.
     resume_data: dict[str, Any] = {"action": action, "output": req.input_data}
 

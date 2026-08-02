@@ -477,9 +477,6 @@ async def test_sweep_fails_old_marked_pending_but_not_young(
     migrated_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from modulo.core.pipeline_executor_task import reset_engines
-
-    reset_engines()
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
 
     org_id, user_id = await _seed_org_account(db_engine, "SweepOrg", cap=1)
@@ -523,9 +520,6 @@ async def test_sweep_never_dispatched_skips_reason_marked_runs(
     migrated_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from modulo.core.pipeline_executor_task import reset_engines
-
-    reset_engines()
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
 
     org_id, user_id = await _seed_org_account(db_engine, "SweepOrg2", cap=1)

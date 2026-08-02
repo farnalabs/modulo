@@ -1,23 +1,11 @@
 #!/bin/bash
 set -e
 
-# PR B (plan F1/F8): this entrypoint runs BOTH Celery and SAQ in shadow.
+# PR C (plan F1/F8): this entrypoint runs ONLY SAQ workers (Celery removed).
 #   * SAQ workers ALWAYS run (runs + system) — the system worker owns the
 #     scheduler (fire_due_triggers) + reconcile + system crons.
-#   * Scheduler mode matrix — EXACTLY ONE scheduler in every mode:
-#       SAQ_ENABLED=true   (cutover): SAQ fire_due_triggers is the scheduler.
-#       SAQ_ENABLED=false  (shadow):  SAQ fire_due_triggers is the scheduler
-#                                     (SAQ workers run regardless of the flag).
-#       SAQ_ENABLED unset  (legacy):  SAQ workers STILL run (this entrypoint
-#                                     always starts them) => fire_due_triggers
-#                                     is STILL the scheduler, so Celery beat
-#                                     NEVER starts. There is no beat-only mode
-#                                     in this entrypoint: if a pure-legacy
-#                                     deployment ever needs Celery beat, the
-#                                     SAQ system worker (and its crons) must be
-#                                     removed first, never run alongside.
-#   * Celery WORKERS still run for execute dispatch in shadow; only beat is
-#     permanently gated off.
+#   * Scheduler: SAQ fire_due_triggers is the ONLY scheduler; Celery beat is
+#     gone (removed in PR C).
 #   * The system SAQ worker is FAIL-CLOSED: the container refuses to boot if
 #     SAQ_AUTH_PASSWORD / SAQ_AUTH_USERNAME are unset (checked via the SETTINGS
 #     VALUES, not raw env).
@@ -92,19 +80,12 @@ if ! python3 -c "from modulo.settings import get_settings; s = get_settings(); r
 fi
 
 # ---------------------------------------------------------------------------
-# Celery beat — PERMANENTLY GATED OFF. This entrypoint ALWAYS starts the SAQ
-# system worker (below), which owns the scheduler (fire_due_triggers) +
-# reconcile + system crons. Starting beat too would create a DOUBLE SCHEDULER
-# and double-fire cron/polling/report triggers in every mode (SAQ_ENABLED
-# true/false/unset — the flag only controls dispatch routing and the healthz
-# gate, never whether SAQ workers run). Single scheduler invariant:
-#   SAQ fire_due_triggers is the ONLY scheduler; beat never starts here.
+# Celery — REMOVED in PR C. The SAQ system worker owns the scheduler
+# (fire_due_triggers) + reconcile + system crons; there is no Celery worker or
+# beat to start. Single scheduler invariant: SAQ fire_due_triggers is the ONLY
+# scheduler.
 # ---------------------------------------------------------------------------
-echo "=== Celery beat GATED OFF (SAQ system worker owns the scheduler) — exactly one scheduler in every mode ==="
-
-echo "=== Starting Celery worker (pipeline execution, concurrency=6) ==="
-celery -A modulo.cli_celery worker --loglevel=info --concurrency=6 --pidfile=/tmp/celery-worker.pid &
-CELERY_WORKER_PID=$!
+echo "=== Celery removed (PR C cutover) — SAQ system worker owns the scheduler ==="
 
 # ---------------------------------------------------------------------------
 # SAQ workers — restart/backoff wrapper + max-restart guard + PID files.

@@ -5,97 +5,84 @@ delivery-tasks: [task-pkg0-celery-optional]
 bdd:
   - backend/tests/bdd/features/pipelines/scheduling.feature
 code:
-  - backend/src/modulo/celery_app.py
-  - backend/src/modulo/core/cron_scheduler.py
+  - backend/src/modulo/core/saq_worker.py
+  - backend/src/modulo/core/cron_helpers.py
+  - backend/src/modulo/core/dispatch.py
+  - backend/src/modulo/core/pipeline_execution.py
   - backend/src/modulo/core/trigger_engine/polling.py
-  - backend/src/modulo/core/rate_limiter.py
-  - backend/src/modulo/core/reports/scheduler.py
-  - backend/src/modulo/core/cleanup_jobs/webhook_dedup_cleanup.py
-  - backend/src/modulo/core/notifier/celery_tasks.py
   - backend/src/modulo/api/main.py
   - backend/pyproject.toml
 unit-tests:
-  - backend/tests/unit/celery_app/test_celery_import_guard.py
+  - backend/tests/unit/test_saq_worker.py
+  - backend/tests/unit/test_dispatch.py
+  - backend/tests/unit/cron_helpers/test_dispatcher_reconcile.py
 depends-on: [feat-core-trigger-system, feat-core-pipeline-execution, feat-core-db-abstraction-core]
 status: partial
 ---
 
-# Redis hard-required — in-process scheduler removed
+# Celery removed — SAQ cutover (PR C)
 
-Redis is now hard-required at startup. The in-process asyncio scheduler fallback (`InProcessScheduler`) has been removed — if `REDIS_URL` is not set, the app raises `RuntimeError` and refuses to start.
+Celery was fully removed in PR C of the Celery->SAQ migration. Modulo now runs
+on **SAQ 0.26.4**: two worker processes (`runs` + `system`), Redis as the
+broker, and DB as the system of record. `SAQ_ENABLED` is gone — SAQ is the only
+dispatch path.
 
-This removes the risk of duplicate trigger fires in multi-replica deployments and eliminates a separate connection pool and asyncio task management layer that added complexity without benefit.
+- `runs` worker — executes `execute_run` / `resume_run` jobs and per-item fire jobs.
+- `system` worker — owns the scheduler (`fire_due_triggers`) + `dispatcher_reconcile` + system crons; web UI on 8081 bound to 127.0.0.1 (fail-closed auth).
+
+Redis is hard-required at startup (`REDIS_URL`).
 
 ## Behaviours
 
-### Dependency packaging
+### Dispatch (SAQ single path)
 
-- [x] `celery[redis]` and `redis` moved to `[redis]` extras in pyproject.toml
-- [x] `pip install modulo[redis]` installs Celery + Redis (extras group `redis = [celery[redis], redis]` exists in pyproject.toml at `[project.optional-dependencies]`; `redis` Python client is also in main deps for rate-limiting/event-broker fallback — `modulo[redis]` additionally pulls in `celery[redis]`)
+- [x] `dispatch_run` enqueues `execute_run` / `resume_run` to the SAQ runs queue with per-job knobs
+- [x] `dispatcher` column always reads `'saq'` (no Celery routing branch)
+- [x] Capacity gating: capacity-blocked runs return `'deferred'` with no enqueue / no `dispatched_at`; `dispatcher_reconcile` re-dispatches when capacity frees
+- [x] `dispatched_at` written BEFORE enqueue (single gating point, F3e)
+- [x] Enqueue failure: fail-fast in webhook handlers (202), backoff elsewhere; final failure marks `dispatch_failed` + expires webhook dedup
 
-### Celery app laziness
+### Scheduler (system worker)
 
-- [x] `celery_app.py` lazy-initialises `Celery()` only when Redis is configured
-- [x] `celery_app` module-level attribute is `None` when Celery unavailable
-- [x] ImportError for missing Celery package caught gracefully (startup warning)
-- [ ] Connection errors to Redis caught gracefully (startup warning)
+- [x] `fire_due_triggers` cron advances `next_fire_at` ATOMICALLY at enqueue time (multi-machine safe, F1)
+- [x] Per-item fire jobs (`fire_cron_trigger` / `fire_polling_trigger` / `fire_report_trigger`) on the runs queue
+- [x] `dispatcher_reconcile` cron re-dispatches runs whose SAQ job is missing (partial-eviction repair, prefix-aware)
+- [x] claim-expiry, retention, webhook-dedup cleanup, stale_run_recovery as system crons
+- [x] Exactly one scheduler: no Celery beat, no in-process scheduler
 
-### Guarded imports
+### Execution (shared core)
 
-- [x] `cron_scheduler.py` guards `from celery import ...` with `try/except ImportError`
-- [x] `polling.py` guards `from celery import ...` with `try/except ImportError`
-- [x] `celery_tasks.py` guards `from celery import ...` with `try/except ImportError`
-- [x] `webhook_dedup_cleanup.py` guards `from celery import ...` with `try/except ImportError`
-- [x] `reports/scheduler.py` guards `from celery import ...` with `try/except ImportError`
-- [x] Celery-dependent classes only defined when Celery is installed
-- [x] Non-Celery fire logic extracted to `fire_cron_trigger()` / `fire_polling_trigger()` shared async functions
+- [x] claim / execute / heartbeat / complete / resume shared in `core/pipeline_execution.py`
+- [x] Atomic claim UPDATE (no check-then-act window), claim cap
+- [x] `_mark_complete` writes `'complete'` (DB enum)
+- [x] stale_run_recovery scoped: never_dispatched / worker_lost branches match `dispatcher IS NULL OR dispatcher != 'saq'` only; capacity_timeout backstop unscoped
 
-### Application wiring
+### Error tracking
 
-- [x] `main.py` lifespan errors at startup if `REDIS_URL` is not set
-- [x] In-process scheduler (`in_process_scheduler.py`) deleted entirely
-- [x] All imports and references to `in_process_scheduler` removed from main.py
-- [x] Test file for in-process scheduler deleted
+- [x] `saq_hooks.after_process` ingests failed jobs (source `'saq'`)
+- [x] `'celery'` kept as a legacy error-source enum value (no migration)
 
-### Rate limiting (already in main)
+### Health / deploy gates
 
-- [x] `RateLimiterRegistry` falls back to in-memory `TokenBucket` when Redis unavailable
-- [x] Startup warning for in-memory rate limiting mode
-- [x] SQLite mode disables rate limiting entirely
+- [x] `/healthz/ready` machine-scoped SAQ worker gate — 503 after 4 consecutive stale probes (SAQ_HARD_GATE, default true)
+- [x] Entrypoint runs only the 2 SAQ workers (Celery removed), fail-closed auth, crash-loop guard
+- [x] fly.toml health check path `/healthz/ready`, interval <30s, kill_timeout >= 120s, restart policy
+- [x] deploy.yml `hold-check` job gates deploys while `SAQ_HOLD` is set
 
-### Edge cases
+### Local dev
 
-- [x] App refuses to start when `REDIS_URL` is unset — raises `RuntimeError` with clear message
-- [x] `redis_url` set to empty string treated same as unset — same `RuntimeError` raised
-
-### Error Handling
-
-- [x] `ImportError` for missing Celery package caught gracefully at guarded-import sites (celery_app.py, cron_scheduler.py, polling.py, celery_tasks.py, webhook_dedup_cleanup.py, reports/scheduler.py)
-- [x] Celery `CronFireTask` uses `autoretry_for = (Exception,)` with 3 retries at 60s intervals
-- [x] `_sync_with_db()` in `DatabaseCronScheduler` catches `Exception` and returns empty list on failure — a DB tick failure does not crash the beat scheduler
-- [x] `Log_event` errors are localised — a failed TriggerEvent insert does not roll back the run creation (session.flush() is the last op)
-- [x] `CronFireTask.run()` now handles async Celery pool via try/except `RuntimeError` — same pattern as `PollingFireTask` (fixed in improve-architecture index 236)
-- [ ] `asyncio.run()` in `_sync_with_db()` (cron_scheduler.py:356, polling.py:526, reports/scheduler.py:415) has no guard for an already-running event loop — Celery beat only runs in sync context, low risk
-- [x] `cron_scheduler.py:_set_rls_org()` now uses dialect check with `session.info` fallback for non-Postgres backends (fixed in improve-architecture index 236)
-
-### Resilience
-
-- [x] `fire_cron_trigger` uses `FOR UPDATE` row lock to serialise concurrent fires across Celery worker replicas
-- [ ] No health-check endpoint to verify scheduler is running — if Celery beat silently exits, triggers stop firing with no alert
-- [ ] `_scheduler_engine` in `cron_scheduler.py` and `_engine` in `polling.py` are module-level and never disposed — connection pool leak on Celery beat restart
+- [x] `docker-compose.yml` + `docker-compose.local.yml` ship `saq-runner` + `saq-system` services
+- [x] `uv run python -m saq modulo.core.saq_worker.runs_settings` / `uv run python -m modulo.core.saq_worker` documented
+- [x] Local Redis required (`REDIS_URL`)
 
 ## Known Gaps
 
-- Connection errors to Redis at startup not caught gracefully — `Celery()` instantiation does NOT try to connect to the broker; the app starts successfully even with an unreachable Redis URL, and errors surface only at task-send time with no startup warning
-- Redis mid-session failure not handled (triggers stop firing, no reconnection)
-- `_scheduler_engine` (in `cron_scheduler.py`) AND `_engine` (in `polling.py`) are created via module-level `_get_engine()` and never explicitly disposed — connection pools live for the Celery beat process lifetime
-- `asyncio.run()` in `_sync_with_db()` (cron_scheduler.py:356, polling.py:526, reports/scheduler.py:415) raises `RuntimeError` if called from within an already-running event loop — no guard present (Celery beat only runs in sync context, so this is low-risk)
-- [RESOLVED in improve-architecture index 236] `CronFireTask.run()` now handles async Celery pool via `try/except RuntimeError` — matching the PollingFireTask pattern. Gap is resolved.
-- [RESOLVED in improve-architecture index 236] `cron_scheduler._set_rls_org()` now checks dialect and falls back to `session.info["organisation_id"]` on non-Postgres. Gap is resolved.
-- `_ENGINE` in `reports/scheduler.py:57` is module-level, created via `_get_engine()`, and never explicitly disposed — same engine leak pattern as cron_scheduler.py and polling.py (undocumented additional gap)
+- `saq-system` service required for local cron/triggers — a dev running only postgres+redis+uvicorn silently gets zero trigger firing (documented)
+- Running both the compose `saq-system` AND a manual `uv run` system worker double-starts crons (safe via atomic `next_fire_at` + `unique=True`, but stated in docs)
+- `'celery'` remains a valid error-source value for historical rows; no down-revision needed (PostgreSQL cannot drop enum values still referenced)
+
 ## QA History
 
-- 2026-07-01 (improve-architecture index 38): Added guarded imports to celery_app.py, cron_scheduler.py, celery_tasks.py, webhook_dedup_cleanup.py, reports/scheduler.py. Moved celery+redis to [redis] extras. Created 11 import-guard unit tests and 14 in-process scheduler unit tests. Replaced 2 @awaiting-implementation BDD scenarios with real ones + step definitions. Removed stale "branch not merged" gap (code already on main).
-- 2026-07-06 (cross-cutting QA): Verified all behaviours against code — marked `modulo[redis]` extras and `redis_url` empty-string edge case as checked [x]. Added Error Handling section (10 items: 7 [x] + 3 [ ]) and Resilience section (8 items: 6 [x] + 2 [ ]). Updated Known Gaps with accurate connection-error description (Celery() does not raise on bad URL) and 2 new gaps (engine disposal leak, asyncio.run guard missing). Created website docs stub at `Website/modulo-website/src/docs/scheduling/in-process-scheduler.md`.
-- 2026-07-06 (improve-architecture index 236): Fixed CRITICAL — `CronFireTask.run()` now handles async Celery pool (was bare `asyncio.run()` without existing-loop guard). Fixed CRITICAL — `cron_scheduler._set_rls_org()` now checks dialect and falls back to `session.info` on non-Postgres (was PG-only `set_config()` that would crash on SQLite/MariaDB — unlike `polling.py` which already had the correct pattern). Updated Known Gaps: corrected stale `redis_url` empty-string gap (IS tested), merged cron + polling engine leak into single gap, added 2 new gaps (CronFireTask async pool gap now fixed, cron_scheduler PG-only RLS now fixed). Added 2 new unchecked items (asyncio.run guard in 3 _sync_with_db callers, same engine leak affects polling.py).
-- 2026-07-27 (rm-scheduler): Removed in-process scheduler (`in_process_scheduler.py` + test file). Redis is now hard-required — app refuses to start without `REDIS_URL`. All references removed from main.py. Updated product-map entry to reflect removal.
+- 2026-07-01 (improve-architecture index 38): Guarded imports + `[redis]` extras era (Celery optional).
+- 2026-07-06 (cross-cutting QA): Verified guarded-import behaviours.
+- 2026-08-02 (PR C cutover): Celery fully removed. SAQ is the only dispatch path; `SAQ_ENABLED` deleted; dispatch_run flattened to unconditional 'saq'; `MODULO_CELERY_DB_POOL_*` settings removed; entrypoint runs only SAQ workers; deploy hold-check added; local-dev worker services shipped.

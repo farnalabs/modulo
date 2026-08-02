@@ -8,12 +8,8 @@ from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from celery.beat import Scheduler
 
 from modulo.core.reports.scheduler import (
-    DatabaseReportEntry,
-    DatabaseReportScheduler,
-    ReportFireTask,
     _deliver_slack_webhook,
     _deliver_via_config,
     _deliver_webhook,
@@ -161,109 +157,6 @@ class TestComputeNextSend:
     def test_raises_on_invalid_expression(self) -> None:
         with pytest.raises((ValueError, KeyError)):
             compute_next_send("not-a-cron")
-
-
-# ---------------------------------------------------------------------------
-# DatabaseReportEntry tests
-# ---------------------------------------------------------------------------
-
-
-class TestDatabaseReportEntry:
-    def test_entry_properties(self) -> None:
-        now = datetime.datetime.now(datetime.UTC)
-        entry = DatabaseReportEntry(
-            report_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            cron_expression="0 9 * * *",
-            next_send_at=now,
-        )
-        assert entry.name.startswith("report-")
-        assert entry.task == ReportFireTask.name
-        assert len(entry.args) == 2
-        assert isinstance(entry.schedule, DatabaseReportEntry)
-
-    def test_is_due_when_past(self) -> None:
-        past = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
-        entry = DatabaseReportEntry(
-            report_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            cron_expression="* * * * *",
-            next_send_at=past,
-        )
-        due, delay = entry.is_due()
-        assert due is True
-        assert delay.total_seconds() == 0
-
-    def test_is_not_due_when_future(self) -> None:
-        future = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
-        entry = DatabaseReportEntry(
-            report_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            cron_expression="0 * * * *",
-            next_send_at=future,
-        )
-        due, delay = entry.is_due()
-        assert due is False
-        assert delay.total_seconds() > 0
-
-    def test_is_due_when_exactly_now(self) -> None:
-        now = datetime.datetime.now(datetime.UTC)
-        entry = DatabaseReportEntry(
-            report_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            cron_expression="* * * * *",
-            next_send_at=now,
-        )
-        due, _delay = entry.is_due()
-        assert due is True
-
-    def test_repr(self) -> None:
-        now = datetime.datetime.now(datetime.UTC)
-        entry = DatabaseReportEntry(
-            report_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            cron_expression="0 9 * * *",
-            next_send_at=now,
-        )
-        r = repr(entry)
-        assert "DatabaseReportEntry" in r
-        assert "next=" in r
-
-    def test_options_contains_unique_task_id(self) -> None:
-        now = datetime.datetime.now(datetime.UTC)
-        entry = DatabaseReportEntry(
-            report_id=uuid.uuid4(),
-            org_id=uuid.uuid4(),
-            cron_expression="* * * * *",
-            next_send_at=now,
-        )
-        opts = entry.options
-        assert "task_id" in opts
-        assert opts["task_id"].startswith("report-")
-
-
-# ---------------------------------------------------------------------------
-# DatabaseReportScheduler tests
-# ---------------------------------------------------------------------------
-
-
-class TestDatabaseReportSchedulerTick:
-    def test_tick_calls_sync_with_db(self) -> None:
-        scheduler = object.__new__(DatabaseReportScheduler)
-        scheduler._schedule = {}
-        scheduler.app = MagicMock()
-        scheduler.data = {}
-
-        with (
-            patch.object(scheduler, "_sync_with_db") as mock_sync,
-            patch.object(Scheduler, "tick", return_value=60.0),
-        ):
-            scheduler.tick()
-        mock_sync.assert_called_once()
-
-    def test_max_interval_is_60(self) -> None:
-        scheduler = object.__new__(DatabaseReportScheduler)
-        assert scheduler.max_interval == 60
 
 
 # ---------------------------------------------------------------------------

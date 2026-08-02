@@ -24,7 +24,7 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 
 - [x] DatabasePollingScheduler queries `triggers` table for `trigger_type='polling'` and `next_fire_at <= now()` on each beat tick
 - [x] DatabasePollingEntry is created per matching trigger row
-- [x] PollingFireTask fires asynchronously via Celery with `autoretry_for=(ConnectionError, TimeoutError, OSError)`, `max_retries=2`, `default_retry_delay=30`
+- [x] Polling triggers fire as per-item SAQ jobs (fire_due_triggers cron -> fire_polling_trigger on the runs queue)
 - [x] Trigger row re-read with `FOR UPDATE` lock to serialise concurrent fire attempts
 - [x] `schedule_polling_trigger()` in TriggerEngine computes `next_fire_at` from `poll_interval_seconds` and persists it
 - [x] `next_fire_at` and `last_fired_at` updated after each fire cycle (both on condition_met and no_match)
