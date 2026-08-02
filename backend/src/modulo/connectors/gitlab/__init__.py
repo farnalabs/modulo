@@ -23,6 +23,15 @@ _GITLAB_API = "https://gitlab.com/api/v4"
 
 REQUIRED_SCOPES = frozenset({"read_api", "write_repository", "api"})
 
+# GitLab RateLimit-* headers reported on API responses
+_RATE_LIMIT_HEADERS = (
+    "RateLimit-Limit",
+    "RateLimit-Remaining",
+    "RateLimit-Observed",
+    "RateLimit-Reset",
+    "RateLimit-ResetTime",
+)
+
 # Retry/backoff configuration
 _RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
 _MAX_RETRIES = 3
@@ -69,6 +78,17 @@ def _rate_limit_detail(response: httpx.Response) -> str:
         if value:
             parts.append(f"{header}={value}")
     return "; ".join(parts)
+
+
+def _rate_limit_metadata(response: httpx.Response) -> dict[str, Any]:
+    """Extract GitLab ``RateLimit-*`` headers into a metadata dict.
+
+    GitLab (and many self-hosted deployments behind a rate-limiting proxy)
+    report quota state via ``RateLimit-Limit`` / ``RateLimit-Remaining`` /
+    ``RateLimit-Reset`` (and friends). Only headers present on the response
+    are included, so an empty dict simply means no rate-limit reporting.
+    """
+    return {name: response.headers.get(name) for name in _RATE_LIMIT_HEADERS if name in response.headers}
 
 
 def _parse_next_page(response: httpx.Response) -> str | None:
@@ -120,7 +140,8 @@ class GitLabConnector(ConnectorBase):
     argument (defaults to the hosted ``https://gitlab.com/api/v4`` endpoint).
     List resources return ``next_cursor`` from GitLab's ``X-Next-Page``
     header; pass it back as ``ConnectorQuery.cursor`` to fetch the next page
-    (GitLab ``page`` query param).
+    (GitLab ``page`` query param). List results also expose ``metadata["rate_limit"]``
+    mirroring GitLab's ``RateLimit-*`` response headers when present.
 
     Supported query resources:
       "projects"          — list projects accessible to the token
@@ -152,9 +173,12 @@ class GitLabConnector(ConnectorBase):
       "label"             — create a project label
       "milestone"         — create a project milestone
       "merge_request"     — create a merge request (filters: source_branch, target_branch, title, description)
-      "mr_merge"          — merge a merge request
-      "mr_approve"        — approve a merge request
-      "mr_comment"        — add a comment to a merge request
+      "file_delete"       — delete a file (data: project, path, branch/ref, message)
+      "mr_merge"          — merge a merge request (data: project, iid, optional squash/merge options)
+      "mr_approve"        — approve a merge request (data: project, iid, optional sha)
+      "mr_comment"        — add a comment to a merge request (data: project, iid, body)
+      "mr_note"           — add a comment to a merge request (data: project, iid, body)
+      "mr_labels"         — set labels on a merge request (data: project, iid, labels)
       "pipeline_run"      — trigger a pipeline
     """
 
@@ -237,7 +261,7 @@ class GitLabConnector(ConnectorBase):
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
             return min(retry_after, _MAX_DELAY)
-        return min(_BASE_DELAY * (2.0**attempt), _MAX_DELAY)
+        return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
@@ -258,6 +282,16 @@ class GitLabConnector(ConnectorBase):
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
+
+    @staticmethod
+    def _result(records: list[dict[str, Any]], response: httpx.Response, total: int | None = None) -> ConnectorResult:
+        """Build a ConnectorResult, wiring pagination cursor + rate-limit metadata."""
+        return ConnectorResult(
+            records=records,
+            total=len(records) if total is None else total,
+            next_cursor=_parse_next_page(response),
+            metadata={"rate_limit": _rate_limit_metadata(response)},
+        )
 
     async def health_check(self) -> HealthResult:
         try:
@@ -312,7 +346,7 @@ class GitLabConnector(ConnectorBase):
                 _paginate_params(params, q.cursor)
                 r = await self._call_api("GET", "/projects", params=params)
                 data = _safe_json(r)
-                return ConnectorResult(records=data, total=len(data), next_cursor=_parse_next_page(r))
+                return self._result(data, r)
             case "file":
                 project = self._require_filter(q.filters, "project", q.resource)
                 path = self._require_filter(q.filters, "path", q.resource)
@@ -326,7 +360,7 @@ class GitLabConnector(ConnectorBase):
                 info = _safe_json(r)
                 if "content" in info:
                     info["content"] = base64.b64decode(info["content"]).decode("utf-8")
-                return ConnectorResult(records=[info])
+                return ConnectorResult(records=[info], metadata={"rate_limit": _rate_limit_metadata(r)})
             case "mrs" | "merge_requests":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -344,7 +378,7 @@ class GitLabConnector(ConnectorBase):
                     params=mr_params,
                 )
                 mrs = _safe_json(r)
-                return ConnectorResult(records=mrs, total=len(mrs), next_cursor=_parse_next_page(r))
+                return self._result(mrs, r)
             case "merge_request":
                 project = self._require_filter(q.filters, "project", q.resource)
                 mr_iid = self._require_filter(q.filters, "iid", q.resource)
@@ -353,7 +387,7 @@ class GitLabConnector(ConnectorBase):
                     "GET",
                     f"/projects/{encoded}/merge_requests/{mr_iid}",
                 )
-                return ConnectorResult(records=[_safe_json(r)])
+                return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
             case "issues":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -368,7 +402,7 @@ class GitLabConnector(ConnectorBase):
                     params=params,
                 )
                 issues = _safe_json(r)
-                return ConnectorResult(records=issues, total=len(issues), next_cursor=_parse_next_page(r))
+                return self._result(issues, r)
             case "issue":
                 project = self._require_filter(q.filters, "project", q.resource)
                 issue_iid = self._require_filter(q.filters, "iid", q.resource)
@@ -377,7 +411,7 @@ class GitLabConnector(ConnectorBase):
                     "GET",
                     f"/projects/{encoded}/issues/{issue_iid}",
                 )
-                return ConnectorResult(records=[_safe_json(r)])
+                return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
             case "labels":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -389,7 +423,7 @@ class GitLabConnector(ConnectorBase):
                     params=label_params,
                 )
                 labels = _safe_json(r)
-                return ConnectorResult(records=labels, total=len(labels), next_cursor=_parse_next_page(r))
+                return self._result(labels, r)
             case "label":
                 project = self._require_filter(q.filters, "project", q.resource)
                 label_id = self._require_filter(q.filters, "label_id", q.resource)
@@ -398,7 +432,7 @@ class GitLabConnector(ConnectorBase):
                     "GET",
                     f"/projects/{encoded}/labels/{label_id}",
                 )
-                return ConnectorResult(records=[_safe_json(r)])
+                return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
             case "milestones":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -410,7 +444,7 @@ class GitLabConnector(ConnectorBase):
                     params=milestone_params,
                 )
                 milestones = _safe_json(r)
-                return ConnectorResult(records=milestones, total=len(milestones), next_cursor=_parse_next_page(r))
+                return self._result(milestones, r)
             case "issue_notes":
                 project = self._require_filter(q.filters, "project", q.resource)
                 issue_iid = self._require_filter(q.filters, "iid", q.resource)
@@ -426,7 +460,7 @@ class GitLabConnector(ConnectorBase):
                     params=params,
                 )
                 notes = _safe_json(r)
-                return ConnectorResult(records=notes, total=len(notes), next_cursor=_parse_next_page(r))
+                return self._result(notes, r)
             case "issue_discussions":
                 project = self._require_filter(q.filters, "project", q.resource)
                 issue_iid = self._require_filter(q.filters, "iid", q.resource)
@@ -439,7 +473,7 @@ class GitLabConnector(ConnectorBase):
                     params=discussion_params,
                 )
                 discussions = _safe_json(r)
-                return ConnectorResult(records=discussions, total=len(discussions), next_cursor=_parse_next_page(r))
+                return self._result(discussions, r)
             case "branch":
                 project = self._require_filter(q.filters, "project", q.resource)
                 branch_name = self._require_filter(q.filters, "name", q.resource)
@@ -448,7 +482,7 @@ class GitLabConnector(ConnectorBase):
                     "GET",
                     f"/projects/{encoded}/repository/branches/{quote(branch_name, safe='')}",
                 )
-                return ConnectorResult(records=[_safe_json(r)])
+                return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
             case "branches":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -460,7 +494,7 @@ class GitLabConnector(ConnectorBase):
                     params=branch_params,
                 )
                 branches = _safe_json(r)
-                return ConnectorResult(records=branches, total=len(branches), next_cursor=_parse_next_page(r))
+                return self._result(branches, r)
             case "tags":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -472,7 +506,7 @@ class GitLabConnector(ConnectorBase):
                     params=tag_params,
                 )
                 tags = _safe_json(r)
-                return ConnectorResult(records=tags, total=len(tags), next_cursor=_parse_next_page(r))
+                return self._result(tags, r)
             case "pipelines":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -484,7 +518,7 @@ class GitLabConnector(ConnectorBase):
                     params=pipeline_params,
                 )
                 pipelines = _safe_json(r)
-                return ConnectorResult(records=pipelines, total=len(pipelines), next_cursor=_parse_next_page(r))
+                return self._result(pipelines, r)
             case "jobs":
                 project = self._require_filter(q.filters, "project", q.resource)
                 pipeline_id = self._require_filter(q.filters, "pipeline_id", q.resource)
@@ -497,7 +531,7 @@ class GitLabConnector(ConnectorBase):
                     params=job_params,
                 )
                 jobs = _safe_json(r)
-                return ConnectorResult(records=jobs, total=len(jobs), next_cursor=_parse_next_page(r))
+                return self._result(jobs, r)
             case _:
                 raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
 
@@ -508,6 +542,7 @@ class GitLabConnector(ConnectorBase):
                 path = self._require_filter(payload.data, "path", payload.resource)
                 encoded = _project_path(project)
                 body: dict[str, Any] = {
+                    "branch": payload.data.get("ref", "main"),
                     "content": payload.data["content"],
                     "commit_message": payload.data.get("message", "Update via Modulo"),
                 }
@@ -523,14 +558,21 @@ class GitLabConnector(ConnectorBase):
                 project = self._require_filter(payload.data, "project", payload.resource)
                 path = self._require_filter(payload.data, "path", payload.resource)
                 encoded = _project_path(project)
-                params = {"branch": payload.data.get("branch", "main")}
+                branch = payload.data.get("branch", payload.data.get("ref", "main"))
+                delete_params: dict[str, Any] = {"branch": branch}
                 if payload.data.get("sha"):
-                    params["sha"] = payload.data["sha"]
+                    delete_params["sha"] = payload.data["sha"]
+                delete_body: dict[str, Any] = {
+                    "commit_message": payload.data.get("message", f"Delete {path} via Modulo"),
+                }
                 r = await self._call_api(
                     "DELETE",
                     f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
-                    params=params,
+                    params=delete_params,
+                    json=delete_body,
                 )
+                if not r.content:
+                    return {"status": "deleted"}
                 return _safe_json_object(r)
             case "mr" | "merge_request":
                 project = self._require_filter(payload.data, "project", payload.resource)
@@ -554,41 +596,65 @@ class GitLabConnector(ConnectorBase):
                 project = self._require_filter(payload.data, "project", payload.resource)
                 mr_iid = self._require_filter(payload.data, "iid", payload.resource)
                 encoded = _project_path(project)
-                body = {}
+                merge_body: dict[str, Any] = {}
                 if "merge_commit_message" in payload.data:
-                    body["merge_commit_message"] = payload.data["merge_commit_message"]
+                    merge_body["merge_commit_message"] = payload.data["merge_commit_message"]
                 if "squash" in payload.data:
-                    body["squash"] = payload.data["squash"]
+                    merge_body["squash"] = payload.data["squash"]
                 if "should_remove_source_branch" in payload.data:
-                    body["should_remove_source_branch"] = payload.data["should_remove_source_branch"]
+                    merge_body["should_remove_source_branch"] = payload.data["should_remove_source_branch"]
+                if "merge_when_pipeline_succeeds" in payload.data:
+                    merge_body["merge_when_pipeline_succeeds"] = payload.data["merge_when_pipeline_succeeds"]
                 r = await self._call_api(
                     "PUT",
                     f"/projects/{encoded}/merge_requests/{mr_iid}/merge",
-                    json=body,
+                    json=merge_body,
                 )
                 return _safe_json_object(r)
             case "mr_approve":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 mr_iid = self._require_filter(payload.data, "iid", payload.resource)
                 encoded = _project_path(project)
-                body = {}
+                approve_body: dict[str, Any] = {}
                 if "sha" in payload.data:
-                    body["sha"] = payload.data["sha"]
+                    approve_body["sha"] = payload.data["sha"]
                 r = await self._call_api(
                     "POST",
                     f"/projects/{encoded}/merge_requests/{mr_iid}/approve",
-                    json=body,
+                    json=approve_body,
                 )
                 return _safe_json_object(r)
             case "mr_comment":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 mr_iid = self._require_filter(payload.data, "iid", payload.resource)
-                body = self._require_filter(payload.data, "body", payload.resource)
+                comment_body = self._require_filter(payload.data, "body", payload.resource)
                 encoded = _project_path(project)
                 r = await self._call_api(
                     "POST",
                     f"/projects/{encoded}/merge_requests/{mr_iid}/notes",
-                    json={"body": body},
+                    json={"body": comment_body},
+                )
+                return _safe_json_object(r)
+            case "mr_note":
+                project = self._require_filter(payload.data, "project", payload.resource)
+                mr_iid = self._require_filter(payload.data, "iid", payload.resource)
+                note_body = self._require_filter(payload.data, "body", payload.resource)
+                encoded = _project_path(project)
+                r = await self._call_api(
+                    "POST",
+                    f"/projects/{encoded}/merge_requests/{mr_iid}/notes",
+                    json={"body": note_body},
+                )
+                return _safe_json_object(r)
+            case "mr_labels":
+                project = self._require_filter(payload.data, "project", payload.resource)
+                mr_iid = self._require_filter(payload.data, "iid", payload.resource)
+                labels = self._require_filter(payload.data, "labels", payload.resource)
+                encoded = _project_path(project)
+                r = await self._call_api(
+                    "PUT",
+                    f"/projects/{encoded}/merge_requests/{mr_iid}",
+                    json={"labels": labels},
                 )
                 return _safe_json_object(r)
             case "issue":
