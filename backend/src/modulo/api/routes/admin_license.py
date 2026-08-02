@@ -12,8 +12,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.license import (
     LicenseError,
@@ -48,14 +47,6 @@ class LicenseUploadResponse(BaseModel):
     features: list[str]
     expires_at: str | None = None
     org_id: str | None = None
-
-
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can manage licenses",
-        )
 
 
 def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:
@@ -108,10 +99,9 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
 @router.get("", response_model=LicenseStatusResponse)
 async def get_license_status(
     settings: Settings = Depends(get_settings),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("org.license.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> LicenseStatusResponse:
-    _require_admin(current_user)
 
     # Attempt Redis cache read
     redis: Redis | None = None
@@ -177,10 +167,8 @@ async def get_license_status(
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
 async def upload_license(
     req: LicenseUploadRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    _: TenantPrincipal = require_permission("org.license.manage"),
 ) -> LicenseUploadResponse:
-    _require_admin(current_user)
-
     try:
         validation = parse_and_verify(req.license_key)
     except LicenseError as exc:

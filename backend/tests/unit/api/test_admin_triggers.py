@@ -39,13 +39,19 @@ def _make_event_result(events: list[MagicMock]) -> MagicMock:
     return r
 
 
+def _authz_result() -> MagicMock:
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=True)
+    return result
+
+
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
-    session.execute = AsyncMock(return_value=_make_event_result([]))
+    session.execute = AsyncMock(return_value=_authz_result())
     return session
 
 
@@ -128,7 +134,9 @@ class TestListTriggerEvents:
             event_result = _make_event_result([event])
             count_result = MagicMock()
             count_result.scalar = MagicMock(return_value=1)
-            session.execute = AsyncMock(side_effect=[event_result, count_result])
+            authz_result = MagicMock()
+            authz_result.scalar_one_or_none = MagicMock(return_value=True)
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result])
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
                 yield session
@@ -150,7 +158,9 @@ class TestListTriggerEvents:
             event_result = _make_event_result([event])
             count_result = MagicMock()
             count_result.scalar = MagicMock(return_value=1)
-            session.execute = AsyncMock(side_effect=[event_result, count_result])
+            authz_result = MagicMock()
+            authz_result.scalar_one_or_none = MagicMock(return_value=True)
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result])
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
                 yield session
@@ -173,7 +183,9 @@ class TestListTriggerEvents:
             event_result = _make_event_result([])
             count_result = MagicMock()
             count_result.scalar = MagicMock(return_value=0)
-            session.execute = AsyncMock(side_effect=[event_result, count_result])
+            authz_result = MagicMock()
+            authz_result.scalar_one_or_none = MagicMock(return_value=True)
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result])
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
                 yield session

@@ -9,8 +9,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
+from modulo.api.dependencies import get_db_session, require_target_org_role
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.db.crud.organisation import get_organisation, update_organisation
@@ -45,12 +44,9 @@ class TestEmailRequest(BaseModel):
 @router.get("/{org_id}/email-settings", response_model=EmailSettingsResponse)
 async def admin_get_email_settings(
     org_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = require_target_org_role("org.email.view", "operator"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> EmailSettingsResponse:
-    if not current_user.is_system_admin and current_user.organisation_id != org_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
     try:
         async with session.begin():
             org = await get_organisation(session, org_id)
@@ -97,12 +93,9 @@ async def admin_get_email_settings(
 async def admin_update_email_settings(
     org_id: uuid.UUID,
     req: EmailSettingsUpdate,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = require_target_org_role("org.email.manage", "admin"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> EmailSettingsResponse:
-    if not current_user.is_system_admin and current_user.organisation_id != org_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
     try:
         org = await get_organisation(session, org_id)
     except ProgrammingError:
@@ -183,12 +176,9 @@ async def admin_update_email_settings(
 async def admin_test_email_settings(
     org_id: uuid.UUID,
     req: TestEmailRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = require_target_org_role("org.email.manage", "admin"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    if not current_user.is_system_admin and current_user.organisation_id != org_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
     try:
         org = await get_organisation(session, org_id)
     except ProgrammingError:

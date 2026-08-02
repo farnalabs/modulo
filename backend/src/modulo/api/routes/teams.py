@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, TEAM_ROLE_HIERARCHY
@@ -107,20 +107,12 @@ class MembershipListResponse(BaseModel):
     page_size: int
 
 
-def _require_admin(principal: TenantPrincipal) -> None:
-    if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can perform this action",
-        )
-
-
 @handle_db_errors("teams.list_teams_endpoint")
 @router.get("", response_model=TeamListResponse)
 async def list_teams_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("team.list"),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamListResponse:
     try:
@@ -174,10 +166,9 @@ async def list_teams_endpoint(
 @router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
 async def create_team_endpoint(
     req: CreateTeamRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("team.create"),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
-    _require_admin(current_user)
 
     try:
         async with session.begin():
@@ -268,7 +259,7 @@ async def create_team_endpoint(
 @router.get("/{team_id}", response_model=TeamResponse)
 async def get_team_endpoint(
     team_id: uuid.UUID,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("team.list"),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
     try:
@@ -324,10 +315,9 @@ async def get_team_endpoint(
 async def update_team_endpoint(
     team_id: uuid.UUID,
     req: UpdateTeamRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("team.update"),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
-    _require_admin(current_user)
 
     updates = req.model_dump(exclude_unset=True)
 
@@ -424,11 +414,9 @@ async def update_team_endpoint(
 @router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_team_endpoint(
     team_id: uuid.UUID,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("team.delete"),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    _require_admin(current_user)
-
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
@@ -541,7 +529,7 @@ async def list_members_endpoint(
     team_id: uuid.UUID,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("team.list"),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipListResponse:
     try:

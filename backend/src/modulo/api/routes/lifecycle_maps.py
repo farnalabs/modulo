@@ -11,8 +11,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.lifecycle_map.service import (
     create_lifecycle_map,
@@ -89,7 +88,7 @@ async def list_lifecycle_maps_endpoint(
     owner_team_id: uuid.UUID | None = Query(default=None),
     include_archived: bool = Query(default=False),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("lifecycle_map.list"),
 ) -> LifecycleMapListResponse:
     try:
         async with session.begin():
@@ -135,7 +134,7 @@ async def list_lifecycle_maps_endpoint(
 async def create_lifecycle_map_endpoint(
     req: LifecycleMapCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("lifecycle_map.create"),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():
@@ -180,7 +179,7 @@ async def create_lifecycle_map_endpoint(
 async def get_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("lifecycle_map.list"),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():
@@ -218,7 +217,7 @@ async def update_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     req: LifecycleMapUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("lifecycle_map.update"),
 ) -> LifecycleMapResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -259,7 +258,7 @@ async def update_lifecycle_map_endpoint(
 async def delete_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("lifecycle_map.delete"),
 ) -> None:
     try:
         async with session.begin():
@@ -295,7 +294,7 @@ async def delete_lifecycle_map_endpoint(
 async def restore_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("lifecycle_map.create"),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():

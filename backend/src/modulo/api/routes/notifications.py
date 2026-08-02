@@ -18,8 +18,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -77,7 +76,7 @@ class NotificationEndpointResponse(BaseModel):
 @router.get("", response_model=list[NotificationEndpointResponse])
 async def list_endpoints(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.view"),
 ) -> list[NotificationEndpointResponse]:
     try:
         async with session.begin():
@@ -118,7 +117,7 @@ async def list_endpoints(
 async def create_endpoint(
     req: NotificationEndpointCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.view"),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -183,7 +182,7 @@ async def create_endpoint(
 async def get_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.view"),
 ) -> NotificationEndpointResponse:
     try:
         async with session.begin():
@@ -228,7 +227,7 @@ async def update_endpoint(
     endpoint_id: uuid.UUID,
     req: NotificationEndpointUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.view"),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -296,7 +295,7 @@ async def update_endpoint(
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.view"),
 ) -> None:
     try:
         async with session.begin():
@@ -342,7 +341,7 @@ async def delete_endpoint(
 async def restore_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.view"),
 ) -> NotificationEndpointResponse:
     try:
         async with session.begin():

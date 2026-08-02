@@ -7,25 +7,16 @@ import os
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 
-from modulo.api.dependencies import require_feature
+from modulo.api.dependencies import require_feature, require_permission
 from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.runtime_config.store import KNOWN_KEYS, RuntimeConfigStore, get_runtime_config_store
 
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/runtime-config", tags=["admin-runtime-config"])
-
-
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Only admin users can manage runtime config (your role: {principal.org_role})",
-        )
 
 
 def _mask_sensitive_items(items: list[dict[str, Any]]) -> None:
@@ -57,9 +48,8 @@ def _build_response(store: RuntimeConfigStore) -> dict[str, Any]:
 
 @router.get("", dependencies=[require_feature("runtime_config")])
 def get_runtime_config(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("runtime_config.manage"),
 ) -> dict[str, Any]:
-    _require_admin(current_user)
     try:
         return _build_response(get_runtime_config_store())
     except HTTPException:
@@ -75,9 +65,8 @@ def get_runtime_config(
 @router.put("", dependencies=[require_feature("runtime_config")])
 def set_runtime_config_overrides(
     req: dict[str, Any],
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("runtime_config.manage"),
 ) -> dict[str, Any]:
-    _require_admin(current_user)
     try:
         store = get_runtime_config_store()
 
@@ -131,9 +120,8 @@ def set_runtime_config_overrides(
 
 @router.post("/reload", dependencies=[require_feature("runtime_config")])
 def reload_runtime_config(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("runtime_config.manage"),
 ) -> dict[str, Any]:
-    _require_admin(current_user)
     try:
         store = get_runtime_config_store()
         store.reload()

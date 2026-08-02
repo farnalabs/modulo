@@ -14,8 +14,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.remy.config_service import RemyConfigService
 from modulo.db.models.daily_run_count import OrgDailyRunCount
@@ -101,7 +100,7 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
 @router.get("/summary")
 async def dashboard_summary(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("dashboard.summary"),
 ) -> dict[str, Any]:
     """Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend."""
     try:
@@ -478,7 +477,7 @@ async def dashboard_summary(
 async def dashboard_trends(
     days: int = Query(7, ge=1, le=90),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("dashboard.trends"),
 ) -> dict[str, Any]:
     """Trend data over the specified number of days — run counts, eval pass rate, token spend."""
     try:
@@ -697,7 +696,7 @@ async def dashboard_trends(
 async def daily_run_counts(
     days: int = Query(30, ge=1, le=365),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("dashboard.daily_run_counts"),
 ) -> dict[str, Any]:
     """Return daily run counts for the last N days, grouped by status."""
     try:

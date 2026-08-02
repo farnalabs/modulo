@@ -11,8 +11,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.environment_profile import (
     create_environment_profile,
@@ -117,7 +116,7 @@ async def list_profiles(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment_profile.list"),
 ) -> ProfileListResponse:
     try:
         async with session.begin():
@@ -157,7 +156,7 @@ async def list_profiles(
 async def create_profile(
     req: ProfileCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment_profile.create"),
 ) -> ProfileResponse:
     try:
         async with session.begin():
@@ -214,7 +213,7 @@ async def create_profile(
 async def get_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment_profile.list"),
 ) -> ProfileResponse:
     try:
         async with session.begin():
@@ -250,7 +249,7 @@ async def update_profile(
     profile_id: uuid.UUID,
     req: ProfileUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment_profile.update"),
 ) -> ProfileResponse:
     updates = req.model_dump(exclude_unset=True)
     if "capabilities" in updates:
@@ -298,7 +297,7 @@ async def update_profile(
 async def delete_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment_profile.delete"),
 ) -> None:
     try:
         async with session.begin():
@@ -332,7 +331,7 @@ async def delete_profile(
 async def restore_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("environment_profile.create"),
 ) -> ProfileResponse:
     try:
         async with session.begin():

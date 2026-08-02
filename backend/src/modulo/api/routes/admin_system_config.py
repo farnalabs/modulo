@@ -10,8 +10,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
+from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.system_config import delete_config, list_config, set_config
 
@@ -29,15 +28,10 @@ class ConfigEntry(BaseModel):
 @handle_db_errors("admin.system_config.admin_list_config")
 @router.get("")
 async def admin_list_config(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ConfigEntry]:
     try:
-        if not current_user.is_system_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="System admin role required",
-            )
         entries = await list_config(session)
         return [
             ConfigEntry(
@@ -75,15 +69,10 @@ class SetConfigRequest(BaseModel):
 async def admin_set_config(
     key: str,
     req: SetConfigRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfigEntry:
     try:
-        if not current_user.is_system_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="System admin role required",
-            )
         entry = await set_config(session, key, req.value, updated_by=current_user.account_id)
         return ConfigEntry(
             key=entry.key,
@@ -119,15 +108,10 @@ async def admin_set_config(
 @router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_delete_config(
     key: str,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
-        if not current_user.is_system_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="System admin role required",
-            )
         deleted = await delete_config(session, key)
         if not deleted:
             raise HTTPException(

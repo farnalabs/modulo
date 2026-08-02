@@ -12,8 +12,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import (
     export_chain,
@@ -26,14 +25,6 @@ from modulo.db.rls import set_rls_org
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/audit", tags=["audit"])
-
-
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required",
-        )
 
 
 class BatchDetailRequest(BaseModel):
@@ -56,7 +47,7 @@ async def list_audit_events_endpoint(
     from_date: datetime | None = Query(None, alias="from_date", description="Filter by start date (ISO 8601)"),
     to_date: datetime | None = Query(None, alias="to_date", description="Filter by end date (ISO 8601)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("audit.manage"),
 ) -> dict[str, object]:
     """List audit events with cursor pagination and filters.
 
@@ -72,7 +63,6 @@ async def list_audit_events_endpoint(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid user_id format: {actor_user_id!r}. Must be a valid UUID.",
             ) from None
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -114,12 +104,11 @@ async def list_audit_events_endpoint(
 async def batch_detail_endpoint(
     req: BatchDetailRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("audit.manage"),
 ) -> list[dict[str, object]]:
     """Return full details for a batch of audit event IDs."""
     try:
         async with session.begin():
-            _require_admin(principal)
             await set_rls_org(session, principal.organisation_id)
             result = await get_audit_events_batch(
                 session,
@@ -153,12 +142,11 @@ async def batch_detail_endpoint(
 @router.get("/verify", response_model=dict[str, object])
 async def verify_chain_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("audit.manage"),
 ) -> dict[str, object]:
     """Verify the cryptographic integrity of the org's audit chain."""
     try:
         async with session.begin():
-            _require_admin(principal)
             await set_rls_org(session, principal.organisation_id)
             result = await verify_chain(session, principal.organisation_id)
     except ProgrammingError:
@@ -194,7 +182,7 @@ async def export_chain_endpoint(
     from_date: datetime | None = Query(None, description="Filter by start date (ISO 8601)"),
     to_date: datetime | None = Query(None, description="Filter by end date (ISO 8601)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("audit.manage"),
 ) -> dict[str, object]:
     """Export audit events as paginated JSON with optional filters."""
     actor_uid = None
@@ -208,7 +196,6 @@ async def export_chain_endpoint(
             ) from None
     try:
         async with session.begin():
-            _require_admin(principal)
             await set_rls_org(session, principal.organisation_id)
             result = await export_chain(
                 session,

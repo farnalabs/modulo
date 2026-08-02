@@ -86,8 +86,15 @@ def require_permission(permission: str) -> Any:
         token: Token[bool | None] | None = None
         try:
             if principal.organisation_id is not None:
-                async with session.begin():
-                    enforce = await resolve_authz_enforce(session, principal.organisation_id)
+                try:
+                    async with session.begin():
+                        enforce = await resolve_authz_enforce(session, principal.organisation_id)
+                except SQLAlchemyError:
+                    # Kill-switch read failure defaults to ENFORCE (fail-closed,
+                    # ADR 017 DECISION 3): a DB blip must not fail-open the
+                    # org-role gate.
+                    logger.exception("permission.kill_switch_read_failed")
+                    enforce = True
                 token = set_authz_enforce(enforce)
             try:
                 assert_org_role(principal.org_role, required, permission)

@@ -13,7 +13,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.models.error_notification_rule import (
     ErrorNotificationRuleCreate,
     ErrorNotificationRuleListResponse,
@@ -47,14 +47,6 @@ def _serialize_rule(rule: ErrorNotificationRule) -> dict[str, Any]:
         "created_at": rule.created_at.isoformat() if rule.created_at else "",
         "updated_at": rule.updated_at.isoformat() if rule.updated_at else "",
     }
-
-
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required for notification rule management",
-        )
 
 
 @handle_db_errors("error_notification_rules.list_notification_rules")
@@ -121,13 +113,11 @@ async def list_notification_rules(
 async def create_notification_rule(
     req: ErrorNotificationRuleCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("error_notification.manage"),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
-
-    _require_admin(principal)
 
     max_rules = _MAX_RULES_COMMUNITY if principal.org_role == "runner" else _MAX_RULES_PER_ORG
 
@@ -190,13 +180,11 @@ async def update_notification_rule(
     rule_id: uuid.UUID,
     req: ErrorNotificationRuleUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("error_notification.manage"),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
-
-    _require_admin(principal)
 
     try:
         async with session.begin():
@@ -262,13 +250,11 @@ async def update_notification_rule(
 async def delete_notification_rule(
     rule_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("error_notification.manage"),
 ) -> None:
     org_id = principal.organisation_id
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
-
-    _require_admin(principal)
 
     try:
         async with session.begin():

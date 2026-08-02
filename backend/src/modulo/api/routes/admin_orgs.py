@@ -12,9 +12,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.api.routes.admin import _require_org_admin
-from modulo.auth.dependencies import get_current_user
+from modulo.api.dependencies import get_db_session, require_system_permission, require_target_org_role
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.db.crud.account import create_account, get_account_by_email
@@ -59,15 +57,9 @@ class CreateOrgResponse(BaseModel):
 @router.post("", response_model=CreateOrgResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_org(
     req: CreateOrgRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgResponse:
-    if not current_user.is_system_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="System admin role required",
-        )
-
     try:
         async with session.begin():
             existing = await get_organisation_by_slug(session, req.slug)
@@ -129,12 +121,9 @@ class ListOrgItem(BaseModel):
 @handle_db_errors("admin.orgs.admin_list_orgs")
 @router.get("", response_model=list[ListOrgItem])
 async def admin_list_orgs(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ListOrgItem]:
-    if not current_user.is_system_admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin role required")
-
     try:
         async with session.begin():
             orgs = await list_organisations(session)
@@ -195,15 +184,9 @@ class CreateOrgUserResponse(BaseModel):
 async def admin_create_org_user(
     org_id: uuid.UUID,
     req: CreateOrgUserRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgUserResponse:
-    if not current_user.is_system_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="System admin role required",
-        )
-
     if req.org_role not in ("admin", "operator", "runner", "viewer"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -295,12 +278,9 @@ async def admin_create_org_user(
 @router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_delete_org(
     org_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    if not current_user.is_system_admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin role required")
-
     try:
         async with session.begin():
             org = await get_organisation(session, org_id)
@@ -351,12 +331,9 @@ class SetOrgLicenseRequest(BaseModel):
 @router.get("/{org_id}/license", response_model=OrgLicenseResponse)
 async def admin_get_org_license(
     org_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = require_target_org_role("org.license.view", "operator"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLicenseResponse:
-    if not current_user.is_system_admin and current_user.organisation_id != org_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
     try:
         org = await get_organisation(session, org_id)
     except ProgrammingError as exc:
@@ -416,12 +393,9 @@ async def admin_get_org_license(
 async def admin_set_org_license(
     org_id: uuid.UUID,
     req: SetOrgLicenseRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = require_target_org_role("org.license.manage", "admin"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLicenseResponse:
-    if not current_user.is_system_admin and current_user.organisation_id != org_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
     try:
         org = await get_organisation(session, org_id)
     except ProgrammingError as exc:
@@ -503,12 +477,9 @@ async def admin_set_org_license(
 @router.delete("/{org_id}/license", response_model=OrgLicenseResponse)
 async def admin_remove_org_license(
     org_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = require_target_org_role("org.license.manage", "admin"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLicenseResponse:
-    if not current_user.is_system_admin and current_user.organisation_id != org_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
     try:
         org = await get_organisation(session, org_id)
     except ProgrammingError as exc:
@@ -580,15 +551,12 @@ class SetOrgAuthzEnforceResponse(BaseModel):
 async def admin_set_org_authz_enforce(
     org_id: uuid.UUID,
     req: SetOrgAuthzEnforceRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = require_target_org_role("org.authz_enforce.manage", "admin"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> SetOrgAuthzEnforceResponse:
     # Tenancy-bounded (ADR 017 DECISION 3): only the org's own admin (or a
     # system admin) may flip the flag, and only for their org. Flipping org A
     # never affects org B.
-    if not current_user.is_system_admin and current_user.organisation_id != org_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-    _require_org_admin(current_user)
 
     # Atomic at statement level — a dedicated boolean column, no read-modify-write.
     affected = 0
