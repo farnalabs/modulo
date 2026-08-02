@@ -3,10 +3,20 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlalchemy.dialects import postgresql
+
 from modulo.api.mcp_server import list_trigger_events
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
+
+
+def _executed_sql(session: AsyncMock) -> list[str]:
+    """Compile every statement passed to ``session.execute`` with literal binds."""
+    return [
+        str(call.args[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+        for call in session.execute.call_args_list
+    ]
 
 
 def _make_mock_event(
@@ -180,6 +190,8 @@ class TestGetTriggerEventsSuccess:
 
         assert result["total"] == 1
         assert result["data"][0]["trigger_id"] == str(target_trigger_id)
+        # The WHERE clause must actually filter on the requested trigger.
+        assert any(f"trigger_id = '{target_trigger_id}'" in sql for sql in _executed_sql(mock_sesh))
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -205,6 +217,10 @@ class TestGetTriggerEventsSuccess:
         result = await list_trigger_events(pipeline_id=str(pipeline_id))
 
         assert result["total"] == 1
+        # The WHERE clause must actually join to triggers/pipelines and filter.
+        executed = _executed_sql(mock_sesh)
+        assert any(f"triggers.pipeline_id = '{pipeline_id}'" in sql for sql in executed)
+        assert any("pipelines.deleted_at IS NULL" in sql for sql in executed)
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -229,6 +245,8 @@ class TestGetTriggerEventsSuccess:
         result = await list_trigger_events(limit=5)
 
         assert result["total"] == 5
+        # The rows query must fetch limit+1 to detect the next page.
+        assert any("LIMIT 6" in sql for sql in _executed_sql(mock_sesh))
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -252,3 +270,66 @@ class TestGetTriggerEventsSuccess:
 
         assert result["total"] == 0
         assert result["data"] == []
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_invalid_trigger_id_returns_invalid_id(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_cm = _make_mock_session()
+        mock_sesh = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_sesh)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        result = await list_trigger_events(trigger_id="not-a-uuid")
+
+        assert result["error"] == "invalid_id"
+        assert result["field"] == "trigger_id"
+        # Validation fails before any query is executed.
+        mock_sesh.execute.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_invalid_pipeline_id_returns_invalid_id(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_cm = _make_mock_session()
+        mock_sesh = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_sesh)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        result = await list_trigger_events(pipeline_id="not-a-uuid")
+
+        assert result["error"] == "invalid_id"
+        assert result["field"] == "pipeline_id"
+        mock_sesh.execute.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_limit_clamped_to_100(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_cm = _make_mock_session()
+        mock_sesh = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_sesh)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        execute_result = MagicMock()
+        execute_result.scalars.return_value.all.return_value = []
+        execute_result.scalar_one_or_none.return_value = 0
+        mock_sesh.execute = AsyncMock(return_value=execute_result)
+
+        result = await list_trigger_events(limit=1000)
+
+        assert result["total"] == 0
+        # lim is clamped to 100, so the fetch is LIMIT 101.
+        assert any("LIMIT 101" in sql for sql in _executed_sql(mock_sesh))

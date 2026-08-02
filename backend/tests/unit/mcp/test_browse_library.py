@@ -207,12 +207,16 @@ class TestSearchLibrary:
             patch(
                 "modulo.api.mcp_server.list_primitives",
                 return_value=PageResult(items=[], total=0, page=1, page_size=20),
-            ),
+            ) as mock_list,
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
             result = await search_library()
 
         assert "insufficient_scope" not in result
+        # The tool must still perform its work — not just avoid raising.
+        mock_list.assert_called_once()
+        assert result["items"] == []
+        assert result["total"] == 0
 
     async def test_error_handling(self) -> None:
         from modulo.api.mcp_server import _ctx_org_id, search_library
