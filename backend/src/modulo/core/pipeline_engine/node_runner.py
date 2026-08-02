@@ -597,9 +597,8 @@ def make_sandbox_agent_fn(
     The node_def must have:
       - agent_prompt: str —  Jinja2 template rendered against state
       - template_id: str —  E2B sandbox template ID (default "base")
-      - agent_command: str —  command to run inside the sandbox
-        (default: "opencode run --auto --format json < /home/user/prompt.md" — reads
-        the rendered prompt, writes structured JSON to /home/user/output.json)
+      - agent_command: str —  REQUIRED command to run inside the sandbox
+        (no default — a sandbox agent cannot run without an explicit command)
       - output_schema_json: dict | None —  optional output schema validation
       - timeout_seconds: int —  max wall-clock time (default 600)
       - context_files: dict[str, str] —  optional files to write into the sandbox
@@ -642,11 +641,9 @@ def make_sandbox_agent_fn(
     elif agent_command_raw:
         agent_command = agent_command_raw
     else:
-        agent_command = (
-            'OPENCODE_API_KEY="$APP_MODULO_OPENCODE_API_KEY" '
-            'GITHUB_TOKEN="$GITHUB_TOKEN" '
-            "opencode run --model opencode/deepseek-v4-flash --auto --format json "
-            "< /home/user/prompt.md"
+        raise ValueError(
+            f"sandbox_agent node '{node_def.get('id')}' is missing required 'agent_command' "
+            "(or 'agent_commands') — a sandbox agent cannot run without an explicit command"
         )
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)

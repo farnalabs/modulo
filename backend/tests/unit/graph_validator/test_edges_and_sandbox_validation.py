@@ -102,7 +102,7 @@ def test_node_without_id_skipped_in_format_check():
 
 
 # ---------------------------------------------------------------------------
-# _check_sandbox_agent_config — warnings
+# _check_sandbox_agent_config — errors and warnings
 # ---------------------------------------------------------------------------
 
 
@@ -141,19 +141,20 @@ def test_sandbox_valid_config_no_issues():
     assert not result.issues
 
 
-def test_sandbox_missing_command_warns():
+def test_sandbox_missing_command_errors():
     graph = {"nodes": [_sandbox_node(agent_command="")], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_MISSING_COMMAND" in _codes(result)
-    assert result.is_valid
+    assert not result.is_valid
 
 
-def test_sandbox_whitespace_command_warns():
+def test_sandbox_whitespace_command_errors():
     graph = {"nodes": [_sandbox_node(agent_command="   ")], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_MISSING_COMMAND" in _codes(result)
+    assert not result.is_valid
 
 
 def test_sandbox_missing_template_warns():
@@ -215,8 +216,8 @@ def test_sandbox_output_schema_incomplete_warns():
     assert "SANDBOX_SCHEMA_INCOMPLETE" in _codes(result)
 
 
-def test_sandbox_multiple_warnings_collected():
-    """A badly configured sandbox node surfaces all warnings at once."""
+def test_sandbox_multiple_issues_collected():
+    """A badly configured sandbox node surfaces all issues at once."""
     graph = {
         "nodes": [
             _sandbox_node(
@@ -239,15 +240,15 @@ def test_sandbox_multiple_warnings_collected():
         "SANDBOX_CONTEXT_PATH_RELATIVE",
         "SANDBOX_RESERVED_ENV_VAR",
     }.issubset(codes)
-    assert result.is_valid  # all sandbox issues are advisory warnings
+    assert not result.is_valid  # missing agent_command is a hard error
 
 
 # ---------------------------------------------------------------------------
-# validate() end-to-end: sandbox warnings do not block saves
+# validate() end-to-end: sandbox errors block saves
 # ---------------------------------------------------------------------------
 
 
-async def test_validate_includes_sandbox_warnings():
+async def test_validate_blocks_missing_sandbox_command():
     from unittest.mock import AsyncMock
 
     validator = GraphValidator()
@@ -261,4 +262,4 @@ async def test_validate_includes_sandbox_warnings():
 
     result = await validator.validate(snap, session)
     assert "SANDBOX_MISSING_COMMAND" in _codes(result)
-    assert result.is_valid
+    assert not result.is_valid

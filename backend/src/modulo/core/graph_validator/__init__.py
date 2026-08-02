@@ -1424,9 +1424,9 @@ class GraphValidator:
             # 1. agent_command must be non-empty.
             cmd = node.get("agent_command", "")
             if not cmd or not str(cmd).strip():
-                result.warning(
+                result.error(
                     "SANDBOX_MISSING_COMMAND",
-                    f"Sandbox agent node '{nid}' has empty agent_command",
+                    f"Sandbox agent node '{nid}' is missing required agent_command",
                     node_id=nid,
                 )
 

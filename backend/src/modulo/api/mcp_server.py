@@ -3072,7 +3072,7 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
         nid = n.get("id", "?")
         ntype = n.get("node_type", "?")
         agent_id = n.get("agent_id", "")
-        agent_cmd = n.get("agent_command", "(default: opencode)")
+        agent_cmd = n.get("agent_command", "(required)")
         prompt_preview = (n.get("prompt_template", "") or "")[:80].replace("\n", " ")
         result += f"  - {nid} (type={ntype}, agent={agent_id}, command={agent_cmd})\n"
         if prompt_preview:
