@@ -1135,7 +1135,7 @@ async def test_cleanup_expired_payloads_none_expired() -> None:
             lambda: AsyncMock(return_value=(MagicMock(id=uuid.uuid4()), MagicMock(), {"key": "val"})),
             202,
             {"status": "accepted"},
-            _replay_auth_headers(),
+            _replay_auth_headers,
             {},
         ),
         (
@@ -1143,7 +1143,7 @@ async def test_cleanup_expired_payloads_none_expired() -> None:
             lambda tid, eid: AsyncMock(side_effect=ReplayNotFoundError(eid)),
             404,
             {"detail": "Trigger event not found"},
-            _replay_auth_headers(),
+            _replay_auth_headers,
             {},
         ),
     ],
@@ -1159,6 +1159,13 @@ def test_webhook_route(
 ) -> None:
     tid = uuid.uuid4()
     eid = uuid.uuid4() if patch_target == "replay_event" else None
+
+    # ``extra_headers`` may be a factory (callable) so the replay JWT is minted
+    # at request time — a token created during collection would expire after the
+    # 15-minute access-token TTL during long full-suite runs, making the route
+    # treat the caller as unauthenticated and fail the expected status.
+    if callable(extra_headers):
+        extra_headers = extra_headers()
 
     if "content" in body_kwargs:
         headers = {"X-Modulo-Timestamp": str(int(time.time()))} | extra_headers

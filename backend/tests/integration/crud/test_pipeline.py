@@ -129,6 +129,7 @@ async def test_replace_pipeline_graph_persists_nodes_and_first_class_edges(
             },
         ],
         is_privileged=True,
+        caller_type="rest",
     )
 
     assert saved is not None
@@ -174,7 +175,18 @@ async def test_clone_pipeline_returns_new_id_and_name_prefix(
             },
         ],
         is_privileged=True,
+        caller_type="rest",
     )
+
+    # clone_pipeline's torn-read fix (PR #535) reads the source through a
+    # separate short-lived session that commits immediately — the source row
+    # must be committed here or that read session cannot see it. Re-establish
+    # RLS afterwards because SET LOCAL is transaction-scoped.
+    await rls_session.commit()
+    from modulo.db.rls import set_rls_org
+
+    async with rls_session.begin():
+        await set_rls_org(rls_session, test_org)
 
     cloned = await clone_pipeline(
         rls_session,
@@ -182,7 +194,6 @@ async def test_clone_pipeline_returns_new_id_and_name_prefix(
         pipeline_id=source.id,
         account_id=test_user,
     )
-
     assert cloned is not None
     assert cloned.id != source.id
     assert cloned.name == "Copy of Original Pipeline"
@@ -218,7 +229,18 @@ async def test_clone_pipeline_independent_from_original(
         nodes=nodes,
         edges=[],
         is_privileged=True,
+        caller_type="rest",
     )
+
+    # clone_pipeline's torn-read fix (PR #535) reads the source through a
+    # separate short-lived session that commits immediately — the source row
+    # must be committed here or that read session cannot see it. Re-establish
+    # RLS afterwards because SET LOCAL is transaction-scoped.
+    await rls_session.commit()
+    from modulo.db.rls import set_rls_org
+
+    async with rls_session.begin():
+        await set_rls_org(rls_session, test_org)
 
     cloned = await clone_pipeline(
         rls_session,
@@ -237,6 +259,7 @@ async def test_clone_pipeline_independent_from_original(
         nodes=[],
         edges=[],
         is_privileged=True,
+        caller_type="rest",
     )
 
     # Check clone is unchanged
@@ -287,6 +310,7 @@ async def test_replace_pipeline_graph_removes_stale_edges(
             },
         ],
         is_privileged=True,
+        caller_type="rest",
     )
     await replace_pipeline_graph(
         rls_session,
@@ -295,6 +319,7 @@ async def test_replace_pipeline_graph_removes_stale_edges(
         nodes=[],
         edges=[],
         is_privileged=True,
+        caller_type="rest",
     )
 
     loaded = await get_pipeline_graph(rls_session, pipeline.id)

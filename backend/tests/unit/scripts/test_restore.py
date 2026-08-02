@@ -119,7 +119,10 @@ def test_decrypt_archive_calls_openssl_with_expected_args(tmp_dir, capsys):
     out_path = os.path.join(tmp_dir, "out.tar.gz")
     proc = MagicMock()
     proc.returncode = 0
-    with patch("scripts.restore.subprocess.run", return_value=proc) as mock_run:
+    with (
+        patch("scripts.restore.subprocess.run", return_value=proc) as mock_run,
+        patch("scripts.restore.shutil.which", return_value="/usr/bin/openssl"),
+    ):
         decrypt_archive(enc_path, "pass", out_path)
     args = mock_run.call_args.args[0]
     assert args[0] == "openssl"
@@ -172,7 +175,11 @@ def test_extract_archive_handles_subdirectories(tmp_dir):
     files = extract_archive(archive_path, extract_dir)
 
     assert files["root.txt"] == os.path.join(extract_dir, "root.txt")
-    assert files["sub/file.txt"] == os.path.join(extract_dir, "sub", "file.txt")
+    # tar members always use "/" separators (POSIX spec) regardless of host
+    # OS, so the dict key is "sub/file.txt" on every platform. Compare the
+    # joined paths with os.path.normpath so Windows backslash vs. forward-slash
+    # differences do not make the assertion platform-dependent.
+    assert os.path.normpath(files["sub/file.txt"]) == os.path.normpath(os.path.join(extract_dir, "sub", "file.txt"))
     assert os.path.exists(files["sub/file.txt"])
 
 

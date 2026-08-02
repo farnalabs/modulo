@@ -8,16 +8,46 @@ Run with::
 
     pytest tests/integration/test_schemathesis.py -x --timeout=120
 
-Requires env vars (minimally SECRET_KEY, FERNET_KEY).  The app's
-lifespan is NOT triggered by ``schemathesis.openapi.from_asgi``, so DB
-connectivity is not required for the schema load — individual endpoints
-may still fail with 5xx if they depend on a database, and that is expected.
+Requires env vars (minimally SECRET_KEY, FERNET_KEY).  The app's lifespan
+IS triggered by ``schemathesis.openapi.from_asgi`` (it drives the app through
+Starlette's TestClient, which runs startup/shutdown), and startup requires a
+reachable REDIS_URL. When Redis is absent or unreachable (e.g. a bare local
+``pytest tests/integration/`` without the docker-compose Redis up), the tests
+skip rather than fail — the lifespan would raise ``RuntimeError`` otherwise.
+CI (deploy.yml) starts Redis and sets REDIS_URL, so the fuzz runs there.
 """
 
+import os
+import socket
+
+import pytest
 import schemathesis
 from hypothesis import HealthCheck, settings
 
-from modulo.api.main import app
+
+def _redis_reachable() -> bool:
+    redis_url = os.environ.get("REDIS_URL", "")
+    if not redis_url:
+        return False
+    try:
+        host = redis_url.split("://")[1].split(":")[0]
+        port = int(redis_url.split(":")[-1].split("/")[0])
+        with socket.create_connection((host, port), timeout=2):
+            return True
+    except (OSError, IndexError, ValueError):
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _redis_reachable(),
+    reason="REDIS_URL not set or Redis port unreachable (required by app lifespan)",
+)
+
+
+# E402: the import must come AFTER the skipif marker is evaluated — importing
+# the app would trigger the full import chain (MCP server startup, DB engine)
+# even when Redis is unreachable and the tests will skip anyway.
+from modulo.api.main import app  # noqa: E402
 
 schema = schemathesis.openapi.from_asgi("/openapi.json", app)
 filtered = schema.include(

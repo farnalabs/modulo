@@ -4,18 +4,17 @@ All functions assume the caller has set the RLS org context via set_rls_org()
 before calling. The session must be within an active transaction.
 """
 
-import asyncio
 import copy
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.crud.base import PageResult, apply_updates
@@ -442,10 +441,11 @@ async def _read_clone_source_snapshot(
     reads nodes/edges/snapshots into plain data, and commits immediately."""
     factory = read_factory
     if factory is None:
-        bind = session.get_bind()
-        if asyncio.iscoroutine(bind):
-            bind = await bind
-        factory = async_sessionmaker(cast(AsyncEngine, bind), expire_on_commit=False, class_=AsyncSession)
+        # ``session.bind`` is the AsyncEngine the session was created with;
+        # ``session.get_bind()`` returns the *sync* ``Engine`` (SQLAlchemy 2.0)
+        # which ``async_sessionmaker`` rejects ("AsyncEngine expected").
+        bind = session.bind
+        factory = async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession)
 
     async with factory() as read_session, read_session.begin():
         await set_rls_org(read_session, org_id)
