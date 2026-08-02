@@ -150,10 +150,9 @@ const props = withDefaults(
   defineProps<{
     createDescription?: string;
     editDescription?: string;
-    createEndpoint?: string;
-    updateEndpoint?: string;
-    deleteEndpoint?: string;
-    listEndpoint?: string;
+    createEndpoint?: '/api/v1/admin/remy/skills' | '/api/v1/me/remy/skills';
+    updateEndpoint?: '/api/v1/admin/remy/skills/{skill_id}' | '/api/v1/me/remy/skills/{skill_id}';
+    deleteEndpoint?: '/api/v1/admin/remy/skills/{skill_id}' | '/api/v1/me/remy/skills/{skill_id}';
   }>(),
   {
     createDescription: "Create a new skill.",
@@ -237,7 +236,7 @@ async function save() {
     };
 
     if (editingId.value) {
-      const { error: err } = await (api as any).PUT(props.updateEndpoint, {
+      const { error: err } = await api.PUT(props.updateEndpoint, {
         params: { path: { skill_id: editingId.value } },
         body: payload,
       });
@@ -246,7 +245,7 @@ async function save() {
         return;
       }
     } else {
-      const { error: err } = await (api as any).POST(props.createEndpoint, {
+      const { error: err } = await api.POST(props.createEndpoint, {
         body: payload,
       });
       if (err) {
@@ -267,7 +266,7 @@ async function confirmDelete() {
   if (!deletingId.value) return;
   deleting.value = true;
   try {
-    const { error: err } = await (api as any).DELETE(props.deleteEndpoint, {
+    const { error: err } = await api.DELETE(props.deleteEndpoint, {
       params: { path: { skill_id: deletingId.value } },
     });
     if (err) {

@@ -6,7 +6,7 @@ import UserRemySkillsView from '../views/UserRemySkillsView.vue'
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockImplementation(() => {
-      return Promise.resolve({ data: { items: [] }, error: null })
+      return Promise.resolve({ data: [], error: null })
     }),
     PUT: vi.fn().mockImplementation(() => {
       return Promise.resolve({ data: null, error: null })

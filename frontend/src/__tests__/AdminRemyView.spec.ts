@@ -49,7 +49,7 @@ vi.mock('../lib/api/client', () => ({
         return Promise.resolve({ data: { product_primer: 'always_on', page_context: 'always_on', user_profile: 'always_on' }, error: undefined })
       }
       if (path === '/api/v1/admin/remy/skills') {
-        return Promise.resolve({ data: { items: [] }, error: undefined })
+        return Promise.resolve({ data: [], error: undefined })
       }
       if (path === '/api/v1/model-backends') {
         return Promise.resolve({ data: { items: [] }, error: undefined })
