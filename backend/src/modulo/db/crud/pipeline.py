@@ -323,10 +323,11 @@ async def clone_pipeline(
     batched ``edge_created_with_gate`` audit event.
 
     The step-(a) read session is a separate connection, so ``set_rls_org`` is
-    not enough: pipelines in ``_TEAM_SCOPED_RLS`` also require the caller's
-    ``app.user_id`` / ``app.org_role`` (``set_rls_user_context``) to be visible.
-    Pass ``org_role`` (the caller's org role) and the read session re-applies
-    the caller's full RLS context; ``account_id`` doubles as the caller's user.
+    not enough: pipelines are team-scoped, so their RLS policy also checks the
+    caller's ``app.user_id`` / ``app.org_role``, which must be re-applied via
+    ``set_rls_user_context`` for the source to be visible. Pass ``org_role``
+    (the caller's org role) and the read session re-applies the caller's full
+    RLS context; ``account_id`` doubles as the caller's user.
     """
     _log.info("Cloning pipeline %s (org=%s, requested_name=%s)", pipeline_id, org_id, new_name)
 
@@ -491,6 +492,10 @@ async def _read_clone_source_snapshot(
     try:
         async with factory() as read_session, read_session.begin():
             await set_rls_org(read_session, org_id)
+            # The guard is intentionally more permissive than the endpoint,
+            # which always passes a non-None org_role (TenantPrincipal). Non-API
+            # callers and unit tests may omit it, so only re-apply the user
+            # context when both identity parts are available.
             if user_id is not None and org_role is not None:
                 await set_rls_user_context(read_session, user_id, org_role)
             src_result = await read_session.execute(
