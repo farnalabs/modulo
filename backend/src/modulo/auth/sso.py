@@ -8,8 +8,8 @@ import urllib.parse
 import uuid
 from datetime import UTC, datetime
 
-import defusedxml.ElementTree as ElementTree
 import httpx
+from defusedxml import ElementTree
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
