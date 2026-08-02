@@ -255,3 +255,17 @@ class TestResourceSchemaDetailSuccess:
         result = await resource_schema_detail(schema_id=str(_SCHEMA_ID), version="99.0.0")
 
         assert "not found" in result
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_invalid_schema_id_returns_error(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_session.return_value.__aenter__ = AsyncMock()
+
+        result = await resource_schema_detail(schema_id="not-a-uuid", version="latest")
+
+        assert "error" in result.lower()
+        assert "Invalid UUID" in result

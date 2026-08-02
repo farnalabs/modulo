@@ -196,10 +196,11 @@ class TestSearchLibrary:
         }
 
     async def test_no_scope_check_needed(self) -> None:
+        from modulo.api.mcp_server import _ctx_org_id, search_library
         from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import search_library
 
         _role.set(None)
+        _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
 
         with (
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
@@ -207,12 +208,16 @@ class TestSearchLibrary:
             patch(
                 "modulo.api.mcp_server.list_primitives",
                 return_value=PageResult(items=[], total=0, page=1, page_size=20),
-            ),
+            ) as mock_list,
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
             result = await search_library()
 
         assert "insufficient_scope" not in result
+        # The tool must still perform its work — not just avoid raising.
+        mock_list.assert_called_once()
+        assert result["items"] == []
+        assert result["total"] == 0
 
     async def test_error_handling(self) -> None:
         from modulo.api.mcp_server import _ctx_org_id, search_library

@@ -197,3 +197,17 @@ class TestGetRunOutputSuccess:
 
         result = await get_run_output(run_id=str(run_id), node_id="nonexistent")
         assert result["error"] == "node_output_not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_invalid_run_id_returns_invalid_id(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        result = await get_run_output(run_id="not-a-uuid", node_id="node1")
+
+        assert result["error"] == "invalid_id"
+        assert result["field"] == "run_id"
+        # Validation fails before any session is opened.
+        mock_session.assert_not_called()
