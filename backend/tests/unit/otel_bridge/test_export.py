@@ -47,15 +47,19 @@ def test_setup_otel_creates_tracer_with_service_name() -> None:
         span.set_attribute("test", True)
 
 
-def test_setup_otel_can_be_called_repeatedly() -> None:
+def test_setup_otel_can_be_called_repeatedly(caplog: pytest.LogCaptureFixture) -> None:
     """Repeated calls are safe — no crash and a usable provider remains.
 
     OTel only permits one global TracerProvider per process, so a second call
     does not replace the first; the documented contract is that repeated calls
-    are harmless rather than that the provider is swapped out.
+    are harmless rather than that the provider is swapped out. The second call
+    logs OTel's expected override warning, which is asserted here so the
+    documented semantics are pinned rather than incidental noise.
     """
     setup_otel(service_name="first")
-    setup_otel(service_name="second")
+    with caplog.at_level(logging.WARNING, logger="opentelemetry.trace"):
+        setup_otel(service_name="second")
+    assert any("Overriding of current TracerProvider" in r.message for r in caplog.records)
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
     # The provider must remain usable for span creation after the second call.
