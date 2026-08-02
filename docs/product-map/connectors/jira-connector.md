@@ -100,6 +100,8 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] `_call_api` retries 429/502/503/504 with exponential backoff + jitter (max 3 retries)
 - [x] `_call_api` raises `ValueError` for 304 Not Modified — resource unchanged
 - [x] `_call_api` respects `Retry-After` header from Jira API
+- [x] `_call_api` prefers Jira Cloud `X-RateLimit-Reset` (quota window) on 429 instead of blind backoff
+- [x] `_call_api` surfaces `X-RateLimit-*` quota headers in the final 429 error message
 - [x] `_parse_json` narrowed to `json.JSONDecodeError` only — prevents masking programming errors
 
 ### Resilience & Integration Robustness
@@ -113,6 +115,10 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] Required field validation uses `key not in` pattern — rejects empty/None without falsy ambiguity
 - [x] `test_jira_resilience.py` covers jitter, exponential backoff, Retry-After, retry 502/503/504 → success, 429 exhaustion
 - [x] Required field validation edge cases tested (missing issue_key, missing body, missing transition_id)
+- [x] Query results expose `metadata["rate_limit"]` mirroring Jira Cloud `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` response headers when present (empty dict when absent)
+- [x] `_parse_rate_limit_reset` derives the wait from the `X-RateLimit-Reset` epoch header — missing/invalid/elapsed header → `None`
+- [x] `_sleep_delay` applies tight jitter around the quota-reset wait so the window is honoured
+- [x] `_rate_limit_detail` summarises `X-RateLimit-*` quota headers for error/health detail strings
 
 ## Known Gaps
 
@@ -122,11 +128,15 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [ ] **No assign/reassign via dedicated operation**: issue assignment only possible through `issue_update` with `fields.assignee`
 - [ ] **No issue labels management**: cannot add/remove labels via dedicated write resource
 - [ ] **No issue delete**: deletion not exposed through connector interface
-- [ ] **No X-RateLimit-* header inspection**: rate-limit retry is blind (no remaining/quota tracking)
 
 ---
 
 ## QA History
+
+### 2026-08-02 — improve-architecture: X-RateLimit-* header inspection RESOLVED
+- **RESOLVED** known gap "No X-RateLimit-* header inspection: rate-limit retry is blind (no remaining/quota tracking)". Jira Cloud reports quota state via `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` (epoch) headers on every response. Added `_RATE_LIMIT_HEADERS`, `_parse_rate_limit_reset()` (epoch → wait delay; missing/invalid/elapsed → `None`), `_rate_limit_detail()` and `_rate_limit_metadata()` to `connectors/jira/__init__.py`. `_call_api` now prefers `X-RateLimit-Reset` on HTTP 429 via new `_sleep_delay()` (tight jitter around the quota window) instead of blind backoff, and the final exhausted-429 error surfaces the quota headers. Every query result now carries `metadata["rate_limit"]` (absent → `{}`). Timeout/ConnectError retry paths now use `_jitter()`.
+- Added 16 unit tests (`test_jira.py`: rate-limit metadata on issue/search/projects, empty fallback; `test_jira_resilience.py`: reset parse ×4, quota detail summary ×2, metadata-only-present-headers, sleep-delay reset vs backoff, 429+reset retry-to-success, exhausted-429 quota detail) + 2 BDD scenarios in `jira_connector.feature` with step definitions in `test_connectors.py` (metadata exposed on results, quota detail in error).
+- Updated product map (behaviours `[ ]`→`[x]`, Known Gaps 7→6, QA History). 62/62 jira unit tests pass, new BDD scenarios pass, ruff clean. Pre-existing connector-suite failures unchanged (10). Status: partial.
 
 ### Index 304 — 2026-07-10: Cross-cutting architecture QA
 - **Fixed CRITICAL** — added `random` import and `_compute_delay()` helper with jitter (`random.uniform(0, 1)`) to all 3 retry delay paths (normal response, HTTPStatusError, TimeoutException/ConnectError). Previous code used pure exponential backoff without jitter despite product map claiming "exponential backoff + jitter". All 3 retry paths now produce varied delays, preventing thundering herd on retry.

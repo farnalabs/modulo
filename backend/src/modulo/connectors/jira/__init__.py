@@ -3,6 +3,7 @@
 import asyncio
 import json
 import random
+import time
 from typing import Any, cast
 
 import httpx
@@ -20,6 +21,13 @@ _RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
 _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
 _MAX_DELAY = 30.0
+
+# Jira Cloud reports quota state via X-RateLimit-* headers on every response
+_RATE_LIMIT_HEADERS = (
+    "X-RateLimit-Limit",
+    "X-RateLimit-Remaining",
+    "X-RateLimit-Reset",
+)
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
@@ -41,6 +49,58 @@ def _compute_delay(attempt: int, response: httpx.Response | None = None) -> floa
             return float(min(retry_after, _MAX_DELAY))
     jitter = random.uniform(0, 1)  # noqa: S311 — non-cryptographic jitter for retry delays
     return float(min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY))
+
+
+def _parse_rate_limit_reset(response: httpx.Response) -> float | None:
+    """Parse Jira Cloud's ``X-RateLimit-Reset`` header (epoch seconds) into a retry delay.
+
+    When a 429 response includes ``X-RateLimit-Reset`` (the epoch second the
+    current quota window resets), the client can wait until the window resets
+    instead of guessing with blind backoff.
+    """
+    value = response.headers.get("X-RateLimit-Reset")
+    if not value:
+        return None
+    try:
+        reset_epoch = float(value)
+    except (ValueError, TypeError):
+        return None
+    delay = reset_epoch - time.time()
+    return delay if delay > 0 else None
+
+
+def _rate_limit_detail(response: httpx.Response) -> str:
+    """Summarise Jira Cloud ``X-RateLimit-*`` quota headers for error strings."""
+    parts = []
+    for header in _RATE_LIMIT_HEADERS:
+        value = response.headers.get(header)
+        if value:
+            parts.append(f"{header}={value}")
+    return "; ".join(parts)
+
+
+def _rate_limit_metadata(response: httpx.Response) -> dict[str, Any]:
+    """Extract Jira Cloud ``X-RateLimit-*`` headers into a metadata dict.
+
+    Jira Cloud reports quota state via ``X-RateLimit-Limit`` /
+    ``X-RateLimit-Remaining`` / ``X-RateLimit-Reset``. Only headers present on
+    the response are included, so an empty dict simply means no rate-limit
+    reporting (e.g. a proxy that strips them).
+    """
+    return {name: response.headers.get(name) for name in _RATE_LIMIT_HEADERS if name in response.headers}
+
+
+def _jitter(delay: float, *, tight: bool = False) -> float:
+    """Add jitter to a retry delay.
+
+    Full jitter (``[0, delay)``) is used for exponential backoff to avoid the
+    thundering herd. Server-derived waits (quota reset) use tight jitter around
+    the requested value so the window is honoured instead of collapsing to a
+    near-immediate retry.
+    """
+    if tight:
+        return random.uniform(delay * 0.9, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
+    return random.uniform(0, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
 
 
 class JiraConnector(ConnectorBase):
@@ -68,6 +128,11 @@ class JiraConnector(ConnectorBase):
       "issue_update"    — update an issue; data: {"issue_key": "PROJ-123", "fields": {...}}
       "issue_comment"   — add a comment to an issue; data: {"issue_key": "PROJ-123", "body": "..."}
       "transition"      — transition an issue; data: {"issue_key": "PROJ-123", "transition_id": "..."}
+
+    Query results expose ``metadata["rate_limit"]`` mirroring Jira Cloud's
+    ``X-RateLimit-Limit`` / ``X-RateLimit-Remaining`` / ``X-RateLimit-Reset``
+    response headers when present (empty dict when absent). On HTTP 429 the
+    connector waits until ``X-RateLimit-Reset`` instead of blind backoff.
     """
 
     def __init__(self, instance: str, creds: dict[str, str]) -> None:
@@ -109,7 +174,9 @@ class JiraConnector(ConnectorBase):
         """Call Jira API with retry/backoff for retryable statuses.
 
         Retries on 429, 502, 503, 504 with exponential backoff + jitter.
-        Wraps HTTP/network/parse errors as ValueError.
+        On 429 responses, prefers ``Retry-After`` then Jira Cloud's
+        ``X-RateLimit-Reset`` (quota window) to compute the wait instead of
+        blind backoff. Wraps HTTP/network/parse errors as ValueError.
         """
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
@@ -119,33 +186,49 @@ class JiraConnector(ConnectorBase):
                     if r.status_code == 304:
                         raise ValueError("Jira API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                        delay = _compute_delay(attempt, r)
-                        await asyncio.sleep(delay)
+                        await asyncio.sleep(self._sleep_delay(r, attempt))
                         continue
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                    delay = _compute_delay(attempt, exc.response)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
-                raise ValueError(f"Jira API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
+                detail = exc.response.text[:200]
+                if exc.response.status_code == 429:
+                    quota = _rate_limit_detail(exc.response)
+                    if quota:
+                        detail = f"{detail} (quota: {quota})"
+                raise ValueError(f"Jira API HTTP {exc.response.status_code}: {detail}") from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = _compute_delay(attempt)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(_jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
                     continue
                 raise ValueError("Jira API timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = _compute_delay(attempt)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(_jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
                     continue
                 raise ValueError("Jira API connection error") from exc
         raise ValueError("Jira API request failed after retries") from last_exc
+
+    @staticmethod
+    def _sleep_delay(response: httpx.Response, attempt: int) -> float:
+        """Compute the sleep before a retry, honouring server-provided wait times.
+
+        On HTTP 429 with Jira Cloud's ``X-RateLimit-Reset`` present, wait until
+        the quota window resets (tight jitter so the window is honoured).
+        Otherwise fall back to ``_compute_delay`` (``Retry-After`` then
+        exponential backoff + jitter).
+        """
+        if response.status_code == 429:
+            reset_delay = _parse_rate_limit_reset(response)
+            if reset_delay is not None:
+                return _jitter(reset_delay, tight=True)
+        return _compute_delay(attempt, response)
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
@@ -176,7 +259,10 @@ class JiraConnector(ConnectorBase):
                 issue_key = q.filters["issue_key"]
                 r = await self._call_api("GET", f"/issue/{issue_key}")
                 data: dict[str, Any] = await self._parse_json(r)
-                return ConnectorResult(records=[data])
+                return ConnectorResult(
+                    records=[data],
+                    metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
             case "search":
                 jql = q.filters.get("jql", "")
                 max_results = q.filters.get("max_results", q.limit)
@@ -192,7 +278,12 @@ class JiraConnector(ConnectorBase):
                 next_cursor: str | None = None
                 if start_at + max_results < total:
                     next_cursor = str(start_at + max_results)
-                return ConnectorResult(records=issues, total=total, next_cursor=next_cursor)
+                return ConnectorResult(
+                    records=issues,
+                    total=total,
+                    next_cursor=next_cursor,
+                    metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
             case "issue_comments":
                 if "issue_key" not in q.filters:
                     raise ValueError("Jira issue_comments query requires 'issue_key' filter")
@@ -209,7 +300,12 @@ class JiraConnector(ConnectorBase):
                 comment_next_cursor: str | None = None
                 if start_at + max_results < total:
                     comment_next_cursor = str(start_at + max_results)
-                return ConnectorResult(records=comments, total=total, next_cursor=comment_next_cursor)
+                return ConnectorResult(
+                    records=comments,
+                    total=total,
+                    next_cursor=comment_next_cursor,
+                    metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
             case "transitions":
                 if "issue_key" not in q.filters:
                     raise ValueError("Jira transitions query requires 'issue_key' filter")
@@ -217,12 +313,20 @@ class JiraConnector(ConnectorBase):
                 r = await self._call_api("GET", f"/issue/{issue_key}/transitions")
                 body = await self._parse_json(r)
                 transitions = body.get("transitions", [])
-                return ConnectorResult(records=transitions, total=len(transitions))
+                return ConnectorResult(
+                    records=transitions,
+                    total=len(transitions),
+                    metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
             case "projects":
                 r = await self._call_api("GET", "/project")
                 data = await self._parse_json(r)
                 projects = data if isinstance(data, list) else data.get("values", [])
-                return ConnectorResult(records=projects, total=len(projects))
+                return ConnectorResult(
+                    records=projects,
+                    total=len(projects),
+                    metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
             case _:
                 raise ValueError(f"Unsupported Jira resource: {q.resource!r}")
 
