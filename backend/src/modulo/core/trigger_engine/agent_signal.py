@@ -65,6 +65,7 @@ async def fire_agent_signal(
 
     for trigger in triggers:
         config = trigger.config_json or {}
+        str_trigger_id = str(trigger.id)
         source_pid = config.get("source_pipeline_id")
         source_nid = config.get("source_node_id")
 
@@ -133,21 +134,29 @@ async def fire_agent_signal(
             snapshot_id = uuid.UUID(int=0)
 
         # Create child run linked to source via parent_run_id.
+        #
+        # Wrap the insert in a SAVEPOINT so a failed create_run (constraint
+        # violation, deadlock, etc.) rolls back only the child-run insert and
+        # leaves the caller's transaction usable. Without this, the failed
+        # flush poisons the whole transaction and the exception-handling code
+        # below (which touches the same session) explodes with a misleading
+        # "Can't operate on closed transaction" error.
         try:
-            child_run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=trigger.pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="agent_signal",
-                trigger_id=trigger.id,
-                input_payload=input_payload,
-                parent_run_id=source_run_id,
-            )
+            async with session.begin_nested():
+                child_run = await create_run(
+                    session,
+                    org_id=org_id,
+                    pipeline_id=trigger.pipeline_id,
+                    snapshot_id=snapshot_id,
+                    trigger_type="agent_signal",
+                    trigger_id=trigger.id,
+                    input_payload=input_payload,
+                    parent_run_id=source_run_id,
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            _log.exception("Failed to create child run for agent signal trigger %s", trigger.id)
+            _log.exception("Failed to create child run for agent signal trigger %s", str_trigger_id)
             await _log_signal_event(
                 session,
                 trigger,
@@ -157,7 +166,7 @@ async def fire_agent_signal(
             )
             results.append(
                 {
-                    "trigger_id": str(trigger.id),
+                    "trigger_id": str_trigger_id,
                     "status": "error",
                     "reason": "create_run_failed",
                 }

@@ -228,8 +228,8 @@ async def test_coverage_gaps_detects_missing_evals(
         await conn.execute(
             text(
                 "INSERT INTO eval_definitions "
-                "(id, organisation_id, pipeline_id, name, eval_type, account_id) "
-                "VALUES (:id, :org_id, :pipeline_id, :name, 'llm_judge', :uid)",
+                "(id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) "
+                "VALUES (:id, :org_id, :pipeline_id, :name, 'llm_judge', '{}'::json, :uid)",
             ),
             {
                 "id": str(eval_id),
@@ -274,8 +274,8 @@ async def test_no_coverage_gaps_when_all_evals_present(
         await conn.execute(
             text(
                 "INSERT INTO eval_definitions "
-                "(id, organisation_id, pipeline_id, name, eval_type, account_id) "
-                "VALUES (:id, :org_id, :pipeline_id, :name, 'llm_judge', :uid)",
+                "(id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) "
+                "VALUES (:id, :org_id, :pipeline_id, :name, 'llm_judge', '{}'::json, :uid)",
             ),
             {
                 "id": str(eval_id),
