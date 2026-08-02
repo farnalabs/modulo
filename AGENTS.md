@@ -1073,7 +1073,7 @@ mypy src/modulo/ 2>&1
 ### Known Issues
 
 - **The runner machine (duncan-pc) can go offline.** Check `gh api repos/farnalabs/modulo/actions/runners --jq '.runners[] | [.name, .status, .busy]'`. Restart with `Start-Process -FilePath "C:\actions-runner\run.cmd" -WindowStyle Hidden`.
-- **Force pushes lose CI results.** After a force push (rebase), CI won't automatically re-trigger on the new SHA. The next `pull_request` event (from a new commit or PR reopen) will trigger it.
+- **Force pushes re-trigger CI normally.** A force-push to a PR branch fires a fresh pull_request (synchronize) event and CI re-runs on the new SHA; the autonomous lifecycle handles re-review and merge.
 - **Concurrent run limits on triggers** default to 1. When a pipeline gets a burst of webhooks, increase `max_concurrent_runs` on the trigger to match expected burst volume.
 
 ### After raising a PR, poll checks until they pass or fail
