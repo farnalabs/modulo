@@ -4,6 +4,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.models.hitl_claim import HitlClaim
 
@@ -105,6 +107,32 @@ async def test_ignores_decided_claims() -> None:
 
 async def test_returns_empty_when_no_overdue_claims() -> None:
     session = _mock_session([])
+    result = await get_overdue_claims(session, _ORG, warning_hours=4)
+
+    assert result == []
+
+
+async def test_rejects_negative_warning_hours() -> None:
+    session = AsyncMock()
+    with pytest.raises(ValueError, match="warning_hours must be non-negative"):
+        await get_overdue_claims(session, _ORG, warning_hours=-1)
+
+
+async def test_rejects_negative_escalation_hours() -> None:
+    session = AsyncMock()
+    with pytest.raises(ValueError, match="escalation_hours must be non-negative"):
+        await get_overdue_claims(session, _ORG, escalation_hours=-5)
+
+
+async def test_rejects_escalation_hours_not_greater_than_warning() -> None:
+    session = AsyncMock()
+    with pytest.raises(ValueError, match=r"escalation_hours .* must exceed warning_hours"):
+        await get_overdue_claims(session, _ORG, warning_hours=6, escalation_hours=6)
+
+
+async def test_returns_empty_when_query_fails() -> None:
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=RuntimeError("db down"))
     result = await get_overdue_claims(session, _ORG, warning_hours=4)
 
     assert result == []
