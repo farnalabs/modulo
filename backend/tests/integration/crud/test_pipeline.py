@@ -129,6 +129,7 @@ async def test_replace_pipeline_graph_persists_nodes_and_first_class_edges(
             },
         ],
         is_privileged=True,
+        caller_type="rest",
     )
 
     assert saved is not None
@@ -174,6 +175,7 @@ async def test_clone_pipeline_returns_new_id_and_name_prefix(
             },
         ],
         is_privileged=True,
+        caller_type="rest",
     )
 
     cloned = await clone_pipeline(
@@ -218,6 +220,7 @@ async def test_clone_pipeline_independent_from_original(
         nodes=nodes,
         edges=[],
         is_privileged=True,
+        caller_type="rest",
     )
 
     cloned = await clone_pipeline(
@@ -237,6 +240,7 @@ async def test_clone_pipeline_independent_from_original(
         nodes=[],
         edges=[],
         is_privileged=True,
+        caller_type="rest",
     )
 
     # Check clone is unchanged
@@ -287,6 +291,7 @@ async def test_replace_pipeline_graph_removes_stale_edges(
             },
         ],
         is_privileged=True,
+        caller_type="rest",
     )
     await replace_pipeline_graph(
         rls_session,
@@ -295,6 +300,7 @@ async def test_replace_pipeline_graph_removes_stale_edges(
         nodes=[],
         edges=[],
         is_privileged=True,
+        caller_type="rest",
     )
 
     loaded = await get_pipeline_graph(rls_session, pipeline.id)
