@@ -39,14 +39,14 @@ export const useOnboardingStore = defineStore('onboarding', () => {
         return
       }
       if (!data) { error.value = 'No response from server'; return }
-      actions.value = (data as any).actions ?? []
+      actions.value = data.actions as unknown as OnboardingAction[]
       const loginAction = actions.value.find(a => a.id === 'login')
       if (loginAction && !loginAction.completed) {
         loginAction.completed = true
       }
-      progressPct.value = (data as any).progress_pct ?? 0
-      isFirstRun.value = (data as any).is_first_run ?? true
-      dismissed.value = (data as any).dismissed ?? false
+      progressPct.value = data.progress_pct
+      isFirstRun.value = data.is_first_run
+      dismissed.value = data.dismissed
     } catch (e) {
       error.value = formatApiError(e)
     } finally {
@@ -57,7 +57,7 @@ export const useOnboardingStore = defineStore('onboarding', () => {
   async function completeAction(actionId: string) {
     try {
       const { error: err } = await api.POST('/api/v1/onboarding/actions/{action_id}/complete', {
-        params: { path: { action_id: actionId } as any },
+        params: { path: { action_id: actionId } },
       })
       if (err) { error.value = formatApiError(err); return }
       await fetchStatus()
@@ -69,7 +69,7 @@ export const useOnboardingStore = defineStore('onboarding', () => {
   async function skipAction(actionId: string) {
     try {
       const { error: err } = await api.POST('/api/v1/onboarding/actions/{action_id}/skip', {
-        params: { path: { action_id: actionId } as any },
+        params: { path: { action_id: actionId } },
       })
       if (err) { error.value = formatApiError(err); return }
       await fetchStatus()

@@ -1233,8 +1233,7 @@ const { data: skillsResp, loading: skillsLoading, load: loadSkills } = useDataFe
 
 watch(() => skillsResp.value, (data) => {
   if (data) {
-    const items = (data as { items?: SkillItem[] }).items
-    skills.value = Array.isArray(items) ? items : []
+    skills.value = data
   }
 })
 
