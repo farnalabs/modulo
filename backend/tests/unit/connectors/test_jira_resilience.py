@@ -178,3 +178,137 @@ async def test_issue_comment_empty_key_rejected(connector):
                 data={"body": "Hello"},
             )
         )
+
+
+# --- X-RateLimit-* header inspection tests ---
+
+
+def test_parse_rate_limit_reset(monkeypatch):
+    """X-RateLimit-Reset (epoch seconds) becomes a positive wait delay."""
+    from modulo.connectors.jira import _parse_rate_limit_reset
+
+    monkeypatch.setattr("modulo.connectors.jira.time.time", lambda: 1_000_000)
+    resp = httpx.Response(429, headers={"X-RateLimit-Reset": "1000010"})
+    delay = _parse_rate_limit_reset(resp)
+    assert delay == pytest.approx(10.0)
+
+
+def test_parse_rate_limit_reset_missing(monkeypatch):
+    """No X-RateLimit-Reset header -> None (blind backoff fallback)."""
+    from modulo.connectors.jira import _parse_rate_limit_reset
+
+    monkeypatch.setattr("modulo.connectors.jira.time.time", lambda: 1_000_000)
+    assert _parse_rate_limit_reset(httpx.Response(429)) is None
+
+
+def test_parse_rate_limit_reset_invalid():
+    """Non-numeric X-RateLimit-Reset -> None."""
+    from modulo.connectors.jira import _parse_rate_limit_reset
+
+    resp = httpx.Response(429, headers={"X-RateLimit-Reset": "not-a-number"})
+    assert _parse_rate_limit_reset(resp) is None
+
+
+def test_parse_rate_limit_reset_in_the_past(monkeypatch):
+    """A reset epoch already elapsed -> None (no point waiting)."""
+    from modulo.connectors.jira import _parse_rate_limit_reset
+
+    monkeypatch.setattr("modulo.connectors.jira.time.time", lambda: 1_000_000)
+    resp = httpx.Response(429, headers={"X-RateLimit-Reset": "999999"})
+    assert _parse_rate_limit_reset(resp) is None
+
+
+def test_rate_limit_detail_summarises_headers():
+    """Quota headers are summarised for error/health detail strings."""
+    from modulo.connectors.jira import _rate_limit_detail
+
+    resp = httpx.Response(
+        429,
+        headers={"X-RateLimit-Limit": "10000", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1754160000"},
+    )
+    detail = _rate_limit_detail(resp)
+    assert "X-RateLimit-Limit=10000" in detail
+    assert "X-RateLimit-Remaining=0" in detail
+    assert "X-RateLimit-Reset=1754160000" in detail
+
+
+def test_rate_limit_detail_empty_when_absent():
+    """No rate-limit headers -> empty detail string."""
+    from modulo.connectors.jira import _rate_limit_detail
+
+    assert _rate_limit_detail(httpx.Response(429)) == ""
+
+
+def test_rate_limit_metadata_only_present_headers():
+    """Only headers actually on the response are surfaced."""
+    from modulo.connectors.jira import _rate_limit_metadata
+
+    resp = httpx.Response(200, headers={"X-RateLimit-Remaining": "42"})
+    assert _rate_limit_metadata(resp) == {"X-RateLimit-Remaining": "42"}
+
+
+def test_sleep_delay_uses_rate_limit_reset_on_429(connector, monkeypatch):
+    """On 429 with X-RateLimit-Reset, sleep until the quota window resets."""
+    from modulo.connectors.jira import time
+
+    monkeypatch.setattr(time, "time", lambda: 1_000_000)
+    resp = httpx.Response(429, headers={"X-RateLimit-Reset": "1000010"})
+    delay = connector._sleep_delay(resp, 0)
+    assert 9.0 <= delay <= 10.0, "tight jitter should stay within the quota window"
+
+
+def test_sleep_delay_falls_back_to_backoff_on_429(connector):
+    """On 429 without X-RateLimit-Reset, fall back to blind backoff + jitter."""
+    resp = httpx.Response(429)
+    delay = connector._sleep_delay(resp, 1)
+    # attempt 1 -> _BASE_DELAY * 2**1 = 2s plus full jitter in [0, 1)
+    assert 2.0 <= delay < 3.0
+
+
+@respx.mock
+async def test_retry_429_then_success_with_reset_header(connector, monkeypatch):
+    """A 429 carrying X-RateLimit-Reset retries using the quota wait, then succeeds."""
+    import asyncio
+
+    from modulo.connectors.jira import time
+
+    monkeypatch.setattr(time, "time", lambda: 1_000_000)
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(
+        side_effect=[
+            httpx.Response(429, headers={"X-RateLimit-Reset": "1000010"}),
+            httpx.Response(200, json={"id": "10001", "key": "PROJ-123"}),
+        ]
+    )
+    result = await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
+    assert result.records[0]["key"] == "PROJ-123"
+    assert sleeps, "expected a retry sleep before success"
+    assert sleeps[0] > 8.0, "429 retry should wait near the X-RateLimit-Reset window"
+
+
+@respx.mock
+async def test_429_exhausted_includes_quota_detail(connector, monkeypatch):
+    """Final 429 error surfaces X-RateLimit-* quota headers in the message."""
+    import asyncio
+
+    async def fake_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(
+        side_effect=[
+            httpx.Response(429, headers={"X-RateLimit-Limit": "10000", "X-RateLimit-Remaining": "0"}),
+            httpx.Response(429, headers={"X-RateLimit-Limit": "10000", "X-RateLimit-Remaining": "0"}),
+            httpx.Response(429, headers={"X-RateLimit-Limit": "10000", "X-RateLimit-Remaining": "0"}),
+            httpx.Response(429, headers={"X-RateLimit-Limit": "10000", "X-RateLimit-Remaining": "0"}),
+        ]
+    )
+    with pytest.raises(ValueError) as exc:
+        await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
+    assert "HTTP 429" in str(exc.value)
+    assert "quota: X-RateLimit-Limit=10000; X-RateLimit-Remaining=0" in str(exc.value)
