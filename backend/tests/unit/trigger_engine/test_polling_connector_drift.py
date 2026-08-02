@@ -89,6 +89,7 @@ def test_polling_types_are_valid_connectors():
         ("filesystem", {"base_path": "/tmp"}, {}),
         ("github", {}, {"token": "x"}),
         ("gitlab", {}, {"token": "x"}),
+        ("gitlab", {"base_url": "https://gitlab.example.com/api/v4"}, {"token": "x"}),
         ("linear", {}, {"api_key": "x"}),
         ("jira", {"instance": "x"}, {"token": "x"}),
         ("slack", {}, {"bot_token": "x"}),
