@@ -78,9 +78,16 @@ _DEMO_ACCOUNT_CHILD_SQL: tuple[str, ...] = (
 )
 
 # Runs, snapshots and variant groups reference pipelines with RESTRICT FKs.
-# They have no account_id (or a SET NULL one), so they are keyed off the demo
-# account's pipelines instead of the account itself.
+# Workspace leases reference runs and environment profiles with RESTRICT FKs.
+# None of these have an account_id (or it is SET NULL), so they are keyed off
+# the demo account's pipelines / environment profiles instead of the account.
+# workspace_leases must be deleted before both runs and environment_profiles.
 _DEMO_PIPELINE_CHILD_SQL: tuple[str, ...] = (
+    "DELETE FROM workspace_leases WHERE run_id IN (SELECT id FROM runs WHERE "
+    "pipeline_id IN (SELECT id FROM pipelines WHERE account_id IN "
+    "(SELECT id FROM accounts WHERE email = 'demo'))) OR environment_profile_id "
+    "IN (SELECT id FROM environment_profiles WHERE account_id IN "
+    "(SELECT id FROM accounts WHERE email = 'demo'))",
     "DELETE FROM runs WHERE pipeline_id IN ("
     "SELECT id FROM pipelines WHERE account_id IN "
     "(SELECT id FROM accounts WHERE email = 'demo'))",
