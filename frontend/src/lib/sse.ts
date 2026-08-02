@@ -3,47 +3,67 @@ export interface SSEEvent {
   data: string
 }
 
+const MAX_BUFFER_SIZE = 1024 * 1024
+
 export async function* parseSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  maxBufferSize = 1024 * 1024,
+  maxBufferSize = MAX_BUFFER_SIZE,
 ): AsyncGenerator<SSEEvent> {
   const decoder = new TextDecoder()
   let buffer = ''
   let currentEvent = ''
+  const dataLines: string[] = []
+
+  function dispatchPending(): SSEEvent | null {
+    if (dataLines.length === 0) return null
+    const event: SSEEvent = { event: currentEvent, data: dataLines.join('\n') }
+    currentEvent = ''
+    dataLines.length = 0
+    return event
+  }
+
+  function processLine(line: string): SSEEvent | null {
+    if (line === '') {
+      return dispatchPending()
+    }
+    if (line.startsWith(':')) {
+      // comment / heartbeat — ignore
+      return null
+    }
+    if (line.startsWith('event:')) {
+      currentEvent = line.slice(6).trim()
+      return null
+    }
+    if (line.startsWith('data:')) {
+      // Per the SSE spec, a single leading space after the field name is stripped.
+      dataLines.push(line[5] === ' ' ? line.slice(6) : line.slice(5))
+    }
+    // id:, retry:, and other fields are ignored.
+    return null
+  }
 
   for (;;) {
     const { done, value } = await reader.read()
-    if (done) {
-      if (currentEvent) {
-        yield { event: currentEvent, data: '' }
-      }
-      break
+    if (!done) {
+      buffer += decoder.decode(value, { stream: true })
     }
-
-    buffer += decoder.decode(value, { stream: true })
-    if (buffer.length > maxBufferSize) {
-      if (currentEvent) {
-        yield { event: currentEvent, data: '' }
-      }
-      break
-    }
+    const overflow = !done && buffer.length > maxBufferSize
 
     const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
+    const keepPartial = !done && !overflow
+    buffer = keepPartial ? (lines.pop() ?? '') : ''
 
-    for (const line of lines) {
-      if (line.startsWith('event: ')) {
-        currentEvent = line.slice(7).trim()
-      } else if (line.startsWith('data: ')) {
-        yield { event: currentEvent, data: line.slice(6) }
-        currentEvent = ''
-      } else if (line.startsWith(':')) {
-        continue
-      }
+    for (const rawLine of lines) {
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+      const pending = processLine(line)
+      if (pending) yield pending
     }
-  }
 
-  if (currentEvent) {
-    yield { event: currentEvent, data: '' }
+    if (done) {
+      const pending = dispatchPending()
+      if (pending) yield pending
+      break
+    }
+    if (overflow) break
   }
 }
