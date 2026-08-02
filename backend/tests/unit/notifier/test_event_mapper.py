@@ -147,6 +147,38 @@ async def test_eval_regression_templates_resolved(mapper: NotificationEventMappe
     assert kwargs["action_url"] == "/evals"
 
 
+async def test_budget_exceeded_templates_resolved(mapper: NotificationEventMapper) -> None:
+    _, mock_create = await _call(mapper, "budget_exceeded")
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "Budget exceeded — my-pipeline"
+    assert kwargs["body"] == 'Run for "my-pipeline" exceeded its token budget.'
+    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
+
+
+async def test_claim_expired_templates_resolved(mapper: NotificationEventMapper) -> None:
+    _, mock_create = await _call(mapper, "claim_expired")
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "HITL claim expired — my-pipeline"
+    assert kwargs["body"] == 'A HITL claim on "my-pipeline" has expired.'
+    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
+
+
+async def test_eval_blocked_templates_resolved(mapper: NotificationEventMapper) -> None:
+    _, mock_create = await _call(mapper, "eval_blocked")
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "Eval blocked — my-pipeline"
+    assert kwargs["body"] == 'An eval check blocked pipeline "my-pipeline".'
+    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
+
+
+async def test_hitl_overdue_templates_resolved(mapper: NotificationEventMapper) -> None:
+    _, mock_create = await _call(mapper, "hitl_overdue")
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "HITL overdue — my-pipeline"
+    assert kwargs["body"] == 'Pipeline "my-pipeline" has been awaiting human review for 12 minutes.'
+    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
+
+
 async def test_system_announcement_uses_message_payload(mapper: NotificationEventMapper) -> None:
     _, mock_create = await _call(mapper, "system_announcement")
     kwargs = mock_create.await_args.kwargs
