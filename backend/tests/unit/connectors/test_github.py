@@ -217,6 +217,8 @@ async def test_write_issue_operations(
         ("file", {"repo": "owner/repo"}, "requires 'path' filter"),
         ("pulls", {}, "requires 'repo' filter"),
         ("pr_commits", {"repo": "owner/repo"}, "requires 'pull_number' filter"),
+        ("pr_diff", {"repo": "owner/repo"}, "requires 'pull_number' filter"),
+        ("search_issues", {}, "requires 'q' filter"),
     ],
 )
 async def test_query_missing_filters(connector, resource, filters, match_text):
@@ -232,6 +234,9 @@ async def test_query_missing_filters(connector, resource, filters, match_text):
         ("pr", {"repo": "owner/repo", "title": "PR", "head": "fix"}, "requires 'base' in data"),
         ("pr", {"repo": "owner/repo", "title": "No head"}, "requires 'head' in data"),
         ("pr_comment", {"repo": "owner/repo", "pull_number": "1"}, "requires 'body' in data"),
+        ("pr_merge", {"repo": "owner/repo"}, "requires 'pull_number' in data"),
+        ("pr_label", {"repo": "owner/repo", "pull_number": "1"}, "requires 'labels' in data"),
+        ("issue_assign", {"repo": "owner/repo", "issue_number": "42"}, "requires 'assignees' in data"),
     ],
 )
 async def test_write_missing_data(connector, resource, data, match_text):
@@ -462,3 +467,211 @@ async def test_query_pulls_pagination_cursor(connector):
     result = await connector.query(ConnectorQuery(resource="pulls", filters={"repo": "owner/repo"}, limit=10))
     assert result.next_cursor is not None
     assert "page=2" in result.next_cursor
+
+
+# ---------------------------------------------------------------------------
+# PR diff and issue search queries
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_pr_diff(connector):
+    diff = (
+        "diff --git a/README.md b/README.md\nindex abc..def 100644\n--- a/README.md\n"
+        "+++ b/README.md\n@@ -1 +1 @@\n-hello\n+world\n"
+    )
+    respx.get("https://api.github.com/repos/owner/repo/pulls/42").mock(
+        return_value=httpx.Response(200, text=diff, headers={"Content-Type": "text/plain; charset=utf-8"})
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="pr_diff", filters={"repo": "owner/repo", "pull_number": "42"})
+    )
+    assert result.total == 1
+    assert result.records[0]["diff"] == diff
+
+
+@respx.mock
+async def test_query_pr_diff_sends_diff_accept_header(connector):
+    route = respx.get("https://api.github.com/repos/owner/repo/pulls/7").mock(
+        return_value=httpx.Response(200, text="+patch")
+    )
+    await connector.query(ConnectorQuery(resource="pr_diff", filters={"repo": "owner/repo", "pull_number": "7"}))
+    accept = route.calls.last.request.headers.get("Accept")
+    assert accept == "application/vnd.github.v3.diff"
+
+
+@respx.mock
+async def test_query_search_issues(connector):
+    body = {
+        "total_count": 1,
+        "items": [{"number": 9, "title": "Search hit", "html_url": "https://github.com/owner/repo/issues/9"}],
+    }
+    respx.get("https://api.github.com/search/issues?q=repo%3Aowner%2Frepo+is%3Aopen&per_page=100").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    result = await connector.query(ConnectorQuery(resource="search_issues", filters={"q": "repo:owner/repo is:open"}))
+    assert result.total == 1
+    assert len(result.records) == 1
+    assert result.records[0]["number"] == 9
+
+
+@respx.mock
+async def test_query_search_issues_empty(connector):
+    respx.get("https://api.github.com/search/issues?q=nothing&per_page=100").mock(
+        return_value=httpx.Response(200, json={"total_count": 0, "items": []})
+    )
+    result = await connector.query(ConnectorQuery(resource="search_issues", filters={"q": "nothing"}))
+    assert result.total == 0
+    assert result.records == []
+
+
+@respx.mock
+async def test_query_search_issues_pagination(connector):
+    body = {"total_count": 30, "items": [{"number": 1}]}
+    link_header = '<https://api.github.com/search/issues?q=bug&page=2&per_page=10>; rel="next"'
+    respx.get("https://api.github.com/search/issues?q=bug&per_page=10").mock(
+        return_value=httpx.Response(200, json=body, headers={"Link": link_header})
+    )
+    result = await connector.query(ConnectorQuery(resource="search_issues", filters={"q": "bug"}, limit=10))
+    assert result.next_cursor is not None
+    assert "page=2" in result.next_cursor
+
+
+@respx.mock
+async def test_query_search_issues_passes_optional_params(connector):
+    body = {"total_count": 1, "items": [{"number": 3, "state": "open"}]}
+    respx.get("https://api.github.com/search/issues?q=bug&sort=created&order=asc&state=open&per_page=5").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="search_issues",
+            filters={"q": "bug", "sort": "created", "order": "asc", "state": "open"},
+            limit=5,
+        )
+    )
+    assert result.total == 1
+    assert result.records[0]["number"] == 3
+
+
+# ---------------------------------------------------------------------------
+# PR merge / review request / labels and issue assign writes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "data,expected_body",
+    [
+        ({"repo": "owner/repo", "pull_number": "1"}, {}),
+        (
+            {
+                "repo": "owner/repo",
+                "pull_number": "1",
+                "commit_title": "T",
+                "commit_message": "M",
+                "merge_method": "squash",
+                "sha": "abc",
+            },
+            {"commit_title": "T", "commit_message": "M", "merge_method": "squash", "sha": "abc"},
+        ),
+    ],
+)
+@respx.mock
+async def test_write_pr_merge(connector, data, expected_body):
+    route = respx.put("https://api.github.com/repos/owner/repo/pulls/1/merge").mock(
+        return_value=httpx.Response(200, json={"sha": "merged123", "merged": True})
+    )
+    result = await connector.write(ConnectorPayload(resource="pr_merge", data=data))
+    assert result["merged"] is True
+    sent = json.loads(route.calls.last.request.content)
+    assert sent == expected_body
+
+
+@respx.mock
+async def test_write_pr_review_request_reviewers(connector):
+    route = respx.post("https://api.github.com/repos/owner/repo/pulls/1/requested_reviewers").mock(
+        return_value=httpx.Response(201, json={"number": 1, "requested_reviewers": [{"login": "alice"}]})
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="pr_review_request",
+            data={"repo": "owner/repo", "pull_number": "1", "reviewers": ["alice", "bob"]},
+        )
+    )
+    assert result["requested_reviewers"][0]["login"] == "alice"
+    sent = json.loads(route.calls.last.request.content)
+    assert sent == {"reviewers": ["alice", "bob"]}
+
+
+@respx.mock
+async def test_write_pr_review_request_team_reviewers(connector):
+    route = respx.post("https://api.github.com/repos/owner/repo/pulls/1/requested_reviewers").mock(
+        return_value=httpx.Response(201, json={"number": 1})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="pr_review_request",
+            data={"repo": "owner/repo", "pull_number": "1", "team_reviewers": ["eng-core"]},
+        )
+    )
+    sent = json.loads(route.calls.last.request.content)
+    assert sent == {"team_reviewers": ["eng-core"]}
+
+
+@respx.mock
+async def test_write_pr_review_request_both(connector):
+    route = respx.post("https://api.github.com/repos/owner/repo/pulls/1/requested_reviewers").mock(
+        return_value=httpx.Response(201, json={"number": 1})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="pr_review_request",
+            data={
+                "repo": "owner/repo",
+                "pull_number": "1",
+                "reviewers": ["alice"],
+                "team_reviewers": ["eng-core"],
+            },
+        )
+    )
+    sent = json.loads(route.calls.last.request.content)
+    assert sent == {"reviewers": ["alice"], "team_reviewers": ["eng-core"]}
+
+
+async def test_write_pr_review_request_missing_reviewers(connector):
+    with pytest.raises(ValueError, match="requires 'reviewers' or 'team_reviewers'"):
+        await connector.write(
+            ConnectorPayload(resource="pr_review_request", data={"repo": "owner/repo", "pull_number": "1"})
+        )
+
+
+@respx.mock
+async def test_write_pr_label(connector):
+    route = respx.post("https://api.github.com/repos/owner/repo/issues/1/labels").mock(
+        return_value=httpx.Response(200, json=[{"id": 1, "name": "ready"}])
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="pr_label",
+            data={"repo": "owner/repo", "pull_number": "1", "labels": ["ready", "review"]},
+        )
+    )
+    assert result[0]["name"] == "ready"
+    sent = json.loads(route.calls.last.request.content)
+    assert sent == {"labels": ["ready", "review"]}
+
+
+@respx.mock
+async def test_write_issue_assign(connector):
+    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/assignees").mock(
+        return_value=httpx.Response(201, json={"number": 42, "assignees": [{"login": "alice"}]})
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_assign",
+            data={"repo": "owner/repo", "issue_number": "42", "assignees": ["alice"]},
+        )
+    )
+    assert result["assignees"][0]["login"] == "alice"
+    sent = json.loads(route.calls.last.request.content)
+    assert sent == {"assignees": ["alice"]}
