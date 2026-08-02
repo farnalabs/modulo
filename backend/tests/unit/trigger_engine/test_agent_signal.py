@@ -48,24 +48,31 @@ def mock_session() -> MagicMock:
     return session
 
 
-def _setup_session(session: MagicMock, triggers: list[Any], count: int = 0) -> None:
-    """Set up session.execute() with trigger query and count query.
+def _setup_session(
+    session: MagicMock,
+    triggers: list[Any],
+    count: int = 0,
+    snapshot_id: uuid.UUID | None = None,
+) -> None:
+    """Set up session.execute() to dispatch trigger/count/snapshot queries.
 
-    The first call returns trigger results; subsequent calls return the count.
-    This matches the pattern used by ``fire_agent_signal`` which queries
-    triggers first, then calls ``_count_active_runs``.
+    Dispatches on the SQL text rather than call order so the mock stays
+    correct when multiple triggers each run the count + snapshot lookups.
     """
     trigger_result = MagicMock()
     trigger_result.scalars.return_value.all.return_value = triggers
     count_result = MagicMock()
     count_result.scalar_one.return_value = count
-    call_num: list[int] = [0]
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one_or_none.return_value = snapshot_id
 
     async def side_effect(*args: Any, **kwargs: Any) -> Any:
-        call_num[0] += 1
-        if call_num[0] == 1:
-            return trigger_result
-        return count_result
+        sql = str(args[0]) if args else ""
+        if "count(" in sql:
+            return count_result
+        if "pipeline_snapshots" in sql:
+            return snapshot_result
+        return trigger_result
 
     session.execute = side_effect
 
@@ -99,7 +106,7 @@ class TestFireAgentSignal:
             source_pipeline_id=source_pipeline_id,
             source_node_id="my-node",
         )
-        _setup_session(mock_session, [trigger])
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
 
         results = await fire_agent_signal(
             mock_session,
@@ -234,7 +241,7 @@ class TestFireAgentSignal:
             source_pipeline_id=source_pipeline_id,
             source_node_id="my-node",
         )
-        _setup_session(mock_session, [trigger])
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
 
         results = await fire_agent_signal(
             mock_session,
@@ -273,7 +280,7 @@ class TestFireAgentSignal:
             source_node_id="shared-node",
             pipeline_id=uuid.uuid4(),
         )
-        _setup_session(mock_session, [trigger_a, trigger_b])
+        _setup_session(mock_session, [trigger_a, trigger_b], snapshot_id=uuid.uuid4())
 
         results = await fire_agent_signal(
             mock_session,
@@ -345,21 +352,22 @@ class TestFireAgentSignal:
         assert mock_create_run.await_count == 1
         assert mock_create_run.call_args[1]["snapshot_id"] == snapshot_id
 
-    async def test_missing_snapshot_id_defaults_to_zero(
+    async def test_missing_snapshot_id_resolves_latest(
         self,
         mock_session: MagicMock,
         mock_create_run: AsyncMock,
     ) -> None:
-        """A trigger with no snapshot_id in config must use uuid.UUID(int=0)."""
+        """A trigger with no snapshot_id must use the pipeline's latest snapshot."""
         org_id = uuid.uuid4()
         source_pipeline_id = uuid.uuid4()
+        snapshot_id = uuid.uuid4()
         trigger = _make_trigger(
             org_id=org_id,
             source_pipeline_id=source_pipeline_id,
             source_node_id="my-node",
             snapshot_id=None,
         )
-        _setup_session(mock_session, [trigger])
+        _setup_session(mock_session, [trigger], snapshot_id=snapshot_id)
 
         await fire_agent_signal(
             mock_session,
@@ -370,7 +378,40 @@ class TestFireAgentSignal:
         )
 
         assert mock_create_run.await_count == 1
-        assert mock_create_run.call_args[1]["snapshot_id"] == uuid.UUID(int=0)
+        assert mock_create_run.call_args[1]["snapshot_id"] == snapshot_id
+
+    async def test_missing_snapshot_no_latest_skips_fire(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A trigger with no pinned snapshot and no pipeline snapshot is skipped."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+            snapshot_id=None,
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=None)
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == "no_snapshot"
+        mock_create_run.assert_not_called()
+        assert any(
+            getattr(c[0][0], "validation_result", None) == "poll_error"
+            for c in mock_session.add.call_args_list
+        )
 
     async def test_create_run_failure_reports_error(
         self,
@@ -380,12 +421,13 @@ class TestFireAgentSignal:
         """A create_run failure should be recorded as an error result, not crash."""
         org_id = uuid.uuid4()
         source_pipeline_id = uuid.uuid4()
+        snapshot_id = uuid.uuid4()
         trigger = _make_trigger(
             org_id=org_id,
             source_pipeline_id=source_pipeline_id,
             source_node_id="my-node",
         )
-        _setup_session(mock_session, [trigger])
+        _setup_session(mock_session, [trigger], snapshot_id=snapshot_id)
         mock_create_run.side_effect = RuntimeError("boom")
 
         results = await fire_agent_signal(
@@ -399,4 +441,7 @@ class TestFireAgentSignal:
         assert len(results) == 1
         assert results[0]["status"] == "error"
         assert results[0]["reason"] == "create_run_failed"
-        assert any(getattr(c[0][0], "validation_result", None) == "error" for c in mock_session.add.call_args_list)
+        assert any(
+            getattr(c[0][0], "validation_result", None) == "validation_failed"
+            for c in mock_session.add.call_args_list
+        )
