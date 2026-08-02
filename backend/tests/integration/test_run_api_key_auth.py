@@ -162,8 +162,8 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
     """Regression: RLS hides org_api_keys rows when no org context is set.
 
     A plain session without ``app.organisation_id`` cannot see the key record —
-    this is exactly why the auth dependency disables RLS for the prefix lookup
-    before re-validating inside the key's org context.
+    this is exactly why the auth dependency resolves the org through a SECURITY
+    DEFINER function before re-validating inside the key's org context.
 
     testcontainers connects as a superuser, which bypasses RLS regardless of
     ``FORCE ROW LEVEL SECURITY`` (FORCE only removes the table-owner exemption,
@@ -202,3 +202,106 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
             await conn.execute(text(f'DROP OWNED BY "{role}"'))
             await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
             await conn.execute(text("COMMIT"))
+
+
+# ---------------------------------------------------------------------------
+# Non-superuser role tests — reproduces the production RLS scenario
+#
+# In production the app connects as ``modulo_app``, a DML-granted non-owner
+# role that is subject to RLS on ``org_api_keys``. The superuser-based tests
+# above cannot catch an RLS regression (superusers bypass RLS even with
+# FORCE ROW LEVEL SECURITY), so these tests run the real auth path as a
+# dedicated non-superuser role to prove the SECURITY DEFINER org lookup
+# actually resolves the key under RLS.
+# ---------------------------------------------------------------------------
+
+
+def _restricted_db_url(db_url: str, role: str, password: str) -> str:
+    from urllib.parse import quote
+
+    scheme, _, rest = db_url.partition("://")
+    hostpart = rest.rsplit("@", 1)[1] if "@" in rest else rest
+    return f"{scheme}://{quote(role)}:{quote(password)}@{hostpart}"
+
+
+@pytest_asyncio.fixture
+async def restricted_role(db_engine: AsyncEngine) -> Generator[tuple[str, str], None, None]:
+    """Create a non-superuser role with DML grants, dropped at teardown."""
+    role = f"api_key_rls_{uuid.uuid4().hex[:8]}"
+    password = "restricted-pw"
+    async with db_engine.connect() as conn:
+        await conn.execute(text(f"CREATE ROLE \"{role}\" LOGIN PASSWORD '{password}' NOSUPERUSER"))
+        await conn.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
+        for table in (
+            "organisations",
+            "accounts",
+            "org_memberships",
+            "teams",
+            "team_memberships",
+            "pipelines",
+            "pipeline_snapshots",
+            "runs",
+            "org_api_keys",
+        ):
+            await conn.execute(text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO "{role}"'))
+        await conn.execute(text("COMMIT"))
+    try:
+        yield role, password
+    finally:
+        async with db_engine.connect() as conn:
+            await conn.execute(text(f'DROP OWNED BY "{role}"'))
+            await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+            await conn.execute(text("COMMIT"))
+
+
+@pytest_asyncio.fixture
+async def restricted_settings(
+    db_url: str,
+    restricted_role: tuple[str, str],
+) -> Settings:
+    """Settings whose database_url connects as the non-superuser role."""
+    role, password = restricted_role
+    return Settings(
+        database_url=_restricted_db_url(db_url, role, password),
+        modulo_db="postgres",
+        secret_key="a" * 32,
+        fernet_key="a" * 32,
+        modulo_auth_rate_limit_enabled=False,
+        redis_url="",
+    )
+
+
+async def test_valid_key_accepted_as_non_superuser_role(
+    org_api_key: dict[str, Any],
+    restricted_settings: Settings,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """A valid key resolves to a principal as an RLS-subject non-superuser role.
+
+    This is the production scenario: the app role cannot see ``org_api_keys``
+    rows without the key's org context, so the SECURITY DEFINER org lookup is
+    what makes validation succeed. Before the fix, ``SET LOCAL row_security TO
+    OFF`` raised ``InsufficientPrivilegeError`` for this role and every valid
+    key got a 503/401.
+    """
+    principal = await get_current_tenant_user_or_api_key(
+        credentials=_credentials(org_api_key["full_key"]),
+        settings=restricted_settings,
+    )
+    assert principal.organisation_id == test_org
+    assert principal.account_id == test_user
+    assert principal.org_role == org_api_key["role"]
+    assert principal.is_system_admin is False
+
+
+async def test_invalid_key_rejected_as_non_superuser_role(
+    restricted_settings: Settings,
+) -> None:
+    """An unknown key returns 401 as the non-superuser role (fail-closed)."""
+    bogus = "mk_00000000_" + "z" * 32
+    with pytest.raises(InvalidToken):
+        await get_current_tenant_user_or_api_key(
+            credentials=_credentials(bogus),
+            settings=restricted_settings,
+        )
