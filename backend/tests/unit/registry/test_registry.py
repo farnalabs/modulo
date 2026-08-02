@@ -60,6 +60,33 @@ class TestCrypto:
         assert len(h) == 64
         assert h == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
 
+    def test_sign_manifest_rejects_non_serializable_payload(self):
+        private, _public = generate_signing_key()
+        with pytest.raises(ValueError, match="non-serializable"):
+            sign_manifest({"payload": object()}, private)
+
+    def test_verify_manifest_non_serializable_payload_returns_false(self):
+        _private, public = generate_signing_key()
+        assert verify_manifest({"payload": object()}, "00" * 64, public) is False
+
+    def test_verify_manifest_bad_signature_hex_returns_false(self):
+        private, public = generate_signing_key()
+        payload = {"hello": "world"}
+        sign_manifest(payload, private)
+        assert verify_manifest(payload, "zz-not-hex", public) is False
+
+    def test_verify_manifest_tampered_signature_returns_false(self):
+        private, public = generate_signing_key()
+        payload = {"hello": "world"}
+        sig = sign_manifest(payload, private)
+        tampered = list(sig)
+        tampered[0] = "f" if tampered[0] != "f" else "0"
+        assert verify_manifest(payload, "".join(tampered), public) is False
+
+    def test_compute_bundle_hash_rejects_non_serializable_bundle(self):
+        with pytest.raises(ValueError, match="non-serializable"):
+            compute_bundle_hash({"payload": object()})
+
 
 class TestBundleIntegrity:
     @pytest.mark.parametrize(
@@ -118,6 +145,21 @@ class TestRegistryCRUD:
         author, name = resolve_namespaced_slug(slug)
         assert author == expected_author
         assert name == expected_name
+
+    def test_resolve_namespaced_slug_empty_defaults_to_modulo(self, caplog):
+        author, name = resolve_namespaced_slug("")
+        assert (author, name) == ("modulo", "")
+        assert "empty slug" in caplog.text
+
+    def test_resolve_namespaced_slug_empty_author_defaults_to_modulo(self, caplog):
+        author, name = resolve_namespaced_slug("/name-only")
+        assert (author, name) == ("modulo", "name-only")
+        assert "empty author" in caplog.text
+
+    def test_resolve_namespaced_slug_empty_name_keeps_author(self, caplog):
+        author, name = resolve_namespaced_slug("author/")
+        assert (author, name) == ("author", "")
+        assert "empty name" in caplog.text
 
     def test_builtin_primitives_have_valid_signatures(self):
         for slug, entry in _BUILTIN_REGISTRY.items():
@@ -209,3 +251,171 @@ class TestPublish(_PreserveRegistry):
         )
 
         assert verify_primitive_signature(entry, public_key=public)
+
+    async def test_publish_rejects_empty_author(self):
+        private, _public = generate_signing_key()
+        key_hex = private.private_bytes_raw().hex()
+        with pytest.raises(ValueError, match="author must be a non-empty string"):
+            publish_primitive(
+                author="",
+                name="x",
+                primitive_type="schema",
+                description="d",
+                tags=[],
+                content_json={},
+                signing_key_hex=key_hex,
+            )
+
+    async def test_publish_rejects_empty_name(self):
+        private, _public = generate_signing_key()
+        key_hex = private.private_bytes_raw().hex()
+        with pytest.raises(ValueError, match="name must be a non-empty string"):
+            publish_primitive(
+                author="a",
+                name="  ",
+                primitive_type="schema",
+                description="d",
+                tags=[],
+                content_json={},
+                signing_key_hex=key_hex,
+            )
+
+    async def test_publish_rejects_empty_primitive_type(self):
+        private, _public = generate_signing_key()
+        key_hex = private.private_bytes_raw().hex()
+        with pytest.raises(ValueError, match="primitive_type must be a non-empty string"):
+            publish_primitive(
+                author="a",
+                name="x",
+                primitive_type="",
+                description="d",
+                tags=[],
+                content_json={},
+                signing_key_hex=key_hex,
+            )
+
+    async def test_publish_rejects_empty_description(self):
+        private, _public = generate_signing_key()
+        key_hex = private.private_bytes_raw().hex()
+        with pytest.raises(ValueError, match="description must be a non-empty string"):
+            publish_primitive(
+                author="a",
+                name="x",
+                primitive_type="schema",
+                description="",
+                tags=[],
+                content_json={},
+                signing_key_hex=key_hex,
+            )
+
+    async def test_publish_rejects_non_list_tags(self):
+        private, _public = generate_signing_key()
+        key_hex = private.private_bytes_raw().hex()
+        with pytest.raises(ValueError, match="tags must be a list of strings"):
+            publish_primitive(
+                author="a",
+                name="x",
+                primitive_type="schema",
+                description="d",
+                tags="t",
+                content_json={},
+                signing_key_hex=key_hex,
+            )
+
+    async def test_publish_rejects_non_string_tag(self):
+        private, _public = generate_signing_key()
+        key_hex = private.private_bytes_raw().hex()
+        with pytest.raises(ValueError, match="tags must be a list of strings"):
+            publish_primitive(
+                author="a",
+                name="x",
+                primitive_type="schema",
+                description="d",
+                tags=[1],
+                content_json={},
+                signing_key_hex=key_hex,
+            )
+
+    async def test_publish_rejects_non_dict_content_json(self):
+        private, _public = generate_signing_key()
+        key_hex = private.private_bytes_raw().hex()
+        with pytest.raises(ValueError, match="content_json must be a dict"):
+            publish_primitive(
+                author="a",
+                name="x",
+                primitive_type="schema",
+                description="d",
+                tags=[],
+                content_json=[],
+                signing_key_hex=key_hex,
+            )
+
+    async def test_publish_rejects_non_serializable_content_json(self):
+        private, _public = generate_signing_key()
+        key_hex = private.private_bytes_raw().hex()
+        with pytest.raises(ValueError, match="not JSON-serializable"):
+            publish_primitive(
+                author="a",
+                name="x",
+                primitive_type="schema",
+                description="d",
+                tags=[],
+                content_json={"x": object()},
+                signing_key_hex=key_hex,
+            )
+
+    async def test_publish_rejects_invalid_signing_key_hex(self):
+        with pytest.raises(ValueError, match="invalid signing key hex"):
+            publish_primitive(
+                author="a",
+                name="x",
+                primitive_type="schema",
+                description="d",
+                tags=[],
+                content_json={},
+                signing_key_hex="not-hex",
+            )
+
+    async def test_publish_overwrites_existing_slug(self):
+        private, _public = generate_signing_key()
+        key_hex = private.private_bytes_raw().hex()
+        original_count = len(_BUILTIN_REGISTRY)
+
+        publish_primitive(
+            author="ow",
+            name="prim",
+            primitive_type="schema",
+            description="v1",
+            tags=[],
+            content_json={"a": 1},
+            signing_key_hex=key_hex,
+        )
+        republished = publish_primitive(
+            author="ow",
+            name="prim",
+            primitive_type="schema",
+            description="v2",
+            tags=[],
+            content_json={"a": 2},
+            signing_key_hex=key_hex,
+        )
+
+        assert len(_BUILTIN_REGISTRY) == original_count + 1
+        assert republished.description == "v2"
+        assert republished.content_json == {"a": 2}
+
+    async def test_publish_unknown_fingerprint_without_key_returns_false(self):
+        private, _public = generate_signing_key()
+        key_hex = private.private_bytes_raw().hex()
+        entry = publish_primitive(
+            author="unknown-fp",
+            name="prim",
+            primitive_type="schema",
+            description="d",
+            tags=[],
+            content_json={},
+            signing_key_hex=key_hex,
+        )
+        entry.signing_key_fingerprint = "0000000000000000"
+
+        assert verify_primitive_signature(entry) is False

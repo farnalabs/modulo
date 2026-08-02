@@ -177,9 +177,7 @@ async def test_query_projects_next_cursor(connector):
 
 @respx.mock
 async def test_query_projects_no_next_page(connector):
-    respx.get(f"{_API}/projects").mock(
-        return_value=httpx.Response(200, json=[{"id": 1}], headers={"X-Next-Page": "0"})
-    )
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}], headers={"X-Next-Page": "0"}))
     result = await connector.query(ConnectorQuery(resource="projects"))
     assert result.next_cursor is None
 

@@ -142,13 +142,12 @@ curl -s https://modulo.example.com/api/v1/health | python3 -m json.tool
 # Full health check (runs DB, Redis, migration checks)
 uv run modulo health --full
 
-# Pod status (K8s)
-kubectl get pods -n modulo-prod
-kubectl describe pod -l app.kubernetes.io/component=backend -n modulo-prod
+# Container status
+# (Docker Compose)
+docker compose -f docker-compose.prod.yml ps
 
 # Resource usage
-kubectl top pods -n modulo-prod
-kubectl top nodes
+docker stats
 ```
 
 ### 3.3 Graceful Degradation Strategy
@@ -157,23 +156,23 @@ kubectl top nodes
 |-------------------|-----------|-------------|
 | **Database read-only** | API returns 503 for writes, read-only endpoints still work | Cannot create/edit pipelines, runs, or settings |
 | **Redis unavailable** | Falls back to in-process scheduling and rate limiting | Single replica only — no horizontal scaling, no task durability |
-| **Backend replica loss** (some pods down) | Remaining replicas serve traffic | Possible latency increase, no data loss |
+| **Backend replica loss** (some containers down) | Remaining replicas serve traffic | Possible latency increase, no data loss |
 | **LLM provider rate-limited** | Run enters retry loop with exponential backoff | Delayed pipeline completion |
-| **Can't scale** (cluster full) | Pods remain Pending | Degraded throughput |
+| **Can't scale** (host resources exhausted) | Container start fails | Degraded throughput |
 
 ### 3.4 Recovery Procedures
 
 **Backend crash-loop:**
-1. Check logs: `kubectl logs -l app.kubernetes.io/component=backend -n modulo-prod --tail=100`
+1. Check logs: `docker compose -f docker-compose.prod.yml logs modulo --tail=100`
 2. Check recent deployments: `git log --oneline -5`
 3. If migration failure: check Alembic status and resolve per `docs/upgrade-process.md`
-4. If missing secrets: verify `kubectl get secret modulo-secrets -n modulo-prod`
+4. If missing secrets: verify the container environment — `docker compose -f docker-compose.prod.yml config | grep -i secret`
 5. If resource exhaustion: increase memory limits or add replicas
-6. Rollback if needed: `kubectl rollout undo deployment/modulo-backend -n modulo-prod`
+6. Rollback if needed: restart with the previous image tag (see `docs/upgrade-process.md`)
 
-**Complete outage (all replicas down):**
-1. Identify cause from pod logs and events
-2. If infrastructure failure (node down, PVC lost), restore from backup per
+**Complete outage (all instances down):**
+1. Identify cause from container logs and events
+2. If infrastructure failure (host down, volume lost), restore from backup per
    `docs/operations/backup.md` §Disaster Recovery Guide
 3. If deployment defect, roll back per `docs/upgrade-process.md`
 4. Restore database from backup if data corruption detected
@@ -190,26 +189,26 @@ kubectl top nodes
 | `pq: could not connect to server` | Backend logs | Postgres down, network issue, credentials rotated |
 | `pq: remaining connection slots are reserved` | Backend logs | Connection pool exhausted |
 | Slow queries > 500ms p95 | pg_stat_statements, OTel traces | Missing index, bad query plan, lock contention |
-| Disk full | `df -h` on Postgres node / PVC | WAL accumulation, no retention policy |
+| Disk full | `df -h` on the Postgres host / volume | WAL accumulation, no retention policy |
 | Replication lag > 30s | `pg_stat_replication` | Network latency, WAL shipping backlog |
 
 ### 4.2 Connection Pool Exhaustion
 
 ```bash
 # Check active connections
-kubectl exec deploy/modulo-postgres -n modulo-prod -- psql -U modulo -c "
+docker compose -f docker-compose.prod.yml exec postgres psql -U modulo -c "
 SELECT count(*) AS active_connections
 FROM pg_stat_activity
 WHERE state = 'active';
 "
 
 # Check max_connections
-kubectl exec deploy/modulo-postgres -n modulo-prod -- psql -U modulo -c "
+docker compose -f docker-compose.prod.yml exec postgres psql -U modulo -c "
 SHOW max_connections;
 "
 
 # Kill idle connections (emergency)
-kubectl exec deploy/modulo-postgres -n modulo-prod -- psql -U modulo -c "
+docker compose -f docker-compose.prod.yml exec postgres psql -U modulo -c "
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
 WHERE state = 'idle'
@@ -229,11 +228,11 @@ WHERE state = 'idle'
 ### 4.3 Disk Full
 
 ```bash
-# Check disk usage (K8s PVC)
-kubectl exec deploy/modulo-postgres -n modulo-prod -- df -h /var/lib/postgresql/data
+# Check disk usage (Postgres container)
+docker compose -f docker-compose.prod.yml exec postgres df -h /var/lib/postgresql/data
 
 # Find largest tables
-kubectl exec deploy/modulo-postgres -n modulo-prod -- psql -U modulo -c "
+docker compose -f docker-compose.prod.yml exec postgres psql -U modulo -c "
 SELECT relname AS table,
        pg_size_pretty(pg_total_relation_size(relid)) AS total_size
 FROM pg_catalog.pg_statio_user_tables
@@ -242,14 +241,14 @@ LIMIT 10;
 "
 
 # Check WAL retention
-kubectl exec deploy/modulo-postgres -n modulo-prod -- psql -U modulo -c "
+docker compose -f docker-compose.prod.yml exec postgres psql -U modulo -c "
 SELECT COUNT(*) AS wal_files
 FROM pg_ls_waldir();
 "
 ```
 
 **Resolution:**
-1. **Immediate:** Extend the PVC (`kubectl edit pvc data-modulo-postgres-0 -n modulo-prod`)
+1. **Immediate:** Extend the Postgres disk/volume (cloud volume resize or data migration per `docs/operations/backup.md`)
 2. Clean up orphaned checkpoint data per `docs/operations/admin-bypass.md` §4.3
 3. Archive old WAL files if WAL archiving is configured
 4. Run `VACUUM ANALYZE` to reclaim dead tuples
@@ -260,7 +259,7 @@ FROM pg_ls_waldir();
 
 ```bash
 # Check replication status
-kubectl exec deploy/modulo-postgres -n modulo-prod -- psql -U modulo -c "
+docker compose -f docker-compose.prod.yml exec postgres psql -U modulo -c "
 SELECT application_name,
        state,
        sync_state,
@@ -287,7 +286,7 @@ Guide. Quick reference:
 uv run scripts/restore.py --input /backups/daily/backup-YYYYMMDD.tar.gz.enc --dry-run
 
 # 2. Stop the application
-systemctl stop modulo   # or scale backend to 0: kubectl scale deploy/modulo-backend --replicas=0
+systemctl stop modulo   # or scale the service down via the orchestrator
 
 # 3. Restore
 uv run scripts/restore.py --input /backups/daily/backup-YYYYMMDD.tar.gz.enc --full
@@ -336,19 +335,19 @@ tasks may not execute.
 
 ```bash
 # 1. Check Redis status
-kubectl exec deploy/modulo-redis -n modulo-prod -- redis-cli PING
-kubectl exec deploy/modulo-redis -n modulo-prod -- redis-cli INFO stats | grep -E "(evicted_keys|keyspace_hits|keyspace_misses)"
+docker compose -f docker-compose.prod.yml exec redis redis-cli PING
+docker compose -f docker-compose.prod.yml exec redis redis-cli INFO stats | grep -E "(evicted_keys|keyspace_hits|keyspace_misses)"
 
 # 2. If Redis is OOM:
-kubectl exec deploy/modulo-redis -n modulo-prod -- redis-cli CONFIG SET maxmemory 512mb
-kubectl exec deploy/modulo-redis -n modulo-prod -- redis-cli CONFIG SET maxmemory-policy allkeys-lru
+docker compose -f docker-compose.prod.yml exec redis redis-cli CONFIG SET maxmemory 512mb
+docker compose -f docker-compose.prod.yml exec redis redis-cli CONFIG SET maxmemory-policy allkeys-lru
 
 # 3. If Redis needs restart:
-kubectl rollout restart deployment/modulo-redis -n modulo-prod
+docker compose -f docker-compose.prod.yml restart redis
 
 # 4. Verify Redis health
-kubectl wait --for=condition=available deployment/modulo-redis -n modulo-prod --timeout=60s
-kubectl exec deploy/modulo-redis -n modulo-prod -- redis-cli PING
+docker compose -f docker-compose.prod.yml ps redis
+docker compose -f docker-compose.prod.yml exec redis redis-cli PING
 ```
 
 ### 5.4 Post-Recovery Steps
@@ -385,13 +384,13 @@ tasks run inline.
 
 ```bash
 # Check Celery queue lengths
-kubectl exec deploy/modulo-backend -n modulo-prod -- uv run celery -A modulo.celery_app inspect active
-kubectl exec deploy/modulo-backend -n modulo-prod -- uv run celery -A modulo.celery_app inspect reserved
-kubectl exec deploy/modulo-backend -n modulo-prod -- uv run celery -A modulo.celery_app inspect scheduled
+docker compose -f docker-compose.prod.yml exec modulo uv run celery -A modulo.celery_app inspect active
+docker compose -f docker-compose.prod.yml exec modulo uv run celery -A modulo.celery_app inspect reserved
+docker compose -f docker-compose.prod.yml exec modulo uv run celery -A modulo.celery_app inspect scheduled
 
 # Check Redis queue keys directly
-kubectl exec deploy/modulo-redis -n modulo-prod -- redis-cli LLEN celery
-kubectl exec deploy/modulo-redis -n modulo-prod -- redis-cli LLEN modulo.pipeline.runs
+docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN celery
+docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN modulo.pipeline.runs
 ```
 
 ### 6.4 Backpressure Response
@@ -399,18 +398,18 @@ kubectl exec deploy/modulo-redis -n modulo-prod -- redis-cli LLEN modulo.pipelin
 **Step 1 — Identify bottleneck:**
 ```bash
 # Are workers saturated?
-kubectl exec deploy/modulo-backend -n modulo-prod -- uv run celery -A modulo.celery_app inspect stats | grep -E "(total_prefetch_count|concurrency)"
+docker compose -f docker-compose.prod.yml exec modulo uv run celery -A modulo.celery_app inspect stats | grep -E "(total_prefetch_count|concurrency)"
 
 # Are there failed/unacknowledged messages?
-kubectl exec deploy/modulo-redis -n modulo-prod -- redis-cli LLEN celery  # main queue
-kubectl exec deploy/modulo-redis -n modulo-prod -- redis-cli ZCOUNT celery.reserved -inf +inf  # reserved/in-flight
+docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN celery  # main queue
+docker compose -f docker-compose.prod.yml exec redis redis-cli ZCOUNT celery.reserved -inf +inf  # reserved/in-flight
 ```
 
 **Step 2 — Immediate mitigation:**
 1. **Scale workers horizontally:**
    ```bash
-   kubectl scale deployment/modulo-celery-worker --replicas=5 -n modulo-prod
-   # Or create additional worker pools for different queue priorities
+   docker compose -f docker-compose.prod.yml up -d --scale modulo=5
+   # Or run additional worker processes via worker/gunicorn env config
    ```
 2. **Prioritise critical queues** — configure Celery queue routing so
    that high-priority pipeline runs bypass the general queue:
@@ -447,7 +446,7 @@ celery -A modulo.celery_app control revoke <task-id>
 celery -A modulo.celery_app purge
 
 # 4. Restart workers
-kubectl rollout restart deployment/modulo-celery-worker -n modulo-prod
+docker compose -f docker-compose.prod.yml restart modulo
 ```
 
 ---
@@ -523,14 +522,14 @@ uv run modulo runs reset <run-id>
 | Pipeline performance | Grafana: `pipeline-performance.json` | Run durations, volumes, error rates |
 | HITL review activity | Grafana: `hitl-review.json` | Gate activity, review speed, approval rates |
 | Cost tracking | Grafana: `cost-tracking.json` | LLM spend by org/model/pipeline |
-| Kubernetes cluster | Prometheus + Grafana (kube-prometheus-stack) | Node health, pod resource usage, HPA status |
+| Host & containers | Prometheus + Grafana (node_exporter + cAdvisor) | Node health, container resource usage |
 | PostgreSQL | Grafana via postgres_exporter or pg_stat_statements | Active connections, query latency, replication lag |
 
 ### 8.2 Alert Rules
 
 | Alert Name | Condition | Severity | Channel | Action |
 |------------|-----------|----------|---------|--------|
-| `BackendDown` | Probe failure > 3/3 on any backend pod | Critical | PagerDuty + #ops-alert | Follow §3 |
+| `BackendDown` | Probe failure > 3/3 on any backend instance | Critical | PagerDuty + #ops-alert | Follow §3 |
 | `HighErrorRate` | HTTP 5xx > 5% of requests over 5 min | Critical | PagerDuty + #ops-alert | Follow §3 |
 | `HighLatency` | p95 latency > 3s over 5 min | High | #ops-alert | Investigate slow endpoints |
 | `QueueBacklog` | Celery queue depth > 100 | High | #ops-alert | Follow §6 |
@@ -538,42 +537,36 @@ uv run modulo runs reset <run-id>
 | `DiskUsageWarning` | Postgres disk > 80% | Medium | #ops-alert | Follow §4.3 |
 | `RedisMemoryPressure` | Redis memory > 80% of maxmemory | Medium | #ops-alert | Follow §5 |
 | `RunFailureSpike` | Run error rate > 10% over 5 min | Medium | #ops-alert | Follow §7 |
-| `HpaMaxReplicas` | Any HPA at max replicas for > 10 min | Medium | #ops-alert | Review capacity plan |
+| `ContainerRestarts` | Backend container restarting repeatedly | Medium | #ops-alert | Follow §3.4 |
 | `MigrationFailure` | Alembic upgrade failure on startup | Critical | PagerDuty + #ops-alert | Follow §3.4 |
 | `CertificateExpiring` | TLS cert expires in < 14 days | Low | #ops-alert | Renew cert |
 
 ### 8.3 Creating Alert Rules
 
-**Prometheus / Alertmanager (K8s):**
+**Prometheus / Alertmanager:**
 
 ```yaml
-# Example alert rule — add to your PrometheusRule CR
-apiVersion: monitoring.coreos.com/v1
-kind: PrometheusRule
-metadata:
-  name: modulo-operational-alerts
-  namespace: modulo-prod
-spec:
-  groups:
-    - name: modulo-operational
-      rules:
-        - alert: BackendDown
-          expr: up{job="modulo-backend"} == 0
-          for: 1m
-          labels:
-            severity: critical
-          annotations:
-            summary: "Backend pod {{ $labels.instance }} is down"
-            runbook: "docs/operations/operational-incident-response.md#3"
+# Example alert rule — add to your prometheus.yml rules file
+groups:
+  - name: modulo-operational
+    rules:
+      - alert: BackendDown
+        expr: up{job="modulo-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend instance {{ $labels.instance }} is down"
+          runbook: "docs/operations/operational-incident-response.md#3"
 
-        - alert: QueueBacklog
-          expr: celery_queue_depth > 100
-          for: 2m
-          labels:
-            severity: high
-          annotations:
-            summary: "Celery queue depth is {{ $value }}"
-            runbook: "docs/operations/operational-incident-response.md#6"
+      - alert: QueueBacklog
+        expr: celery_queue_depth > 100
+        for: 2m
+        labels:
+          severity: high
+        annotations:
+          summary: "Celery queue depth is {{ $value }}"
+          runbook: "docs/operations/operational-incident-response.md#6"
 ```
 
 ### 8.4 Health Endpoint Contract
