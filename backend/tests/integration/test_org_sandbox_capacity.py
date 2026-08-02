@@ -8,6 +8,7 @@ SQL — no GraphValidator, hubs, or checkpointer involved.
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import text
@@ -141,41 +142,37 @@ async def _seed_run(
     status: str = "pending",
     error_code: str | None = None,
     created_at: datetime | None = None,
+    heartbeat_at: datetime | None = None,
+    dispatched_at: datetime | None = None,
 ) -> uuid.UUID:
+    from sqlalchemy import insert
+
+    from modulo.db.models.run import Run
+
     run_id = uuid.uuid4()
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    params: dict = {
-        "rid": str(run_id),
-        "oid": str(org_id),
-        "pid": str(pipeline_id),
-        "sid": str(snapshot_id),
-        "hash": _hash(_next_run_number()),
-        "tid": _thread_id(org_id, run_id),
-        "code": error_code,
+    values: dict = {
+        "id": run_id,
+        "organisation_id": org_id,
+        "pipeline_id": pipeline_id,
+        "snapshot_id": snapshot_id,
+        "trigger_type": "manual",
         "status": status,
+        "input_hash": _hash(_next_run_number()),
+        "langgraph_thread_id": _thread_id(org_id, run_id),
+        "error_code": error_code,
         "run_number": _next_run_number(),
     }
+    for col, value in (
+        ("created_at", created_at),
+        ("heartbeat_at", heartbeat_at),
+        ("dispatched_at", dispatched_at),
+    ):
+        if value is not None:
+            values[col] = value
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        if created_at is not None:
-            params["created_at"] = created_at
-            await session.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                    "trigger_type, status, input_hash, langgraph_thread_id, error_code, run_number, created_at) "
-                    "VALUES (:rid, :oid, :pid, :sid, 'manual', :status, :hash, :tid, :code, :run_number, :created_at)"
-                ),
-                params,
-            )
-        else:
-            await session.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                    "trigger_type, status, input_hash, langgraph_thread_id, error_code, run_number) "
-                    "VALUES (:rid, :oid, :pid, :sid, 'manual', :status, :hash, :tid, :code, :run_number)"
-                ),
-                params,
-            )
+        await session.execute(insert(Run).values(**values))
     return run_id
 
 
@@ -193,6 +190,38 @@ async def _run_state(
         )
         row = result.first()
         return (row.status, row.error_code) if row else ("missing", None)
+
+
+async def _run_heartbeat(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> datetime | None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        result = await session.execute(
+            text("SELECT heartbeat_at FROM runs WHERE id = :rid"),
+            {"rid": str(run_id)},
+        )
+        row = result.first()
+        return row[0] if row else None
+
+
+@pytest.fixture(autouse=True)
+def patched_redispatch(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Fence the real SAQ/Celery dispatch out of sweep tests.
+
+    The stranded re-dispatch branch calls ``_re_dispatch_capacity_blocked``
+    which routes through ``dispatch_run`` (SAQ/Celery) — neither exists in the
+    integration container. Every sweep test gets a deterministic AsyncMock so
+    the branch's firing (or not) is observable without a broker.
+    """
+    from modulo.core import pipeline_execution as pe
+
+    mock = AsyncMock(return_value="enqueued")
+    monkeypatch.setattr(pe, "_re_dispatch_capacity_blocked", mock)
+    return mock
 
 
 def _make_executor(db_engine: AsyncEngine) -> PipelineExecutor:
@@ -563,3 +592,134 @@ async def test_sweep_never_dispatched_skips_reason_marked_runs(
     status, code = await _run_state(db_engine, org_id, plain)
     assert status == "failed"
     assert code == "never_dispatched"
+
+
+# ---------------------------------------------------------------------------
+# Stranded capacity-blocked re-dispatch (worker-restart durability)
+# ---------------------------------------------------------------------------
+
+
+async def test_sweep_redispatches_stranded_capacity_blocked_run(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    patched_redispatch: AsyncMock,
+):
+    """A capacity-marked run whose in-process retry loop died (stale heartbeat)
+    is RE-DISPATCHED, not failed — the durable restart-durability guarantee."""
+    from modulo.core.pipeline_executor_task import reset_engines
+
+    reset_engines()
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+
+    org_id, user_id = await _seed_org_account(db_engine, "RedispatchOrg", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeRedispatch", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+
+    now = datetime.now(UTC)
+    stranded = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="pending",
+        error_code="org_capacity_limited",
+        created_at=now - timedelta(minutes=30),
+        heartbeat_at=now - timedelta(minutes=30),
+        dispatched_at=now - timedelta(minutes=30),
+    )
+
+    result = await stale_run_recovery_sweep(db_engine)
+    assert result.get("error") is None, f"sweep failed: {result}"
+    assert result["stranded_capacity_redispatched"] == 1, result
+    patched_redispatch.assert_awaited_once_with(str(stranded), str(org_id))
+
+    status, code = await _run_state(db_engine, org_id, stranded)
+    assert status == "pending", "re-dispatched run must not be terminal-failed"
+    assert code == "org_capacity_limited"
+
+    heartbeat = await _run_heartbeat(db_engine, org_id, stranded)
+    assert heartbeat is not None and heartbeat > now - timedelta(seconds=30), (
+        "the sweep must stamp a fresh heartbeat so it does not hot-loop"
+    )
+
+
+async def test_sweep_skips_fresh_heartbeat_capacity_blocked_run(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    patched_redispatch: AsyncMock,
+):
+    """A live in-process retry loop refreshes heartbeat_at — the sweep's fence
+    must skip it (no re-dispatch, no double-execution)."""
+    from modulo.core.pipeline_executor_task import reset_engines
+
+    reset_engines()
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+
+    org_id, user_id = await _seed_org_account(db_engine, "LiveLoopOrg", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeLiveLoop", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+
+    now = datetime.now(UTC)
+    live = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="pending",
+        error_code="pipeline_capacity",
+        created_at=now - timedelta(minutes=30),
+        heartbeat_at=now - timedelta(seconds=5),
+        dispatched_at=now - timedelta(minutes=30),
+    )
+
+    result = await stale_run_recovery_sweep(db_engine)
+    assert result.get("error") is None, f"sweep failed: {result}"
+    assert result["stranded_capacity_redispatched"] == 0, result
+    patched_redispatch.assert_not_awaited()
+
+    status, code = await _run_state(db_engine, org_id, live)
+    assert status == "pending"
+    assert code == "pipeline_capacity"
+
+
+async def test_sweep_still_fails_capacity_timeout_eligible_run(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    patched_redispatch: AsyncMock,
+):
+    """A run past the 120-min capacity_timeout TTL must FAIL, never be
+    resurrected by the re-dispatch branch (existing behaviour preserved)."""
+    from modulo.core.pipeline_executor_task import reset_engines
+
+    reset_engines()
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+
+    org_id, user_id = await _seed_org_account(db_engine, "TimeoutOrg", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeTimeout", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+
+    now = datetime.now(UTC)
+    old = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="pending",
+        error_code="org_capacity_limited",
+        created_at=now - timedelta(minutes=CAPACITY_TIMEOUT_TTL_MINUTES + 30),
+        heartbeat_at=now - timedelta(minutes=CAPACITY_TIMEOUT_TTL_MINUTES + 30),
+        dispatched_at=now - timedelta(minutes=CAPACITY_TIMEOUT_TTL_MINUTES + 30),
+    )
+
+    result = await stale_run_recovery_sweep(db_engine)
+    assert result.get("error") is None, f"sweep failed: {result}"
+    assert result["stranded_capacity_redispatched"] == 0, result
+    assert result["capacity_timeout_swept"] == 1, result
+    patched_redispatch.assert_not_awaited()
+
+    status, code = await _run_state(db_engine, org_id, old)
+    assert status == "failed"
+    assert code == "capacity_timeout"
