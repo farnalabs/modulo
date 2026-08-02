@@ -135,11 +135,7 @@ async def fire_agent_signal(
             # latest snapshot (same resolution cron triggers use). A zero-UUID
             # here would fail the cross-org FK trigger on runs.snapshot_id.
             snap_result = await session.execute(
-                text(
-                    "SELECT id FROM pipeline_snapshots "
-                    "WHERE pipeline_id = :pid "
-                    "ORDER BY created_at DESC LIMIT 1"
-                ),
+                text("SELECT id FROM pipeline_snapshots WHERE pipeline_id = :pid ORDER BY created_at DESC LIMIT 1"),
                 {"pid": str(trigger.pipeline_id)},
             )
             latest_snapshot_id = snap_result.scalar_one_or_none()

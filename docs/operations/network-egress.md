@@ -140,10 +140,10 @@ never initiates external connections without configuration.
 
 ```bash
 # Check if telemetry is enabled
-kubectl exec deploy/modulo-backend -n modulo-prod -- env | grep MODULO_TELEMETRY
+docker compose -f docker-compose.prod.yml exec modulo env | grep MODULO_TELEMETRY
 
 # Check if OTLP endpoint is configured
-kubectl exec deploy/modulo-backend -n modulo-prod -- env | grep OTEL_EXPORTER_OTLP
+docker compose -f docker-compose.prod.yml exec modulo env | grep OTEL_EXPORTER_OTLP
 
 # List all active connector instances (API)
 curl -H "Authorization: Bearer $TOKEN" "$MODULO_URL/api/v1/connectors"
@@ -151,6 +151,6 @@ curl -H "Authorization: Bearer $TOKEN" "$MODULO_URL/api/v1/connectors"
 # List all configured webhook endpoints
 curl -H "Authorization: Bearer $TOKEN" "$MODULO_URL/api/v1/admin/notifications"
 
-# Verify no unexpected egress (requires cluster network policy monitoring)
-kubectl exec deploy/modulo-backend -n modulo-prod -- netstat -tlnp  # listening only
+# Verify no unexpected egress (requires host firewall / network policy monitoring)
+docker compose -f docker-compose.prod.yml exec modulo netstat -tlnp  # listening only
 ```

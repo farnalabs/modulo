@@ -3,12 +3,12 @@ Feature: Priya — Platform Engineer at a Scaling Org
   I want to roll out agentic SDLC team-by-team with central policy
   So that we capture AI's speed without expanding risk
 
-  @goal-priya-self-hosted-k8s @awaiting-implementation
-  Scenario: Priya deploys Modulo on existing Kubernetes infrastructure
-    Given I have a Kubernetes cluster with Postgres and Redis
-    When I deploy the Modulo Helm chart
+  @goal-priya-self-hosted @awaiting-implementation
+  Scenario: Priya self-hosts Modulo on existing infrastructure
+    Given I have existing servers with Postgres and Redis
+    When I deploy Modulo via Docker Compose
     Then the application starts and runs health checks
-    And all data stays within the cluster's VPC
+    And all data stays within the org's VPC
 
   @goal-priya-sso-okta @awaiting-implementation
   Scenario: Priya integrates Okta SSO with JIT provisioning

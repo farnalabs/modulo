@@ -75,11 +75,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
-        name="helm_deployment",
-        description="Helm chart for production Kubernetes deployment",
-        tier="community",
-    ),
-    FeatureFlag(
         name="web_vitals_analytics",
         description="Web Vitals analytics dashboard for monitoring frontend performance",
         tier="community",
