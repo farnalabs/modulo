@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/api-keys", tags=["api-keys"])
 
+
 def _require_runner(principal: TenantPrincipal, permission: str) -> None:
     """Thin compatibility wrapper: require the org role for a runner-level permission.
 
@@ -42,7 +43,6 @@ def _require_runner(principal: TenantPrincipal, permission: str) -> None:
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
-
 
 
 class ApiKeyCreate(BaseModel):
