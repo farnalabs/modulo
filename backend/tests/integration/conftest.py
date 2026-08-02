@@ -186,6 +186,8 @@ def migrated_db_url(db_url: str) -> str:
                 "notification_delivery_log",
                 "trigger_events",
                 "webhook_payloads",
+                "environment_profiles",
+                "workspace_leases",
             ):
                 await conn.execute(text(f"ALTER TABLE {_tbl} FORCE ROW LEVEL SECURITY"))
 
@@ -204,6 +206,62 @@ async def db_engine(migrated_db_url: str) -> AsyncEngine:
     # different event loop, raising "attached to a different loop" asyncpg
     # errors. NullPool opens a fresh connection per checkout.
     engine = create_async_engine(migrated_db_url, echo=False, poolclass=NullPool)
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def non_superuser_role(db_engine: AsyncEngine) -> str:
+    """Provision a non-superuser role with full DML privileges.
+
+    Postgres RLS never applies to superusers/BYPASSRLS roles — even under
+    ``FORCE ROW LEVEL SECURITY`` (verified empirically against the
+    testcontainers ``test`` user). Tests that assert cross-org isolation must
+    run their DB sessions as a non-superuser role so the RLS policies actually
+    filter rows. This mirrors production, where the ``modulo_app`` runtime role
+    is a non-owner. Returns the role name; ``app_engine`` SET ROLEs to it on
+    every connection checkout.
+    """
+    role = "modulo_integration_app"
+    async with db_engine.connect() as conn:
+        await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+        await conn.execute(text(f'CREATE ROLE "{role}" NOSUPERUSER NOBYPASSRLS NOLOGIN'))
+        await conn.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
+        await conn.execute(text(f'GRANT ALL ON ALL TABLES IN SCHEMA public TO "{role}"'))
+        await conn.execute(text(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{role}"'))
+        await conn.execute(text(f'GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO "{role}"'))
+        await conn.execute(text("COMMIT"))
+    yield role
+    async with db_engine.connect() as conn:
+        await conn.execute(text(f'DROP OWNED BY "{role}"'))
+        await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+        await conn.execute(text("COMMIT"))
+
+
+@pytest_asyncio.fixture(scope="session")
+async def app_engine(migrated_db_url: str, non_superuser_role: str) -> AsyncEngine:
+    """Engine whose connections run as a non-superuser role (RLS applies).
+
+    ``SET ROLE`` is applied on every connection checkout via a sync-cursor
+    event, mirroring ``db.rls.register_rls_reset_hook``. Used by tests that
+    assert RLS isolation (cross-tenant HTTP clients, environment-profile RLS).
+    """
+    from sqlalchemy import event
+
+    engine = create_async_engine(migrated_db_url, echo=False, poolclass=NullPool)
+
+    @event.listens_for(engine.sync_engine, "checkout")
+    def _set_role_on_checkout(
+        dbapi_connection: object,
+        _connection_record: object,
+        _connection_proxy: object,
+    ) -> None:
+        cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+        try:
+            cursor.execute(f'SET ROLE "{non_superuser_role}"')
+        finally:
+            cursor.close()
+
     yield engine
     await engine.dispose()
 

@@ -324,7 +324,7 @@ class TriggerEngine:
                     trigger=trigger,
                     org_id=org_id,
                     payload_hash=payload_hash,
-                    result="concurrency_limit_reached_queued",
+                    result="concurrency_limit_reached",
                 )
 
             # Payload mapping
