@@ -3209,6 +3209,16 @@ async def admin_update_sandbox_concurrency(
                 "sandbox_concurrency_limit": req.sandbox_concurrency_limit,
             },
         )
+    except Exception:
+        # Best-effort audit: the limit update already committed. A generic
+        # failure from append_audit_event must NOT 500 the response.
+        logger.warning(
+            "sandbox_concurrency audit event failed — limit was updated",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "sandbox_concurrency_limit": req.sandbox_concurrency_limit,
+            },
+        )
 
     logger.info(
         "sandbox_concurrency.updated",

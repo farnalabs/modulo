@@ -33,6 +33,7 @@ async def _seed_saq_run(
     heartbeat_stale: bool = True,
     dispatched: bool = True,
     dispatcher: str | None = "saq",
+    error_code: str | None = None,
 ) -> tuple[uuid.UUID, uuid.UUID]:
     pipeline_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
@@ -66,11 +67,11 @@ async def _seed_saq_run(
                 text(
                     "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, account_id, trigger_type, "
                     "status, input_hash, langgraph_thread_id, run_number, dispatcher, claim_count, "
-                    "heartbeat_at, dispatched_at, saq_job_id, claim_token) "
+                    "heartbeat_at, dispatched_at, saq_job_id, claim_token, error_code) "
                     "VALUES (:id, :oid, :pid, :sid, :uid, 'manual', :status, 'hash', :thread, :rn, :disp, 1, "
                     "CASE WHEN :stale THEN now() - interval '30 minutes' ELSE now() END, "
                     "CASE WHEN :dispatched THEN now() - interval '30 minutes' ELSE NULL END, "
-                    ":job_id, 'token-a')"
+                    ":job_id, 'token-a', :code)"
                 ),
                 {
                     "id": str(run_id),
@@ -85,6 +86,7 @@ async def _seed_saq_run(
                     "dispatched": dispatched,
                     "disp": dispatcher,
                     "job_id": f"saq:job:runs:run:{run_id}",
+                    "code": error_code,
                 },
             )
         return run_id, pipeline_id
@@ -220,6 +222,48 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
         await eng.dispose()
     assert row[0] == "saq"
     assert row[1] != "token-a"
+
+
+@pytest.mark.asyncio
+async def test_capacity_marked_pending_run_not_redispatched(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review fix: a capacity-marked pending run (error_code in
+    ``org_capacity_limited``/``pipeline_capacity``) is NEVER re-dispatched by
+    reconcile — it has a live in-process ``_retry_pending`` accelerator, and
+    re-enqueuing it spawns a second retry loop that could double-execute the
+    run when a slot frees. The 120-min capacity_timeout sweep is the backstop.
+    """
+    monkeypatch.setenv("SAQ_ENABLED", "true")
+    run_id, _ = await _seed_saq_run(
+        db_engine,
+        test_org,
+        test_user,
+        status="pending",
+        dispatched=False,
+        dispatcher=None,
+        error_code="org_capacity_limited",
+    )
+
+    summary = await ch.dispatcher_reconcile()
+    assert summary["repaired"] == 0
+
+    # No job may appear and the claim token stays untouched.
+    assert not await _job_exists(saq_settings_env, f"run:{run_id}")
+
+    from sqlalchemy import NullPool
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
+    try:
+        async with eng.connect() as conn:
+            row = (
+                await conn.execute(text("SELECT claim_token, status FROM runs WHERE id=:rid"), {"rid": str(run_id)})
+            ).first()
+    finally:
+        await eng.dispose()
+    assert row[0] == "token-a"  # claim token not rotated
+    assert row[1] == "pending"  # still pending on the capacity retry loop
 
 
 @pytest.mark.asyncio

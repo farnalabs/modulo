@@ -21,6 +21,7 @@ from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 
 _log = logging.getLogger(__name__)
@@ -38,6 +39,22 @@ CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELI
 _SANDBOX_CONCURRENCY_KEY = "sandbox_concurrency_limit"
 _SANDBOX_CONCURRENCY_MIN = 1
 _SANDBOX_CONCURRENCY_MAX = 100
+
+
+def graph_contains_sandbox_agent(graph_json: dict[str, Any] | None) -> bool:
+    """Top-level scan for any ``sandbox_agent`` node in a snapshot graph.
+
+    Fail-open: ``None``, non-dicts, and missing ``nodes`` return ``False``
+    (treat as non-sandbox, never block). Only the top-level ``nodes`` list is
+    scanned — composite ``composite_ref`` → ``sub_pipeline_graph_json`` is
+    deliberately not recursed (composite pipelines are not compilable today).
+    """
+    if not isinstance(graph_json, dict):
+        return False
+    nodes = graph_json.get("nodes")
+    if not isinstance(nodes, list):
+        return False
+    return any(isinstance(n, dict) and n.get("node_type") == "sandbox_agent" for n in nodes)
 
 
 def _input_hash(payload: dict[str, Any]) -> str:
@@ -292,14 +309,21 @@ async def count_active_sandbox_runs_for_org(
     org_id: uuid.UUID,
     exclude_run_id: uuid.UUID | None = None,
 ) -> int:
-    """Count ``running`` runs for an organisation (the sandbox capacity pool).
+    """Count ``running`` sandbox-bearing runs for an organisation.
 
     Only ``running`` counts — it is the sole executing state; pending,
-    awaiting_human, and claimed runs hold no live sandbox. The explicit
-    ``organisation_id`` filter makes the query cross-tenant safe on top of RLS.
+    awaiting_human, and claimed runs hold no live sandbox. Only runs whose
+    snapshot graph contains a ``sandbox_agent`` node count toward the org
+    sandbox cap — a NON-sandbox pipeline running in the org consumes no
+    sandbox slot. The explicit ``organisation_id`` filter makes the query
+    cross-tenant safe on top of RLS.
+
+    Two ORM queries (no raw text, no JSONB SQL predicate): the candidate
+    running runs, then a single batched ``IN`` read of their snapshots'
+    ``graph_json`` to decide sandbox-bearing membership. Cross-backend safe.
     """
     stmt = (
-        select(func.count())
+        select(Run.id, Run.snapshot_id)
         .select_from(Run)
         .where(
             Run.organisation_id == org_id,
@@ -309,8 +333,17 @@ async def count_active_sandbox_runs_for_org(
     )
     if exclude_run_id is not None:
         stmt = stmt.where(Run.id != exclude_run_id)
-    result = await session.execute(stmt)
-    return int(result.scalar_one_or_none() or 0)
+    rows = (await session.execute(stmt)).all()
+    if not rows:
+        return 0
+    snapshot_ids = {row.snapshot_id for row in rows}
+    snap_rows = (
+        await session.execute(
+            select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(PipelineSnapshot.id.in_(snapshot_ids))
+        )
+    ).all()
+    sandbox_snapshot_ids = {snap_id for snap_id, graph_json in snap_rows if graph_contains_sandbox_agent(graph_json)}
+    return sum(1 for row in rows if row.snapshot_id in sandbox_snapshot_ids)
 
 
 async def get_sandbox_concurrency_limit(session: AsyncSession, org_id: uuid.UUID) -> int | None:

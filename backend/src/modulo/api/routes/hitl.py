@@ -413,7 +413,6 @@ async def reject_gate(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
                 await mgr.reject(
                     session,

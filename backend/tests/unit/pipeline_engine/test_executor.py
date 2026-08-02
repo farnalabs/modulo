@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunNotFoundError,
-    _graph_contains_sandbox_agent,
     _seed_state,
 )
+from modulo.db.crud.run import graph_contains_sandbox_agent
 
 
 @pytest.fixture(autouse=True)
@@ -860,33 +860,33 @@ async def test_execute_fails_on_checkpointer_connection_error():
 
 
 # ---------------------------------------------------------------------------
-# _graph_contains_sandbox_agent — pure top-level sandbox-node detection
+# graph_contains_sandbox_agent — pure top-level sandbox-node detection
 # ---------------------------------------------------------------------------
 
 
 def test_graph_contains_sandbox_agent_false_for_none():
-    assert _graph_contains_sandbox_agent(None) is False
+    assert graph_contains_sandbox_agent(None) is False
 
 
 def test_graph_contains_sandbox_agent_false_for_non_dict():
-    assert _graph_contains_sandbox_agent([]) is False
-    assert _graph_contains_sandbox_agent("sandbox") is False
-    assert _graph_contains_sandbox_agent(42) is False
+    assert graph_contains_sandbox_agent([]) is False
+    assert graph_contains_sandbox_agent("sandbox") is False
+    assert graph_contains_sandbox_agent(42) is False
 
 
 def test_graph_contains_sandbox_agent_false_when_missing_nodes():
-    assert _graph_contains_sandbox_agent({"edges": []}) is False
-    assert _graph_contains_sandbox_agent({}) is False
+    assert graph_contains_sandbox_agent({"edges": []}) is False
+    assert graph_contains_sandbox_agent({}) is False
 
 
 def test_graph_contains_sandbox_agent_true_for_sandbox_agent_node():
     graph = {"nodes": [{"id": "a", "node_type": "sandbox_agent"}]}
-    assert _graph_contains_sandbox_agent(graph) is True
+    assert graph_contains_sandbox_agent(graph) is True
 
 
 def test_graph_contains_sandbox_agent_false_for_other_node_types():
     graph = {"nodes": [{"id": "a", "node_type": "agent"}, {"id": "b", "node_type": "connector"}]}
-    assert _graph_contains_sandbox_agent(graph) is False
+    assert graph_contains_sandbox_agent(graph) is False
 
 
 # ---------------------------------------------------------------------------
@@ -1256,7 +1256,7 @@ async def test_check_capacity_fail_open_when_graph_scan_raises():
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
         patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", new=org_count),
         patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", new=cap_read),
-        patch("modulo.core.pipeline_engine.executor._graph_contains_sandbox_agent", side_effect=_raise_graph),
+        patch("modulo.core.pipeline_engine.executor.graph_contains_sandbox_agent", side_effect=_raise_graph),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -1269,6 +1269,74 @@ async def test_check_capacity_fail_open_when_graph_scan_raises():
     assert result.status == "running"
     cap_read.assert_not_awaited()
     org_count.assert_not_awaited()
+
+
+async def test_check_capacity_does_not_admit_terminal_run():
+    """Defense-in-depth (PR review): a terminal run must NEVER be re-admitted.
+
+    A run can go terminal (e.g. ``failed``) mid-backoff; the admit branch
+    would otherwise re-set it to ``running``, resurrecting a finished run.
+    ``_check_capacity`` must return it as-is without any status write.
+    """
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run(status="failed")
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=5),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=10,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result is run
+    assert result.status == "failed"
+    assert calls == [], "terminal run must not be admitted or demoted"
+
+
+async def test_check_capacity_admits_running_and_pending_runs():
+    """Both legitimate admission paths still work: a freshly-claimed run
+    (``running``) and a retried run (``pending``) are admitted."""
+    for status in ("pending", "running"):
+        session = _make_capacity_session()
+        executor = _make_capacity_executor(session)
+        run = _capacity_run(status=status)
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        with (
+            patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+            patch(
+                "modulo.core.pipeline_engine.executor.update_run_status",
+                side_effect=_make_update_status(run, calls),
+            ),
+            patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+            patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+            patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
+            patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=5),
+        ):
+            result = await executor._check_capacity(
+                run_id=run.id,
+                org_id=uuid.uuid4(),
+                pipeline_id=uuid.uuid4(),
+                max_concurrent=10,
+                graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+            )
+
+        assert result.status == "running"
+        assert calls[-1][0] == "running"
 
 
 # ---------------------------------------------------------------------------

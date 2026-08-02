@@ -115,6 +115,28 @@ class TestRejectGateSQLAlchemyError:
         assert resp.status_code == 503
 
 
+class TestRejectGateBypassesSandboxCapacity:
+    @patch("modulo.api.routes.hitl.HITLManager.reject", new=AsyncMock())
+    def test_reject_gate_does_not_require_org_sandbox_capacity(self, client: TestClient) -> None:
+        """Rejecting a gate never resumes the run into execution, so it never
+        needs a sandbox slot. Returning 202 'queued' on a reject would
+        surprise an operator (PR review finding #4)."""
+        executor = MagicMock()
+        executor.resume = AsyncMock()
+        capacity_free = AsyncMock(return_value=False)
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=capacity_free),
+            patch("modulo.api.routes.hitl.PipelineExecutor", return_value=executor),
+        ):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/reject",
+                json={"claim_token": "test-token", "reason": "not needed"},
+            )
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "rejected", "run_id": str(_RUN_ID)}
+        capacity_free.assert_not_awaited()
+
+
 class TestDeliverManualSQLAlchemyError:
     @patch(
         "modulo.api.routes.hitl.HITLManager.deliver_manual",

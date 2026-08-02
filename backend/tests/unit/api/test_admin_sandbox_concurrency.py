@@ -1,5 +1,6 @@
 """Tests for the admin org sandbox-concurrency endpoint contract."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -133,6 +134,31 @@ async def test_put_merge_preserves_other_settings(client_admin, mock_session):
     assert org.settings_json["license_key"] == "license-abc"
     assert org.settings_json["retention_days"] == 30
     assert org.settings_json["sandbox_concurrency_limit"] == 7
+
+
+@pytest.mark.anyio
+async def test_put_survives_audit_event_generic_failure(client_admin, mock_session):
+    """The audit write is explicitly best-effort — a generic (non-SQLAlchemy)
+    failure from append_audit_event must NOT 500 the response; the limit
+    update already committed (PR review finding #2)."""
+    import modulo.core.audit_logger as audit_mod
+
+    original = audit_mod.append_audit_event
+
+    async def _boom(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("audit backend exploded")
+
+    audit_mod.append_audit_event = _boom
+    try:
+        resp = await client_admin.put(
+            "/api/v1/admin/org/sandbox-concurrency",
+            json={"sandbox_concurrency_limit": 5},
+        )
+    finally:
+        audit_mod.append_audit_event = original
+
+    assert resp.status_code == 200
+    assert resp.json() == {"sandbox_concurrency_limit": 5}
 
 
 @pytest.mark.anyio

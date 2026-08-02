@@ -71,6 +71,7 @@ from modulo.db.crud.run import (
     count_active_sandbox_runs_for_org,
     get_run,
     get_sandbox_concurrency_limit,
+    graph_contains_sandbox_agent,
     update_run_status,
 )
 from modulo.db.models.eval_definition import EvalDefinition
@@ -190,29 +191,13 @@ async def _checkpointer_scope(
         yield saver
 
 
-def _graph_contains_sandbox_agent(graph_json: dict[str, Any] | None) -> bool:
-    """Top-level scan for any ``sandbox_agent`` node in a snapshot graph.
-
-    Fail-open: ``None``, non-dicts, and missing ``nodes`` return ``False``
-    (treat as non-sandbox, never block). Only the top-level ``nodes`` list is
-    scanned — composite ``composite_ref`` → ``sub_pipeline_graph_json`` is
-    deliberately not recursed (composite pipelines are not compilable today).
-    """
-    if not isinstance(graph_json, dict):
-        return False
-    nodes = graph_json.get("nodes")
-    if not isinstance(nodes, list):
-        return False
-    return any(isinstance(n, dict) and n.get("node_type") == "sandbox_agent" for n in nodes)
-
-
 def _sandbox_agent_for_snapshot(snapshot_id: uuid.UUID, graph_json: dict[str, Any] | None) -> bool:
     """Bounded per-snapshot cache over the (immutable) snapshot graph JSON."""
     key = str(snapshot_id)
     cached = _SANDBOX_AGENT_CACHE.get(key)
     if cached is not None:
         return cached
-    result = _graph_contains_sandbox_agent(graph_json)
+    result = graph_contains_sandbox_agent(graph_json)
     if len(_SANDBOX_AGENT_CACHE) >= _SANDBOX_AGENT_CACHE_MAX:
         _SANDBOX_AGENT_CACHE.clear()
     _SANDBOX_AGENT_CACHE[key] = result
@@ -238,7 +223,7 @@ async def org_sandbox_capacity_free(
             select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id)
         )
         graph_json = snap_result.scalar_one_or_none()
-        if not _graph_contains_sandbox_agent(graph_json):
+        if not graph_contains_sandbox_agent(graph_json):
             return True
         cap = await get_sandbox_concurrency_limit(session, org_id)
         if cap is None:
@@ -327,6 +312,15 @@ class PipelineExecutor:
                     raise RunNotFoundError(run_id)
                 return cancelled_run
 
+            if run.status not in ("pending", "running"):
+                # Defense-in-depth (PR review): never resurrect a terminal run.
+                # A run can go terminal mid-backoff; the admit branch below
+                # would otherwise re-set it to running. Return as-is and let
+                # the caller's retry-exit logic handle it. A freshly-claimed
+                # run (status ``running``) and a retried run (status
+                # ``pending``) are still admitted.
+                return run
+
             pipeline_capacity_ok = True
             active_count = 0
             if max_concurrent > 0:
@@ -400,7 +394,7 @@ class PipelineExecutor:
             if snapshot_id is not None:
                 has_sandbox = _sandbox_agent_for_snapshot(snapshot_id, graph_json)
             else:
-                has_sandbox = _graph_contains_sandbox_agent(graph_json)
+                has_sandbox = graph_contains_sandbox_agent(graph_json)
         except asyncio.CancelledError:
             raise
         except Exception:

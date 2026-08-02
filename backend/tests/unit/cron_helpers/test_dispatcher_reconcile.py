@@ -378,3 +378,49 @@ class TestReconcilePrefixAware:
         redis_client.zrem.assert_awaited_with("saq:staging-runs:incomplete", f"saq:job:staging-runs:run:{RUN_RUNNING}")
         redis_client.lrem.assert_any_await("saq:staging-runs:queued", 0, f"saq:job:staging-runs:run:{RUN_RUNNING}")
         redis_client.lrem.assert_any_await("saq:staging-runs:active", 0, f"saq:job:staging-runs:run:{RUN_RUNNING}")
+
+
+# ---------------------------------------------------------------------------
+# Capacity-marker exclusion (review fix) — capacity-blocked pending runs are
+# NEVER re-dispatched: they have a live in-process _retry_pending accelerator
+# and the 120-min capacity_timeout sweep is their backstop.
+# ---------------------------------------------------------------------------
+
+
+def _eval_marker_exclusion(clause: Any, error_code: str | None) -> bool:
+    """Evaluate the SQLAlchemy exclusion expression against an error_code value.
+
+    Handles only the operators the exclusion uses: ``or_``/``and_``,
+    ``is_(None)``, and ``not_in``. Raises on anything unexpected so a future
+    predicate change is caught rather than silently mis-evaluated.
+    """
+    from sqlalchemy.sql import operators
+    from sqlalchemy.sql.elements import BooleanClauseList
+
+    if isinstance(clause, BooleanClauseList):
+        if clause.operator is operators.or_:
+            return any(_eval_marker_exclusion(c, error_code) for c in clause.clauses)
+        return all(_eval_marker_exclusion(c, error_code) for c in clause.clauses)
+    if clause.operator is operators.is_:
+        return error_code is clause.right
+    if clause.operator is operators.not_in_op:
+        right = getattr(clause.right, "value", clause.right)
+        return error_code not in tuple(right)
+    raise AssertionError(f"unhandled operator in exclusion predicate: {clause.operator!r}")
+
+
+class TestReconcileCapacityMarkerExclusion:
+    @pytest.mark.parametrize(
+        ("error_code", "expected"),
+        [
+            (None, True),
+            ("never_dispatched", True),
+            ("worker_lost", True),
+            ("", True),
+            ("org_capacity_limited", False),
+            ("pipeline_capacity", False),
+        ],
+    )
+    def test_exclusion_allows_non_capacity_markers(self, error_code: str | None, expected: bool) -> None:
+        exclusion = ch._reconcile_capacity_marker_exclusion()
+        assert _eval_marker_exclusion(exclusion, error_code) is expected
