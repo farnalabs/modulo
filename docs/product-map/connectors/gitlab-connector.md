@@ -138,11 +138,11 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 ## Known Gaps
 
 - [ ] **No X-Request-Id reporting**: API errors don't surface GitLab's `X-Request-Id` header for support debugging
-- [ ] **MR operations limited**: no MR diff/changed-files listing, MR approval request, or MR approval-request flow (merge, approve, comment, note, and labels now implemented)
+- [ ] **MR operations limited**: no MR diff/changed-files listing or MR approval request (merge, approve, comment, note, and labels now implemented)
 - [ ] **Scope verification incomplete**: health check distinguishes expired-token vs missing-scope and reports denied endpoints, but `write_repository`/`api` scopes are not individually probed and pre-run ConnectorHub blocking is not enforced
 - [ ] **No self-hosted version reporting**: health check doesn't report the GitLab server version for diagnostics (base URL is now configurable)
-- [ ] **Recursive directory listing & batch file ops**: not implemented
 - [ ] **Self-hosted discovery**: `base_url` is configurable per connector instance, but there is no instance-discovery/onboarding flow for self-hosted GitLab
+- [ ] **Recursive directory listing & batch file ops**: not implemented
 
 ## QA History
 
@@ -150,13 +150,15 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 
 **RESOLVED self-hosted support, file deletion, MR operations, and RateLimit-* header inspection (merged from concurrent work on main and this branch):**
 
-- **Self-hosted GitLab**: `GitLabConnector.__init__` now accepts an optional `base_url` (default `https://gitlab.com/api/v4`, trailing-slash-normalised); `_client()` uses it for every request. Wired through `connector_hub._build_connector()` and `polling._build_polling_connector()` via `config.get("base_url", ...)` — mirroring the existing `gitlab_ci` pattern.
-- **File deletion**: new `write("file_delete")` — `DELETE /projects/{id}/repository/files/{path}` accepting either `branch`/`sha` or `ref`/`message` payload keys (default branch `main`), returns the API response body when present else `{"status": "deleted"}`.
-- **MR operations**: new `write("mr_merge")` (`PUT …/merge_requests/{iid}/merge` with optional `squash`/`merge_commit_message`/`should_remove_source_branch`/`merge_when_pipeline_succeeds`), `write("mr_approve")` (`POST …/merge_requests/{iid}/approve`), `write("mr_comment")` and `write("mr_note")` (`POST …/merge_requests/{iid}/notes`), and `write("mr_labels")` (`PUT …/merge_requests/{iid}` with `labels`).
-- **RateLimit-* inspection**: `_call_api` prefers `RateLimit-ResetTime` (quota-window wait) over backoff on 429 via `_retry_delay()`; `_rate_limit_detail()` surfaces quota headers in the final 429 error; `_rate_limit_metadata()` + `_RATE_LIMIT_HEADERS` expose GitLab's `RateLimit-Limit`/`Remaining`/`Observed`/`Reset`/`ResetTime` as `metadata["rate_limit"]` on query results (absent → `{}`) via the additive `metadata: dict` field on `ConnectorResult` (`base.py`).
+- **Self-hosted GitLab → RESOLVED**: `GitLabConnector.__init__` accepts an optional `base_url` (default `https://gitlab.com/api/v4`, trailing-slash-normalised via `rstrip("/")`); `_client()` uses it for every request. Wired through `connector_hub._build_connector()` and `polling._build_polling_connector()` via `config.get("base_url", ...)` — mirroring the existing `gitlab_ci` pattern.
+- **File deletion → RESOLVED**: new `write("file_delete")` — `DELETE /projects/{id}/repository/files/{path}` accepting either `branch`/`sha` or `ref`/`message` payload keys (default branch `main`), returns the API response body when present else `{"status": "deleted"}`.
+- **MR operations → partial**: new `write("mr_merge")` (`PUT …/merge_requests/{iid}/merge` with optional `squash`/`merge_commit_message`/`should_remove_source_branch`/`merge_when_pipeline_succeeds`), `write("mr_approve")` (`POST …/merge_requests/{iid}/approve`), `write("mr_comment")` and `write("mr_note")` (`POST …/merge_requests/{iid}/notes`), and `write("mr_labels")` (`PUT …/merge_requests/{iid}` with `labels`). MR diff and approval-request remain.
+- **RateLimit-* inspection → RESOLVED**: `_call_api` prefers `RateLimit-ResetTime` (quota-window wait) over backoff on 429 via `_retry_delay()`; `_rate_limit_detail()` surfaces quota headers in the final 429 error; `_rate_limit_metadata()` + `_RATE_LIMIT_HEADERS` expose GitLab's `RateLimit-Limit`/`Remaining`/`Observed`/`Reset`/`ResetTime` as `metadata["rate_limit"]` on query results (absent → `{}`) via the additive `metadata: dict` field on `ConnectorResult` (`base.py`).
 - **Scope verification → partial**: health check distinguishes expired tokens (401 on `/user`) from missing scopes (403 on `/user` → needs read_user/api; 403 on `/projects` → read_api/api not granted), reporting the denied endpoint/scope.
 
 **Tests:** merged both suites — self-hosted base URL routing (health-check + query, trailing-slash normalisation, default base URL), rate-limit metadata (list + single-resource, empty fallback), `file_delete` (branch/sha params, ref/message + 204 status, default-ref, missing-filters, error response), `mr_merge`, `mr_approve`, `mr_comment`, `mr_note`, `mr_labels`, `mr_merge` missing-iid. 99/99 gitlab unit tests + 32/32 gitlab BDD scenarios pass, ruff + mypy clean.
+
+**Product map updates:** behaviours `[ ]`→`[x]` (self-hosted base URL, file deletion, MR merge/approve/comment/note/labels, expired-vs-scope detection, scope-detail reporting, RateLimit-ResetTime wait, RateLimit-* 429 detail, rate-limit metadata), Known Gaps rewritten to reflect remaining work.
 
 **Status:** partial (MR diff/changed-files, MR approval-request, write_repository/api scope probing + pre-run blocking, X-Request-Id reporting, self-hosted version reporting/discovery, recursive dir listing, batch file ops, path traversal protection remain).
 

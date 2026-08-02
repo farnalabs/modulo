@@ -177,7 +177,7 @@ class GitLabConnector(ConnectorBase):
       "merge_request"     — create a merge request (filters: source_branch, target_branch, title, description)
       "mr_merge"          — merge a merge request (data: project, iid, optional squash,
                             merge_commit_message/should_remove_source_branch/merge_when_pipeline_succeeds)
-      "mr_approve"        — approve a merge request
+      "mr_approve"        — approve a merge request (data: project, iid, optional sha)
       "mr_comment"        — add a comment to a merge request (data: project, iid, body)
       "mr_note"           — add a comment to a merge request (data: project, iid, body)
       "mr_labels"         — set labels on a merge request (data: project, iid, labels)
@@ -560,7 +560,7 @@ class GitLabConnector(ConnectorBase):
                 project = self._require_filter(payload.data, "project", payload.resource)
                 path = self._require_filter(payload.data, "path", payload.resource)
                 encoded = _project_path(project)
-                delete_params = {"branch": payload.data.get("branch", payload.data.get("ref", "main"))}
+                delete_params: dict[str, Any] = {"branch": payload.data.get("branch", payload.data.get("ref", "main"))}
                 if payload.data.get("sha"):
                     delete_params["sha"] = payload.data["sha"]
                 delete_body: dict[str, Any] = {
