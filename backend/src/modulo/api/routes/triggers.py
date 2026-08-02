@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -34,6 +35,17 @@ from modulo.db.rls import set_rls_org
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["triggers"])
+
+
+def _serialize_spend_limit(value: Decimal | None) -> float | None:
+    """Serialize the trigger-level ``daily_spend_limit`` Numeric column to JSON.
+
+    Returns ``None`` when no limit is configured so callers can distinguish
+    "unlimited" from a zero budget.
+    """
+    if value is None:
+        return None
+    return float(value)
 
 
 @handle_db_errors("triggers.list_triggers")
@@ -97,6 +109,7 @@ async def list_triggers(
                 "trigger_type": r.trigger_type,
                 "active": r.active,
                 "max_concurrent_runs": r.max_concurrent_runs,
+                "daily_spend_limit": _serialize_spend_limit(r.daily_spend_limit),
                 "config_json": mask_config_json(r.config_json),
                 "cron_expression": r.cron_expression,
                 "cron_timezone": r.cron_timezone,
@@ -307,6 +320,9 @@ class PollingConfigUpdate(BaseModel):
     condition_expression: str | None = None
     poll_interval_seconds: int | None = Field(None, ge=10)
     snapshot_id: str | None = None
+    daily_spend_limit: Decimal | None = Field(
+        None, ge=0, description="Daily spend ceiling in USD; null clears, None unchanged"
+    )
 
 
 @handle_db_errors("triggers.update_polling_config")
@@ -344,6 +360,8 @@ async def update_polling_config(
 
             if req.active is not None:
                 trigger.active = req.active
+            if "daily_spend_limit" in req.model_fields_set:
+                trigger.daily_spend_limit = req.daily_spend_limit
 
             config = dict(trigger.config_json or {})
 
@@ -399,6 +417,7 @@ async def update_polling_config(
     return {
         "id": str(trigger.id),
         "active": trigger.active,
+        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
         "config_json": mask_config_json(trigger.config_json),
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
     }
@@ -486,6 +505,9 @@ class TriggerCreate(BaseModel):
     trigger_type: str = Field(..., pattern=r"^(manual|webhook|cron|polling)$")
     active: bool = True
     max_concurrent_runs: int = Field(default=1, ge=1)
+    daily_spend_limit: Decimal | None = Field(
+        None, ge=0, description="Daily spend ceiling in USD; None = unlimited"
+    )
     config_json: dict[str, Any] = Field(default_factory=dict)
     cron_expression: str | None = None
     cron_timezone: str | None = None
@@ -517,6 +539,7 @@ async def create_trigger(
                 trigger_type=req.trigger_type,
                 active=req.active,
                 max_concurrent_runs=req.max_concurrent_runs,
+                daily_spend_limit=req.daily_spend_limit,
                 config_json=req.config_json,
                 cron_expression=req.cron_expression,
                 cron_timezone=req.cron_timezone,
@@ -552,6 +575,7 @@ async def create_trigger(
         "trigger_type": trigger.trigger_type,
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
+        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
         "config_json": mask_config_json(trigger.config_json),
         "cron_expression": trigger.cron_expression,
         "cron_timezone": trigger.cron_timezone,
@@ -564,6 +588,9 @@ async def create_trigger(
 class TriggerUpdate(BaseModel):
     active: bool | None = None
     max_concurrent_runs: int | None = Field(None, ge=1)
+    daily_spend_limit: Decimal | None = Field(
+        None, ge=0, description="Daily spend ceiling in USD; null clears, None unchanged"
+    )
     config_json: dict[str, Any] | None = None
     cron_expression: str | None = None
     cron_timezone: str | None = None
@@ -609,6 +636,8 @@ async def update_trigger(
                 trigger.active = req.active
             if req.max_concurrent_runs is not None:
                 trigger.max_concurrent_runs = req.max_concurrent_runs
+            if "daily_spend_limit" in req.model_fields_set:
+                trigger.daily_spend_limit = req.daily_spend_limit
             if req.config_json is not None:
                 trigger.config_json = req.config_json
             if req.cron_expression is not None:
@@ -646,6 +675,7 @@ async def update_trigger(
         "trigger_type": trigger.trigger_type,
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
+        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
         "config_json": mask_config_json(trigger.config_json),
         "cron_expression": trigger.cron_expression,
         "cron_timezone": trigger.cron_timezone,
@@ -735,6 +765,7 @@ async def restore_trigger(
         "trigger_type": trigger.trigger_type,
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
+        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
         "config_json": mask_config_json(trigger.config_json),
         "cron_expression": trigger.cron_expression,
         "cron_timezone": trigger.cron_timezone,
@@ -1046,6 +1077,7 @@ async def list_pipeline_triggers(
                 "trigger_type": r.trigger_type,
                 "active": r.active,
                 "max_concurrent_runs": r.max_concurrent_runs,
+                "daily_spend_limit": _serialize_spend_limit(r.daily_spend_limit),
                 "config_json": mask_config_json(r.config_json),
                 "cron_expression": r.cron_expression,
                 "cron_timezone": r.cron_timezone,

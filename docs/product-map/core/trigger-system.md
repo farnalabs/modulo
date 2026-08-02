@@ -57,6 +57,8 @@ concurrency management via `max_concurrent_runs`.
 - [x] Toggle trigger active state via `POST /triggers/{id}/toggle`
 - [x] Test trigger via `POST /triggers/{id}/test` — fires a TriggerEvent and optionally creates a Run (manual type only)
 - [x] Delete trigger cascades to TriggerEvent rows
+- [x] `daily_spend_limit` accepted on `TriggerCreate`/`TriggerUpdate` (validated `ge=0`; explicit `null` clears it) and echoed on every trigger response (`list_triggers`, `create_trigger`, `update_trigger`, `restore_trigger`, `list_pipeline_triggers`)
+- [x] MCP `create_trigger` tool accepts `max_concurrent_runs` and `daily_spend_limit` (validated) and echoes both in the response
 
 ### Manual Trigger
 
@@ -154,7 +156,7 @@ concurrency management via `max_concurrent_runs`.
 - [ ] Agent signal with `source_pipeline_id` that doesn't match any trigger → silent skip (no results)
 - [ ] Agent signal trigger for a non-existent node_id → all triggers evaluated but none match → empty results
 - [ ] Cron trigger with invalid timezone → validation returns error string, API returns 422
-- [ ] Cron trigger with `daily_spend_limit=0` → all runs blocked by spend check (0 >= 0)
+- [x] Cron trigger with `daily_spend_limit=0` → all runs blocked by spend check (0 >= 0)
 - [ ] Toggling a deleted trigger → 404 Not Found
 - [ ] Deleting a trigger that has TriggerEvent rows → cascade delete (TriggerEvent FK to trigger is ON DELETE CASCADE)
 - [x] Cursor parsing in list_trigger_events: malformed cursor (no `_` separator) → logged as warning, treated as no cursor
@@ -206,13 +208,14 @@ concurrency management via `max_concurrent_runs`.
 - `snapshot_id` falls back to `uuid.UUID(int=0)` in polling/agent_signal/cron — may create runs against latest snapshot instead of intended one
 - Polling trigger has no `retain_payload` equivalent (webhook has it for replay)
 - `max_concurrent_runs` uses pipeline-level active-run counting; PRD 8.5 suggests trigger-level counting
-- Trigger-level `daily_spend_limit` is enforced at fire time by both cron and polling but not exposed via the trigger CRUD/polling-config API
+- (Resolved) Trigger-level `daily_spend_limit` is enforced at fire time by both cron and polling but was not exposed via the trigger CRUD/polling-config API — resolved 2026-08-02: accepted on `TriggerCreate`/`TriggerUpdate`/`PollingConfigUpdate` and echoed on all trigger responses
 - (Resolved) No unit tests for `admin_triggers.py` ProgrammingError → 501 path — covered in test_admin_triggers.py
 - (Resolved) No unit tests for generic Exception→500 on trigger routes — covered in test_admin_triggers.py
 - No unit tests for `webhooks.py` ProgrammingError → 501 path — deleted in the 530-test reduction (previously test_trigger_programming_error.py)
 
 ## QA History
 
+- 2026-08-02 (round 2): improve-architecture: RESOLVED the Known Gap "Trigger-level `daily_spend_limit` is enforced at fire time by both cron and polling but not exposed via the trigger CRUD/polling-config API". `daily_spend_limit` is now accepted on `TriggerCreate`, `TriggerUpdate`, and `PollingConfigUpdate` (validated `ge=0`; explicit `null` clears via `model_fields_set`, omitted `None` leaves unchanged) and echoed on every trigger response (`list_triggers`, `create_trigger`, `update_trigger`, `restore_trigger`, `update_polling_config`, `list_pipeline_triggers`). MCP `create_trigger` now also accepts `max_concurrent_runs` + `daily_spend_limit`. Marked "Cron trigger with `daily_spend_limit=0` → all runs blocked" [x] (verified `0 >= 0` short-circuit in `cron_helpers.py`). Added 7 unit tests in `test_triggers_endpoint.py`.
 - 2026-08-02: improve-architecture: RESOLVED the "Daily spend limit applies to cron triggers only — polling has no spend limit check" known gap. `fire_polling_trigger` now enforces `trigger.daily_spend_limit` (new `_daily_spend_limit_reached()` helper) — over-budget triggers log a `spend_limit_reached` TriggerEvent, advance `next_fire_at`, and skip. Wired up the previously-orphaned `triggers/polling.feature` (9 executable fire-path scenarios + 3 spend-limit scenarios) via `tests/bdd/steps/test_polling_triggers.py` and added 5 unit tests (`TestDailySpendLimit`). Updated frontmatter (`bdd:`/`unit-tests:`).
 - 2026-07-05: Cross-cutting QA (index 169): Added `SQLAlchemyError` catch → 503 to all 16 trigger route handlers (triggers.py: 12, admin_triggers.py: 1 route with 2 try/except blocks, webhooks.py: 3). Fixed silent cursor-parsing error swallowing in admin_triggers.py (now logs warning). Added test_trigger_sqlalchemy_error.py with 18 tests covering SQLAlchemyError→503 for all trigger route handlers. Updated product map: marked all 50+ previously unchecked behaviours as [x] (verified against code implementation), added Error Handling checkbox for SQLAlchemyError→503, added Resilience & Integration Robustness section (8 checkboxes: 4 [x] + 4 [ ]). All existing unit tests continue to pass. Status: partial.
 - 2026-07-09: Cross-cutting QA (index 287): Fixed CRITICAL — added `except Exception → 500` with `except HTTPException: raise` guard and `_log.exception` to 14 trigger route handlers (12 in triggers.py, 1 in admin_triggers.py with 2 try/except blocks, 2 in webhooks.py). `cleanup_expired` already had the guard. Moved lazy `hashlib`/`json` imports to module level in test_trigger endpoint. Created test_trigger_exception_guard.py with 15 tests covering Exception→500 on all routes (12 triggers.py + admin_triggers.py + 2 webhooks.py). Removed 3 resolved Known Gaps. Updated product map Error Handling section. All tests pass. Merged to main. Status: partial.
