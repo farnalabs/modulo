@@ -4,6 +4,7 @@ import contextlib
 import json
 import uuid
 from collections.abc import AsyncGenerator
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -28,8 +29,6 @@ def _fake_ci(
     config: dict | None = None,
 ) -> object:
     """Minimal fake ConnectorInstance."""
-    from types import SimpleNamespace
-
     return SimpleNamespace(
         id=uuid.uuid4(),
         connector_type_id=connector_type_id,
@@ -131,16 +130,7 @@ async def test_linear_scan() -> None:
     async with _hub(ci) as hub:
         await hub.initialise([ci])
 
-        respx.post(f"{_LINEAR_API}/graphql").mock(
-            httpx.Response(
-                200,
-                json={
-                    "data": {
-                        "viewer": {"id": "u1", "name": "User", "email": "u@test.com"},
-                    }
-                },
-            )
-        ).side_effect = [
+        respx.post(f"{_LINEAR_API}/graphql").side_effect = [
             httpx.Response(
                 200,
                 json={
@@ -274,8 +264,6 @@ async def test_all_health_checks_fail_returns_error_samples() -> None:
 
 @respx.mock
 async def test_connector_whose_health_check_raises_is_skipped() -> None:
-    from types import SimpleNamespace
-
     hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     broken_id = uuid.uuid4()
     healthy_id = uuid.uuid4()
