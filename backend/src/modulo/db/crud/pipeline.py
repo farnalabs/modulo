@@ -457,10 +457,7 @@ async def _read_clone_source_snapshot(
                 raw = session.get_bind()
                 if asyncio.iscoroutine(raw):
                     raw = await raw
-                if isinstance(raw, Connection):
-                    async_url = raw.engine.url
-                else:
-                    async_url = raw.url
+                async_url = raw.engine.url if isinstance(raw, Connection) else raw.url
             elif isinstance(bind, AsyncConnection):
                 conn = bind.sync_connection
                 assert conn is not None
