@@ -31,7 +31,7 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
@@ -489,6 +489,33 @@ class PipelineExecutor:
                 extra={"run_id": str(run_id)},
             )
 
+    async def _touch_run_heartbeat(self, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+        """Refresh ``heartbeat_at`` so the beat sweep's stale-heartbeat fence
+        sees a live retry loop.
+
+        A capacity-blocked retry can span hours (10 attempts with backoff up to
+        600s). Without a per-attempt heartbeat refresh the run would look
+        STRANDED to ``stale_run_recovery_sweep``'s re-dispatch branch even
+        though this loop is alive — the sweep would re-dispatch it, spawn a
+        second retry loop, and double-execute the run when a slot frees. The
+        refresh keeps ``heartbeat_at`` well inside
+        ``_STRANDED_REDISPATCH_TTL_MINUTES`` (12 min) for any live loop.
+        """
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await session.execute(
+                    text("UPDATE runs SET heartbeat_at=now() WHERE id=:rid"),
+                    {"rid": run_id},
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "retry_pending.heartbeat_refresh_failed",
+                extra={"run_id": str(run_id)},
+            )
+
     async def _retry_pending(
         self,
         *,
@@ -501,7 +528,8 @@ class PipelineExecutor:
         Single-flight: the caller (``execute``) only spawns this task when NOT
         itself called from within a retry (``from_retry``), so at most one
         retry loop exists per blocked run. Each attempt re-checks the run's
-        status (never re-admits a terminal run), exits on ``running`` or any
+        status (never re-admits a terminal run), refreshes ``heartbeat_at``
+        (the beat sweep's liveness fence), exits on ``running`` or any
         non-``pending`` terminal/hold status, and after
         :attr:`_retry_max_attempts` terminal-fails with
         ``capacity_timeout`` instead of looping forever.
@@ -515,6 +543,7 @@ class PipelineExecutor:
             while attempts < self._retry_max_attempts:
                 attempts += 1
                 await asyncio.sleep(self._capacity_poll_interval)
+                await self._touch_run_heartbeat(run_id, org_id)
                 if not await self._run_status_retryable(run_id, org_id):
                     return
                 try:
