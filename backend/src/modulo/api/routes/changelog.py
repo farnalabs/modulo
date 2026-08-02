@@ -4,6 +4,8 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.dependencies import require_permission
+from modulo.auth.jwt import TenantPrincipal
 
 router = APIRouter(prefix="/api/v1/changelog", tags=["changelog"])
 
@@ -84,7 +86,10 @@ async def latest_changelog() -> ChangelogEntry:
 
 @router.post("", response_model=ChangelogEntry, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("changelog.create_changelog_entry")
-async def create_changelog_entry(req: CreateChangelogEntryRequest) -> ChangelogEntry:
+async def create_changelog_entry(
+    req: CreateChangelogEntryRequest,
+    _: TenantPrincipal = require_permission("changelog.post"),
+) -> ChangelogEntry:
     """Add a new changelog entry (in-memory for alpha; persists across restarts via DB in v1)."""
     entry = ChangelogEntry(
         version=req.version,

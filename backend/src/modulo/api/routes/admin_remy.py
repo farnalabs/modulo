@@ -13,8 +13,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.remy_skill import RemySkill
 from modulo.db.models.system_config import SystemConfig
@@ -56,14 +55,6 @@ _PROVIDER_LABELS: dict[str, str] = {
 }
 
 router = APIRouter(prefix="/api/v1/admin/remy", tags=["admin-remy"])
-
-
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required",
-        )
 
 
 # ── Config models ──────────────────────────────────────────────────────
@@ -148,9 +139,8 @@ class ContextSourceModeUpdate(BaseModel):
 @router.get("/config", response_model=RemyConfigResponse)
 async def get_remy_config(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.remy.manage"),
 ) -> RemyConfigResponse:
-    _require_admin(principal)
     try:
         async with session.begin():
             result = await session.execute(
@@ -195,9 +185,8 @@ async def get_remy_config(
 @handle_db_errors("admin.remy.get_available_providers")
 @router.get("/available-providers", response_model=AvailableProvidersResponse)
 async def get_available_providers(
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.remy.manage"),
 ) -> AvailableProvidersResponse:
-    _require_admin(principal)
     try:
         from modulo.api.routes.remy import SUPPORTED_PROVIDERS
         from modulo.db.enums import ModelBackendProvider
@@ -228,9 +217,8 @@ async def get_available_providers(
 async def update_remy_config(
     req: RemyConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.remy.manage"),
 ) -> RemyConfigResponse:
-    _require_admin(principal)
     if req.allowed_providers is not None:
         from modulo.api.routes.remy import SUPPORTED_PROVIDERS
 
@@ -337,9 +325,8 @@ def _skill_to_response(skill: RemySkill) -> SkillResponse:
 @router.get("/skills", response_model=list[SkillResponse])
 async def list_org_skills(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.remy.manage"),
 ) -> list[SkillResponse]:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -380,9 +367,8 @@ async def list_org_skills(
 async def create_org_skill(
     req: SkillCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.remy.manage"),
 ) -> SkillResponse:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -427,9 +413,8 @@ async def update_org_skill(
     skill_id: uuid.UUID,
     req: SkillUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.remy.manage"),
 ) -> SkillResponse:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -473,9 +458,8 @@ async def update_org_skill(
 async def delete_org_skill(
     skill_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.remy.manage"),
 ) -> None:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -510,9 +494,8 @@ async def delete_org_skill(
 @router.get("/context-sources")
 async def get_org_context_sources(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.remy.manage"),
 ) -> dict[str, object]:
-    _require_admin(principal)
     try:
         async with session.begin():
             from modulo.core.remy.context_source_service import (
@@ -557,9 +540,8 @@ async def set_org_context_source(
     source_key: str,
     req: ContextSourceModeUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.remy.manage"),
 ) -> dict[str, str]:
-    _require_admin(principal)
     try:
         async with session.begin():
             from modulo.core.remy.context_source_service import (
@@ -595,9 +577,8 @@ async def set_org_context_source(
 @router.delete("/context-sources", status_code=status.HTTP_200_OK)
 async def reset_org_context_sources(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.remy.manage"),
 ) -> dict[str, str]:
-    _require_admin(principal)
     try:
         async with session.begin():
             from modulo.db.models.remy_context_source import RemyContextSource

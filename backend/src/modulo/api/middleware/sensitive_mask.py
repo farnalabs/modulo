@@ -17,8 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import SecretStorageError, decode_stored_secret
 from modulo.db.models.sso_provider import SsoProvider
@@ -98,14 +97,6 @@ class RevealResponse(BaseModel):
     expires_in_seconds: int = 30
 
 
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can reveal sensitive values",
-        )
-
-
 async def _fetch_value(
     payload: RevealRequest,
     session: AsyncSession,
@@ -173,11 +164,10 @@ async def _fetch_value(
 @router.post("/reveal", response_model=RevealResponse)
 async def reveal_sensitive_value(
     payload: RevealRequest,
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("admin.sensitive.manage"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> RevealResponse:
-    _require_admin(principal)
 
     try:
         async with session.begin():
