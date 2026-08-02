@@ -987,7 +987,8 @@ export default {
       "status_label": "Status:",
       "sandbox_label": "Sandbox:",
       "duration_label": "Duration:",
-      "error_label": "Error:"
+      "error_label": "Error:",
+      "waiting_for_capacity": "Waiting for capacity"
     },
     "AdminRunRetentionView": {
       "run_retention": "Run Retention",
