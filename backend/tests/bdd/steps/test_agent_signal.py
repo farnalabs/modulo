@@ -78,18 +78,26 @@ def _make_trigger(
     return trigger
 
 
-def _setup_session(session: MagicMock, triggers: list[Any], count: int = 0) -> None:
+def _setup_session(
+    session: MagicMock,
+    triggers: list[Any],
+    count: int = 0,
+    snapshot_id: uuid.UUID | None = None,
+) -> None:
     trigger_result = MagicMock()
     trigger_result.scalars.return_value.all.return_value = triggers
     count_result = MagicMock()
     count_result.scalar_one.return_value = count
-    call_num: list[int] = [0]
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one_or_none.return_value = snapshot_id or uuid.uuid4()
 
     async def side_effect(*args: Any, **kwargs: Any) -> Any:
-        call_num[0] += 1
-        if call_num[0] == 1:
-            return trigger_result
-        return count_result
+        sql = str(args[0]) if args else ""
+        if "count(" in sql:
+            return count_result
+        if "pipeline_snapshots" in sql:
+            return snapshot_result
+        return trigger_result
 
     session.execute = side_effect
 

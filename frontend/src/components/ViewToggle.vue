@@ -93,13 +93,13 @@ const isEnabled = ref(false);
 
 async function fetchViews() {
   try {
-    const { data, error } = await (api as any).GET("/api/v1/views");
+    const { data, error } = await api.GET("/api/v1/views");
     if (error) {
       console.warn("ViewToggle: failed to fetch views", error);
       return;
     }
-    if (data && Array.isArray(data.views)) {
-      views.value = data.views;
+    if (data && Array.isArray(data.items)) {
+      views.value = data.items;
     }
   } catch {
     console.warn("ViewToggle: exception fetching views");

@@ -112,6 +112,18 @@ Rate limiting uses a Redis token-bucket algorithm. Falls back to in-memory witho
 
 ---
 
+## Organisation Settings (`settings_json`)
+
+Per-organisation configuration is stored in the `settings_json` column of the
+`organisations` table (not environment variables). Configured by an org admin
+via the admin API. Unknown/absent keys default to safe values.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `sandbox_concurrency_limit` | `int` (1–100) or `null` | `null` (unlimited) | Max concurrently `running` sandbox-agent runs for the org across all pipelines. Runs beyond the cap stay `pending` with `error_code='org_capacity_limited'` and are retried by the background accelerator. Managed via `GET`/`PUT /api/v1/admin/org/sandbox-concurrency`. |
+
+---
+
 ## Backup & Recovery
 
 | Variable | Required | Default | Description |

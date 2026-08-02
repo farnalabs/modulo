@@ -177,6 +177,7 @@ class TestFireAgentSignalIntegration:
         source_pipeline_id: uuid.UUID,
         source_run_id: uuid.UUID,
         snapshot_id: uuid.UUID,
+        trigger_id: uuid.UUID,
     ) -> None:
         """Trigger matches → child run created + TriggerEvent recorded."""
         factory = async_sessionmaker(db_engine, expire_on_commit=False)

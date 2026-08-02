@@ -509,7 +509,7 @@ uv run modulo runs reset <run-id>
 |---------|--------------|---------------|
 | Per-org pipeline rate limit | `RATE_LIMIT_PIPELINE_SUBMIT` | An org floods the queue |
 | Per-pipeline concurrency limit | Pipeline settings | A single pipeline creates too many runs |
-| Max concurrent runs per org | `MODULO_MAX_CONCURRENT_RUNS_PER_ORG` | Default safeguard |
+| Max concurrent sandbox runs per org | `Organisation.settings_json["sandbox_concurrency_limit"]` (via `GET`/`PUT /api/v1/admin/org/sandbox-concurrency`) | Default safeguard for sandbox-agent pipelines; `null` = unlimited |
 | Global run rate limit | `uv run modulo rate-limit set --global` | Upstream LLM provider degradation |
 | Webhook/trigger backoff | Connector settings | External system sends too many events |
 

@@ -5,6 +5,7 @@ delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/pipelines/webhook_trigger.feature
   - backend/tests/bdd/features/pipelines/scheduling.feature
+  - backend/tests/bdd/features/triggers/polling.feature
 code:
   - backend/src/modulo/api/routes/triggers.py
   - backend/src/modulo/api/routes/admin_triggers.py
@@ -20,6 +21,7 @@ unit-tests:
   - backend/tests/unit/trigger_engine/test_polling_connector_drift.py
   - backend/tests/unit/api/test_triggers_endpoint.py
   - backend/tests/bdd/steps/test_cron_triggers.py
+  - backend/tests/bdd/steps/test_polling_triggers.py
   - backend/tests/unit/api/test_admin_triggers.py
   - backend/tests/unit/api/test_webhooks_endpoint.py
   - backend/tests/unit/api/test_webhook_replay.py
@@ -55,6 +57,8 @@ concurrency management via `max_concurrent_runs`.
 - [x] Toggle trigger active state via `POST /triggers/{id}/toggle`
 - [x] Test trigger via `POST /triggers/{id}/test` — fires a TriggerEvent and optionally creates a Run (manual type only)
 - [x] Delete trigger cascades to TriggerEvent rows
+- [x] `daily_spend_limit` accepted on `TriggerCreate`/`TriggerUpdate` (validated `ge=0`; explicit `null` clears it) and echoed on every trigger response (`list_triggers`, `create_trigger`, `update_trigger`, `restore_trigger`, `list_pipeline_triggers`)
+- [x] MCP `create_trigger` tool accepts `max_concurrent_runs` and `daily_spend_limit` (validated) and echoes both in the response
 
 ### Manual Trigger
 
@@ -110,6 +114,7 @@ concurrency management via `max_concurrent_runs`.
 - [x] Trigger re-read with `FOR UPDATE` lock for concurrency serialisation
 - [x] Next-fire guard: if `next_fire_at > now()` the task returns `already_fired_this_cycle` without firing
 - [x] `schedule_polling_trigger()` in TriggerEngine computes `next_fire_at` from `poll_interval_seconds`
+- [x] Daily spend limit (`trigger.daily_spend_limit`) enforced before run creation — `spend_limit_reached` TriggerEvent, `next_fire_at` advanced, `skipped` returned
 - [x] Connector instance loaded from DB by `connector_instance_id` in `config_json`
 - [x] Credentials decrypted via Fernet-backed secrets backend
 - [x] One-shot connector built via `_build_polling_connector()` (filesystem, github, gitlab, linear, jira, slack)
@@ -151,7 +156,7 @@ concurrency management via `max_concurrent_runs`.
 - [ ] Agent signal with `source_pipeline_id` that doesn't match any trigger → silent skip (no results)
 - [ ] Agent signal trigger for a non-existent node_id → all triggers evaluated but none match → empty results
 - [ ] Cron trigger with invalid timezone → validation returns error string, API returns 422
-- [ ] Cron trigger with `daily_spend_limit=0` → all runs blocked by spend check (0 >= 0)
+- [x] Cron trigger with `daily_spend_limit=0` → all runs blocked by spend check (0 >= 0)
 - [ ] Toggling a deleted trigger → 404 Not Found
 - [ ] Deleting a trigger that has TriggerEvent rows → cascade delete (TriggerEvent FK to trigger is ON DELETE CASCADE)
 - [x] Cursor parsing in list_trigger_events: malformed cursor (no `_` separator) → logged as warning, treated as no cursor
@@ -196,20 +201,22 @@ concurrency management via `max_concurrent_runs`.
 ## Known Gaps
 
 - BDD feature file `webhook_trigger.feature` has 5 scenarios all tagged `@awaiting-implementation` — no executable BDD coverage exists for webhook triggers
-- BDD `scheduling.feature` has 5 cron scenarios but zero polling scenarios — no BDD coverage for polling trigger behaviour
+- BDD `scheduling.feature` has 5 cron scenarios but zero polling scenarios — executable polling BDD lives in `triggers/polling.feature` (9 scenarios, wired)
 - `_build_polling_connector()` is a standalone copy of `connector_hub._build_connector()` — drifts as connector hub gains new types (41+ types registered vs 6 in polling)
 - Agent signal triggers have no BDD or unit test coverage for the `fire_agent_signal()` function
 - `list_trigger_events` in `triggers.py` uses a separate count query — not DRY with admin version
 - `snapshot_id` falls back to `uuid.UUID(int=0)` in polling/agent_signal/cron — may create runs against latest snapshot instead of intended one
 - Polling trigger has no `retain_payload` equivalent (webhook has it for replay)
 - `max_concurrent_runs` uses pipeline-level active-run counting; PRD 8.5 suggests trigger-level counting
-- Daily spend limit applies to cron triggers only — polling has no spend limit check
+- (Resolved) Trigger-level `daily_spend_limit` is enforced at fire time by both cron and polling but was not exposed via the trigger CRUD/polling-config API — resolved 2026-08-02: accepted on `TriggerCreate`/`TriggerUpdate`/`PollingConfigUpdate` and echoed on all trigger responses
 - (Resolved) No unit tests for `admin_triggers.py` ProgrammingError → 501 path — covered in test_admin_triggers.py
 - (Resolved) No unit tests for generic Exception→500 on trigger routes — covered in test_admin_triggers.py
 - No unit tests for `webhooks.py` ProgrammingError → 501 path — deleted in the 530-test reduction (previously test_trigger_programming_error.py)
 
 ## QA History
 
+- 2026-08-02 (round 2): improve-architecture: RESOLVED the Known Gap "Trigger-level `daily_spend_limit` is enforced at fire time by both cron and polling but not exposed via the trigger CRUD/polling-config API". `daily_spend_limit` is now accepted on `TriggerCreate`, `TriggerUpdate`, and `PollingConfigUpdate` (validated `ge=0`; explicit `null` clears via `model_fields_set`, omitted `None` leaves unchanged) and echoed on every trigger response (`list_triggers`, `create_trigger`, `update_trigger`, `restore_trigger`, `update_polling_config`, `list_pipeline_triggers`). MCP `create_trigger` now also accepts `max_concurrent_runs` + `daily_spend_limit`. Marked "Cron trigger with `daily_spend_limit=0` → all runs blocked" [x] (verified `0 >= 0` short-circuit in `cron_helpers.py`). Added 7 unit tests in `test_triggers_endpoint.py`.
+- 2026-08-02: improve-architecture: RESOLVED the "Daily spend limit applies to cron triggers only — polling has no spend limit check" known gap. `fire_polling_trigger` now enforces `trigger.daily_spend_limit` (new `_daily_spend_limit_reached()` helper) — over-budget triggers log a `spend_limit_reached` TriggerEvent, advance `next_fire_at`, and skip. Wired up the previously-orphaned `triggers/polling.feature` (9 executable fire-path scenarios + 3 spend-limit scenarios) via `tests/bdd/steps/test_polling_triggers.py` and added 5 unit tests (`TestDailySpendLimit`). Updated frontmatter (`bdd:`/`unit-tests:`).
 - 2026-07-05: Cross-cutting QA (index 169): Added `SQLAlchemyError` catch → 503 to all 16 trigger route handlers (triggers.py: 12, admin_triggers.py: 1 route with 2 try/except blocks, webhooks.py: 3). Fixed silent cursor-parsing error swallowing in admin_triggers.py (now logs warning). Added test_trigger_sqlalchemy_error.py with 18 tests covering SQLAlchemyError→503 for all trigger route handlers. Updated product map: marked all 50+ previously unchecked behaviours as [x] (verified against code implementation), added Error Handling checkbox for SQLAlchemyError→503, added Resilience & Integration Robustness section (8 checkboxes: 4 [x] + 4 [ ]). All existing unit tests continue to pass. Status: partial.
 - 2026-07-09: Cross-cutting QA (index 287): Fixed CRITICAL — added `except Exception → 500` with `except HTTPException: raise` guard and `_log.exception` to 14 trigger route handlers (12 in triggers.py, 1 in admin_triggers.py with 2 try/except blocks, 2 in webhooks.py). `cleanup_expired` already had the guard. Moved lazy `hashlib`/`json` imports to module level in test_trigger endpoint. Created test_trigger_exception_guard.py with 15 tests covering Exception→500 on all routes (12 triggers.py + admin_triggers.py + 2 webhooks.py). Removed 3 resolved Known Gaps. Updated product map Error Handling section. All tests pass. Merged to main. Status: partial.
 - 2026-07-12: Round 3 QA (improve-architecture batch 3): Fixed MINOR — added `exc_info=True` to `_log.warning()` in cursor decode except blocks in triggers.py and admin_triggers.py (both caught (ValueError, AttributeError) for malformed cursor but didn't log the exception traceback). B904 audit: all except blocks across triggers.py, admin_triggers.py, and webhooks.py already use `from None`/`from exc` correctly. CancelledError guard: not applicable (Python 3.12+). No stale frontmatter or resolved known gaps in active gaps section.

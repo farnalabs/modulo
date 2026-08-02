@@ -20,6 +20,13 @@ jobs:
   trigger-modulo-fixer:
     name: Trigger Modulo Branch Fixer
     runs-on: ubicloud-standard-2
+    # Manual-delivery label protocol:
+    # The `manual-delivery` label on a PR tells the ci.yml caller
+    # (notify-pr-failure job) to skip dispatching this Branch Fixer. The label
+    # guard lives in ci.yml because workflow_dispatch events carry no
+    # github.event.pull_request context, so the check cannot be evaluated here.
+    # Manual `workflow_dispatch` invocations MUST check the PR's labels
+    # themselves before calling this workflow.
     steps:
       - name: Send webhook to Modulo Branch Fixer
         id: webhook

@@ -171,8 +171,8 @@ const { loading, error, data: responseData, load: loadDeliveries } = useDataFetc
   },
 )
 
-const items = computed(() => (responseData.value as any)?.items ?? [])
-const total = computed(() => (responseData.value as any)?.total ?? 0)
+const items = computed(() => responseData.value?.items ?? [])
+const total = computed(() => responseData.value?.total ?? 0)
 
 const filterStatus = ref('__all__')
 const filterDateFrom = ref('')

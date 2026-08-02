@@ -66,6 +66,8 @@ squash-merges when all checks pass and the threshold is met. Track with:
 ..\..\..\..\devtools\harness\tools\wait-for-pr.ps1 -PRNumber <N> -WaitForCI
 ```
 
+When delivering multiple PRs for one feature, merge each PR manually once CI is green and approved (`gh pr merge --squash`) before branching the next PR off main - do not wait for the merge queue between chained PRs.
+
 **Legacy gate.ps1** (local-only skills only [`find-and-fix`, `explore-deployment`]):
 `..\..\..\..\devtools\harness\tools\gate.ps1 -Branch <branch-name>` runs local CI
 and merges to local main. Accepts `-Semver patch|minor|major` (default patch),
@@ -583,6 +585,18 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ## Lessons Learned
 
+### Multi-PR delivery: merge the first PR manually, then branch the next PR off main
+
+When delivering a feature as multiple PRs (e.g. PR A -> PR B -> PR C), once PR N is green on CI and APPROVED by the reviewer, MERGE IT MANUALLY (`gh pr merge --squash`) rather than waiting for the merge queue. Then branch PR N+1 off the updated main. Waiting for the merge queue on a fast-moving main means the next PR's branch base goes stale while it waits, forcing repeated rebases. Manual merge after approval is the single biggest accelerator for multi-PR delivery. Only wait for the merge queue when you are NOT chaining PRs (single independent PR).
+
+### Once a PR exists, ALWAYS merge main in with a merge commit - never rebase
+
+Once a PR branch exists, keep it current with main by running `git merge origin/main --no-edit` (a MERGE COMMIT). NEVER rebase the branch onto main and NEVER rewrite its history with force-push while the branch is shared or being reviewed. Rationale: (a) rebase re-applies the whole diff and re-conflicts on every main movement; (b) merge composes with concurrent agents (Branch Fixer, other pipelines) instead of force-push-warring with them; (c) git records conflict resolutions in the merge commit so they don't re-conflict. If a push is rejected, fetch + merge + push again - do NOT force-push over a branch another agent may be touching.
+
+### Use Python for file writes, not PowerShell string ops
+
+Never edit source/text files with PowerShell string replacement (Get-Content -Raw + [System.IO.File]::WriteAllText or .Replace()). PowerShell's encoding handling corrupts UTF-8 (em-dashes, arrows, non-ASCII) into mojibake, producing lint errors and broken files. Use a Python script with io.open(path, 'r', encoding='utf-8') and io.open(path, 'w', encoding='utf-8', newline='\n') for every file write.
+
 ### Branch-fixer / opencode coder agent
 
 - **opencode auth step runs before fetch-ci** → `Configure opencode auth` references `steps.fetch-ci.outputs.ci_failures` but must run AFTER `Fetch CI failures`. GitHub Actions evaluates `if:` conditions at step execution time, and the referenced step's outputs are empty/false if it hasn't run yet. Always verify step ordering when a step's condition depends on another step's output.
@@ -633,9 +647,13 @@ sequential number and fix its `down_revision` to point at the current head.
 
 ### Rebasing: only when another branch merged first — and how to resolve conflicts
 
-In general, **no pre-rebase is needed** — the worktree branch is based on
+**PREFERRED: merge main in with a merge commit (`git merge origin/main --no-edit`).**
+Only use rebase when you exclusively own the branch and need a clean linear
+history for a single PR.
+
+In general, **no pre-merge is needed** — the worktree branch is based on
 main and the PR flow handles merging. If another PR merged first (changing
-shared files), rebase to catch up.
+shared files), merge main in with a merge commit instead of rebasing.
 
 If the rebase produces conflicts, resolve them inline:
 
@@ -1055,7 +1073,7 @@ mypy src/modulo/ 2>&1
 ### Known Issues
 
 - **The runner machine (duncan-pc) can go offline.** Check `gh api repos/farnalabs/modulo/actions/runners --jq '.runners[] | [.name, .status, .busy]'`. Restart with `Start-Process -FilePath "C:\actions-runner\run.cmd" -WindowStyle Hidden`.
-- **Force pushes lose CI results.** After a force push (rebase), CI won't automatically re-trigger on the new SHA. The next `pull_request` event (from a new commit or PR reopen) will trigger it.
+- **Force pushes re-trigger CI normally.** A force-push to a PR branch fires a fresh pull_request (synchronize) event and CI re-runs on the new SHA; the autonomous lifecycle handles re-review and merge.
 - **Concurrent run limits on triggers** default to 1. When a pipeline gets a burst of webhooks, increase `max_concurrent_runs` on the trigger to match expected burst volume.
 
 ### After raising a PR, poll checks until they pass or fail
