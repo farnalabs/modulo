@@ -567,3 +567,21 @@ class TestGenerateQualityReport:
         report = await generate_quality_report(session, org_id)
 
         assert report["summary"]["total_cost_usd"] == 0.0
+
+    async def test_propagates_sqlalchemy_errors(self) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        org_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
+
+        with pytest.raises(SQLAlchemyError, match="db down"):
+            await generate_quality_report(session, org_id)
+
+    async def test_propagates_unexpected_errors(self) -> None:
+        org_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=RuntimeError("boom"))
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await generate_quality_report(session, org_id)
