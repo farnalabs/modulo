@@ -146,16 +146,12 @@ const skillToggling = ref<Record<string, boolean>>({})
 
 const skillDialogRef = ref<InstanceType<typeof RemySkillDialog> | null>(null)
 
-interface SkillsResponse {
-  items: SkillItem[]
-}
-
-const { loading, error: loadError, data: skillsResp, load: loadSkills } = useDataFetch<SkillsResponse>(
-  () => (api as any).GET('/api/v1/me/remy/skills'),
-  { initialValue: { items: [] as SkillItem[] } },
+const { loading, error: loadError, data: skillsResp, load: loadSkills } = useDataFetch<SkillItem[]>(
+  () => api.GET('/api/v1/me/remy/skills'),
+  { initialValue: [] },
 )
 
-const skills = computed(() => skillsResp.value?.items ?? [])
+const skills = computed(() => skillsResp.value ?? [])
 
 watch(skillsResp, () => {
   remyStore.signalSkillsChanged()
@@ -167,7 +163,7 @@ async function toggleSkillActive(skill: SkillItem) {
   skillToggleError.value = null
   skillToggling.value = { ...skillToggling.value, [skill.id]: true }
   try {
-    const { data, error: err } = await (api as any).PUT('/api/v1/me/remy/skills/{skill_id}', {
+    const { data, error: err } = await api.PUT('/api/v1/me/remy/skills/{skill_id}', {
       params: { path: { skill_id: skill.id } },
       body: { active: newActive },
     })
@@ -178,7 +174,7 @@ async function toggleSkillActive(skill: SkillItem) {
     if (data) {
       const idx = skills.value.findIndex((s) => s.id === skill.id)
       if (idx !== -1 && skillsResp.value) {
-        skillsResp.value.items[idx] = data as SkillItem
+        skillsResp.value[idx] = data
       }
     }
     remyStore.signalSkillsChanged()
