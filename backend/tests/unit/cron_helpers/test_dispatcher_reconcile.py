@@ -350,6 +350,37 @@ class TestPartialEviction:
         ingest.assert_awaited_once()
 
 
+class TestCapacityMarkerExclusion:
+    """PR review: capacity-blocked runs must NEVER be re-dispatched.
+
+    A run demoted to ``pending`` with ``error_code`` in
+    (``org_capacity_limited``, ``pipeline_capacity``) has a LIVE in-process
+    retry accelerator (``_retry_pending``). If ``dispatcher_reconcile``
+    re-enqueues it, a second worker spawns a SECOND retry loop that can
+    double-execute the run. ``_reconcile_capacity_marker_exclusion()`` is the
+    WHERE-clause guard. These assertions fail if the exclusion is removed.
+    """
+
+    def _sql(self) -> str:
+        return str(ch._reconcile_capacity_marker_exclusion().compile(compile_kwargs={"literal_binds": True}))
+
+    def test_null_error_code_not_excluded(self) -> None:
+        """error_code IS NULL (no failure) must be allowed through."""
+        assert "IS NULL" in self._sql()
+
+    def test_org_capacity_limited_marker_excluded(self) -> None:
+        assert "org_capacity_limited" in self._sql()
+
+    def test_pipeline_capacity_marker_excluded(self) -> None:
+        assert "pipeline_capacity" in self._sql()
+
+    def test_markers_rendered_in_not_in_clause(self) -> None:
+        """Both markers live in a single NOT IN clause — a run carrying either
+        marker fails the whole exclusion predicate and is never re-dispatched."""
+        sql = self._sql()
+        assert "NOT IN ('org_capacity_limited', 'pipeline_capacity')" in sql
+
+
 class TestReconcilePrefixAware:
     @pytest.mark.asyncio
     async def test_staging_queue_names_used(self, monkeypatch: pytest.MonkeyPatch) -> None:

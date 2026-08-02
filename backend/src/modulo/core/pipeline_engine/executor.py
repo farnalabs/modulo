@@ -3,7 +3,10 @@
 Responsibilities:
   - Seed initial LangGraph state from snapshot.run_context_defaults + input_payload
   - Obtain/compile the StateGraph (via graph_cache)
-  - Enforce per-pipeline max_concurrent_runs via SELECT FOR UPDATE on pipeline row
+  - Enforce per-pipeline max_concurrent_runs and the per-org sandbox
+    concurrency cap via count-based capacity checks (no FOR UPDATE; runs
+    declined at capacity are demoted back to ``pending`` with a reason
+    marker and retried by :meth:`PipelineExecutor._retry_pending`)
   - Consume astream_events() and publish to the per-run RunEventBroker
   - Set up AsyncPostgresSaver as LangGraph checkpointer
   - Stream graph execution, updating Run status on transitions
@@ -18,9 +21,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import random
 import socket
 import uuid
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -61,8 +64,14 @@ from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.run import (
+    ERROR_CODE_CAPACITY_TIMEOUT,
+    ERROR_CODE_ORG_CAPACITY_LIMITED,
+    ERROR_CODE_PIPELINE_CAPACITY,
+    _graph_contains_sandbox_agent,
     count_active_runs_for_pipeline,
+    count_active_sandbox_runs_for_org,
     get_run,
+    get_sandbox_concurrency_limit,
     update_run_status,
 )
 from modulo.db.models.eval_definition import EvalDefinition
@@ -76,6 +85,15 @@ from modulo.otel_bridge import LangGraphOtelBridge
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
 _RETRY_SEMAPHORE: asyncio.Semaphore | None = None
+
+# Statuses a run may still be admitted from when a retry's backoff elapses.
+# Any terminal status (complete/failed/cancelled/eval_failed) means the run
+# was already finalised while the retry loop slept — it must never be
+# resurrected back to ``running``.
+_ADMISSIBLE_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
+
+_SANDBOX_AGENT_CACHE: OrderedDict[str, bool] = OrderedDict()
+_SANDBOX_AGENT_CACHE_MAX = 512
 
 _log = logging.getLogger(__name__)
 
@@ -179,6 +197,55 @@ async def _checkpointer_scope(
         yield saver
 
 
+def _sandbox_agent_for_snapshot(snapshot_id: uuid.UUID, graph_json: dict[str, Any] | None) -> bool:
+    """Bounded per-snapshot cache over the (immutable) snapshot graph JSON."""
+    key = str(snapshot_id)
+    cached = _SANDBOX_AGENT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    result = _graph_contains_sandbox_agent(graph_json)
+    if len(_SANDBOX_AGENT_CACHE) >= _SANDBOX_AGENT_CACHE_MAX:
+        _SANDBOX_AGENT_CACHE.clear()
+    _SANDBOX_AGENT_CACHE[key] = result
+    return result
+
+
+async def org_sandbox_capacity_free(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """True when the org's sandbox cap (if configured) can admit *run_id*.
+
+    Used by HITL routes as a PRE-approval check: the gate decision must not be
+    committed when the org is at sandbox capacity. Fail-open — any error reads
+    as ``True`` (admit) with a warning, never raises.
+    """
+    try:
+        run = await get_run(session, run_id)
+        if run is None or run.snapshot_id is None:
+            return True
+        snap_result = await session.execute(
+            select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id)
+        )
+        graph_json = snap_result.scalar_one_or_none()
+        if not _graph_contains_sandbox_agent(graph_json):
+            return True
+        cap = await get_sandbox_concurrency_limit(session, org_id)
+        if cap is None:
+            return True
+        active = await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
+        return active < cap
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "hitl.sandbox_capacity_check_failed",
+            extra={"org_id": str(org_id), "run_id": str(run_id)},
+        )
+        return True
+
+
 class PipelineExecutor:
     """Execute a single pipeline run synchronously (sequential, HITL-aware).
 
@@ -202,6 +269,11 @@ class PipelineExecutor:
 
     # Override in tests to avoid real delays.
     _capacity_poll_interval: float = 15.0
+    # Retry backoff schedule (production: 120 → 240 → ... → 600s). Tests set
+    # these tiny so a retry cycle completes in milliseconds.
+    _retry_initial_delay: float = 120.0
+    _retry_max_delay: float = 600.0
+    _retry_max_attempts: int = 10
     # Token pricing constants
     _INPUT_TOKEN_RATE = Decimal("0.00001")
     _OUTPUT_TOKEN_RATE = Decimal("0.00003")
@@ -213,34 +285,26 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         pipeline_id: uuid.UUID,
         max_concurrent: int,
+        graph_json: dict[str, Any] | None = None,
+        snapshot_id: uuid.UUID | None = None,
     ) -> Run:
         """Non-blocking capacity check using count-based comparison.
 
-        Avoids FOR UPDATE on the pipeline row — the advisory lock on snapshot
-        creation is the primary serialisation mechanism. If the pipeline has
-        reached its max_concurrent_runs limit, the run stays ``pending`` and
-        will be picked up by a background retry loop (see :meth:`_retry_pending`).
+        Soft-cap, no advisory lock. If the pipeline's ``max_concurrent_runs``
+        limit OR the organisation's sandbox concurrency cap (when the graph
+        contains a ``sandbox_agent`` node and a cap is configured) is reached,
+        the run is atomically demoted back to ``pending`` with a reason marker
+        on ``error_code`` (``pipeline_capacity`` / ``org_capacity_limited``)
+        and picked up by :meth:`_retry_pending`.
 
-        When *max_concurrent* is 0 or negative, capacity is unlimited and the
-        run transitions directly to ``running``.
+        When *max_concurrent* is 0 or negative the pipeline is unlimited, but
+        the organisation sandbox cap (if configured) still applies.
+
+        Fail-open, loud: any error reading the org setting, counting org runs,
+        or scanning the graph logs a warning and ADMITS the run (treats it as
+        no-cap) rather than raising.
         """
-        if max_concurrent <= 0:
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                run = await get_run(session, run_id)
-                if run is None:
-                    raise RunNotFoundError(run_id)
-                if run.cancellation_requested:
-                    await update_run_status(session, run_id, "cancelled")
-                    cancelled_run = await get_run(session, run_id)
-                    if cancelled_run is None:
-                        raise RunNotFoundError(run_id)
-                    return cancelled_run
-                await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
-                running_run = await get_run(session, run_id)
-                if running_run is None:
-                    raise RunNotFoundError(run_id)
-                return running_run
+        org_sandbox_cap: int | None = await self._read_org_sandbox_cap(org_id, graph_json, snapshot_id)
 
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
@@ -254,17 +318,172 @@ class PipelineExecutor:
                     raise RunNotFoundError(run_id)
                 return cancelled_run
 
-            active_count = await count_active_runs_for_pipeline(
-                session, pipeline_id, include_pending=False, exclude_run_id=run_id
-            )
-            if active_count < max_concurrent:
-                await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
+            pipeline_capacity_ok = True
+            active_count = 0
+            if max_concurrent > 0:
+                active_count = await count_active_runs_for_pipeline(
+                    session, pipeline_id, include_pending=False, exclude_run_id=run_id
+                )
+                pipeline_capacity_ok = active_count < max_concurrent
+
+            org_capacity_ok = True
+            org_count = 0
+            if org_sandbox_cap is not None:
+                try:
+                    org_count = await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "pipeline.sandbox_org_count_failed",
+                        extra={"org_id": str(org_id), "run_id": str(run_id)},
+                    )
+                else:
+                    org_capacity_ok = org_count < org_sandbox_cap
+
+            if pipeline_capacity_ok and org_capacity_ok:
+                if run.status not in _ADMISSIBLE_STATUSES:
+                    # The run went terminal (or hold) while a retry was backing
+                    # off — never resurrect it. Return it untouched so the
+                    # caller does not resume execution.
+                    return run
+                await update_run_status(
+                    session,
+                    run_id,
+                    "running",
+                    claimed_by=_WORKER_ID,
+                    clear_error_code=True,
+                )
                 running_run = await get_run(session, run_id)
                 if running_run is None:
                     raise RunNotFoundError(run_id)
                 return running_run
 
-        return run
+            decline_code, decline_detail = self._capacity_decline(
+                max_concurrent=max_concurrent,
+                active_count=active_count,
+                pipeline_capacity_ok=pipeline_capacity_ok,
+                org_sandbox_cap=org_sandbox_cap,
+                org_count=org_count,
+                org_capacity_ok=org_capacity_ok,
+            )
+            # Demote to pending + reason marker so the caller's retry branch fires.
+            await update_run_status(
+                session,
+                run_id,
+                "pending",
+                error_code=decline_code,
+                error_detail=decline_detail,
+            )
+            pending_run = await get_run(session, run_id)
+            if pending_run is None:
+                raise RunNotFoundError(run_id)
+            return pending_run
+
+    async def _read_org_sandbox_cap(
+        self,
+        org_id: uuid.UUID,
+        graph_json: dict[str, Any] | None,
+        snapshot_id: uuid.UUID | None,
+    ) -> int | None:
+        """Read the org's sandbox cap (``None`` = no cap / no sandbox / fail-open).
+
+        Short-circuits BEFORE any DB read: a graph with no ``sandbox_agent``
+        node skips the settings read entirely. Each fail-open path logs a
+        warning and treats the run as uncapped.
+        """
+        try:
+            if snapshot_id is not None:
+                has_sandbox = _sandbox_agent_for_snapshot(snapshot_id, graph_json)
+            else:
+                has_sandbox = _graph_contains_sandbox_agent(graph_json)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.sandbox_graph_scan_failed",
+                extra={"org_id": str(org_id)},
+            )
+            return None
+        if not has_sandbox:
+            return None
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                return await get_sandbox_concurrency_limit(session, org_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.sandbox_cap_read_failed",
+                extra={"org_id": str(org_id)},
+            )
+            return None
+
+    @staticmethod
+    def _capacity_decline(
+        *,
+        max_concurrent: int,
+        active_count: int,
+        pipeline_capacity_ok: bool,
+        org_sandbox_cap: int | None,
+        org_count: int,
+        org_capacity_ok: bool,
+    ) -> tuple[str, str]:
+        """Pick the capacity reason marker + sanitized human detail."""
+        if not org_capacity_ok and org_sandbox_cap is not None:
+            return (
+                ERROR_CODE_ORG_CAPACITY_LIMITED,
+                f"Org sandbox concurrency limit reached: {org_count} active, cap {org_sandbox_cap}",
+            )
+        return (
+            ERROR_CODE_PIPELINE_CAPACITY,
+            f"Pipeline max_concurrent_runs reached: {active_count} active, limit {max_concurrent}",
+        )
+
+    async def _run_status_retryable(self, run_id: uuid.UUID, org_id: uuid.UUID) -> bool:
+        """True when the run is still in a retryable state (pending/running).
+
+        Guards against re-admitting a run that went terminal while a retry
+        was waiting its backoff. Fail-open True: if the status cannot be read,
+        let :meth:`execute` decide.
+        """
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                run = await get_run(session, run_id)
+                return run is not None and run.status in ("pending", "running")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "retry_pending.status_check_failed",
+                extra={"run_id": str(run_id)},
+            )
+            return True
+
+    async def _fail_capacity_timeout(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+        """Terminal-fail a run that stayed capacity-blocked past all retries."""
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                run = await get_run(session, run_id)
+                if run is None or run.status != "pending":
+                    return
+                await update_run_status(
+                    session,
+                    run_id,
+                    "failed",
+                    error_code=ERROR_CODE_CAPACITY_TIMEOUT,
+                    error_detail="Run stayed capacity-blocked beyond the retry window",
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "pipeline.capacity_timeout_fail_failed",
+                extra={"run_id": str(run_id)},
+            )
 
     async def _retry_pending(
         self,
@@ -272,38 +491,51 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         org_id: uuid.UUID,
         input_payload: dict[str, Any],
-        delay: int = 120,
-        max_delay: int = 600,
     ) -> None:
         """Retry a pending run with exponential backoff until capacity frees up.
 
-        Starts at *delay* seconds, doubles each attempt, caps at *max_delay*.
-        If the run transitions to ``running`` on any attempt, returns immediately.
-        Exceptions are logged and loop continues - the final attempt runs at
-        *max_delay* seconds.
+        Single-flight: the caller (``execute``) only spawns this task when NOT
+        itself called from within a retry (``from_retry``), so at most one
+        retry loop exists per blocked run. Each attempt re-checks the run's
+        status (never re-admits a terminal run), exits on ``running`` or any
+        non-``pending`` terminal/hold status, and after
+        :attr:`_retry_max_attempts` terminal-fails with
+        ``capacity_timeout`` instead of looping forever.
         """
         global _RETRY_SEMAPHORE
         if _RETRY_SEMAPHORE is None:
             _RETRY_SEMAPHORE = asyncio.Semaphore(2)
         async with _RETRY_SEMAPHORE:
-            current_delay = delay
-            while current_delay <= max_delay:
-                await asyncio.sleep(current_delay + random.uniform(0, 30))  # noqa: S311 — non-cryptographic jitter
+            current_delay = self._retry_initial_delay
+            attempts = 0
+            while attempts < self._retry_max_attempts:
+                attempts += 1
+                await asyncio.sleep(self._capacity_poll_interval)
+                if not await self._run_status_retryable(run_id, org_id):
+                    return
                 try:
                     result = await self.execute(
                         run_id=run_id,
                         org_id=org_id,
                         input_payload=input_payload,
+                        from_retry=True,
                     )
-                    if result.status == "running":
-                        return
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     _log.exception(
-                        "retry_pending attempt failed for run %s (next retry in %ss)",
+                        "retry_pending attempt failed for run %s (attempt %d/%d)",
                         run_id,
-                        min(int(current_delay * 1.5), max_delay),
+                        attempts,
+                        self._retry_max_attempts,
                     )
-                current_delay = min(int(current_delay * 1.5), max_delay)
+                else:
+                    if result.status != "pending":
+                        return
+                if attempts < self._retry_max_attempts:
+                    await asyncio.sleep(current_delay)
+                    current_delay = min(current_delay * 1.5, self._retry_max_delay)
+            await self._fail_capacity_timeout(run_id=run_id, org_id=org_id)
 
     async def _load_eval_defs_for_pipeline(
         self,
@@ -693,8 +925,14 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         org_id: uuid.UUID,
         input_payload: dict[str, Any],
+        from_retry: bool = False,
     ) -> Run:
-        """Execute the run to completion. Returns the final Run row."""
+        """Execute the run to completion. Returns the final Run row.
+
+        *from_retry* is True when called from :meth:`_retry_pending`; it
+        suppresses spawning a fresh retry task on a capacity decline so at most
+        one single-flight retry loop exists per blocked run.
+        """
         # Load run + pipeline + snapshot in one short-lived transaction.
         # Query directly to avoid SQLAlchemy async lazy-load (MissingGreenlet).
         async with self._session_factory() as session, session.begin():
@@ -734,22 +972,26 @@ class PipelineExecutor:
             eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
         eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, pipeline_id)
 
-        # Non-blocking capacity check — if at limit the run stays pending.
+        # Non-blocking capacity check — if at limit the run is demoted back to
+        # pending (with a reason marker) and retried by _retry_pending.
         capacity_run = await self._check_capacity(
             run_id=run_id,
             org_id=org_id,
             pipeline_id=pipeline_id,
             max_concurrent=max_concurrent,
+            graph_json=graph_json,
+            snapshot_id=snapshot_id,
         )
         if capacity_run.status != "running":
-            retry_task = asyncio.create_task(
-                self._retry_pending(
-                    run_id=run_id,
-                    org_id=org_id,
-                    input_payload=input_payload,
+            if not from_retry:
+                retry_task = asyncio.create_task(
+                    self._retry_pending(
+                        run_id=run_id,
+                        org_id=org_id,
+                        input_payload=input_payload,
+                    )
                 )
-            )
-            retry_task.add_done_callback(lambda t: t.exception())
+                retry_task.add_done_callback(lambda t: t.exception())
             return capacity_run
 
         final_status: str = "failed"
