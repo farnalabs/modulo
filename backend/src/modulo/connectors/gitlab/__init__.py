@@ -237,7 +237,7 @@ class GitLabConnector(ConnectorBase):
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
             return min(retry_after, _MAX_DELAY)
-        return min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+        return min(_BASE_DELAY * (2.0**attempt), _MAX_DELAY)
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
@@ -554,7 +554,7 @@ class GitLabConnector(ConnectorBase):
                 project = self._require_filter(payload.data, "project", payload.resource)
                 mr_iid = self._require_filter(payload.data, "iid", payload.resource)
                 encoded = _project_path(project)
-                body: dict[str, Any] = {}
+                body = {}
                 if "merge_commit_message" in payload.data:
                     body["merge_commit_message"] = payload.data["merge_commit_message"]
                 if "squash" in payload.data:
@@ -571,7 +571,7 @@ class GitLabConnector(ConnectorBase):
                 project = self._require_filter(payload.data, "project", payload.resource)
                 mr_iid = self._require_filter(payload.data, "iid", payload.resource)
                 encoded = _project_path(project)
-                body: dict[str, Any] = {}
+                body = {}
                 if "sha" in payload.data:
                     body["sha"] = payload.data["sha"]
                 r = await self._call_api(
