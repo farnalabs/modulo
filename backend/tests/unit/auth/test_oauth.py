@@ -766,7 +766,7 @@ class TestPKCE:
         assert all(c.isalnum() or c in "-_" for c in challenge)
 
     def test_verify_pkce_matches(self) -> None:
-        verify_pkce(_CODE_VERIFIER, _CODE_CHALLENGE, "S256")
+        assert verify_pkce(_CODE_VERIFIER, _CODE_CHALLENGE, "S256") is None
 
     def test_verify_pkce_mismatch_raises(self) -> None:
         with pytest.raises(InvalidGrantError, match="PKCE"):
