@@ -232,19 +232,19 @@ class GitLabConnector(ConnectorBase):
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (2**attempt), _MAX_DELAY)))
+                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
                     continue
                 raise ValueError("GitLab API timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (2**attempt), _MAX_DELAY)))
+                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
                     continue
                 raise ValueError("GitLab API connection error") from exc
             except httpx.HTTPError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (2**attempt), _MAX_DELAY)))
+                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
                     continue
                 raise ValueError(f"GitLab API HTTP error: {exc}") from exc
         raise ValueError("GitLab API request failed after retries") from last_exc
@@ -263,7 +263,7 @@ class GitLabConnector(ConnectorBase):
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
             return min(retry_after, _MAX_DELAY)
-        return min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+        return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
