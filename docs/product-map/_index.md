@@ -63,7 +63,6 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-email-config](core/email-config.md) => PRD 8.11
 - [feat-core-feature-flag-ui](core/feature-flag-ui.md) => PRD 6.2, 6.3
 - [feat-core-feedback-correction](core/feedback-correction.md) => PRD 8.20
-- [feat-core-helm-chart](core/helm-chart.md) => PRD 11
 - [feat-core-hitl-effort-trend](core/hitl-effort-trend.md) => PRD 8.8
 - [feat-core-in-app-notifications](core/in-app-notifications.md) => PRD 8.11
 - [feat-core-langgraph-runtime](core/langgraph-runtime.md) => PRD 6.5
@@ -129,7 +128,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-frontend-ownership-picker](frontend/ownership-picker.md) => PRD 9.3
 
 ### Infrastructure
-- [feat-infra-deployment](infra/deployment.md) => PRD 10
+- [feat-infra-deployment](infra/deployment.md) => PRD 10, 11
 - [feat-infra-extensibility](infra/extensibility.md) => PRD 10, 10.2, 10.3, 10.3a, 10.4, 10.5
 - [feat-infra-health](infra/health-checks.md) => PRD N/A
 - [feat-infra-security](infra/security-controls.md) => PRD 7, 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9, 7.11, 7.12, 7.14, 7.15, 7.16, 7.17

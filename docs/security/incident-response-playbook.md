@@ -681,5 +681,4 @@ Conduct a tabletop exercise quarterly:
 | Self-hosted admin operations | `docs/operations/self-hosted-admin.md` |
 | Network egress audit | `docs/operations/network-egress.md` |
 | On-call rota | `docs/operations/on-call.md` |
-| K8s deployment runbook | `docs/deployment/k8s.md` |
 | Product map (behaviour tracking) | `docs/product-map/` |

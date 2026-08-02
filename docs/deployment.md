@@ -333,17 +333,11 @@ If Redis is configured (`REDIS_URL` set), the app automatically upgrades schedul
 
 ### Kubernetes (production, multi-replica)
 
-See `docs/deployment/k8s.md` and the Helm chart at `helm/modulo/`.
-
-| Component | How it runs |
-|---|---|
-| Database | PostgreSQL 16 (Bitnami sub-chart or external) |
-| Task scheduling | Celery beat (Redis required) |
-| Task queue | Celery workers (Redis required) |
-| Rate limiting | Redis token bucket (Redis required) |
-| Concurrency | Multiple backend replicas, horizontal scaling |
-
-**Redis is required for multi-replica deployments.** See the Scaling section below.
+The Kubernetes/Helm example deployment configs were removed — they were never
+exercised by CI or used in production. Modulo's only managed deployment path is
+Fly.io. For self-hosting, use the Docker Compose configuration
+(`docker-compose.prod.yml`). Kubernetes/Helm support can be re-added later as a
+properly maintained example config.
 
 ---
 

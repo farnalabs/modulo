@@ -311,14 +311,9 @@ Three compose files:
 
 ### Kubernetes (Helm)
 
-Helm chart at `helm/modulo/`. Referenced images: `ghcr.io/anomalyco/modulo-backend` and `modulo-frontend`.
-
-| Component | Replicas | Dependencies |
-|-----------|----------|-------------|
-| Backend API | 2+ | PostgreSQL, Redis |
-| Celery worker | 1+ | Redis |
-| Celery beat | 1 | Redis |
-| Frontend (nginx) | 2+ | Backend API |
+The Kubernetes/Helm example deployment configs were removed — they were never
+exercised by CI or used in production. Self-hosting is via Docker Compose
+(`docker-compose.prod.yml`); the managed deployment path is Fly.io.
 
 ### Redis dependency
 

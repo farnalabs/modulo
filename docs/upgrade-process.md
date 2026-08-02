@@ -39,30 +39,6 @@ docker compose -f docker-compose.prod.yml logs modulo-api | grep alembic
 curl http://localhost:8000/health
 ```
 
-### Kubernetes
-
-```bash
-# 1. Update the image tag in your overlay
-#    deploy/k8s/overlays/prod/backend-patch.yaml:
-#      spec:
-#        template:
-#          spec:
-#            containers:
-#              - name: backend
-#                image: ghcr.io/anomalyco/modulo-backend:v2.0.0
-
-# 2. Apply the change (rolling update)
-kubectl apply -k deploy/k8s/overlays/prod
-
-# 3. Monitor rollout
-kubectl rollout status deployment/modulo-backend -n modulo-prod
-
-# 4. Verify in logs
-kubectl logs -l app.kubernetes.io/component=backend -n modulo-prod --tail=20 | grep alembic
-```
-
-See [`docs/deployment/k8s.md`](./deployment/k8s.md) §9 for detailed K8s upgrade instructions.
-
 ### Self-Hosted (Bare Metal / VM)
 
 ```bash
@@ -198,7 +174,6 @@ When upgrading, check for changes to:
 |-------|----------|
 | Deployment guide | [`docs/deployment.md`](./deployment.md) |
 | Deployment security | [`docs/deployment-security.md`](./deployment-security.md) §7 |
-| K8s upgrades | [`docs/deployment/k8s.md`](./deployment/k8s.md) §9 |
 | Backup & restore | [`docs/operations/backup.md`](./operations/backup.md) |
 | Configuration reference | [`docs/configuration-reference.md`](./configuration-reference.md) |
 | Troubleshooting | [`docs/troubleshooting.md`](./troubleshooting.md) |

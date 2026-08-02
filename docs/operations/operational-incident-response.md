@@ -12,7 +12,6 @@ events.
 - `docs/operations/backup.md` — backup/restore procedures
 - `docs/operations/admin-bypass.md` — checkpoint bypass procedures
 - `docs/operations/performance-baseline.md` — performance budgets and baselines
-- `docs/deployment/k8s.md` — K8s deployment (if running on K8s)
 
 **Security incidents** (SSO compromise, API key leak, RLS bypass, prompt
 injection, data exfiltration, container CVE exploit, insider threat) follow
@@ -167,7 +166,7 @@ kubectl top nodes
 **Backend crash-loop:**
 1. Check logs: `kubectl logs -l app.kubernetes.io/component=backend -n modulo-prod --tail=100`
 2. Check recent deployments: `git log --oneline -5`
-3. If migration failure: check Alembic status and resolve per `docs/deployment/k8s.md` §9
+3. If migration failure: check Alembic status and resolve per `docs/upgrade-process.md`
 4. If missing secrets: verify `kubectl get secret modulo-secrets -n modulo-prod`
 5. If resource exhaustion: increase memory limits or add replicas
 6. Rollback if needed: `kubectl rollout undo deployment/modulo-backend -n modulo-prod`
@@ -176,7 +175,7 @@ kubectl top nodes
 1. Identify cause from pod logs and events
 2. If infrastructure failure (node down, PVC lost), restore from backup per
    `docs/operations/backup.md` §Disaster Recovery Guide
-3. If deployment defect, rollback per `docs/deployment/k8s.md` §9
+3. If deployment defect, roll back per `docs/upgrade-process.md`
 4. Restore database from backup if data corruption detected
 5. Verify health with `uv run modulo health --full`
 
@@ -782,7 +781,6 @@ Run this checklist quarterly to ensure operational readiness:
 | Performance baselines | `docs/operations/performance-baseline.md` |
 | Deployment basics | `docs/deployment.md` |
 | Deployment security | `docs/deployment-security.md` |
-| K8s deployment | `docs/deployment/k8s.md` |
 | Secret management | `docs/security/secret-management.md` |
 | Network egress audit | `docs/operations/network-egress.md` |
 | Product map (behaviour tracking) | `docs/product-map/` |
