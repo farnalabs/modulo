@@ -99,4 +99,17 @@ describe('parseSSEStream', () => {
     const events = await collect([''])
     expect(events).toEqual([])
   })
+
+  it('flushes the decoder on end-of-stream, preserving complete multibyte characters', async () => {
+    const events = await collect(['event: token\ndata: {"token":"🦄"}\n\n'])
+    expect(events).toEqual([{ event: 'token', data: '{"token":"🦄"}' }])
+  })
+
+  it('handles unicode characters split across chunk boundaries', async () => {
+    const events = await collect([
+      'event: token\ndata: {"token":"🦄',
+      '"}\n\n',
+    ])
+    expect(events).toEqual([{ event: 'token', data: '{"token":"🦄"}' }])
+  })
 })
