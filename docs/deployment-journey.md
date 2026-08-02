@@ -103,13 +103,13 @@ the ABC hides the backend.
 
 ### When to outgrow this
 You need more than 2 concurrent agents, sandbox isolation for security,
-or want to deploy on your own Kubernetes cluster.
+or want to self-host on your own infrastructure.
 
 ---
 
 ## 3. Existing Infrastructure — Integrate With What You Have
 
-**Who it's for:** teams that already run Kubernetes, have a VPC, use AWS/GCP,
+**Who it's for:** teams that already self-host (Docker Compose), have a VPC, use AWS/GCP,
 have compliance requirements (SOC 2, data residency, air-gapped).
 
 **Goal:** deploy Modulo into existing infra with maximum control.
@@ -119,7 +119,7 @@ have compliance requirements (SOC 2, data residency, air-gapped).
 ```
 ┌──────────┐  ┌──────────┐  ┌──────────────────┐
 │Postgres  │  │  Redis   │  │  Modulo Backend  │
-│(existing)│  │(existing)│  │  (K8s/Podman)    │
+│(existing)│  │(existing)│  │  (Docker Compose) │
 └──────────┘  └──────────┘  └────────┬─────────┘
                                      │
                                      ▼
@@ -195,7 +195,7 @@ you want to offer Modulo as a service to external teams.
                                    ▼
                         ┌──────────────────────┐
                         │  Existing Infra       │
-                        │  (K8s / Helm / VPC)   │
+                        │  (Docker / VPC)       │
                         │  Any RuntimeProvider  │
                         │  Full enterprise      │
                         └──────────────────────┘
