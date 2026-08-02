@@ -39,7 +39,7 @@ def _patch_trigger_run(client, request, *, pipeline=None, run=None, payload=None
             return_value=make_mock_snapshot(),
         ),
         patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run) as create_run,
-        patch("modulo.api.routes.runs._get_celery_app"),
+        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/runs",

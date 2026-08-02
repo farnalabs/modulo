@@ -174,29 +174,43 @@ def fire_cron_trigger(request, client):
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
 
-    execute_result = MagicMock()
-    execute_result.scalar_one_or_none = MagicMock(return_value=trigger_mock)
-    execute_result.scalar_one = MagicMock(return_value=getattr(request.node, "_today_cost", Decimal(0)))
-    session.execute = AsyncMock(return_value=execute_result)
+    update_sql: list[str] = []
+
+    async def _execute(stmt, *args, **kwargs):
+        result = MagicMock()
+        sql = str(stmt).lower()
+        if "pg_try_advisory" in sql:
+            result.scalar_one = MagicMock(return_value=True)
+        elif "from triggers" in sql:
+            result.scalar_one_or_none = MagicMock(return_value=trigger_mock)
+        elif "total_cost_usd" in sql:
+            result.scalar_one = MagicMock(return_value=getattr(request.node, "_today_cost", Decimal(0)))
+        else:
+            result.scalar_one_or_none = MagicMock(return_value=trigger_mock)
+        if "update" in sql:
+            update_sql.append(str(stmt))
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
 
     mock_factory = MagicMock(return_value=session)
     with (
-        patch("modulo.core.cron_scheduler._get_engine"),
-        patch("modulo.core.cron_scheduler.async_sessionmaker", return_value=mock_factory),
-        patch("modulo.core.cron_scheduler._set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.cron_helpers._get_engine"),
+        patch("modulo.core.cron_helpers.async_sessionmaker", return_value=mock_factory),
+        patch("modulo.core.cron_helpers._set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.cron_scheduler._count_active_runs",
+            "modulo.core.cron_helpers._count_active_runs",
             new_callable=AsyncMock,
             return_value=0,
         ),
-        patch("modulo.core.cron_scheduler.create_run", new_callable=AsyncMock, return_value=run_mock),
-        patch("modulo.core.cron_scheduler._log_event", new_callable=AsyncMock) as mock_event,
+        patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, return_value=run_mock),
+        patch("modulo.core.cron_helpers._log_event", new_callable=AsyncMock) as mock_event,
     ):
         mock_event.return_value = MagicMock(id=uuid.uuid4())
 
         import asyncio
 
-        from modulo.core.cron_scheduler import fire_cron_trigger as fire_fn
+        from modulo.core.cron_helpers import fire_cron_trigger as fire_fn
 
         event_loop = asyncio.new_event_loop()
         try:
@@ -207,6 +221,7 @@ def fire_cron_trigger(request, client):
                     pipeline_id=pipeline_id,
                     snapshot_id=snapshot_id,
                     cron_expression=getattr(request.node, "_cron_expression", "0 * * * *"),
+                    advance_next_fire_at=True,
                 )
             )
         finally:
@@ -215,6 +230,7 @@ def fire_cron_trigger(request, client):
     request.node._fire_result = result
     request.node._trigger_mock = trigger_mock
     request.node._run_mock = run_mock
+    request.node._update_sql = update_sql
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +293,9 @@ def trigger_last_fired_updated(request):
 def trigger_next_fire_advanced(request):
     result = getattr(request.node, "_fire_result", None)
     assert result is not None
-    assert result.get("next_fire_at") is not None
+    assert result.get("status") == "fired"
+    update_sql = getattr(request.node, "_update_sql", [])
+    assert any("next_fire_at" in sql for sql in update_sql), "Expected next_fire_at in the fire update statement"
 
 
 @then(parsers.parse('the trigger is skipped with reason "{reason}"'))
