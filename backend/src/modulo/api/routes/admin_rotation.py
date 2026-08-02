@@ -12,8 +12,12 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, get_or_create_engine, get_or_create_session_factory
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import (
+    get_db_session,
+    get_or_create_engine,
+    get_or_create_session_factory,
+    require_permission,
+)
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.fernet_rotation import rotate_all_encrypted_data
@@ -66,7 +70,7 @@ def _validate_fernet_key(key: str, label: str) -> None:
 @router.post("/rotate-key", response_model=RotateKeyResponse, status_code=status.HTTP_202_ACCEPTED)
 async def rotate_key(
     req: RotateKeyRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("admin.rotation.manage"),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> RotateKeyResponse:
@@ -157,7 +161,7 @@ async def rotate_key(
 @handle_db_errors("admin.rotation.rotation_status")
 @router.get("/status", response_model=RotationStatusResponse)
 async def rotation_status(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("admin.rotation.manage"),
 ) -> RotationStatusResponse:
     """Return the current rotation state."""
     try:

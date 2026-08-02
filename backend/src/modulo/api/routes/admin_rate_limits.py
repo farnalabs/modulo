@@ -1,11 +1,10 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from modulo.api.dependencies import require_feature
+from modulo.api.dependencies import require_feature, require_permission
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware, redis_available
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 
 _log = logging.getLogger(__name__)
@@ -44,9 +43,8 @@ def _require_admin(principal: TenantPrincipal) -> None:
 
 @router.get("", response_model=RateLimitStatusResponse, dependencies=[require_feature("rate_limits")])
 async def get_rate_limits(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("admin.rate_limit.manage"),
 ) -> RateLimitStatusResponse:
-    _require_admin(current_user)
     rules = [RateLimitRuleResponse(path_prefix=p, max_requests=m, window_s=w) for p, m, w in RateLimitMiddleware.RULES]
     return RateLimitStatusResponse(
         mode="redis" if redis_available else "in_memory",
@@ -57,9 +55,8 @@ async def get_rate_limits(
 @router.put("", response_model=RateLimitStatusResponse, dependencies=[require_feature("rate_limits")])
 async def update_rate_limits(
     req: RateLimitUpdateRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("admin.rate_limit.manage"),
 ) -> RateLimitStatusResponse:
-    _require_admin(current_user)
     new_rules = [(r.path_prefix, r.max_requests, r.window_s) for r in req.rules]
     if not new_rules:
         raise HTTPException(
