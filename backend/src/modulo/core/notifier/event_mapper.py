@@ -37,6 +37,12 @@ from modulo.db.models.notification import Notification
 
 _log = logging.getLogger(__name__)
 
+# HITL-gate guard events (hitl-gate-removal-guard-plan.md v19 §5). These are
+# emitted by the service-layer backstop as AuditEvents; the config registration
+# keeps the in-app Notification surface aware of them (scope: admin).
+EVENT_HITL_GATE_REMOVED = "hitl_gate_removed"
+EVENT_HITL_GATE_REMOVAL_DENIED = "hitl_gate_removal_denied"
+
 _EVENT_CONFIG: dict[str, dict[str, Any]] = {
     EVENT_HITL_AWAITING: {
         "level": "info",
@@ -74,6 +80,22 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "level": "warning",
         "scope": "admin",
         "category": "hitl.overdue",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_HITL_GATE_REMOVED: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "hitl.gate_removed",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_HITL_GATE_REMOVAL_DENIED: {
+        "level": "error",
+        "scope": "admin",
+        "category": "hitl.gate_removal_denied",
         "dismiss_strategy": "org_admin",
         "dismissible_at_scope": True,
         "ttl_hours": 168,
@@ -118,6 +140,8 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_BUDGET_EXCEEDED: "Budget exceeded — {pipeline_name}",
     EVENT_CLAIM_EXPIRED: "HITL claim expired — {pipeline_name}",
     EVENT_HITL_OVERDUE: "HITL overdue — {pipeline_name}",
+    EVENT_HITL_GATE_REMOVED: "HITL gate weakened — {pipeline_name}",
+    EVENT_HITL_GATE_REMOVAL_DENIED: "HITL gate removal denied",
     EVENT_EVAL_REGRESSION: "Eval regression detected — {agent_name}",
     EVENT_EVAL_BLOCKED: "Eval blocked — {pipeline_name}",
     EVENT_FEEDBACK_PENDING: "Feedback awaiting review",
@@ -130,6 +154,8 @@ _BODY_TEMPLATES: dict[str, str] = {
     EVENT_BUDGET_EXCEEDED: 'Run for "{pipeline_name}" exceeded its token budget.',
     EVENT_CLAIM_EXPIRED: 'A HITL claim on "{pipeline_name}" has expired.',
     EVENT_HITL_OVERDUE: 'Pipeline "{pipeline_name}" has been awaiting human review for {minutes_overdue} minutes.',
+    EVENT_HITL_GATE_REMOVED: 'A HITL gate on "{pipeline_name}" was weakened or removed.',
+    EVENT_HITL_GATE_REMOVAL_DENIED: "A non-privileged attempt to weaken a HITL gate was denied.",
     EVENT_EVAL_REGRESSION: 'Eval pass rate dropped for agent "{agent_name}".',
     EVENT_EVAL_BLOCKED: 'An eval check blocked pipeline "{pipeline_name}".',
     EVENT_FEEDBACK_PENDING: "A feedback record is pending your review.",
@@ -142,6 +168,8 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_BUDGET_EXCEEDED: "/runs/{run_id}",
     EVENT_CLAIM_EXPIRED: "/runs/{run_id}",
     EVENT_HITL_OVERDUE: "/runs/{run_id}",
+    EVENT_HITL_GATE_REMOVED: None,
+    EVENT_HITL_GATE_REMOVAL_DENIED: None,
     EVENT_EVAL_REGRESSION: "/evals",
     EVENT_EVAL_BLOCKED: "/runs/{run_id}",
     EVENT_FEEDBACK_PENDING: "/feedback/inbox",

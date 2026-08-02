@@ -194,24 +194,30 @@ class Notifier:
         retain_payload: bool,
         team_id: uuid.UUID | None = None,
     ) -> list[DispatchResult]:
+        # hitl-gate-removal-guard-plan.md v19 §5: the early `if not endpoints:
+        # return []` was a silent-loss bug — it made in-app Notification
+        # creation unreachable whenever an org had zero webhook subscribers.
+        # Webhook dispatch (a zero-iteration loop when ``endpoints`` is empty)
+        # and in-app notification creation are two independent, always-executed
+        # steps.
         endpoints = await self._get_subscribed_endpoints(org_id, event_type, team_id=team_id)
         if not endpoints:
             _log.debug("notifier.no_subscribers", extra={"event_type": event_type, "org_id": str(org_id)})
-            return []
-        body = json.dumps(
-            {
-                "event": event_type,
-                "timestamp": datetime.now(UTC).isoformat(),
-                "payload": payload,
-            },
-            default=str,
-            separators=(",", ":"),
-        ).encode()
-        http_client = await self._get_client()
         results: list[DispatchResult] = []
-        for ep in endpoints:
-            result = await self._dispatch_to_endpoint(http_client, ep, event_type, body, run_id, retain_payload)
-            results.append(result)
+        if endpoints:
+            body = json.dumps(
+                {
+                    "event": event_type,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "payload": payload,
+                },
+                default=str,
+                separators=(",", ":"),
+            ).encode()
+            http_client = await self._get_client()
+            for ep in endpoints:
+                result = await self._dispatch_to_endpoint(http_client, ep, event_type, body, run_id, retain_payload)
+                results.append(result)
 
         # Create in-app notification record alongside webhook dispatches
         try:

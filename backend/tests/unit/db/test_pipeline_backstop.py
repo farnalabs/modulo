@@ -83,6 +83,7 @@ async def test_replace_pipeline_graph_accepts_is_privileged_true() -> None:
         nodes=[],
         edges=[],
         is_privileged=True,
+        caller_type="rest",
     )
     assert result is None
 
@@ -95,6 +96,7 @@ async def test_replace_pipeline_graph_accepts_is_privileged_false() -> None:
         nodes=[],
         edges=[],
         is_privileged=False,
+        caller_type="rest",
     )
     assert result is None
 
@@ -105,6 +107,7 @@ async def test_rollback_to_snapshot_accepts_is_privileged_true() -> None:
         uuid.uuid4(),
         uuid.uuid4(),
         is_privileged=True,
+        caller_type="rest",
     )
     assert result is None
 
@@ -115,8 +118,48 @@ async def test_rollback_to_snapshot_accepts_is_privileged_false() -> None:
         uuid.uuid4(),
         uuid.uuid4(),
         is_privileged=False,
+        caller_type="rest",
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# caller_type is a required keyword-only argument on both guarded functions
+# (hitl-gate-removal-guard-plan.md v19 §3 item 5).
+# ---------------------------------------------------------------------------
+
+
+def test_replace_pipeline_graph_caller_type_keyword_only_no_default() -> None:
+    sig = inspect.signature(replace_pipeline_graph)
+    param = sig.parameters["caller_type"]
+    assert param.kind == inspect.Parameter.KEYWORD_ONLY
+    assert param.default is inspect.Parameter.empty
+
+
+def test_rollback_to_snapshot_caller_type_keyword_only_no_default() -> None:
+    sig = inspect.signature(rollback_to_snapshot)
+    param = sig.parameters["caller_type"]
+    assert param.kind == inspect.Parameter.KEYWORD_ONLY
+    assert param.default is inspect.Parameter.empty
+
+
+async def test_replace_pipeline_graph_requires_caller_type() -> None:
+    session = AsyncMock()
+    with pytest.raises(TypeError):
+        await replace_pipeline_graph(
+            session,
+            pipeline_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            nodes=[],
+            edges=[],
+            is_privileged=True,
+        )
+
+
+async def test_rollback_to_snapshot_requires_caller_type() -> None:
+    session = AsyncMock()
+    with pytest.raises(TypeError):
+        await rollback_to_snapshot(session, uuid.uuid4(), uuid.uuid4(), is_privileged=True)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +194,46 @@ def test_all_call_sites_pass_is_privileged() -> None:
             if "is_privileged" not in keywords:
                 missing.append(f"{rel}:{node.lineno}: {node.func.id}()")
     assert not missing, f"Call sites missing is_privileged=: {missing}"
+
+
+def test_all_call_sites_pass_caller_type() -> None:
+    missing: list[str] = []
+    for rel in _CALL_SITE_FILES:
+        path = _SRC_ROOT / rel
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id not in _GUARDED_CALLS:
+                continue
+            keywords = {kw.arg for kw in node.keywords}
+            if "caller_type" not in keywords:
+                missing.append(f"{rel}:{node.lineno}: {node.func.id}()")
+    assert not missing, f"Call sites missing caller_type=: {missing}"
+
+
+def test_mcp_call_site_passes_literal_mcp_caller_type() -> None:
+    """The MCP call site must pass the literal "mcp", not a variable.
+
+    Complements the .semgrep/hitl-gate-mcp-caller-type.yml rule with a
+    structural check visible in the unit suite.
+    """
+    path = _SRC_ROOT / "api" / "mcp_server.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id not in _GUARDED_CALLS:
+            continue
+        for kw in node.keywords:
+            if kw.arg != "caller_type":
+                continue
+            if not isinstance(kw.value, ast.Constant) or kw.value.value != "mcp":
+                violations.append(f"api/mcp_server.py:{node.lineno}: caller_type is not the literal 'mcp'")
+    assert not violations, "\n".join(violations)
 
 
 # ---------------------------------------------------------------------------
