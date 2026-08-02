@@ -151,6 +151,12 @@
         <pre class="bg-muted/30 rounded-lg p-4 text-sm overflow-x-auto whitespace-pre-wrap">{{ formattedOutput }}</pre>
       </div>
 
+      <!-- Capacity-blocked pending run (queued on sandbox concurrency limit) -->
+      <div v-if="run.status === 'pending' && (run.error_code === 'org_capacity_limited' || run.error_code === 'pipeline_capacity')" data-testid="run-detail-waiting-for-capacity" class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4">
+        <h3 class="text-sm font-semibold text-warning mb-1">{{ $t('views.RunDetailView.waiting_for_capacity') }}</h3>
+        <p v-if="run.error_detail" class="text-xs whitespace-pre-wrap text-warning/80">{{ run.error_detail }}</p>
+      </div>
+
       <!-- Failed Run Diagnostics -->
       <div v-if="run.status === 'failed' && run.error_detail" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 mb-4">
         <h3 class="text-sm font-semibold text-destructive mb-1">{{ $t('views.RunDetailView.run_error') }}</h3>

@@ -566,6 +566,17 @@ routes:
         <<: *team
         deprecated: false
 
+    /admin/sandbox-concurrency:
+        name: admin-sandbox-concurrency
+        breadcrumb: Sandbox Concurrency
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 8
+        type: form_page
+        <<: *team
+        deprecated: false
+
     /admin/views:
         name: admin-views
         breadcrumb: Saved Views
