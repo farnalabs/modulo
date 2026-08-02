@@ -327,7 +327,10 @@ const currentPage = ref(1)
 const pageSize = 10
 
 const { data: flagsResponse, loading, error, load: loadFlags } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/feature-flags') as Promise<{ data?: FlagsResponse; error?: { detail?: string } }>,
+  () => api.GET('/api/v1/admin/feature-flags').then((res) => ({
+    data: res.data as FlagsResponse | undefined,
+    error: res.error,
+  })),
   { initialValue: { flags: [] as FlagItem[], license: { tier: 'community', has_license_key: false, is_valid: true } as LicenseInfo, would_activate: [] as FlagItem[] } as FlagsResponse }
 )
 
@@ -444,7 +447,7 @@ async function saveOverride() {
 async function toggleFlag(flag: FlagItem) {
   flagToggling.value[flag.name] = true
   const enabled = !flag.currently_active
-  const { error: err } = await (api as any).PUT('/api/v1/admin/feature-flags/{flag_name}', {
+  const { error: err } = await api.PUT('/api/v1/admin/feature-flags/{flag_name}', {
     params: { path: { flag_name: flag.name } },
     body: { enabled },
   })

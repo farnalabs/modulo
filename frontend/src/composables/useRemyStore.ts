@@ -4,11 +4,11 @@ import { useStorage } from '@vueuse/core'
 import { api, type components } from '@/lib/api/client'
 import { formatApiError } from '@/lib/api/formatError'
 import { pauseUiCommands, resumeUiCommands } from './useUiCommandExecutor'
-import type { ChatSession, ChatMessage, PageContext } from '@/types/remy'
+import type { ChatSession, ChatMessage, PageContext, ToolResult } from '@/types/remy'
 
 export interface PermissionRequest {
   request_id: string
-  tools: Array<{ name: string; args: Record<string, unknown> }>
+  tools: Array<{ name: string; args: Record<string, unknown>; nogo?: boolean }>
 }
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200000
@@ -291,7 +291,7 @@ export const useRemyStore = defineStore('remy', () => {
     }
   }
 
-  function appendToolCall(tc: { tool_call_id: string; tool_name: string; success: boolean; result?: unknown; error?: string }) {
+  function appendToolCall(tc: ToolResult) {
     const summary = tc.success
       ? `Tool: ${tc.tool_name} — completed`
       : `Tool: ${tc.tool_name} — failed: ${tc.error ?? 'unknown error'}`

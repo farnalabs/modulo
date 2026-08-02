@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -276,7 +275,6 @@ async def delete_view_endpoint(
 
 
 @router.post("/{view_id}/restore", response_model=ViewResponse, dependencies=[require_feature("view_modes")])
-@handle_db_errors("views.restore")
 async def restore_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
