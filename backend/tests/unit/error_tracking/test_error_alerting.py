@@ -404,7 +404,7 @@ class TestDispatchWebhook:
         assert "Test Webhook" in summary
         assert "count=3" in summary
 
-    async def test_dispatch_swallows_exception(self) -> None:
+    async def test_dispatch_swallows_exception(self, caplog: pytest.LogCaptureFixture) -> None:
         from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
 
         alert = TriggeredAlert(
@@ -421,7 +421,10 @@ class TestDispatchWebhook:
         error_group = MagicMock()
         error_group.sample_event = None
 
-        await dispatch_alert(_ORG_ID, alert, session, error_group)
+        with caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"):
+            await dispatch_alert(_ORG_ID, alert, session, error_group)
+
+        assert any("alert.webhook_request_failed" in rec.message for rec in caplog.records)
 
 
 # =========================================================================
