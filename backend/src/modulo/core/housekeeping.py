@@ -228,6 +228,7 @@ async def _scan_untriggered_pipelines(session: AsyncSession, org_id: uuid.UUID) 
             await session.execute(
                 select(Pipeline).where(
                     Pipeline.organisation_id == org_id,
+                    Pipeline.deleted_at.is_(None),
                     Pipeline.id.notin_(select(trigger_subq.c.pipeline_id)),
                     Pipeline.id.notin_(select(run_subq.c.pipeline_id)),
                 )
@@ -268,6 +269,7 @@ async def _scan_stale_pipelines(session: AsyncSession, org_id: uuid.UUID) -> lis
                 )
                 .where(
                     Pipeline.organisation_id == org_id,
+                    Pipeline.deleted_at.is_(None),
                     max_run.c.last_run_at < four_weeks_ago,
                 )
             )
@@ -316,6 +318,7 @@ async def _scan_inactive_triggers(session: AsyncSession, org_id: uuid.UUID) -> l
             await session.execute(
                 select(Trigger).where(
                     Trigger.organisation_id == org_id,
+                    Trigger.deleted_at.is_(None),
                     Trigger.active.is_(False),
                     Trigger.last_fired_at.is_(None),
                 )
