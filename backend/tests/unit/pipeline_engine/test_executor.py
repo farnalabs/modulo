@@ -1432,3 +1432,33 @@ async def test_execute_does_not_spawn_retry_when_called_from_retry():
 
     assert result.status == "pending"
     create_task.assert_not_awaited()
+
+
+@pytest.mark.parametrize("terminal_status", ["complete", "failed", "cancelled", "eval_failed"])
+async def test_execute_does_not_spawn_retry_for_terminal_run(terminal_status: str):
+    """A terminal run returned by _check_capacity must not spawn a retry task.
+
+    Spawning _retry_pending for a terminal run would sleep
+    _capacity_poll_interval while holding the global retry semaphore, then
+    exit without doing anything — needlessly starving genuinely blocked runs.
+    """
+    run = _make_run()
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    create_task = MagicMock()
+    terminal_run = _make_run(run_id=run.id, status=terminal_status)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(PipelineExecutor, "_check_capacity", new=AsyncMock(return_value=terminal_run)),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor.asyncio.create_task", new=create_task),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    assert result.status == terminal_status
+    create_task.assert_not_called()

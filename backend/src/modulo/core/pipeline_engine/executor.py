@@ -92,6 +92,10 @@ _RETRY_SEMAPHORE: asyncio.Semaphore | None = None
 # resurrected back to ``running``.
 _ADMISSIBLE_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
 
+# Terminal statuses. A run in one of these is already finalised; it must never
+# be resurrected AND must never spawn (or hold) a retry task.
+_TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+
 _SANDBOX_AGENT_CACHE: OrderedDict[str, bool] = OrderedDict()
 _SANDBOX_AGENT_CACHE_MAX = 512
 
@@ -983,6 +987,14 @@ class PipelineExecutor:
             snapshot_id=snapshot_id,
         )
         if capacity_run.status != "running":
+            if capacity_run.status in _TERMINAL_STATUSES:
+                # The run went terminal while the capacity check ran (e.g. it
+                # was cancelled/completed while backing off). Never spawn a
+                # retry task for a terminal run — it would sleep
+                # _capacity_poll_interval while holding the global retry
+                # semaphore, then exit on the retryable check without doing
+                # anything, briefly starving genuinely blocked runs of slots.
+                return capacity_run
             if not from_retry:
                 retry_task = asyncio.create_task(
                     self._retry_pending(
