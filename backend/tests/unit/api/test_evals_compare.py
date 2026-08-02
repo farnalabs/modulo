@@ -141,6 +141,7 @@ class TestEvalCompare:
         )
 
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_one_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -180,6 +181,7 @@ class TestEvalCompare:
         mock_session = _make_mock_session()
 
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_one_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -206,6 +208,7 @@ class TestEvalCompare:
         run_b = _make_row(id=_RUN_B, created_at=_DT)
 
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_one_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -251,6 +254,7 @@ class TestEvalCoverage:
         eval_def = _make_row(id=_EVAL_DEF_1, node_id=_NODE_1)
 
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_one_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -276,6 +280,7 @@ class TestEvalCoverage:
         mock_session = _make_mock_session()
 
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_one_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -299,6 +304,7 @@ class TestEvalCoverage:
         )
 
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_one_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -334,6 +340,7 @@ class TestEvalFromRun:
         )
 
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_one_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -383,6 +390,7 @@ class TestEvalFromRun:
         mock_session = _make_mock_session()
 
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_one_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -415,6 +423,7 @@ class TestEvalFromRun:
             )
 
             mock_session.execute.side_effect = [
+                _make_result(),  # require_permission authz_enforce (kill-switch) read
                 _make_result(scalar_one_value=None),  # set_rls_org
                 _make_result(scalar_value=None),  # set_rls_user_context (user_id)
                 _make_result(scalar_value=None),  # set_rls_user_context (org_role)

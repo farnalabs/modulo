@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service import (
@@ -295,7 +295,7 @@ async def list_library_primitives_endpoint(
     search: str | None = None,
     source: str | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.search"),
 ) -> LibraryPrimitiveListResponse:
     try:
         try:
@@ -381,7 +381,7 @@ async def ping() -> dict[str, bool]:
 async def get_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.search"),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -609,7 +609,7 @@ async def copy_to_adapt_endpoint(
     primitive_id: uuid.UUID,
     req: CopyToAdaptRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.copy"),
 ) -> LibraryPrimitiveResponse:
     try:
         result = await copy_to_adapt(

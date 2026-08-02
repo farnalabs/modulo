@@ -22,9 +22,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import mask_config_json
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 from modulo.core.trigger_engine import TriggerEngine
@@ -45,7 +44,7 @@ async def list_triggers(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.list"),
 ) -> dict[str, Any]:
     """List all triggers, optionally filtered by pipeline or type."""
     try:
@@ -146,7 +145,7 @@ async def update_cron_config(
     trigger_id: uuid.UUID,
     req: CronConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.update"),
 ) -> dict[str, Any]:
     """Update cron configuration for a trigger.
 
@@ -233,7 +232,7 @@ async def preview_cron_schedule(
     trigger_id: uuid.UUID,
     count: int = Query(5, ge=1, le=50),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.list"),
 ) -> dict[str, Any]:
     """Preview the next *count* fire times for a cron trigger."""
     try:
@@ -316,7 +315,7 @@ async def update_polling_config(
     trigger_id: uuid.UUID,
     req: PollingConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.update"),
 ) -> dict[str, Any]:
     """Update polling configuration for a trigger.
 
@@ -419,7 +418,7 @@ async def test_polling_condition(
     trigger_id: uuid.UUID,
     req: PollingTestRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.update"),
 ) -> dict[str, Any]:
     """Test a polling trigger's query and condition expression without firing a run.
 
@@ -498,7 +497,7 @@ async def create_trigger(
     pipeline_id: uuid.UUID,
     req: TriggerCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.create"),
 ) -> dict[str, Any]:
     """Create a new trigger for a pipeline."""
     try:
@@ -576,7 +575,7 @@ async def update_trigger(
     trigger_id: uuid.UUID,
     req: TriggerUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.update"),
 ) -> dict[str, Any]:
     """Update a trigger's general configuration."""
     try:
@@ -660,7 +659,7 @@ async def update_trigger(
 async def delete_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.delete"),
 ) -> None:
     """Soft-delete a trigger."""
     try:
@@ -698,7 +697,7 @@ async def delete_trigger(
 async def restore_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.update"),
 ) -> dict[str, Any]:
     """Restore a soft-deleted trigger."""
     try:
@@ -749,7 +748,7 @@ async def restore_trigger(
 async def toggle_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.update"),
 ) -> dict[str, Any]:
     """Toggle a trigger's active state."""
     try:
@@ -802,7 +801,7 @@ async def test_trigger(
     trigger_id: uuid.UUID,
     req: TestTriggerRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.update"),
 ) -> dict[str, Any]:
     """Fire a test event for a trigger.
 
@@ -899,7 +898,7 @@ async def list_trigger_events(
     cursor: str | None = Query(None, description="Cursor: createdAt_eventId"),
     limit: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.events.list"),
 ) -> dict[str, Any]:
     """List trigger events with cursor-based pagination.
 
@@ -1003,7 +1002,7 @@ async def list_pipeline_triggers(
     pipeline_id: uuid.UUID,
     trigger_type: str | None = Query(None),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("trigger.list"),
 ) -> dict[str, Any]:
     """List triggers for a specific pipeline."""
     try:

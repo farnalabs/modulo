@@ -116,6 +116,8 @@ PERMISSIONS: dict[str, str] = {
     "eval.list": "runner",
     "eval.run": "operator",
     "eval.definition.create": "operator",
+    "eval.definition.update": "operator",
+    "eval.definition.delete": "operator",
     # housekeeping
     "housekeeping.list": "runner",
     "housekeeping.perform": "operator",
