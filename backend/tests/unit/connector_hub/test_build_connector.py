@@ -40,6 +40,16 @@ def test_build_gitlab_connector():
     assert connector.connector_type == ConnectorType.GITLAB
 
 
+def test_build_gitlab_connector_self_hosted():
+    connector = _build_connector(
+        "gitlab",
+        {"base_url": "https://gitlab.example.com/api/v4"},
+        {"token": "gitlab_token"},
+    )
+    assert connector.connector_type == ConnectorType.GITLAB
+    assert connector._base_url == "https://gitlab.example.com/api/v4"
+
+
 def test_build_linear_connector():
     connector = _build_connector("linear", {}, {"api_key": "linear_key"})
     assert connector.connector_type == ConnectorType.LINEAR

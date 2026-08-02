@@ -188,3 +188,120 @@ async def test_parse_json_narrowed_to_jsondecodeerror(connector):
     # list responses should work (they're valid JSON) — if _parse_json was dict-only this would fail
     result = await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
     assert len(result.records) == 2
+
+
+@respx.mock
+async def test_query_429_uses_rate_limit_reset_time(connector):
+    """RateLimit-ResetTime header should drive the retry delay on 429."""
+    import time
+
+    reset_epoch = time.time() + 0.05
+    route = respx.get(f"{_API}/projects/group%2Fproject/issues")
+    route.mock(
+        side_effect=[
+            httpx.Response(
+                429,
+                headers={"RateLimit-Remaining": "0", "RateLimit-ResetTime": str(reset_epoch)},
+                text="Rate limit exceeded",
+            ),
+            httpx.Response(200, json=[{"id": 1}]),
+        ],
+    )
+    start = time.monotonic()
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
+    elapsed = time.monotonic() - start
+    assert len(result.records) == 1
+    assert route.call_count == 2
+    assert elapsed < 0.5
+
+
+@respx.mock
+async def test_query_429_uses_rate_limit_reset_fallback(connector):
+    """RateLimit-Reset (epoch) should drive the retry delay when ResetTime is absent."""
+    import time
+
+    reset_epoch = time.time() + 0.05
+    route = respx.get(f"{_API}/projects/group%2Fproject/issues")
+    route.mock(
+        side_effect=[
+            httpx.Response(
+                429,
+                headers={"RateLimit-Remaining": "0", "RateLimit-Reset": str(reset_epoch)},
+                text="Rate limit exceeded",
+            ),
+            httpx.Response(200, json=[{"id": 1}]),
+        ],
+    )
+    start = time.monotonic()
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
+    elapsed = time.monotonic() - start
+    assert len(result.records) == 1
+    assert route.call_count == 2
+    assert elapsed < 0.5
+
+
+@respx.mock
+async def test_query_429_rate_limit_headers_in_error(connector):
+    """Rate-limit quota headers should surface in the final 429 error detail."""
+    route = respx.get(f"{_API}/projects/group%2Fproject/issues")
+    route.mock(
+        side_effect=[
+            httpx.Response(
+                429,
+                headers={
+                    "RateLimit-Limit": "600",
+                    "RateLimit-Remaining": "0",
+                    "RateLimit-Reset": "1754000000",
+                },
+                text="Rate limit",
+            )
+            for _ in range(4)
+        ],
+    )
+    with pytest.raises(ValueError, match="GitLab API HTTP 429") as excinfo:
+        await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
+    assert route.call_count == 4
+    assert "RateLimit-Reset=1754000000" in str(excinfo.value)
+
+
+@respx.mock
+async def test_health_check_detects_missing_scope_on_projects(connector):
+    """A 403 on /projects (insufficient read_api/api scope) should fail health."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(403, json={"error": "insufficient_scope"}))
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "read_api" in result.detail or "api" in result.detail
+
+
+@respx.mock
+async def test_health_check_detects_expired_token(connector):
+    """A 401 on /user should be reported as an invalid/expired token, not a scope issue."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(401, json={"error": "invalid_token"}))
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "Invalid or expired" in result.detail
+
+
+@respx.mock
+async def test_health_check_ok_with_rate_limit_headers(connector):
+    """Healthy quota headers should not trip the health check."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"id": 1}],
+            headers={"RateLimit-Limit": "600", "RateLimit-Remaining": "599"},
+        )
+    )
+    result = await connector.health_check()
+    assert result.ok is True
+
+
+@respx.mock
+async def test_health_check_no_rate_limit_headers_ok(connector):
+    """No RateLimit-* headers (unrestricted api scope) should pass health."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    result = await connector.health_check()
+    assert result.ok is True
