@@ -92,7 +92,9 @@ def create_migration(from_schema: dict[str, Any], to_schema: dict[str, Any]) -> 
                 new_type=new_type,
             )
 
-    renames = _detect_renames(from_props, to_props, list(removed), list(added))
+    # Sort candidate names so the same-type heuristic is deterministic across
+    # runs (sets/py dicts have hash-randomised iteration order).
+    renames = _detect_renames(from_props, to_props, sorted(removed), sorted(added))
     for old, new in renames:
         plan.renames[old] = new
         plan.field_removals.remove(old)
@@ -124,14 +126,96 @@ def _detect_renames(
     return renames
 
 
+def _detect_rename_cycles(renames: dict[str, str]) -> list[list[str]]:
+    """Return rename cycles as ordered lists of old-name keys.
+
+    A cycle ``A -> B -> A`` is returned as ``[A, B]`` (each node renames
+    to the next). Keys that participate in no cycle are not returned.
+    """
+    cycles: list[list[str]] = []
+    visited: set[str] = set()
+
+    for start in renames:
+        if start in visited:
+            continue
+        path: list[str] = []
+        index: dict[str, int] = {}
+        node = start
+        while node in renames and node not in index:
+            if node in visited:
+                break
+            index[node] = len(path)
+            path.append(node)
+            node = renames[node]
+        if node in index:
+            cycle = path[index[node] :]
+            cycles.append(cycle)
+            visited.update(cycle)
+        else:
+            visited.update(path)
+
+    return cycles
+
+
+def _apply_renames(result: dict[str, Any], renames: dict[str, str]) -> dict[str, Any]:
+    """Apply a rename mapping without losing data or hanging on cycles.
+
+    Renames are treated as a simultaneous value rotation:
+
+    - *Cycles* (``A -> B -> A``) rotate values: each field receives the
+      value of its predecessor, so ``{A: 1, B: 2}`` with ``A<->B`` becomes
+      ``{A: 2, B: 1}`` instead of losing one field.
+    - *Chains* are applied tail-first (reverse topological order) so a
+      value that moves into a field that is itself being renamed is
+      forwarded before the field is overwritten.
+    """
+    cycles = _detect_rename_cycles(renames)
+    for cycle in cycles:
+        saved = {name: result.get(name) for name in cycle}
+        for i, name in enumerate(cycle):
+            predecessor = cycle[i - 1]
+            if predecessor in result:
+                result[name] = saved[predecessor]
+        _log.warning(
+            "Circular rename chain detected: %s -> %s; applied as value rotation",
+            " -> ".join(cycle),
+            cycle[0],
+        )
+
+    cyclic_nodes = {name for cycle in cycles for name in cycle}
+    sources = set(renames)
+    pending = {old: new for old, new in renames.items() if old not in cyclic_nodes}
+
+    while pending:
+        progressed = False
+        for old_name, new_name in list(pending.items()):
+            if new_name in pending:
+                continue
+            if old_name in result:
+                if new_name in result and new_name not in sources:
+                    _log.warning(
+                        "Rename %s -> %s: target field already exists, overwriting",
+                        old_name,
+                        new_name,
+                    )
+                result[new_name] = result.pop(old_name)
+            del pending[old_name]
+            progressed = True
+        if not progressed:
+            _log.warning(
+                "Rename plan has an irreducible cycle: %s",
+                ", ".join(f"{old} -> {new}" for old, new in pending.items()),
+            )
+            break
+
+    return result
+
+
 def apply_migration(data: dict[str, Any], plan: MigrationPlan) -> dict[str, Any]:
     result = deepcopy(data)
 
-    for old_name, new_name in plan.renames.items():
-        if old_name in result and new_name in result:
-            _log.warning("Rename %s -> %s: target field already exists, overwriting", old_name, new_name)
-        if old_name in result:
-            result[new_name] = result.pop(old_name)
+    if plan.renames:
+        result = _apply_renames(result, plan.renames)
 
     for field_name in plan.field_removals:
         result.pop(field_name, None)
