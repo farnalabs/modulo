@@ -110,13 +110,6 @@ See [`docs/deployment-security.md`](./deployment-security.md) for the full secur
   - `docker-compose.prod.yml` (or equivalent) references correct images
   - Port mappings are correct
   - Volume mounts are configured for Postgres data persistence
-- [ ] **Kubernetes** manifests are validated (if using K8s):
-  - `deploy/k8s/overlays/prod/` has correct image tags
-  - HPA is configured with appropriate min/max replicas
-  - PodDisruptionBudget is applied (`minAvailable: 1`)
-  - Backend readiness/liveness probes are configured
-  - Secrets are managed via SealedSecrets or External Secrets Operator
-- [ ] **Helm chart** (if used) is packaged and tested
 
 ---
 
@@ -126,7 +119,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for the full secur
 - [ ] **Rollback procedure** is documented and tested
 - [ ] **Alembic migration** SQL is previewed and reviewed
 - [ ] **Pre-upgrade backup** procedure is verified
-- [ ] **Zero-downtime** requirements are met (2+ backend replicas for K8s)
+- [ ] **Zero-downtime** requirements are met (2+ backend replicas)
 
 See [`docs/upgrade-process.md`](./upgrade-process.md) for full upgrade and rollback procedures.
 
@@ -183,7 +176,6 @@ See [`docs/upgrade-process.md`](./upgrade-process.md) for full upgrade and rollb
 | System requirements | [`docs/system-requirements.md`](./system-requirements.md) |
 | Quickstart | [`docs/quickstart.md`](./quickstart.md) |
 | Deployment guide | [`docs/deployment.md`](./deployment.md) |
-| K8s deployment | [`docs/deployment/k8s.md`](./deployment/k8s.md) |
 | Deployment journeys | [`docs/deployment-journey.md`](./deployment-journey.md) |
 | Security hardening | [`docs/deployment-security.md`](./deployment-security.md) |
 | Configuration reference | [`docs/configuration-reference.md`](./configuration-reference.md) |

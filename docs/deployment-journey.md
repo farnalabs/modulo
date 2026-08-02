@@ -2,7 +2,7 @@
 
 Modulo supports three distinct deployment scenarios. Every user starts on one
 path and can graduate to the next as their needs grow — all three use the same
-codebase, same Helm chart, same Docker images, same RuntimeProvider ABC.
+codebase, same Docker images, same RuntimeProvider ABC.
 
 ---
 
@@ -122,20 +122,17 @@ have compliance requirements (SOC 2, data residency, air-gapped).
 │(existing)│  │(existing)│  │  (K8s/Podman)    │
 └──────────┘  └──────────┘  └────────┬─────────┘
                                      │
-              ┌──────────────────────┤
-              │                      │
-              ▼                      ▼
-   ┌──────────────────┐   ┌──────────────────┐
-   │  E2B Runtime     │   │  K8s Runtime     │
-   │  (sandboxed)     │   │  (per-agent Job) │
-   └──────────────────┘   └──────────────────┘
+                                     ▼
+                        ┌──────────────────────┐
+                        │    E2B Runtime       │
+                        │    (sandboxed)       │
+                        └──────────────────────┘
 ```
 
 ### Deployment options
 
 | Approach | Docs | RuntimeProvider |
 |---|---|---|
-| K8s + Helm chart | `helm/modulo/`, `docs/deployment/k8s.md` | Local (in-process), E2B, or K8s Job |
 | Docker Compose (prod) | `docs/deployment.md` | Local or E2B |
 | Raw Docker | `docker compose up` with prod config | Local or E2B |
 
@@ -145,7 +142,6 @@ have compliance requirements (SOC 2, data residency, air-gapped).
 |---|---|---|---|
 | `LocalRuntimeProvider` | Default; single-host, no sandbox | Capped (default 2) | None |
 | `E2BRuntimeProvider` | Add sandboxed execution with E2B | Unlimited (E2B's capacity) | Full sandbox |
-| `KubernetesRuntimeProvider` | Run each agent as a K8s Job | Cluster capacity | Namespace-level |
 | `DockerRuntimeProvider` | Run each agent in a separate container | Host capacity | Container-level |
 
 All providers share the same `RuntimeProvider` ABC. Switching between them
