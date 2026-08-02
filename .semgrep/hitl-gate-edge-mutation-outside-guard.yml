@@ -1,0 +1,31 @@
+rules:
+  - id: hitl-gate-edge-mutation-outside-guard
+    patterns:
+      - pattern-either:
+          - pattern: |
+              delete(PipelineEdge)
+          - pattern: |
+              sa_delete(PipelineEdge)
+          - pattern: |
+              PipelineEdge(
+    message: >
+      PipelineEdge rows are the HITL-gate store. Deleting or directly
+      constructing them OUTSIDE the guarded write paths (replace_pipeline_graph
+      / rollback_to_snapshot / the apply_gated_edge_diff primitive in
+      db/crud/) or the creation-only allowlist (clone_pipeline, templates,
+      library, workflow_import_export) is a gate-weakening bypass
+      (hitl-gate-removal-guard-plan.md v19 §3 item 4). Route the write through
+      replace_pipeline_graph() so the guard runs.
+    languages: [python]
+    severity: ERROR
+    paths:
+      include:
+        - "**/backend/src/**"
+        - "**/.semgrep/tests/hitl-gate-edge-mutation-outside-guard.py"
+      exclude:
+        - "**/backend/src/modulo/db/crud/pipeline.py"
+        - "**/backend/src/modulo/db/crud/pipeline_snapshot_versioning.py"
+        - "**/backend/src/modulo/db/crud/hitl_gate_guard.py"
+        - "**/backend/src/modulo/core/workflow_import_export/**"
+        - "**/backend/src/modulo/api/routes/templates.py"
+        - "**/backend/src/modulo/api/routes/library.py"

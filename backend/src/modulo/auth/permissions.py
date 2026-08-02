@@ -43,6 +43,11 @@ PERMISSIONS: dict[str, str] = {
     "pipeline.update": "operator",
     "pipeline.delete": "operator",
     "pipeline.graph.update": "operator",
+    # hitl-gate-removal-guard-plan.md v19 §3 item 5 / ADR 017 open question 5:
+    # dedicated route-layer gate on the weakening-capable graph-write
+    # endpoints (admin). The service-layer backstop is the load-bearing
+    # control; this is defense-in-depth breadth.
+    "pipeline.graph.weakening": "admin",
     "pipeline.bind_connector": "operator",
     "pipeline.graph.read": "viewer",
     "pipeline.list": "viewer",

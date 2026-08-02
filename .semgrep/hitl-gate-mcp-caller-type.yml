@@ -1,0 +1,19 @@
+rules:
+  - id: hitl-gate-mcp-caller-type-literal
+    patterns:
+      - pattern: |
+          replace_pipeline_graph(..., caller_type=$CT, ...)
+      - pattern-not: |
+          replace_pipeline_graph(..., caller_type="mcp", ...)
+    message: >
+      hitl-gate-removal-guard-plan.md v19 §3 item 5: the MCP call site
+      (mcp_server.py update_pipeline_graph) MUST pass caller_type="mcp" as a
+      LITERAL, never a variable. This literal is the entire MCP structural
+      exclusion mechanism — a variable lets the value derive from request
+      context, defeating the hardcoded-False privilege override.
+    languages: [python]
+    severity: ERROR
+    paths:
+      include:
+        - "**/backend/src/modulo/api/mcp_server.py"
+        - "**/.semgrep/tests/hitl-gate-mcp-caller-type-literal.py"

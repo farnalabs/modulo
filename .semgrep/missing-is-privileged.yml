@@ -8,13 +8,17 @@ rules:
           replace_pipeline_graph(..., is_privileged=...)
       - pattern-not: |
           rollback_to_snapshot(..., is_privileged=...)
+      - pattern-not: |
+          replace_pipeline_graph(..., caller_type=...)
+      - pattern-not: |
+          rollback_to_snapshot(..., caller_type=...)
     message: >
-      ADR 017 service-layer backstop: replace_pipeline_graph() and
-      rollback_to_snapshot() require an explicit is_privileged= argument.
-      The HITL gate guard consumes this flag to block gate-weakening by
-      non-privileged callers. A missing is_privileged= is a runtime
-      TypeError (keyword-only, no default) — always pass it explicitly.
+      ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
+      replace_pipeline_graph() and rollback_to_snapshot() require explicit
+      is_privileged= and caller_type= keyword-only arguments (no defaults). A
+      missing one is a runtime TypeError AND a gate-guard bypass — always pass
+      both. The MCP call site must pass caller_type="mcp" as a literal.
     languages: [python]
     severity: ERROR
     paths:
-      include: ["**/backend/src/**"]
+      include: ["**/backend/src/**", "**/.semgrep/tests/graph-write-missing-is-privileged.py"]

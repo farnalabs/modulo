@@ -69,6 +69,19 @@ Feature: Pipeline CRUD
     And the pipeline graph matches "snap-1"
     And the new snapshot version is 3
 
+  Scenario: Rollback that would weaken a HITL gate is denied
+    Given org "acme" has pipeline "my-pipeline" with snapshots "snap-1" and "snap-2"
+    And the rollback would weaken a HITL gate for a non-privileged caller
+    When I POST /api/pipelines/my-pipeline/rollback to snapshot "snap-1"
+    Then the response status is 403
+    And the error says "Gate weakening denied"
+
+  Scenario: Cloning a pipeline records an audit event
+    Given org "acme" has pipeline "my-pipeline"
+    When I clone pipeline "my-pipeline"
+    Then the response status is 201
+    And a clone audit event is recorded
+
   Scenario: Delete a historical snapshot
     Given org "acme" has pipeline "my-pipeline" with snapshots "snap-1" and "snap-2"
     When I DELETE /api/pipelines/snapshots/snap-1
