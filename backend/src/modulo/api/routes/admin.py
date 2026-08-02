@@ -3094,12 +3094,6 @@ async def admin_get_sandbox_concurrency(
             limit = await get_sandbox_concurrency_limit(session, current_user.organisation_id)
     except asyncio.CancelledError:
         raise
-    except IntegrityError:
-        logger.exception("admin.admin_get_sandbox_concurrency")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from None
     except ProgrammingError:
         logger.exception("routes.admin")
 
