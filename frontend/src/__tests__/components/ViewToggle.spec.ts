@@ -28,7 +28,7 @@ describe('ViewToggle', () => {
 
   it('fetches view list on mount when feature is enabled', async () => {
     const { api } = await import('../../lib/api/client')
-    ;(api.GET as any).mockResolvedValue({ data: { views: mockViews }, error: null })
+    ;(api.GET as any).mockResolvedValue({ data: { items: mockViews }, error: null })
 
     const store = usePlanStore()
     store.$patch({ features: { saved_views: true } })
@@ -45,7 +45,7 @@ describe('ViewToggle', () => {
 
   it('clicking toggle emits view-changed with correct payload', async () => {
     const { api } = await import('../../lib/api/client')
-    ;(api.GET as any).mockResolvedValue({ data: { views: mockViews }, error: null })
+    ;(api.GET as any).mockResolvedValue({ data: { items: mockViews }, error: null })
 
     const store = usePlanStore()
     store.$patch({ features: { saved_views: true } })
@@ -66,7 +66,7 @@ describe('ViewToggle', () => {
 
   it('shows Active badge when a view is selected and toggle is on', async () => {
     const { api } = await import('../../lib/api/client')
-    ;(api.GET as any).mockResolvedValue({ data: { views: mockViews }, error: null })
+    ;(api.GET as any).mockResolvedValue({ data: { items: mockViews }, error: null })
 
     const store = usePlanStore()
     store.$patch({ features: { saved_views: true } })
@@ -104,7 +104,7 @@ describe('ViewToggle', () => {
 
   it('does not fetch views from API when feature is disabled', async () => {
     const { api } = await import('../../lib/api/client')
-    ;(api.GET as any).mockResolvedValue({ data: { views: mockViews }, error: null })
+    ;(api.GET as any).mockResolvedValue({ data: { items: mockViews }, error: null })
 
     const store = usePlanStore()
     store.$patch({ features: { saved_views: false } })
@@ -118,7 +118,7 @@ describe('ViewToggle', () => {
 
   it('selecting a view from the dropdown emits view-changed and sets selectedViewId', async () => {
     const { api } = await import('../../lib/api/client')
-    ;(api.GET as any).mockResolvedValue({ data: { views: mockViews }, error: null })
+    ;(api.GET as any).mockResolvedValue({ data: { items: mockViews }, error: null })
 
     const store = usePlanStore()
     store.$patch({ features: { saved_views: true } })

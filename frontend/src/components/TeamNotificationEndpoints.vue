@@ -338,6 +338,10 @@ import { Plus } from "@lucide/vue";
 
 type NotificationEndpointResponse =
   components["schemas"]["NotificationEndpointResponse"];
+type NotificationEndpointCreate =
+  components["schemas"]["NotificationEndpointCreate"];
+type NotificationEndpointUpdate =
+  components["schemas"]["NotificationEndpointUpdate"];
 type TestResult = components["schemas"]["TestResult"];
 
 const props = defineProps<{ teamId: string }>();
@@ -424,21 +428,18 @@ async function saveEdit() {
   saving.value = true;
   editError.value = null;
   try {
-    const body: Record<string, unknown> = {
+    const body: NotificationEndpointUpdate = {
       url: editForm.value.url.trim(),
+      events: editForm.value.events,
+      description: editForm.value.description || null,
     };
-    if (editForm.value.events.length > 0) body.events = editForm.value.events;
-    else body.events = [];
-    if (editForm.value.description)
-      body.description = editForm.value.description;
-    else body.description = null;
     if (editForm.value.secret) body.secret = editForm.value.secret;
 
     const { error: err } = await api.PUT(
       "/api/v1/notifications/{endpoint_id}",
       {
         params: { path: { endpoint_id: editingId.value } },
-        body: body as any,
+        body,
       },
     );
     if (err) {
@@ -465,7 +466,7 @@ async function addEndpoint() {
   adding.value = true;
   addError.value = null;
   try {
-    const body: Record<string, unknown> = {
+    const body: NotificationEndpointCreate = {
       url: addForm.value.url.trim(),
       team_id: props.teamId,
     };
@@ -474,7 +475,7 @@ async function addEndpoint() {
     if (addForm.value.description) body.description = addForm.value.description;
 
     const { data, error: err } = await api.POST("/api/v1/notifications", {
-      body: body as any,
+      body,
     });
     if (err) {
       addError.value = `Create failed: ${formatApiError(err)}`;
@@ -520,7 +521,7 @@ async function deleteEndpoint(id: string) {
 async function test(ep: NotificationEndpointResponse) {
   if (testingId.value) return;
   testingId.value = ep.id;
-  testResults.value[ep.id] = undefined as any;
+  delete testResults.value[ep.id];
   try {
     const { data, error: err } = await api.POST(
       "/api/v1/admin/notifications/{webhook_id}/test",
