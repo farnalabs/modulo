@@ -63,8 +63,20 @@ def step_source_definition(field_json: str, request) -> None:
     request.node._source_def = {"type": "object", "properties": {k: {"type": v} for k, v in parsed.items()}}
 
 
+@given(parsers.parse("a source definition with fields {field_json}"))
+def step_source_definitions(field_json: str, request) -> None:
+    parsed = json.loads(field_json)
+    request.node._source_def = {"type": "object", "properties": {k: {"type": v} for k, v in parsed.items()}}
+
+
 @given(parsers.parse("a target definition with field {field_json}"))
 def step_target_definition(field_json: str, request) -> None:
+    parsed = json.loads(field_json)
+    request.node._target_def = {"type": "object", "properties": {k: {"type": v} for k, v in parsed.items()}}
+
+
+@given(parsers.parse("a target definition with fields {field_json}"))
+def step_target_definitions(field_json: str, request) -> None:
     parsed = json.loads(field_json)
     request.node._target_def = {"type": "object", "properties": {k: {"type": v} for k, v in parsed.items()}}
 
