@@ -196,10 +196,11 @@ class TestSearchLibrary:
         }
 
     async def test_no_scope_check_needed(self) -> None:
+        from modulo.api.mcp_server import _ctx_org_id, search_library
         from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import search_library
 
         _role.set(None)
+        _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
 
         with (
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
