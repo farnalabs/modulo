@@ -64,7 +64,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. This doc
 | **Database** | PostgreSQL 16 | Primary data store |
 | **Cache/queue** | Redis 7 | Celery broker, rate limiting |
 | **Container** | Docker Compose | Local dev, production |
-| **Orchestration** | Helm + Kubernetes | Production (multi-replica) |
+| **Orchestration** | Docker Compose / Fly.io | Self-hosted / managed production |
 
 ## Key Components
 
@@ -299,7 +299,7 @@ Redis-backed token bucket. In-memory fallback with startup warning for single-pr
 |------|-----------|----------|
 | **Standalone** | Single process + SQLite file | Local dev, quick evaluation |
 | **Docker Compose** | Backend + Frontend + PostgreSQL 16 + (optional) Redis 7 + (optional) OTel stack | Single-server production |
-| **Kubernetes** | Multiple replicas + Celery workers + Redis + PostgreSQL 16 (Bitnami sub-chart) | Multi-replica production |
+| **Fly.io** | Managed app + managed PostgreSQL + Redis, optional E2B sandboxes | Managed production, horizontal scaling |
 
 ### Docker Compose
 
