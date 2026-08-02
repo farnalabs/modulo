@@ -54,7 +54,7 @@ _GATE = {
 
 
 # ---------------------------------------------------------------------------
-# Field-level weakening: all five fields
+# Field-level weakening: all four fields
 # ---------------------------------------------------------------------------
 
 
@@ -76,7 +76,10 @@ _GATE = {
             ["eval_condition"],
         ),
         ({"eval_condition": None}, {"eval_condition": {"name": "x"}}, ["eval_condition"]),
-        ({"claim_expiry_minutes": 60}, {"claim_expiry_minutes": 30}, ["claim_expiry_minutes"]),
+        # claim_expiry_minutes is NOT weakening: a shorter expiry is stricter —
+        # on expiry the claim is reset (run returns to awaiting_human), it never
+        # releases the gate or auto-approves the run (plan §1, review finding).
+        ({"claim_expiry_minutes": 60}, {"claim_expiry_minutes": 30}, []),
         ({"claim_expiry_minutes": 30}, {"claim_expiry_minutes": 60}, []),
         ({"claim_expiry_minutes": 30}, {"claim_expiry_minutes": 30}, []),
     ],

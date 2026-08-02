@@ -808,8 +808,15 @@ async def replace_pipeline_graph_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("pipeline.graph.update"),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
-    __: TenantPrincipal = require_permission("pipeline.graph.weakening"),
 ) -> PipelineGraphResponse:
+    # Route layer carries the operator baseline ("pipeline.graph.update") for
+    # defense-in-depth breadth; actual gate-weakening enforcement is the
+    # service-layer backstop (operator+ privileged under the row lock, non-
+    # privileged callers denied — hitl-gate-removal-guard-plan.md v19 §3 item
+    # 5). There is deliberately no admin-only route gate here: operators are
+    # "privileged" for weakening by design, and equivalent weakening remains
+    # reachable via update_pipeline / convert_to_agent / revert_to_manual, so an
+    # admin-only gate would only block the operator's primary graph-edit path.
     node_data = [node.model_dump(mode="json") for node in req.nodes]
     edge_data = [
         {
@@ -1635,8 +1642,14 @@ async def rollback_snapshot_endpoint(
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("pipeline.graph.update"),
-    __: TenantPrincipal = require_permission("pipeline.graph.weakening"),
 ) -> SnapshotResponse:
+    # Route layer carries the operator baseline ("pipeline.graph.update") for
+    # defense-in-depth breadth; actual gate-weakening enforcement is the
+    # service-layer backstop (operator+ privileged under the row lock, non-
+    # privileged callers denied — hitl-gate-removal-guard-plan.md v19 §3 item
+    # 5). There is deliberately no admin-only route gate here, matching the
+    # graph-replace endpoint: operators are "privileged" for weakening by
+    # design (equivalent weakening stays reachable via update_pipeline).
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

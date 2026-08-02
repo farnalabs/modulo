@@ -156,14 +156,17 @@ def _normalize_edge(edge: PipelineEdge | dict[str, Any]) -> dict[str, Any]:
 def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[str]:
     """Return the field-level weakening types between two non-null gate configs.
 
-    The five weakening-capable fields from plan §1:
+    The four weakening-capable fields from plan §1:
     - ``human_only``: true -> false.
     - ``required_team_id``: changed to null or any different team.
     - ``condition``: changed at all (evaluated before ``human_only`` is
       consulted, so any change can silently gate off a formerly-always-on gate).
     - ``eval_condition``: changed at all (same reasoning).
-    - ``claim_expiry_minutes``: decreased (expiry is set once at claim creation,
-      so a decrease is not retroactive — it only narrows future claims).
+
+    ``claim_expiry_minutes`` is deliberately NOT weakening: a shorter expiry is
+    stricter, not weaker. On expiry the claim is reset (run returns to
+    ``awaiting_human``) — it never releases the gate or auto-approves the run,
+    so a decrease cannot weaken the HITL control (plan §1, review finding).
     """
     types: list[str] = []
     if old_cfg.get("human_only") is True and new_cfg.get("human_only") is not True:
@@ -176,10 +179,6 @@ def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[s
         types.append("condition")
     if old_cfg.get("eval_condition") != new_cfg.get("eval_condition"):
         types.append("eval_condition")
-    old_expiry = old_cfg.get("claim_expiry_minutes")
-    new_expiry = new_cfg.get("claim_expiry_minutes")
-    if old_expiry is not None and new_expiry is not None and new_expiry < old_expiry:
-        types.append("claim_expiry_minutes")
     return types
 
 

@@ -43,11 +43,13 @@ PERMISSIONS: dict[str, str] = {
     "pipeline.update": "operator",
     "pipeline.delete": "operator",
     "pipeline.graph.update": "operator",
-    # hitl-gate-removal-guard-plan.md v19 §3 item 5 / ADR 017 open question 5:
-    # dedicated route-layer gate on the weakening-capable graph-write
-    # endpoints (admin). The service-layer backstop is the load-bearing
-    # control; this is defense-in-depth breadth.
-    "pipeline.graph.weakening": "admin",
+    # hitl-gate-removal-guard-plan.md v19 §3 item 5: the weakening-capable
+    # graph-write endpoints carry the operator baseline ("pipeline.graph.update")
+    # at the route layer; gate-weakening enforcement is the service-layer
+    # backstop (operator+ privileged under the row lock, non-privileged callers
+    # denied). There is deliberately no admin-only route permission for
+    # weakening — operators are "privileged" for weakening by design, and the
+    # backstop is the load-bearing control.
     "pipeline.bind_connector": "operator",
     "pipeline.graph.read": "viewer",
     "pipeline.list": "viewer",
