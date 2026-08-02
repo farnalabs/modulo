@@ -597,6 +597,17 @@ Once a PR branch exists, keep it current with main by running `git merge origin/
 
 Never edit source/text files with PowerShell string replacement (Get-Content -Raw + [System.IO.File]::WriteAllText or .Replace()). PowerShell's encoding handling corrupts UTF-8 (em-dashes, arrows, non-ASCII) into mojibake, producing lint errors and broken files. Use a Python script with io.open(path, 'r', encoding='utf-8') and io.open(path, 'w', encoding='utf-8', newline='\n') for every file write.
 
+### Merge queue re-verifies review state at merge time - never trust the collection step alone
+
+The merge queue (`.github/workflows/merge-queue.yml`) checks for APPROVED reviews in its "Collect open PRs" step, but between collection and the actual `gh pr merge` (which runs 15-30 minutes later, after squash-queueing and full backend/frontend CI), a reviewer can post CHANGES_REQUESTED - and the merge step never re-checked. This TOCTOU race caused PR #535 (a security fix) to merge despite a CHANGES_REQUESTED review posted minutes earlier; the buggy code reached main and needed a follow-up fix PR (#542).
+
+The guard (added in #546): the workflow re-queries `reviewDecision` via `gh pr view` at TWO points - (1) before squash-merging each PR into the merge-queue branch, and (2) immediately before `gh pr merge --squash`. Any PR whose `reviewDecision` is not APPROVED at merge time is skipped and stays open for the next queue cycle.
+
+Rules:
+1. Any workflow that merges PRs must re-verify the review decision immediately before the actual merge, never rely on a check done at collection time.
+2. When a security review lands with CHANGES_REQUESTED and the merge already happened, fix the finding in a follow-up PR immediately - do not leave the vulnerability on main.
+3. The reviewbot does not pin reviews to a commit SHA; a CHANGES_REQUESTED posted mid-flight applies to the whole PR regardless of when the APPROVED was given.
+
 ### Branch-fixer / opencode coder agent
 
 - **opencode auth step runs before fetch-ci** → `Configure opencode auth` references `steps.fetch-ci.outputs.ci_failures` but must run AFTER `Fetch CI failures`. GitHub Actions evaluates `if:` conditions at step execution time, and the referenced step's outputs are empty/false if it hasn't run yet. Always verify step ordering when a step's condition depends on another step's output.

@@ -140,7 +140,7 @@ async def test_create_with_minimal_fields(
     assert loaded.deleted_at is None
 
 
-async def test_rls_isolation(db_engine: AsyncEngine) -> None:
+async def test_rls_isolation(db_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
     """EnvironmentProfiles from org A are invisible from org B."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -150,7 +150,8 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
     org_b = uuid.uuid4()
     account_id = await _seed_account(db_engine, f"env-rls-{uuid.uuid4().hex[:8]}@test.local")
 
-    # Seed orgs
+    # Seed orgs and profiles as the superuser engine (RLS does not apply to the
+    # owner role; these inserts carry no org context).
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
@@ -164,9 +165,6 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
             ),
             {"id": str(org_b), "name": "RLS Org B", "slug": f"rls-b-{org_b.hex[:8]}"},
         )
-
-    # Create a profile in org_a
-    async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
                 "INSERT INTO environment_profiles "
@@ -181,10 +179,6 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
                 "account_id": str(account_id),
             },
         )
-
-    # Create a profile in org_b
-    b_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
                 "INSERT INTO environment_profiles "
@@ -192,7 +186,7 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
                 "VALUES (:id, :org_id, :name, :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
             ),
             {
-                "id": str(b_id),
+                "id": str(uuid.uuid4()),
                 "org_id": str(org_b),
                 "name": "org-b-profile",
                 "image": "img:latest",
@@ -200,12 +194,13 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
             },
         )
 
-    # Query from org_a's context should not see org_b's profile
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    # Query from org_a's context should not see org_b's profile. app_engine
+    # runs as a non-superuser role, so the RLS policy actually filters rows.
+    factory = async_sessionmaker(app_engine, expire_on_commit=False)
     async with factory() as session:
-        await set_rls_org(session, org_a)
-        profiles = (await session.execute(select(EnvironmentProfile))).scalars().all()
+        async with session.begin():
+            await set_rls_org(session, org_a)
+            profiles = (await session.execute(select(EnvironmentProfile))).scalars().all()
         names = {p.name for p in profiles}
         assert "org-a-profile" in names
         assert "org-b-profile" not in names
-        await session.rollback()

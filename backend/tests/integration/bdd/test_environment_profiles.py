@@ -119,12 +119,12 @@ async def user_a(db_engine: AsyncEngine, org_a: uuid.UUID) -> uuid.UUID:
 
 @pytest_asyncio.fixture(scope="module")
 async def org_a_profile(
-    db_engine: AsyncEngine,
+    app_engine: AsyncEngine,
     org_a: uuid.UUID,
     user_a: uuid.UUID,
 ) -> uuid.UUID:
     """Seed a single EnvironmentProfile for org_a."""
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(app_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, org_a)
         profile = await create_environment_profile(
@@ -150,11 +150,11 @@ class TestCreateProfileRoundTrip:
 
     async def test_create_and_read_profile(
         self,
-        db_engine: AsyncEngine,
+        app_engine: AsyncEngine,
         org_a: uuid.UUID,
         user_a: uuid.UUID,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session:
             async with session.begin():
                 await set_rls_org(session, org_a)
@@ -181,10 +181,10 @@ class TestCreateProfileRoundTrip:
 
     async def test_list_profiles_returns_seeded(
         self,
-        db_engine: AsyncEngine,
+        app_engine: AsyncEngine,
         org_a: uuid.UUID,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, org_a)
             result = await list_environment_profiles(session)
@@ -192,28 +192,40 @@ class TestCreateProfileRoundTrip:
 
     async def test_update_profile(
         self,
-        db_engine: AsyncEngine,
-        org_a_profile: uuid.UUID,
+        app_engine: AsyncEngine,
         org_a: uuid.UUID,
+        user_a: uuid.UUID,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
-        async with factory() as session, session.begin():
-            await set_rls_org(session, org_a)
-            updated = await update_environment_profile(
-                session,
-                org_a_profile,
-                {"name": "updated-int-profile"},
-            )
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        async with factory() as session:
+            async with session.begin():
+                await set_rls_org(session, org_a)
+                profile = await create_environment_profile(
+                    session,
+                    org_id=org_a,
+                    name="updatable-int-profile",
+                    image_ref="python:3.12-slim",
+                    account_id=user_a,
+                )
+                pid = profile.id
+
+            async with session.begin():
+                await set_rls_org(session, org_a)
+                updated = await update_environment_profile(
+                    session,
+                    pid,
+                    {"name": "updated-int-profile"},
+                )
         assert updated is not None
         assert updated.name == "updated-int-profile"
 
     async def test_delete_profile(
         self,
-        db_engine: AsyncEngine,
+        app_engine: AsyncEngine,
         user_a: uuid.UUID,
         org_a: uuid.UUID,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
         pid = None
         async with factory() as session:
             async with session.begin():
@@ -248,10 +260,10 @@ class TestRLSIsolation:
 
     async def test_org_b_cannot_list_org_a_profiles(
         self,
-        db_engine: AsyncEngine,
+        app_engine: AsyncEngine,
         org_b: uuid.UUID,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, org_b)
             result = await list_environment_profiles(session)
@@ -259,11 +271,11 @@ class TestRLSIsolation:
 
     async def test_org_b_cannot_get_org_a_profile(
         self,
-        db_engine: AsyncEngine,
+        app_engine: AsyncEngine,
         org_b: uuid.UUID,
         org_a_profile: uuid.UUID,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, org_b)
             result = await get_environment_profile(session, org_a_profile)
@@ -271,11 +283,11 @@ class TestRLSIsolation:
 
     async def test_org_b_cannot_update_org_a_profile(
         self,
-        db_engine: AsyncEngine,
+        app_engine: AsyncEngine,
         org_b: uuid.UUID,
         org_a_profile: uuid.UUID,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, org_b)
             result = await update_environment_profile(
@@ -287,15 +299,96 @@ class TestRLSIsolation:
 
     async def test_org_b_cannot_delete_org_a_profile(
         self,
-        db_engine: AsyncEngine,
+        app_engine: AsyncEngine,
         org_b: uuid.UUID,
         org_a_profile: uuid.UUID,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, org_b)
             result = await delete_environment_profile(session, org_a_profile)
         assert result is False
+
+
+@pytest_asyncio.fixture
+async def profile_with_lease(
+    app_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    user_a: uuid.UUID,
+) -> uuid.UUID:
+    factory = async_sessionmaker(app_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_a)
+
+        # Create a pipeline + run first (needed for FK references from runs/leases)
+        pipeline_id = uuid.uuid4()
+        await session.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, "
+                "node_timeout_seconds, run_context_defaults, graph_nodes_json) "
+                "VALUES (:id, :oid, :name, :uid, 5, 30, 300, '{}'::json, '[]'::json)",
+            ),
+            {
+                "id": str(pipeline_id),
+                "oid": str(org_a),
+                "name": "restrict-test-pipeline",
+                "uid": str(user_a),
+            },
+        )
+        run_id = uuid.uuid4()
+        snapshot_id = uuid.uuid4()
+        await session.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
+            ),
+            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_a)},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
+                "trigger_type, status, langgraph_thread_id, input_hash, run_number) "
+                "VALUES (:id, :oid, :pid, :sid, 'manual', 'pending', :thread, :hash, :rn)",
+            ),
+            {
+                "id": str(run_id),
+                "oid": str(org_a),
+                "pid": str(pipeline_id),
+                "sid": str(snapshot_id),
+                "thread": str(uuid.uuid4()),
+                "hash": "0" * 64,
+                "rn": int(run_id.int % 10**9) + 1,
+            },
+        )
+
+        # Create profile
+        profile = await create_environment_profile(
+            session,
+            org_id=org_a,
+            name="restrict-test-profile",
+            image_ref="python:3.12-slim",
+            account_id=user_a,
+        )
+        pid = profile.id
+
+        # Create lease referencing the profile
+        lease = WorkspaceLease(
+            organisation_id=org_a,
+            environment_profile_id=pid,
+            run_id=run_id,
+            provider_ref="int-ws-001",
+            status="running",
+            lease_started_at=datetime.now(UTC),
+            lease_expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        session.add(lease)
+        await session.flush()
+    return pid
 
 
 # ===========================================================================
@@ -306,58 +399,13 @@ class TestRLSIsolation:
 class TestDeleteProfileWithLeases:
     """Verify that a profile with active leases cannot be deleted (RESTRICT)."""
 
-    @pytest_asyncio.fixture(scope="class")
-    async def profile_with_lease(
-        self,
-        db_engine: AsyncEngine,
-        org_a: uuid.UUID,
-        user_a: uuid.UUID,
-    ) -> uuid.UUID:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
-        async with factory() as session, session.begin():
-            await set_rls_org(session, org_a)
-
-            # Create a run first (needed for FK reference from workspace_leases)
-            run_id = uuid.uuid4()
-            await session.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, status, langgraph_thread_id) "
-                    "VALUES (:id, :oid, 'pending', :thread)",
-                ),
-                {"id": str(run_id), "oid": str(org_a), "thread": str(uuid.uuid4())},
-            )
-
-            # Create profile
-            profile = await create_environment_profile(
-                session,
-                org_id=org_a,
-                name="restrict-test-profile",
-                image_ref="python:3.12-slim",
-                account_id=user_a,
-            )
-            pid = profile.id
-
-            # Create lease referencing the profile
-            lease = WorkspaceLease(
-                organisation_id=org_a,
-                environment_profile_id=pid,
-                run_id=run_id,
-                provider_ref="int-ws-001",
-                status="active",
-                started_at=datetime.now(UTC),
-                expires_at=datetime.now(UTC) + timedelta(hours=1),
-            )
-            session.add(lease)
-            await session.flush()
-        return pid
-
     async def test_delete_profile_with_active_lease_raises(
         self,
-        db_engine: AsyncEngine,
+        app_engine: AsyncEngine,
         org_a: uuid.UUID,
         profile_with_lease: uuid.UUID,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, org_a)
             # Deletion should fail because workspace_leases has RESTRICT FK
@@ -373,11 +421,11 @@ class TestDeleteProfileWithLeases:
 class TestPositiveControl:
     async def test_orga_sees_own_profile(
         self,
-        db_engine: AsyncEngine,
+        app_engine: AsyncEngine,
         org_a: uuid.UUID,
         org_a_profile: uuid.UUID,
     ) -> None:
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, org_a)
             profile = await get_environment_profile(session, org_a_profile)

@@ -144,9 +144,11 @@ class TestFeedbackFlowUnit:
         rls_session: AsyncSession,
         test_org: uuid.UUID,
     ) -> None:
+        from modulo.core.feedback_manager import FeedbackRecordNotFoundError
+
         mgr = FeedbackManager(rls_session, test_org)
-        result = await mgr.update_status(uuid.uuid4(), "resolved")
-        assert result is None
+        with pytest.raises(FeedbackRecordNotFoundError):
+            await mgr.update_status(uuid.uuid4(), "resolved")
 
     async def test_link_correction_run(
         self,
