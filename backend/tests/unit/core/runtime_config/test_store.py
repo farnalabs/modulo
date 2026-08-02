@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from unittest.mock import patch
 
 from modulo.core.runtime_config.store import (
@@ -20,9 +21,7 @@ class TestRuntimeConfigStore:
 
     def _purge_singleton(self) -> None:
         """Reset the module-level singleton for test isolation."""
-        import modulo.core.runtime_config.store as store_mod
-
-        store_mod._store = None
+        RuntimeConfigStore.reset()
 
     # ----------------------------------------------------------------
     # Singleton
@@ -38,6 +37,41 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         store = get_runtime_config_store()
         assert isinstance(store, RuntimeConfigStore)
+
+    def test_singleton_is_thread_safe(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            instances: list[RuntimeConfigStore] = []
+            errors: list[Exception] = []
+            barrier = threading.Barrier(8)
+
+            def _get() -> None:
+                try:
+                    barrier.wait()
+                    instances.append(get_runtime_config_store())
+                except Exception as exc:
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=_get) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            assert not errors
+            assert len(instances) == 8
+            assert all(inst is instances[0] for inst in instances)
+
+    def test_reset_creates_fresh_singleton(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            s1 = get_runtime_config_store()
+            s1.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            assert s1.get("MODULO_LOG_LEVEL") == "DEBUG"
+            RuntimeConfigStore.reset()
+            s2 = get_runtime_config_store()
+            assert s2 is not s1
+            assert s2.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
 
     # ----------------------------------------------------------------
     # Initial state
@@ -111,8 +145,77 @@ class TestRuntimeConfigStore:
             val = store.get("THIS_KEY_DOES_NOT_EXIST")
             assert val is None
 
+    def test_get_returns_none_for_empty_key(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            assert store.get("") is None
+
+    def test_get_uses_empty_string_env_value(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {"REDIS_URL": ""}, clear=True):
+            store = get_runtime_config_store()
+            assert store.get("REDIS_URL") == ""
+            entry = next(item for item in store.get_all() if item.key == "REDIS_URL")
+            assert entry.provenance == "environment"
+
+    def test_get_uses_empty_string_override_over_env(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {"REDIS_URL": "redis://env:6379"}, clear=True):
+            store = get_runtime_config_store()
+            store.set_override("REDIS_URL", "")
+            assert store.get("REDIS_URL") == ""
+            entry = next(item for item in store.get_all() if item.key == "REDIS_URL")
+            assert entry.provenance == "override"
+
     # ----------------------------------------------------------------
     # set_override / clear_override
+    # ----------------------------------------------------------------
+
+    def test_set_override_rejects_empty_key(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            store.set_override("", "DEBUG")
+            assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+
+    def test_set_override_rejects_key_with_surrounding_whitespace(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            store.set_override(" MODULO_LOG_LEVEL", "DEBUG")
+            assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+            store.set_override("MODULO_LOG_LEVEL ", "DEBUG")
+            assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+
+    def test_clear_override_rejects_empty_key(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            store.clear_override("")
+            assert store.get("MODULO_LOG_LEVEL") == "DEBUG"
+
+    def test_clear_override_rejects_key_with_surrounding_whitespace(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            store.clear_override("MODULO_LOG_LEVEL ")
+            assert store.get("MODULO_LOG_LEVEL") == "DEBUG"
+
+    def test_set_override_unknown_key_is_stored_but_hidden_from_get_all(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            store.set_override("UNKNOWN_CONFIG_KEY", "v1")
+            assert store.get("UNKNOWN_CONFIG_KEY") == "v1"
+            assert all(item.key != "UNKNOWN_CONFIG_KEY" for item in store.get_all())
+            store.clear_override("UNKNOWN_CONFIG_KEY")
+            assert store.get("UNKNOWN_CONFIG_KEY") is None
+
+    # ----------------------------------------------------------------
+    # clear_all_overrides
     # ----------------------------------------------------------------
 
     def test_set_override(self) -> None:
@@ -220,6 +323,30 @@ class TestRuntimeConfigStore:
                 assert entry.key in KNOWN_KEYS
                 assert isinstance(entry.hot_reloadable, bool)
 
+    def test_get_all_preserves_known_key_order(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            keys = [item.key for item in store.get_all()]
+            assert keys == list(KNOWN_KEYS)
+
+    def test_get_all_reports_env_drift_after_reload(self) -> None:
+        """Env changes become visible via reload, and overrides survive it."""
+        self._purge_singleton()
+        with patch.dict(os.environ, {"MODULO_LOG_LEVEL": "ERROR"}, clear=True):
+            store = get_runtime_config_store()
+            entry = next(item for item in store.get_all() if item.key == "MODULO_LOG_LEVEL")
+            assert entry.current_value == "ERROR"
+            assert entry.env_value == "ERROR"
+            assert entry.override_value is None
+            store.set_override("MODULO_LOG_LEVEL", "WARN")
+            store.reload()
+            entry = next(item for item in store.get_all() if item.key == "MODULO_LOG_LEVEL")
+            assert entry.current_value == "WARN"
+            assert entry.env_value == "ERROR"
+            assert entry.override_value == "WARN"
+            assert entry.provenance == "override"
+
     def test_get_all_env_provenance(self) -> None:
         self._purge_singleton()
         with patch.dict(os.environ, {"MODULO_LOG_LEVEL": "ERROR"}, clear=True):
@@ -298,3 +425,16 @@ class TestRuntimeConfigStore:
             # DATABASE_URL, SECRET_KEY, FERNET_KEY have no defaults
             for key in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY"):
                 assert store.get(key) is None
+
+    # ----------------------------------------------------------------
+    # Module-level configuration invariants
+    # ----------------------------------------------------------------
+
+    def test_hot_reloadable_keys_are_known(self) -> None:
+        assert frozenset(KNOWN_KEYS) >= HOT_RELOADABLE_KEYS
+
+    def test_default_values_are_known(self) -> None:
+        assert set(DEFAULT_VALUES.keys()) <= set(KNOWN_KEYS)
+
+    def test_default_values_are_strings(self) -> None:
+        assert all(isinstance(v, str) for v in DEFAULT_VALUES.values())
