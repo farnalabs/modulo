@@ -151,7 +151,10 @@ async def test_remove_dead_queues_deletes_empty_org(bus: EventBus) -> None:
 
 
 async def test_remove_dead_queues_unknown_org_is_noop(bus: EventBus) -> None:
+    other = await bus.subscribe("org-1")
     await bus._remove_dead_queues("nope", [asyncio.Queue()])
+    assert "nope" not in bus._subscribers
+    assert bus._subscribers["org-1"] == [other]
 
 
 async def test_remove_dead_queues_ignores_queue_not_present(bus: EventBus) -> None:
@@ -270,6 +273,7 @@ async def test_unsubscribe_keeps_remaining_queues(bus: EventBus) -> None:
 
 async def test_unsubscribe_unknown_org_is_noop(bus: EventBus) -> None:
     await bus.unsubscribe("nope", asyncio.Queue())
+    assert "nope" not in bus._subscribers
 
 
 async def test_unsubscribe_unknown_queue_is_noop(bus: EventBus) -> None:

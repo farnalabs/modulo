@@ -147,7 +147,8 @@ class TestAssertOrgRoleKillSwitch:
     def test_fail_open_when_context_false(self) -> None:
         token = set_authz_enforce(False)
         try:
-            assert_org_role("viewer", "operator", "test.permission")
+            result = assert_org_role("viewer", "operator", "test.permission")
+            assert result is None
         finally:
             reset_authz_enforce(token)
 
