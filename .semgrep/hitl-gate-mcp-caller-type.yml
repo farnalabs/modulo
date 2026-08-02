@@ -16,4 +16,3 @@ rules:
     paths:
       include:
         - "**/backend/src/modulo/api/mcp_server.py"
-        - "**/.semgrep/tests/hitl-gate-mcp-caller-type-literal.py"

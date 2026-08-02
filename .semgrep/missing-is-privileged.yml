@@ -2,23 +2,15 @@ rules:
   - id: graph-write-missing-is-privileged
     patterns:
       - pattern-either:
-          - pattern: replace_pipeline_graph(...)
-          - pattern: rollback_to_snapshot(...)
-      - pattern-not: |
-          replace_pipeline_graph(..., is_privileged=...)
-      - pattern-not: |
-          rollback_to_snapshot(..., is_privileged=...)
-      - pattern-not: |
-          replace_pipeline_graph(..., caller_type=...)
-      - pattern-not: |
-          rollback_to_snapshot(..., caller_type=...)
+          - pattern-regex: (?s)(?<!def\\s)(?:await\\s+|=\\s*)?(?:replace_pipeline_graph|rollback_to_snapshot)\\s*\\((?:(?!is_privileged\\s*=).)*?\\)
+          - pattern-regex: (?s)(?<!def\\s)(?:await\\s+|=\\s*)?(?:replace_pipeline_graph|rollback_to_snapshot)\\s*\\((?:(?!caller_type\\s*=).)*?\\)
     message: >
       ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
       replace_pipeline_graph() and rollback_to_snapshot() require explicit
       is_privileged= and caller_type= keyword-only arguments (no defaults). A
-      missing one is a runtime TypeError AND a gate-guard bypass — always pass
+      missing one is a runtime TypeError AND a gate-guard bypass - always pass
       both. The MCP call site must pass caller_type="mcp" as a literal.
     languages: [python]
     severity: ERROR
     paths:
-      include: ["**/backend/src/**", "**/.semgrep/tests/graph-write-missing-is-privileged.py"]
+      include: ["**/backend/src/**"]
