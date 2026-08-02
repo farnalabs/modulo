@@ -13,8 +13,8 @@ def test_build_graph_with_nodes_succeeds() -> None:
 
     graph_json = {
         "nodes": [
-            {"id": "node-a", "role": "context_setter", "node_type": "agent"},
-            {"id": "node-b", "role": None, "node_type": "agent"},
+            {"id": "node-a", "role": "context_setter"},
+            {"id": "node-b", "role": None},
         ],
         "edges": [
             {"source": "node-a", "target": "node-b"},

@@ -140,8 +140,8 @@ def test_evict_removes_all_node_timeout_variants():
 
 _SIMPLE_GRAPH: dict[str, Any] = {
     "nodes": [
-        {"id": "node-a", "role": None, "node_type": "agent"},
-        {"id": "node-b", "role": None, "node_type": "agent"},
+        {"id": "node-a", "role": None},
+        {"id": "node-b", "role": None},
     ],
     "edges": [
         {"source": "node-a", "target": "node-b", "type": "normal"},
@@ -156,10 +156,7 @@ def test_build_graph_compiles_successfully():
 
 def test_build_graph_accepts_persisted_edge_endpoint_names():
     graph_json = {
-        "nodes": [
-            {"id": "node-a", "node_type": "agent"},
-            {"id": "node-b", "node_type": "agent"},
-        ],
+        "nodes": [{"id": "node-a"}, {"id": "node-b"}],
         "edges": [
             {
                 "source_node_id": "node-a",
@@ -177,23 +174,10 @@ def test_build_graph_empty_nodes_raises():
         build_graph_from_json({"nodes": [], "edges": []})
 
 
-def test_build_graph_missing_node_type_raises():
-    """A node omitting node_type must be a hard error, not silently defaulted."""
-    graph_json: dict[str, Any] = {
-        "nodes": [{"id": "node-a", "role": None}],
-        "edges": [],
-    }
-    with pytest.raises(ValueError, match="missing required 'node_type'"):
-        build_graph_from_json(graph_json)
-
-
 def test_build_graph_cycle_detection():
     # Two nodes that both point to each other — no entry point exists.
     graph_json: dict[str, Any] = {
-        "nodes": [
-            {"id": "a", "node_type": "agent"},
-            {"id": "b", "node_type": "agent"},
-        ],
+        "nodes": [{"id": "a"}, {"id": "b"}],
         "edges": [
             {"source": "a", "target": "b"},
             {"source": "b", "target": "a"},
@@ -206,7 +190,7 @@ def test_build_graph_cycle_detection():
 def test_node_null_timeout_uses_pipeline_default():
     """A node with null timeout_seconds resolves to pipeline_node_timeout_seconds."""
     graph_json: dict[str, Any] = {
-        "nodes": [{"id": "node-a", "role": None, "node_type": "agent", "timeout_seconds": None}],
+        "nodes": [{"id": "node-a", "role": None, "timeout_seconds": None}],
         "edges": [],
     }
     with patch("modulo.core.pipeline_engine.graph_cache.make_node_fn") as mock_make:
@@ -219,7 +203,7 @@ def test_node_null_timeout_uses_pipeline_default():
 def test_node_explicit_timeout_wins_over_pipeline_default():
     """An explicit per-node timeout_seconds is honoured over the pipeline default."""
     graph_json: dict[str, Any] = {
-        "nodes": [{"id": "node-a", "role": None, "node_type": "agent", "timeout_seconds": 77}],
+        "nodes": [{"id": "node-a", "role": None, "timeout_seconds": 77}],
         "edges": [],
     }
     with patch("modulo.core.pipeline_engine.graph_cache.make_node_fn") as mock_make:
@@ -251,9 +235,9 @@ async def test_built_graph_executes_simple_pipeline():
 
 _CONDITIONAL_GRAPH: dict[str, Any] = {
     "nodes": [
-        {"id": "decider", "role": None, "node_type": "agent"},
-        {"id": "pass-branch", "role": None, "node_type": "agent"},
-        {"id": "fail-branch", "role": None, "node_type": "agent"},
+        {"id": "decider", "role": None},
+        {"id": "pass-branch", "role": None},
+        {"id": "fail-branch", "role": None},
     ],
     "edges": [
         {
@@ -309,9 +293,9 @@ async def test_conditional_falls_back_to_default_target():
     """When no condition matches, the default_target edge is followed."""
     graph: dict[str, Any] = {
         "nodes": [
-            {"id": "decider", "role": None, "node_type": "agent"},
-            {"id": "pass-branch", "role": None, "node_type": "agent"},
-            {"id": "else-branch", "role": None, "node_type": "agent"},
+            {"id": "decider", "role": None},
+            {"id": "pass-branch", "role": None},
+            {"id": "else-branch", "role": None},
         ],
         "edges": [
             {
@@ -345,9 +329,9 @@ async def test_conditional_routes_using_artifact_field_values():
     """JMESPath can drill into nested artifact fields to decide routing."""
     graph: dict[str, Any] = {
         "nodes": [
-            {"id": "router", "role": None, "node_type": "agent"},
-            {"id": "high", "role": None, "node_type": "agent"},
-            {"id": "low", "role": None, "node_type": "agent"},
+            {"id": "router", "role": None},
+            {"id": "high", "role": None},
+            {"id": "low", "role": None},
         ],
         "edges": [
             {
@@ -380,9 +364,9 @@ async def test_conditional_with_normal_fallback():
     """Normal edges from the same source serve as fallback when no condition matches."""
     graph: dict[str, Any] = {
         "nodes": [
-            {"id": "decider", "role": None, "node_type": "agent"},
-            {"id": "special", "role": None, "node_type": "agent"},
-            {"id": "default-path", "role": None, "node_type": "agent"},
+            {"id": "decider", "role": None},
+            {"id": "special", "role": None},
+            {"id": "default-path", "role": None},
         ],
         "edges": [
             {
@@ -410,9 +394,9 @@ async def test_conditional_first_matching_wins():
     """When multiple conditions match, the first declared edge is taken."""
     graph: dict[str, Any] = {
         "nodes": [
-            {"id": "router", "role": None, "node_type": "agent"},
-            {"id": "high", "role": None, "node_type": "agent"},
-            {"id": "low", "role": None, "node_type": "agent"},
+            {"id": "router", "role": None},
+            {"id": "high", "role": None},
+            {"id": "low", "role": None},
         ],
         "edges": [
             {
@@ -445,8 +429,8 @@ async def test_conditional_accepts_persisted_naming():
     """Conditional edges work with persisted (edge_type/source_node_id/target_node_id) naming."""
     graph: dict[str, Any] = {
         "nodes": [
-            {"id": "router", "role": None, "node_type": "agent"},
-            {"id": "target", "role": None, "node_type": "agent"},
+            {"id": "router", "role": None},
+            {"id": "target", "role": None},
         ],
         "edges": [
             {
@@ -505,9 +489,9 @@ def test_gate_with_reject_target_compiles():
     """A graph with a gate that has reject_target compiles without error."""
     graph: dict[str, Any] = {
         "nodes": [
-            {"id": "source", "role": None, "node_type": "agent"},
-            {"id": "target", "role": None, "node_type": "agent"},
-            {"id": "kickback_target", "role": None, "node_type": "agent"},
+            {"id": "source", "role": None},
+            {"id": "target", "role": None},
+            {"id": "kickback_target", "role": None},
         ],
         "edges": [
             {
@@ -532,8 +516,8 @@ def test_gate_without_reject_target_compiles():
     """A gate without reject_target (no kickback) compiles normally."""
     graph: dict[str, Any] = {
         "nodes": [
-            {"id": "source", "role": None, "node_type": "agent"},
-            {"id": "target", "role": None, "node_type": "agent"},
+            {"id": "source", "role": None},
+            {"id": "target", "role": None},
         ],
         "edges": [
             {
@@ -557,9 +541,9 @@ def test_gate_with_reject_edge_type_compiles():
     """A graph with a reject-type edge (as kickback source) compiles."""
     graph: dict[str, Any] = {
         "nodes": [
-            {"id": "source", "role": None, "node_type": "agent"},
-            {"id": "target", "role": None, "node_type": "agent"},
-            {"id": "fallback_node", "role": None, "node_type": "agent"},
+            {"id": "source", "role": None},
+            {"id": "target", "role": None},
+            {"id": "fallback_node", "role": None},
         ],
         "edges": [
             {
