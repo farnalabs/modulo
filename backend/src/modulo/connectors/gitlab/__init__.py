@@ -201,8 +201,17 @@ class GitLabConnector(ConnectorBase):
 
     @staticmethod
     def _has_server_delay(response: httpx.Response) -> bool:
-        """Whether the response carries an explicit server-provided retry delay."""
-        return _parse_retry_after(response) is not None or _parse_rate_limit_reset(response) is not None
+        """Whether the response carries an explicit server-provided retry delay.
+
+        ``Retry-After`` is honoured on any retryable status. GitLab reports the
+        ``RateLimit-Reset`` headers on *every* response while rate limiting is
+        active, so they only count as a server delay on HTTP 429 (the quota
+        window); on other retryable statuses they would otherwise switch the
+        backoff to tight jitter and undermine thundering-herd protection.
+        """
+        if _parse_retry_after(response) is not None:
+            return True
+        return response.status_code == 429 and _parse_rate_limit_reset(response) is not None
 
     def _sleep_delay(self, response: httpx.Response, attempt: int) -> float:
         """Compute the sleep before a retry, honouring server-provided wait times."""
@@ -275,11 +284,16 @@ class GitLabConnector(ConnectorBase):
         Prefers ``Retry-After``, then GitLab's rate-limit reset headers
         (``RateLimit-ResetTime`` / ``RateLimit-Reset`` — only on HTTP 429, the
         quota reset window), then exponential backoff.
+
+        The quota reset window is left uncapped so a GitLab quota window longer
+        than ``_MAX_DELAY`` is truly honoured (capping it would fire the retry
+        early and hit another 429). ``Retry-After`` and backoff remain capped
+        at ``_MAX_DELAY``.
         """
         if response.status_code == 429:
             reset_delay = _parse_rate_limit_reset(response)
             if reset_delay is not None:
-                return min(reset_delay, _MAX_DELAY)
+                return reset_delay
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
             return min(retry_after, _MAX_DELAY)

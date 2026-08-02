@@ -30,7 +30,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Accept configurable base URL for self-hosted GitLab instances (`base_url` constructor arg, default `https://gitlab.com/api/v4`)
 - [x] health_check() calls `GET /user` to validate token
 - [x] Return `HealthResult(ok=False)` with HTTP status on non-200
- - [x] Return `HealthResult(ok=True)` with authenticated user info on success
+- [x] Return `HealthResult(ok=True)` with authenticated user info on success
 - [ ] Report `X-Request-Id` on API errors for GitLab support debugging
 
 ### OAuth Scopes — capability verification
@@ -143,6 +143,16 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] **Recursive directory listing & batch file ops**: not implemented
 
 ## QA History
+
+### 2026-08-02 — improve-architecture (index 144)
+
+**Review-fix pass (PR #544, non-blocking nits):**
+
+- **Quota reset window no longer capped at `_MAX_DELAY` (30s)**: `_retry_delay()` now returns the `RateLimit-ResetTime`/`RateLimit-Reset` wait uncapped on 429, so a GitLab quota window longer than 30s is truly honoured instead of firing the retry early into another 429. `Retry-After` and exponential backoff remain capped at `_MAX_DELAY`.
+- **`RateLimit-Reset` gated to HTTP 429 in `_has_server_delay()`**: GitLab reports `RateLimit-*` headers on every response while rate limiting is active; they previously switched 502/503/504 backoff retries to tight jitter around the exponential backoff. Now only 429 treats the reset header as a server-provided wait, keeping full-jitter thundering-herd protection on other retryable statuses. `Retry-After` remains honoured on any status.
+- **Cosmetic**: removed a stray leading space on the `Return HealthResult(ok=True)` behaviour line.
+
+**Tests:** added 4 unit tests in `test_gitlab_resilience.py` (uncapped reset-window delay, Retry-After/backoff still capped, `_has_server_delay` gated to 429 for `RateLimit-Reset`, `Retry-After` honoured on any status).
 
 ### 2026-08-02 — improve-architecture (index 143)
 
