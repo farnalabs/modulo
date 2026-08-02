@@ -15,7 +15,13 @@ from typing import Any, Literal
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 
 from modulo.core.audit_logger import append_audit_event
@@ -451,6 +457,9 @@ async def _read_clone_source_snapshot(
                 bind = session.get_bind()
                 if asyncio.iscoroutine(bind):
                     bind = await bind
+            elif isinstance(bind, AsyncConnection):
+                bind = bind.sync_connection
+            assert bind is not None
             factory = async_sessionmaker(
                 create_async_engine(bind.url, poolclass=NullPool),
                 expire_on_commit=False,
