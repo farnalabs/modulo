@@ -544,10 +544,14 @@ def _preserve_omitted_gate_config(
     Mirrors ``hitl_gate_guard._normalize_edge`` presence semantics: when the
     client omits the ``hitl_gate_config`` key (or sends
     ``hitl_gate_config_present=False``) for an edge whose topology key matches
-    a pre-existing gated edge, the stored value is preserved. The
-    delete+reinsert write path must honour the guard's "omission = preserve"
-    contract (hitl-gate-removal-guard-plan.md §3 item 6) — otherwise a client
-    that simply omits the key would silently wipe the gate with zero audit.
+    a pre-existing gated edge, the stored value is preserved; for an edge with
+    no prior gate the omission persists ``None``. Any ``hitl_gate_config`` value
+    carried alongside an omission signal is ignored, exactly as the guard
+    ignores it — a client cannot sneak a gate value past an explicit
+    ``present=False``. The delete+reinsert write path must honour the guard's
+    "omission = preserve" contract (hitl-gate-removal-guard-plan.md §3 item 6)
+    — otherwise a client that simply omits the key would silently wipe the
+    gate with zero audit.
     """
     present = edge.get("hitl_gate_config_present", "hitl_gate_config" in edge)
     if present:
@@ -557,7 +561,7 @@ def _preserve_omitted_gate_config(
         str(edge["target_node_id"]),
         str(edge["edge_type"]),
     )
-    return old_by_key.get(key, edge.get("hitl_gate_config"))
+    return old_by_key.get(key)
 
 
 async def replace_pipeline_graph(

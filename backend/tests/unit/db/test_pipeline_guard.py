@@ -749,3 +749,39 @@ async def test_replace_explicit_null_still_denies_for_mcp(monkeypatch: pytest.Mo
         )
     assert excinfo.value.reason_code == REASON_MCP_NOT_PERMITTED
     audit.assert_not_awaited()
+
+
+async def test_replace_present_false_with_config_on_new_edge_ignores_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Contradictory input (hitl_gate_config_present=False alongside a non-null
+    hitl_gate_config) on a brand-new edge is ignored by the write path, matching
+    the guard which treats present=False as omission. The provided value must
+    NOT be persisted via the no-old-value fallback."""
+    pipeline = _PipelineRow()
+    old = []  # brand-new edge: no prior gate to preserve
+    new = [
+        {
+            "id": uuid.uuid4(),
+            "source_node_id": _NODE_A,
+            "target_node_id": _NODE_B,
+            "edge_type": "normal",
+            "hitl_gate_config": dict(_GATE),
+            "hitl_gate_config_present": False,
+        }
+    ]
+    session = _build_session(_pipeline_result(pipeline), _edges_result(old))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    result = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline.id,
+        org_id=uuid.uuid4(),
+        nodes=[],
+        edges=new,
+        is_privileged=False,
+        caller_type="rest",
+    )
+    assert result is not None
+    persisted = result[1]
+    assert persisted[0].hitl_gate_config is None, "present=False must ignore the provided gate value"
+    audit.assert_not_awaited()
