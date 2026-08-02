@@ -804,6 +804,81 @@ def step_jira_write_empty_data(resource, ctx):
         ctx["query_error"] = str(exc)
 
 
+@given("a Jira connector that reports rate-limit headers")
+def step_jira_connector_rate_limited(ctx):
+    from unittest.mock import AsyncMock
+
+    from modulo.connectors.base import ConnectorResult
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "jira"
+
+    rate_limit = {
+        "X-RateLimit-Limit": "10000",
+        "X-RateLimit-Remaining": "9780",
+        "X-RateLimit-Reset": "1754160000",
+    }
+
+    async def mock_query(q):
+        key = q.filters.get("issue_key", "")
+        if not key:
+            raise ValueError("Jira issue query requires 'issue_key' filter")
+        return ConnectorResult(
+            records=[{"id": "10001", "key": key, "fields": {"summary": "Test"}}],
+            metadata={"rate_limit": rate_limit},
+        )
+
+    mock_connector.query = mock_query
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@given("a Jira connector that is rate limited")
+def step_jira_connector_rate_limited_error(ctx):
+    from unittest.mock import AsyncMock
+
+    from modulo.connectors.base import HealthResult
+
+    mock_connector = AsyncMock()
+    mock_connector.connector_type = "jira"
+
+    async def mock_query(q):
+        raise ValueError(
+            "Jira API HTTP 429: Rate limit exceeded "
+            "(quota: X-RateLimit-Limit=10000; X-RateLimit-Remaining=0; X-RateLimit-Reset=1754160000)"
+        )
+
+    async def mock_write(payload):
+        raise ValueError("Jira API HTTP 429: Rate limit exceeded")
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Jira API HTTP 429: Rate limit exceeded")
+
+    mock_connector.query = mock_query
+    mock_connector.write = mock_write
+    mock_connector.health_check = mock_health_check
+    ctx["connector"] = mock_connector
+    ctx["query_error"] = None
+
+
+@then("the result reports rate-limit metadata")
+def step_jira_result_reports_rate_limit_metadata(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    meta = result.metadata.get("rate_limit", {})
+    assert meta, f"Expected rate-limit metadata but got: {result.metadata}"
+    assert "X-RateLimit-Remaining" in meta, f"Missing X-RateLimit-Remaining in {meta}"
+    assert "X-RateLimit-Reset" in meta, f"Missing X-RateLimit-Reset in {meta}"
+
+
+@then("the error reports the Jira rate-limit quota")
+def step_jira_error_reports_quota(ctx):
+    error = ctx.get("query_error")
+    assert error is not None, "Expected an error but query succeeded"
+    assert "quota" in error, f"Expected quota detail in error but got: {error}"
+    assert "X-RateLimit-Remaining" in error, f"Expected X-RateLimit-Remaining in error: {error}"
+
+
 # ============================================================================
 # connectors/linear_connector.feature  —  5 scenarios
 # ============================================================================

@@ -363,3 +363,55 @@ async def test_304_not_modified(connector):
     respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(304))
     with pytest.raises(ValueError, match="304 Not Modified"):
         await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
+
+
+# --- X-RateLimit-* metadata tests ---
+
+
+@respx.mock
+async def test_query_issue_rate_limit_metadata(connector):
+    """Query results expose Jira Cloud X-RateLimit-* headers via metadata."""
+    issue_data = {"id": "10001", "key": "PROJ-123", "fields": {"summary": "Fix bug"}}
+    headers = {
+        "X-RateLimit-Limit": "10000",
+        "X-RateLimit-Remaining": "9780",
+        "X-RateLimit-Reset": "1754160000",
+    }
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(200, json=issue_data, headers=headers))
+    result = await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
+    assert result.records[0]["key"] == "PROJ-123"
+    assert result.metadata["rate_limit"] == headers
+
+
+@respx.mock
+async def test_query_search_rate_limit_metadata(connector):
+    """Search results expose rate-limit metadata too."""
+    search_body = {"issues": [{"id": "1", "key": "PROJ-1"}], "total": 1}
+    headers = {
+        "X-RateLimit-Limit": "10000",
+        "X-RateLimit-Remaining": "9000",
+        "X-RateLimit-Reset": "1754160000",
+    }
+    respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(200, json=search_body, headers=headers))
+    result = await connector.query(ConnectorQuery(resource="search", filters={"jql": "project = PROJ"}))
+    assert result.total == 1
+    assert result.metadata["rate_limit"] == headers
+
+
+@respx.mock
+async def test_rate_limit_metadata_empty_when_absent(connector):
+    """No rate-limit headers on the response -> empty metadata dict."""
+    issue_data = {"id": "10001", "key": "PROJ-123"}
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(200, json=issue_data))
+    result = await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
+    assert result.metadata["rate_limit"] == {}
+
+
+@respx.mock
+async def test_query_projects_rate_limit_metadata(connector):
+    """List resources expose rate-limit metadata as well."""
+    headers = {"X-RateLimit-Remaining": "500", "X-RateLimit-Limit": "10000"}
+    respx.get(f"{_BASE}/project").mock(return_value=httpx.Response(200, json=[{"key": "PROJ"}], headers=headers))
+    result = await connector.query(ConnectorQuery(resource="projects"))
+    assert len(result.records) == 1
+    assert result.metadata["rate_limit"] == headers
