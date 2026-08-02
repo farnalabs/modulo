@@ -144,9 +144,7 @@ async def test_close_closes_client(registry: RemyRedisRegistry, redis_client: Ma
 # ---------------------------------------------------------------------------
 
 
-async def test_set_permission_request_hsets_and_expires(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_set_permission_request_hsets_and_expires(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     tools = [{"name": "run_pipeline", "args": {"pipeline_id": "p1"}}]
     await registry.set_permission_request("req-1", "sess-1", tools, ttl=120)
 
@@ -164,9 +162,7 @@ async def test_get_permission_request_happy_path(registry: RemyRedisRegistry, re
     assert result == {"session_id": "sess-1", "tools": tools}
 
 
-async def test_get_permission_request_empty_returns_none(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_get_permission_request_empty_returns_none(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.hgetall.return_value = {}
     assert await registry.get_permission_request("req-1") is None
 
@@ -204,9 +200,7 @@ async def test_get_permission_request_tools_not_list_warns(
 # ---------------------------------------------------------------------------
 
 
-async def test_set_permission_decision_setex(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_set_permission_decision_setex(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     decision = {"decision": "allow"}
     await registry.set_permission_decision("req-1", decision, ttl=120)
     redis_client.setex.assert_awaited_once_with("remy:decision:req-1", 120, json.dumps(decision))
@@ -255,9 +249,7 @@ async def test_get_and_clear_permission_decision_non_object_json(
 # ---------------------------------------------------------------------------
 
 
-async def test_set_ui_command_results_setex(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_set_ui_command_results_setex(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     results = [{"result": "ok"}]
     await registry.set_ui_command_results("sess-1", results, ttl=300)
     redis_client.setex.assert_awaited_once_with("remy:ui_results:sess-1", 300, json.dumps(results))
@@ -297,9 +289,7 @@ async def test_get_and_clear_ui_command_results_invalid_json_warns(
 # ---------------------------------------------------------------------------
 
 
-async def test_set_session_approval_hsets_and_expires(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_set_session_approval_hsets_and_expires(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     await registry.set_session_approval("sess-1", "run_pipeline", "/pipelines", ttl=1800)
 
     redis_client.hset.assert_awaited_once()
@@ -312,68 +302,50 @@ async def test_set_session_approval_hsets_and_expires(
     redis_client.expire.assert_awaited_once_with("remy:approval:sess-1", 1800 + 60)
 
 
-async def test_is_session_approved_happy_path(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_is_session_approved_happy_path(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     payload = json.dumps({"page_path": "/pipelines", "expires_at": time.time() + 1000})
     redis_client.hget.return_value = payload
     assert await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines") is True
 
 
-async def test_is_session_approved_wrong_page_path(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_is_session_approved_wrong_page_path(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     payload = json.dumps({"page_path": "/other", "expires_at": time.time() + 1000})
     redis_client.hget.return_value = payload
     assert await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines") is False
 
 
-async def test_is_session_approved_expired(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_is_session_approved_expired(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     payload = json.dumps({"page_path": "/pipelines", "expires_at": time.time() - 1000})
     redis_client.hget.return_value = payload
     assert await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines") is False
 
 
-async def test_is_session_approved_missing_value(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_is_session_approved_missing_value(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.hget.return_value = None
     assert await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines") is False
 
 
-async def test_is_session_approved_invalid_json(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_is_session_approved_invalid_json(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.hget.return_value = "{not json"
     assert await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines") is False
 
 
-async def test_is_session_approved_missing_expires_at(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_is_session_approved_missing_expires_at(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.hget.return_value = json.dumps({"page_path": "/pipelines"})
     assert await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines") is False
 
 
-async def test_is_session_approved_wrong_expires_at_type(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_is_session_approved_wrong_expires_at_type(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.hget.return_value = json.dumps({"page_path": "/pipelines", "expires_at": "soon"})
     assert await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines") is False
 
 
-async def test_clear_session_approvals_deletes_key(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_clear_session_approvals_deletes_key(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     await registry.clear_session_approvals("sess-1")
     redis_client.delete.assert_awaited_once_with("remy:approval:sess-1")
 
 
-async def test_clear_session_deletes_all_keys(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_clear_session_deletes_all_keys(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     await registry.clear_session("sess-1")
     redis_client.delete.assert_awaited_once_with("remy:ui_results:sess-1", "remy:approval:sess-1")
 
@@ -383,14 +355,10 @@ async def test_clear_session_deletes_all_keys(
 # ---------------------------------------------------------------------------
 
 
-async def test_publish_permission_response(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_publish_permission_response(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     decision = {"decision": "allow"}
     await registry.publish_permission_response("req-1", decision)
-    redis_client.publish.assert_awaited_once_with(
-        "remy:channel:permission:req-1", json.dumps(decision)
-    )
+    redis_client.publish.assert_awaited_once_with("remy:channel:permission:req-1", json.dumps(decision))
 
 
 async def test_subscribe_permission_response_receives_message(
@@ -400,9 +368,7 @@ async def test_subscribe_permission_response_receives_message(
     redis_client.pubsub.return_value = _pubsub("remy:channel:permission:req-1", decision)
     result = await registry.subscribe_permission_response("req-1", timeout=1.0)
     assert result == decision
-    redis_client.pubsub.return_value.subscribe.assert_awaited_once_with(
-        "remy:channel:permission:req-1"
-    )
+    redis_client.pubsub.return_value.subscribe.assert_awaited_once_with("remy:channel:permission:req-1")
     redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
     redis_client.pubsub.return_value.aclose.assert_awaited_once()
 
@@ -439,18 +405,14 @@ async def test_publish_ui_results(registry: RemyRedisRegistry, redis_client: Mag
     redis_client.publish.assert_awaited_once_with("remy:channel:ui_results:sess-1", "ready")
 
 
-async def test_subscribe_ui_results_receives_message(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_subscribe_ui_results_receives_message(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.pubsub.return_value = _pubsub("remy:channel:ui_results:sess-1", {"x": 1})
     assert await registry.subscribe_ui_results("sess-1", timeout=1.0) is True
     redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
     redis_client.pubsub.return_value.aclose.assert_awaited_once()
 
 
-async def test_subscribe_ui_results_timeout_returns_false(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_subscribe_ui_results_timeout_returns_false(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.pubsub.return_value = _pubsub("remy:channel:ui_results:sess-1", None)
     assert await registry.subscribe_ui_results("sess-1", timeout=0.01) is False
 
@@ -460,18 +422,14 @@ async def test_publish_resume(registry: RemyRedisRegistry, redis_client: MagicMo
     redis_client.publish.assert_awaited_once_with("remy:channel:resume:sess-1", "resume")
 
 
-async def test_subscribe_resume_receives_message(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_subscribe_resume_receives_message(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.pubsub.return_value = _pubsub("remy:channel:resume:sess-1", {"x": 1})
     assert await registry.subscribe_resume("sess-1", timeout=1.0) is True
     redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
     redis_client.pubsub.return_value.aclose.assert_awaited_once()
 
 
-async def test_subscribe_resume_timeout_returns_false(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_subscribe_resume_timeout_returns_false(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.pubsub.return_value = _pubsub("remy:channel:resume:sess-1", None)
     assert await registry.subscribe_resume("sess-1", timeout=0.01) is False
 
@@ -489,9 +447,7 @@ async def test_get_permission_request_cancelled_propagates(
         await registry.get_permission_request("req-1")
 
 
-async def test_is_session_approved_cancelled_propagates(
-    registry: RemyRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_is_session_approved_cancelled_propagates(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.hget.side_effect = asyncio.CancelledError()
     with pytest.raises(asyncio.CancelledError):
         await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines")

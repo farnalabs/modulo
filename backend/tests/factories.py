@@ -73,5 +73,6 @@ class RunFactory(factory.alchemy.SQLAlchemyModelFactory):
     organisation = factory.SelfAttribute("snapshot.organisation")
     status = "pending"
     trigger_type = "manual"
+    run_number = factory.Sequence(lambda n: n + 1)
     input_hash = "0" * 64
     langgraph_thread_id = factory.LazyFunction(lambda: str(uuid.uuid4()))

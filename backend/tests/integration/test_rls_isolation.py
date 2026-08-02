@@ -393,6 +393,29 @@ async def test_team_memberships_isolated_by_org_rls(
     account_a = await _create_account(db_engine, "member-a@rls-membership.com")
     account_b = await _create_account(db_engine, "member-b@rls-membership.com")
 
+    # The check_team_privilege_cap trigger requires every account to hold an
+    # org_membership row in the org before it can be added to a team — without
+    # it the org role resolves to NULL and the trigger raises
+    # "Team role ... exceeds org role <NULL>".
+    async with db_engine.connect() as conn, conn.begin():
+        for account_id, role in (
+            (account_admin, "admin"),
+            (account_a, "viewer"),
+            (account_b, "operator"),
+        ):
+            await conn.execute(
+                text(
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                    "VALUES (:id, :aid, :oid, :role)"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "aid": str(account_id),
+                    "oid": str(org),
+                    "role": role,
+                },
+            )
+
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session, session.begin():

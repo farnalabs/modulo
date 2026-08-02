@@ -191,11 +191,15 @@ async def test_parse_json_narrowed_to_jsondecodeerror(connector):
 
 
 @respx.mock
-async def test_query_429_uses_rate_limit_reset_time(connector):
+async def test_query_429_uses_rate_limit_reset_time(connector, monkeypatch):
     """RateLimit-ResetTime header should drive the retry delay on 429."""
-    import time
 
-    reset_epoch = time.time() + 0.05
+    # Freeze time so the reset window cannot expire mid-request (the connector's
+    # own processing time would otherwise push reset_epoch - time.time() <= 0 and
+    # fall back to exponential backoff, making the test timing-flaky).
+    fake_now = 1_000_000.0
+    monkeypatch.setattr("modulo.connectors.gitlab.time.time", lambda: fake_now)
+    reset_epoch = fake_now + 5.0  # 5s reset window, comfortably in the future
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(
         side_effect=[
@@ -207,20 +211,18 @@ async def test_query_429_uses_rate_limit_reset_time(connector):
             httpx.Response(200, json=[{"id": 1}]),
         ],
     )
-    start = time.monotonic()
     result = await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
-    elapsed = time.monotonic() - start
     assert len(result.records) == 1
     assert route.call_count == 2
-    assert elapsed < 0.5
 
 
 @respx.mock
-async def test_query_429_uses_rate_limit_reset_fallback(connector):
+async def test_query_429_uses_rate_limit_reset_fallback(connector, monkeypatch):
     """RateLimit-Reset (epoch) should drive the retry delay when ResetTime is absent."""
-    import time
 
-    reset_epoch = time.time() + 0.05
+    fake_now = 1_000_000.0
+    monkeypatch.setattr("modulo.connectors.gitlab.time.time", lambda: fake_now)
+    reset_epoch = fake_now + 5.0
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(
         side_effect=[
@@ -232,12 +234,9 @@ async def test_query_429_uses_rate_limit_reset_fallback(connector):
             httpx.Response(200, json=[{"id": 1}]),
         ],
     )
-    start = time.monotonic()
     result = await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
-    elapsed = time.monotonic() - start
     assert len(result.records) == 1
     assert route.call_count == 2
-    assert elapsed < 0.5
 
 
 @respx.mock

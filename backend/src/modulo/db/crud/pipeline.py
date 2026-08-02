@@ -467,6 +467,9 @@ async def _read_clone_source_snapshot(
     factory = read_factory
     read_engine: AsyncEngine | None = None
     if factory is None:
+        # ``session.bind`` is the AsyncEngine the session was created with;
+        # ``session.get_bind()`` returns the *sync* ``Engine`` (SQLAlchemy 2.0)
+        # which ``async_sessionmaker`` rejects ("AsyncEngine expected").
         bind = session.bind
         if isinstance(bind, AsyncEngine):
             factory = async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession)

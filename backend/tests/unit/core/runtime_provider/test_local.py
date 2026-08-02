@@ -231,8 +231,12 @@ class TestLocalRuntimeProvider:
         monkeypatch.setattr(asyncio, "wait_for", _wait_for)
         ref = await provider.create_workspace(spec)
 
+        # Use sys.executable (not a bare "sleep" binary) so the subprocess
+        # actually launches on Windows, where no `sleep` executable exists and
+        # create_subprocess_exec would raise FileNotFoundError (caught by the
+        # code, returning ExecResult instead of reaching the patched wait_for).
         with pytest.raises(asyncio.CancelledError):
-            await provider.exec_command(ref, ["sleep", "1"])
+            await provider.exec_command(ref, [sys.executable, "-c", "import time; time.sleep(1)"])
         await provider.destroy_workspace(ref)
 
     async def test_create_workspace_clones_repo(
