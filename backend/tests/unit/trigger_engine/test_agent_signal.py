@@ -408,10 +408,7 @@ class TestFireAgentSignal:
         assert results[0]["status"] == "skipped"
         assert results[0]["reason"] == "no_snapshot"
         mock_create_run.assert_not_called()
-        assert any(
-            getattr(c[0][0], "validation_result", None) == "poll_error"
-            for c in mock_session.add.call_args_list
-        )
+        assert any(getattr(c[0][0], "validation_result", None) == "poll_error" for c in mock_session.add.call_args_list)
 
     async def test_create_run_failure_reports_error(
         self,
@@ -442,6 +439,5 @@ class TestFireAgentSignal:
         assert results[0]["status"] == "error"
         assert results[0]["reason"] == "create_run_failed"
         assert any(
-            getattr(c[0][0], "validation_result", None) == "validation_failed"
-            for c in mock_session.add.call_args_list
+            getattr(c[0][0], "validation_result", None) == "validation_failed" for c in mock_session.add.call_args_list
         )

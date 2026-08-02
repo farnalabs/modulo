@@ -1,8 +1,7 @@
 # Modulo — Caddy v2 Reverse Proxy
 
-Standalone TLS termination for environments outside Kubernetes (bare metal,
-single-VM, staging, or any setup where you want Caddy handling HTTPS instead of
-an ingress controller).
+Standalone TLS termination for self-hosted environments (bare metal, single-VM,
+staging, or any setup where you want Caddy handling HTTPS directly).
 
 ## Quick Start
 
@@ -119,13 +118,13 @@ asyncio.run(test())
 "
 ```
 
-## Comparison: Caddy vs k8s Ingress
+## Comparison: Caddy vs nginx
 
-| Concern                      | This Caddyfile                | k8s Ingress (nginx+cert-manager) |
-|------------------------------|-------------------------------|-----------------------------------|
-| TLS provisioning             | Automatic (Let's Encrypt)     | cert-manager + ClusterIssuer     |
-| WebSocket                    | Transparent (built-in)        | Explicit Upgrade header config   |
-| Rate limiting                | Built-in (v2.7+)              | nginx ConfigMap + limit_req      |
-| CSP / security headers       | Single `header` block         | Ingress annotation per header    |
-| State                        | File-based (JSON config)      | Kubernetes API                   |
-| Best for                     | Single-VM, staging, bare metal| Multi-node, GitOps, auto-scaling |
+| Concern                      | This Caddyfile                | nginx                                |
+|------------------------------|-------------------------------|--------------------------------------|
+| TLS provisioning             | Automatic (Let's Encrypt)     | Manual cert + `ssl_certificate`      |
+| WebSocket                    | Transparent (built-in)        | Explicit Upgrade header config       |
+| Rate limiting                | Built-in (v2.7+)              | `limit_req` module                   |
+| CSP / security headers       | Single `header` block         | Per-location `add_header` directives |
+| State                        | File-based (JSON config)      | File-based (`nginx.conf`)            |
+| Best for                     | Single-VM, staging, bare metal| Existing nginx deployments           |

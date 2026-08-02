@@ -40,7 +40,7 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 
 - [x] `FeatureFlagRegistry` catalogs all known flags with name, description, tier, and active status
 - [x] Seven Community-tier flags registered: `parallel_branches`, `eval_system`, `webhook_trigger`, `cron_trigger`, `mcp_server`, `community_library`, `saved_views`
-- [x] Additional Community-tier flags: `polling_trigger`, `agent_signal_trigger`, `helm_deployment`, `model_backend_management`, `remy`, `remy_ui_driving`
+- [x] Additional Community-tier flags: `polling_trigger`, `agent_signal_trigger`, `model_backend_management`, `remy`, `remy_ui_driving`
 - [x] Nine Team-tier flags registered: `sso`, `team_rbac`, `audit_viewer`, `admin_spend_limits`, `observability`, `view_modes`
 - [x] Additional Team-tier flags: `admin_cost_controls`, `admin_cost_breakdown`, `admin_run_retention`, `error_forwarders`, `schema_version_history`, `environment_profiles`, `plugin_management`
 - [x] Two v1-tier flags registered: `schema_union_types`, `migration_cli`

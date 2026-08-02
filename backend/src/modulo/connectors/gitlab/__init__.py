@@ -375,9 +375,7 @@ class GitLabConnector(ConnectorBase):
                     params=discussion_params,
                 )
                 discussions = _safe_json(r)
-                return ConnectorResult(
-                    records=discussions, total=len(discussions), next_cursor=_parse_next_page(r)
-                )
+                return ConnectorResult(records=discussions, total=len(discussions), next_cursor=_parse_next_page(r))
             case "branch":
                 project = self._require_filter(q.filters, "project", q.resource)
                 branch_name = self._require_filter(q.filters, "name", q.resource)

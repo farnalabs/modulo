@@ -58,6 +58,13 @@ class TestPublisherTrust(_PreservePublishers):
     def test_revoke_nonexistent_returns_false(self):
         assert revoke_publisher("nonexistent") is False
 
+    def test_revoke_already_revoked_returns_true(self, caplog):
+        fp = "double-revoke-fingerprint"
+        register_publisher(fp, "double", "Double Revoke")
+        assert revoke_publisher(fp) is True
+        assert revoke_publisher(fp) is True
+        assert "already revoked" in caplog.text
+
     def test_list_verified_publishers(self):
         publishers = list_verified_publishers()
         assert any(p.author == "modulo" for p in publishers)
@@ -102,6 +109,51 @@ class TestSearchRanking:
     def test_ranked_list_filter_by_type(self):
         results = list_registry_primitives_ranked(primitive_type="schema")
         assert all(r["entry"].primitive_type == "schema" for r in results)
+
+    def test_ranked_list_sorts_by_downloads(self):
+        results = list_registry_primitives_ranked(sort_by="downloads")
+        counts = [r["entry"].download_count for r in results]
+        assert counts == sorted(counts, reverse=True)
+
+    def test_ranked_list_unknown_sort_falls_back_to_popularity(self, caplog):
+        results = list_registry_primitives_ranked(sort_by="bogus")
+        scores = [r["popularity_score"] for r in results]
+        assert scores == sorted(scores, reverse=True)
+        assert "Unknown sort_by" in caplog.text
+
+    def test_popularity_score_clamps_negative_downloads(self):
+        now = datetime.now(UTC)
+        score = compute_popularity_score(-5, None, 0, now)
+        assert score >= 0
+
+    def test_popularity_score_caps_downloads_at_scale(self):
+        now = datetime.now(UTC)
+        capped = compute_popularity_score(10**9, None, 0, now)
+        below = compute_popularity_score(1000, None, 0, now)
+        assert capped <= 0.4 + 0.2 + 0.05  # download + max recency + review bonus
+        assert capped > below
+
+    def test_popularity_score_clamps_negative_rating(self):
+        now = datetime.now(UTC)
+        score = compute_popularity_score(100, -3.0, 0, now)
+        assert score >= 0
+
+    def test_popularity_score_caps_rating_at_five(self):
+        now = datetime.now(UTC)
+        over = compute_popularity_score(100, 99.0, 0, now)
+        at_max = compute_popularity_score(100, 5.0, 0, now)
+        assert over == at_max
+
+    def test_popularity_score_caps_review_bonus(self):
+        now = datetime.now(UTC)
+        many = compute_popularity_score(100, 4.0, 999, now)
+        capped = compute_popularity_score(100, 4.0, 10, now)
+        assert many == capped
+
+    def test_popularity_score_ancient_primitive_zero_recency(self):
+        ancient = datetime(1900, 1, 1, tzinfo=UTC)
+        recent = datetime.now(UTC)
+        assert compute_popularity_score(100, 4.0, 5, ancient) < compute_popularity_score(100, 4.0, 5, recent)
 
 
 class TestDownloadTracking:
