@@ -362,6 +362,36 @@ class TestHandlerPerEventAuth:
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_resource_connectors_returns_connector_uuid(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        connector_id = uuid.uuid4()
+        connector = MagicMock(
+            name="Slack",
+            id=connector_id,
+            connector_type_id="slack_webhook",
+        )
+        mock_result = MagicMock()
+        mock_result.scalars.return_value = [connector]
+        mock_sess = AsyncMock()
+        mock_sess.execute = AsyncMock(return_value=mock_result)
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_sess)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        result = await resource_connectors()
+
+        assert f"id={connector_id}" in result
+        assert "Slack" in result
+        assert "slack_webhook" in result
+        assert result.startswith("Connectors (1):")
+        mock_validate_auth.assert_called_once()
+
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     @patch("modulo.api.mcp_server._session")
     async def test_resource_model_backends_returns_auth_error(
