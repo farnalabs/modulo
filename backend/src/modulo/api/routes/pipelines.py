@@ -1240,6 +1240,7 @@ async def clone_pipeline_endpoint(
                 org_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
                 account_id=principal.account_id,
+                org_role=principal.org_role,
                 new_name=req.name,
             )
             if cloned is None:

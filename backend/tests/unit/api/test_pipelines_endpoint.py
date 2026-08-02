@@ -976,6 +976,7 @@ def test_clone_pipeline_returns_201(client: TestClient) -> None:
         org_id=_ORG_ID,
         pipeline_id=_PIPELINE_ID,
         account_id=_USER_ID,
+        org_role="admin",
         new_name=None,
     )
 
@@ -1009,6 +1010,7 @@ def test_clone_pipeline_with_custom_name(client: TestClient) -> None:
         org_id=_ORG_ID,
         pipeline_id=_PIPELINE_ID,
         account_id=_USER_ID,
+        org_role="admin",
         new_name="My Custom Clone",
     )
 

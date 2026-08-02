@@ -46,6 +46,10 @@ export async function* parseSSEStream(
     const { done, value } = await reader.read()
     if (!done) {
       buffer += decoder.decode(value, { stream: true })
+    } else {
+      // Flush any trailing bytes so a final chunk ending mid-multi-byte
+      // sequence isn't silently dropped.
+      buffer += decoder.decode()
     }
     const overflow = !done && buffer.length > maxBufferSize
 
@@ -64,6 +68,8 @@ export async function* parseSSEStream(
       if (pending) yield pending
       break
     }
+    // Safety cap: if the buffer limit is hit before a terminating blank line,
+    // drop the accumulated partial event rather than growing the buffer forever.
     if (overflow) break
   }
 }

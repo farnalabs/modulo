@@ -601,9 +601,6 @@ async def test_sweep_redispatches_stranded_capacity_blocked_run(
 ):
     """A capacity-marked run whose in-process retry loop died (stale heartbeat)
     is RE-DISPATCHED, not failed — the durable restart-durability guarantee."""
-    from modulo.core.pipeline_executor_task import reset_engines
-
-    reset_engines()
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
 
     org_id, user_id = await _seed_org_account(db_engine, "RedispatchOrg", cap=1)
@@ -646,9 +643,6 @@ async def test_sweep_skips_fresh_heartbeat_capacity_blocked_run(
 ):
     """A live in-process retry loop refreshes heartbeat_at — the sweep's fence
     must skip it (no re-dispatch, no double-execution)."""
-    from modulo.core.pipeline_executor_task import reset_engines
-
-    reset_engines()
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
 
     org_id, user_id = await _seed_org_account(db_engine, "LiveLoopOrg", cap=1)
@@ -686,9 +680,6 @@ async def test_sweep_still_fails_capacity_timeout_eligible_run(
 ):
     """A run past the 120-min capacity_timeout TTL must FAIL, never be
     resurrected by the re-dispatch branch (existing behaviour preserved)."""
-    from modulo.core.pipeline_executor_task import reset_engines
-
-    reset_engines()
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
 
     org_id, user_id = await _seed_org_account(db_engine, "TimeoutOrg", cap=1)

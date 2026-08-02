@@ -2,16 +2,9 @@
   - id: requests-without-timeout
     patterns:
       - pattern-either:
-          - pattern: requests.get($URL)
-          - pattern: requests.post($URL, ...)
-          - pattern: requests.put($URL, ...)
-          - pattern: requests.delete($URL, ...)
-          - pattern: requests.request($METHOD, $URL, ...)
-          - pattern: httpx.Client().get($URL, ...)
-          - pattern: httpx.Client().post($URL, ...)
-          - pattern: httpx.Client().put($URL, ...)
-          - pattern: httpx.Client().delete($URL, ...)
-      - pattern-not-regex: '.*timeout\s*=.*'
+          - pattern-regex: (?s)\brequests\.(?:get|post|put|delete|request)\((?:(?!timeout\s*=)(?:[^()]|\([^()]*\)))*?\)
+          - pattern-regex: (?s)\bhttpx\.Client\(\)\.(?:get|post|put|delete|patch|request)\((?:(?!timeout\s*=)(?:[^()]|\([^()]*\)))*?\)
+          - pattern-regex: (?s)\bhttpx\.(?:get|post|put|delete|patch|request)\((?:(?!timeout\s*=)(?:[^()]|\([^()]*\)))*?\)
     message: "HTTP request without explicit `timeout=` — network hang blocks the caller indefinitely. Always set a timeout."
     languages: [python]
     severity: ERROR
