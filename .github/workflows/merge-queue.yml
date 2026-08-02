@@ -166,6 +166,13 @@ jobs:
               continue
             fi
 
+            # Re-verify review decision immediately before queueing (TOCTOU guard, PR #535 incident)
+            REVIEW_DECISION=$(gh pr view "$NUM" --json reviewDecision --jq '.reviewDecision' 2>/dev/null || echo "unknown")
+            if [ "$REVIEW_DECISION" != "APPROVED" ]; then
+              echo "  skipping PR #$NUM - reviewDecision is '$REVIEW_DECISION' at queue time (must be APPROVED)"
+              continue
+            fi
+
             echo ""
             echo "=== PR #$NUM: $TITLE ==="
 
@@ -316,6 +323,14 @@ jobs:
           FAILED=""
           for NUM in $PR_NUMS; do
             echo "  Merging PR #$NUM..."
+
+            # Re-verify review decision immediately before merge (TOCTOU guard, PR #535 incident)
+            REVIEW_DECISION=$(gh pr view "$NUM" --json reviewDecision --jq '.reviewDecision' 2>/dev/null || echo "unknown")
+            if [ "$REVIEW_DECISION" != "APPROVED" ]; then
+              echo "  PR #$NUM reviewDecision is '$REVIEW_DECISION' -- skipping merge (stays open for next queue cycle)"
+              continue
+            fi
+
             if gh pr merge --squash "$NUM" 2>&1; then
               echo "    PR #$NUM merged --"
             else
