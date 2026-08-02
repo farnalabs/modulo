@@ -387,6 +387,8 @@ def test_end_without_start_does_not_raise(bridge: LangGraphOtelBridge) -> None:
     bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)
     bridge.on_tool_end("x", run_id=run_id)
 
+    assert bridge._spans == {}
+
 
 def test_spans_dict_empty_after_full_lifecycle(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     root = uuid.uuid4()

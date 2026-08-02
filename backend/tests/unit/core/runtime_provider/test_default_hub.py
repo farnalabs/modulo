@@ -146,4 +146,5 @@ class TestMatchesProviderType:
 
     async def test_close_is_noop(self) -> None:
         provider = _MinimalProvider()
-        await provider.close()
+        result = await provider.close()
+        assert result is None
