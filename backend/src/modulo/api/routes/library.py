@@ -424,7 +424,7 @@ async def get_library_primitive_endpoint(
 async def create_library_primitive_endpoint(
     req: LibraryPrimitiveCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.manage"),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -494,7 +494,7 @@ async def update_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     req: LibraryPrimitiveUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.manage"),
 ) -> LibraryPrimitiveResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -533,7 +533,7 @@ async def update_library_primitive_endpoint(
 async def delete_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.manage"),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -571,7 +571,7 @@ async def delete_library_primitive_endpoint(
 async def restore_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.manage"),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -663,7 +663,7 @@ async def export_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     format: str = Query("v1", regex="^(v1|v2)$"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.manage"),
 ) -> Response:
     try:
         async with session.begin():
@@ -866,7 +866,7 @@ async def _analyse_bundle(
 async def upload_zip_and_analyse_endpoint(
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.manage"),
 ) -> ImportBundleResponse:
     """Upload a .modulo.zip file, extract bundle.json, and return analysis.
 
@@ -905,7 +905,7 @@ async def upload_zip_and_analyse_endpoint(
 async def analyse_import_bundle_endpoint(
     req: AnalyseBundleRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.manage"),
 ) -> ImportBundleResponse:
     """Analyse a bundle JSON and return resolution warnings + available teams.
 
@@ -925,7 +925,7 @@ async def analyse_import_bundle_endpoint(
 async def confirm_import_endpoint(
     req: ImportConfirmRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("library.manage"),
 ) -> dict[str, Any]:
     """Confirm and execute the import.
 

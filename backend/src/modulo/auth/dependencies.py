@@ -161,11 +161,12 @@ async def get_current_tenant_user_or_api_key(
     call ``set_rls_user_context``, so team restriction is not enforced for
     run trigger/read — consistent with the existing user-JWT behaviour.
 
-    API keys are resolved with an RLS-disabled prefix lookup (the key's org is
-    unknown until the record is read) and re-validated inside the key's org
-    context — mirroring the MCP middleware, since ``org_api_keys`` has RLS
-    enabled. For JWT credentials the behaviour is identical to
-    :func:`get_current_tenant_user`.
+    API keys are resolved by first looking up the key's organisation through a
+    SECURITY DEFINER function (owned by the migration role, so it can read
+    RLS-protected ``org_api_keys`` rows that the runtime app role cannot), then
+    re-validating the key inside that org's RLS context — mirroring the MCP
+    middleware, since ``org_api_keys`` has RLS enabled. For JWT credentials the
+    behaviour is identical to :func:`get_current_tenant_user`.
     """
     if credentials is None:
         raise InvalidToken()
@@ -194,25 +195,40 @@ async def get_current_tenant_user_or_api_key(
             # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and the
             # key's org is unknown until the record is read — a plain lookup in
             # an empty org context would be filtered out by RLS and reject every
-            # valid key. Resolve the record with RLS disabled, then re-validate
-            # inside the key's org context before trusting it.
+            # valid key. On Postgres the runtime app role is RLS-subject (a
+            # non-owner DML-granted role), so the org is resolved through a
+            # SECURITY DEFINER function owned by the migration role rather than
+            # SET row_security TO OFF (which only bypasses RLS for owners and
+            # raises for a regular role). On generic backends there is no RLS
+            # and the tenant filter only injects when an org context is set, so
+            # a plain prefix scan works. Then re-validate inside the org
+            # context before trusting the key.
             prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
             async with factory() as session, session.begin():
                 dialect = await _ensure_active_transaction(session)
                 if dialect == "postgresql":
-                    await session.execute(text("SET LOCAL row_security TO OFF"))
-                result = await session.execute(
-                    select(OrgApiKey).where(
-                        OrgApiKey.lookup_prefix == prefix,
-                        OrgApiKey.revoked_at.is_(None),
-                    )
-                )
-                key_record = result.scalar_one_or_none()
-            if key_record is None:
+                    org_id = (
+                        await session.execute(
+                            text("SELECT public.lookup_api_key_org(:prefix)"),
+                            {"prefix": prefix},
+                        )
+                    ).scalar_one_or_none()
+                else:
+                    key_record = (
+                        await session.execute(
+                            select(OrgApiKey).where(
+                                OrgApiKey.lookup_prefix == prefix,
+                                OrgApiKey.revoked_at.is_(None),
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    org_id = key_record.organisation_id if key_record is not None else None
+            if org_id is None:
                 raise ApiKeyInvalidError()
+
             async with factory() as session, session.begin():
-                await set_rls_org(session, key_record.organisation_id)
-                key = await validate_api_key(session, token, org_id=key_record.organisation_id)
+                await set_rls_org(session, org_id)
+                key = await validate_api_key(session, token, org_id=org_id)
         except ApiKeyInvalidError:
             raise InvalidToken() from None
         except SQLAlchemyError:

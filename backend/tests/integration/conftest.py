@@ -14,6 +14,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
 
 # Collection imports the FastAPI app before database fixtures run. Provide only
@@ -172,7 +173,12 @@ def migrated_db_url(db_url: str) -> str:
 
 @pytest_asyncio.fixture(scope="session")
 async def db_engine(migrated_db_url: str) -> AsyncEngine:
-    engine = create_async_engine(migrated_db_url, echo=False)
+    # NullPool: the session-scoped engine is created on the session loop but
+    # tests (and the auth dependency's process-global engine) run on function
+    # loops. A pooled connection checked out here would later be reused on a
+    # different event loop, raising "attached to a different loop" asyncpg
+    # errors. NullPool opens a fresh connection per checkout.
+    engine = create_async_engine(migrated_db_url, echo=False, poolclass=NullPool)
     yield engine
     await engine.dispose()
 

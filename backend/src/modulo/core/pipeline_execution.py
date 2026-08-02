@@ -59,6 +59,23 @@ RUN_COMPLETE_STATUS = "complete"
 # the 120->600s exponential retry backoff plus worker restarts.
 CAPACITY_TIMEOUT_TTL_MINUTES = 120
 
+# Re-dispatch TTL for stranded capacity-blocked runs. A run demoted to
+# ``pending`` with a capacity marker is normally retried in-process by
+# ``PipelineExecutor._retry_pending``, which refreshes ``heartbeat_at`` on each
+# attempt. If the worker process hosting that loop dies (deploy/crash/restart)
+# the run would otherwise sit ``pending`` until the 120-min capacity_timeout
+# sweep TERMINAL-FAILS a legitimate never-executed run. This window re-dispatches
+# a stranded run long before that — but ONLY when its heartbeat is stale (the
+# in-process loop is provably gone), and never once it is already past the
+# capacity_timeout TTL (those must fail, not be resurrected forever).
+#
+# Sized ABOVE the retry loop's worst-case backoff sleep (600s) plus the 15s
+# poll interval, so a LIVE loop's per-attempt heartbeat refresh never trips the
+# fence (a 10-minute TTL would race the 600s backoff and risk double-retry
+# loops). A genuinely stranded run gets ~10 re-dispatch attempts (120/12) before
+# the capacity_timeout backstop fails it.
+_STRANDED_REDISPATCH_TTL_MINUTES = 12
+
 _DEFAULT_CLAIM_CAP = 5
 
 # SAQ run claim cap (plan F6a) — distinct per-claim value; SAQ retries reuse the
@@ -336,6 +353,37 @@ async def execute_run(
     await mark_complete(async_engine, str(rid), str(oid))
 
 
+async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
+    """Re-dispatch a stranded capacity-blocked run through ``dispatch_run``.
+
+    Re-enters ``claim_run`` → ``execute()`` → ``_check_capacity``, which
+    re-checks the org/pipeline cap and either admits the run when a slot frees
+    or re-demotes it back to ``pending``. This is the SAME mechanism
+    ``dispatcher_reconcile`` uses; the beat sweep is the durable liveness owner
+    for capacity-blocked runs because ``dispatcher_reconcile`` deliberately
+    excludes them (its exclusion prevents the double-execution double-retry-loop
+    race and must stay — see cron_helpers._reconcile_capacity_marker_exclusion).
+
+    Double-execution safety: ``dispatch_run`` enqueues with the deterministic
+    ``run:{id}`` SAQ key (deduped if a job already exists) and the worker's
+    ``claim_run`` is an atomic ``UPDATE ... WHERE status='pending' OR
+    (running AND stale heartbeat)`` — a run already claimed by a live loop
+    simply loses the claim.
+
+    Returns the outcome string (``enqueued``/``deferred``/``deduped``/``failed``).
+    """
+    from modulo.core.dispatch import dispatch_run
+
+    try:
+        outcome, _job_id = await dispatch_run(run_id, org_id)
+        return outcome
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.redispatched_capacity_blocked_failed run=%s", run_id)
+        return "failed"
+
+
 async def stale_run_recovery_sweep(
     async_engine: AsyncEngine,
     *,
@@ -346,6 +394,12 @@ async def stale_run_recovery_sweep(
 
     - Pending runs older than the never-dispatched window with no
       ``dispatched_at`` are marked ``failed`` with ``never_dispatched``.
+    - Stranded capacity-blocked pending runs (``error_code`` in
+      ``org_capacity_limited``/``pipeline_capacity``) whose heartbeat is stale
+      are RE-DISPATCHED (durable restart durability — see
+      :func:`_re_dispatch_capacity_blocked`), never failed.
+    - Capacity-blocked pending runs past ``CAPACITY_TIMEOUT_TTL_MINUTES`` are
+      marked ``failed`` with ``capacity_timeout``.
     - Running runs with a heartbeat older than the worker-lost window and
       5+ claims are marked ``failed`` with ``worker_lost``.
 
@@ -361,6 +415,7 @@ async def stale_run_recovery_sweep(
     settings = get_settings()
     nd_window = never_dispatched_window if never_dispatched_window is not None else settings.saq_never_dispatched_window
     wl_window = worker_lost_window if worker_lost_window is not None else settings.saq_worker_lost_window
+    stranded_rows: list[Any] = []
     try:
         async with async_engine.connect() as conn, conn.begin():
             never_result = await conn.execute(
@@ -377,6 +432,36 @@ async def stale_run_recovery_sweep(
                 {"nd_window": nd_window},
             )
             never_count = never_result.rowcount
+
+            # Re-dispatch stranded capacity-blocked runs. Runs demoted to
+            # ``pending`` with a capacity marker are normally retried by the
+            # in-process ``PipelineExecutor._retry_pending`` loop, which
+            # refreshes ``heartbeat_at`` per attempt. A stale heartbeat is the
+            # fence that proves that loop is GONE (worker died): only then is
+            # the run re-dispatched so it re-enters claim -> execute ->
+            # _check_capacity. Runs already past the capacity_timeout TTL are
+            # excluded — they fail below, they are not resurrected forever. The
+            # heartbeat stamp both fences against a live loop and backs off the
+            # sweep when the re-dispatch defers (capacity still full) instead of
+            # hot-looping every cron tick.
+            stranded_result = await conn.execute(
+                text(
+                    "UPDATE runs "
+                    "SET heartbeat_at = now() "
+                    "WHERE status = 'pending' "
+                    "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+                    "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:redispatch_ttl * interval '1 minute')) "
+                    "AND created_at >= now() - (:fail_ttl * interval '1 minute') "
+                    "AND cancellation_requested = false "
+                    "RETURNING id, organisation_id"
+                ),
+                {
+                    "redispatch_ttl": _STRANDED_REDISPATCH_TTL_MINUTES,
+                    "fail_ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
+                },
+            )
+            stranded_rows = list(stranded_result.all())
+            stranded_count = len(stranded_rows)
 
             # Durable backstop for capacity-blocked runs. The in-process retry
             # accelerator (PipelineExecutor._retry_pending) handles normal slot
@@ -409,17 +494,30 @@ async def stale_run_recovery_sweep(
             )
             lost_count = lost_result.rowcount
 
-        if never_count or lost_count or capacity_timeout_count:
+        # Re-dispatch AFTER the sweep transaction commits so dispatch_run's own
+        # sessions (and the row lock the UPDATE held) never overlap a live
+        # transaction.
+        redispatch_outcomes: dict[str, int] = {}
+        for row in stranded_rows:
+            outcome = await _re_dispatch_capacity_blocked(str(row.id), str(row.organisation_id))
+            redispatch_outcomes[outcome] = redispatch_outcomes.get(outcome, 0) + 1
+
+        if never_count or lost_count or capacity_timeout_count or stranded_count:
             _log.info(
-                "Stale run recovery: %d never-dispatched, %d capacity-timeout, %d worker-lost runs swept",
+                "Stale run recovery: %d never-dispatched, %d capacity-timeout, %d worker-lost runs swept, "
+                "%d stranded capacity-blocked runs re-dispatched (%s)",
                 never_count,
                 capacity_timeout_count,
                 lost_count,
+                stranded_count,
+                redispatch_outcomes,
             )
         return {
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
             "capacity_timeout_swept": capacity_timeout_count,
+            "stranded_capacity_redispatched": stranded_count,
+            "redispatch_outcomes": redispatch_outcomes,
         }
     except asyncio.CancelledError:
         raise
@@ -429,6 +527,8 @@ async def stale_run_recovery_sweep(
             "never_dispatched_swept": 0,
             "worker_lost_swept": 0,
             "capacity_timeout_swept": 0,
+            "stranded_capacity_redispatched": 0,
+            "redispatch_outcomes": {},
             "error": "sweep_failed",
         }
 

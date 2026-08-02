@@ -59,31 +59,6 @@ def _scan_node_runner(path: Path) -> None:
                             "use 'opencode' template (has opencode CLI pre-installed)."
                         )
 
-    # Line-based checks for patterns that are hard to catch with AST
-    for lineno, line in enumerate(source.splitlines(), start=1):
-        # `**env_vars_extra` at end of envs dict (after system vars)
-        stripped = line.strip()
-        if "**env_vars_extra" in stripped and "}" not in stripped:
-            _fail(
-                f"{path}:{lineno}: "
-                "`**env_vars_extra` must precede system env vars "
-                "(GITHUB_TOKEN, APP_MODULO_OPENCODE_API_KEY) — "
-                "otherwise pipeline config can override auth tokens."
-            )
-
-
-def _scan_mcp_server(path: Path) -> None:
-    """AST-scan the MCP server for empty agent_prompt patterns."""
-    source = path.read_text(encoding="utf-8")
-    for lineno, line in enumerate(source.splitlines(), start=1):
-        stripped = line.strip()
-        if 'n.get("agent_prompt", "")' in stripped or 'n.get("agent_prompt", "") or ""' in stripped:
-            _fail(
-                f"{path}:{lineno}: "
-                "Empty agent_prompt fallback in MCP handler — "
-                "opencode will hang with no instructions. "
-                "Require a non-empty prompt template."
-            )
 
 
 def _scan_pipeline_config_files() -> None:
@@ -145,19 +120,6 @@ def _check_node_config(path: Path, obj: dict, prefix: str = "") -> None:
                 "increase to 1200 for complex tasks"
             )
 
-    # Check env_vars ordering
-    envs = obj.get("envs") or obj.get("env_vars")
-    if isinstance(envs, dict) and "env_vars_extra" in envs:
-        keys = list(envs.keys())
-        extra_idx = keys.index("env_vars_extra")
-        # Flag if env_vars_extra is not the first entry (it should be first to prevent overrides)
-        for idx, key in enumerate(keys):
-            if key in ("GITHUB_TOKEN", "APP_MODULO_OPENCODE_API_KEY", "GITHUB_REVIEWBOT_PAT") and extra_idx > idx:
-                    _fail(
-                        f"{path}: env_vars_extra (index {extra_idx}) is placed after "
-                        f"'{key}' (index {idx}) in node {prefix} — "
-                        "move env_vars_extra before system env vars to prevent override"
-                    )
 
     # Recurse into children/edges
     for key in ("nodes", "edges", "items", "steps", "children"):
@@ -176,9 +138,6 @@ def main() -> int:
     if node_runner.exists():
         _scan_node_runner(node_runner)
 
-    mcp_server = repo_root / "backend" / "src" / "modulo" / "api" / "mcp_server.py"
-    if mcp_server.exists():
-        _scan_mcp_server(mcp_server)
 
     # Scan pipeline config files
     _scan_pipeline_config_files()

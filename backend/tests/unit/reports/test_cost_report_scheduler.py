@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.email_service import EmailSendingError
 from modulo.core.reports.cost_report import deliver_cost_report, format_cost_report, generate_cost_report
 from modulo.core.reports.scheduler import _fire_scheduled_report, get_generator
 from modulo.db.crud.scheduled_report import delete_scheduled_report, list_scheduled_reports
@@ -96,6 +97,96 @@ async def test_generate_format_and_deliver_cost_report() -> None:
         results = await deliver_cost_report(payload, {"type": "email", "emails": ["admin@example.com"]})
 
     assert results == [{"type": "email", "status": "delivered", "recipient_count": 1}]
+    send.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"period": "hourly", "group_by": "team", "format": "csv"},
+        {"period": "daily", "group_by": "department", "format": "csv"},
+        {"period": "daily", "group_by": "team", "format": "xml"},
+        {},
+    ],
+)
+async def test_generate_cost_report_rejects_unsupported_config(config: dict[str, str]) -> None:
+    with (
+        patch("modulo.core.reports.cost_report.get_cost_report", new_callable=AsyncMock) as get_cost,
+        pytest.raises(ValueError),
+    ):
+        await generate_cost_report(
+            cast(AsyncSession, MagicMock(spec=AsyncSession)),
+            uuid.uuid4(),
+            config,
+        )
+    get_cost.assert_not_awaited()
+
+
+async def test_generate_cost_report_json_format() -> None:
+    rows = [{"entity_id": "team-1", "entity_name": "Platform", "total_spend_usd": 2.5, "total_runs": 4}]
+    with patch(
+        "modulo.core.reports.cost_report.get_cost_report", new_callable=AsyncMock, return_value=rows
+    ) as get_cost:
+        generated = await generate_cost_report(
+            cast(AsyncSession, MagicMock(spec=AsyncSession)),
+            uuid.uuid4(),
+            {"period": "monthly", "group_by": "org", "format": "json"},
+        )
+
+    assert generated["format"] == "json"
+    get_cost.assert_awaited_once()
+    assert get_cost.call_args.kwargs["period"] == "month"
+
+
+def test_format_cost_report_json_emits_json_array() -> None:
+    payload = format_cost_report(
+        {
+            "period": "monthly",
+            "group_by": "org",
+            "format": "json",
+            "items": [{"entity_id": "org-1", "entity_name": "Acme", "total_spend_usd": 1.25, "total_runs": 3}],
+        }
+    )
+    assert "Acme" in payload["body_text"]
+    assert '"entity_name": "Acme"' in payload["body_text"]
+    assert "Modulo monthly cost report by org" in payload["subject"]
+    assert payload["body_html"].startswith("<html>")
+
+
+def test_format_cost_report_rejects_unknown_format() -> None:
+    with pytest.raises(ValueError):
+        format_cost_report({"period": "daily", "group_by": "team", "format": "pdf", "items": []})
+
+
+@pytest.mark.parametrize(
+    "recipient_config",
+    [
+        {"type": "slack", "emails": ["admin@example.com"]},
+        {"type": "email", "emails": "admin@example.com"},
+        {"type": "email", "emails": []},
+        {"type": "email", "emails": [""]},
+        {"type": "email", "emails": ["admin@example.com", 42]},
+    ],
+)
+async def test_deliver_cost_report_rejects_invalid_recipients(recipient_config: dict[str, object]) -> None:
+    payload = {"subject": "Cost", "body_html": "<p />", "body_text": "cost"}
+    with (
+        patch("modulo.core.reports.cost_report.get_settings"),
+        patch("modulo.core.reports.cost_report.send_email", new_callable=AsyncMock) as send,
+        pytest.raises(ValueError),
+    ):
+        await deliver_cost_report(payload, recipient_config)
+    send.assert_not_awaited()
+
+
+async def test_deliver_cost_report_raises_when_smtp_unconfigured() -> None:
+    payload = {"subject": "Cost", "body_html": "<p />", "body_text": "cost"}
+    with (
+        patch("modulo.core.reports.cost_report.get_settings", return_value=MagicMock()),
+        patch("modulo.core.reports.cost_report.send_email", return_value=False) as send,
+        pytest.raises(EmailSendingError, match="SMTP is not configured"),
+    ):
+        await deliver_cost_report(payload, {"type": "email", "emails": ["admin@example.com"]})
     send.assert_called_once()
 
 

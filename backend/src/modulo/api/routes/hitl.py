@@ -103,11 +103,15 @@ class PendingGatesResponse(BaseModel):
 
 
 async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
-    """Raise ``202`` (queued) when the org sandbox cap blocks a gate resume.
+    """Raise ``409`` when the org sandbox cap blocks a gate resume.
 
     Runs BEFORE the HITL gate decision is committed so a capacity decline
     never deadlocks the run (gate decided + run stuck). The gate stays
     undecided and the human can retry once a slot frees.
+
+    409 Conflict (rather than 202 Accepted) is returned because nothing is
+    accepted or queued by this call — the request conflicts with the current
+    state (org at sandbox capacity) and no state is changed.
 
     Applied to the resume actions (approve / approve-with-modification /
     deliver-manual / submit-manual), which continue executing the sandbox
@@ -117,8 +121,8 @@ async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID
     """
     if not await org_sandbox_capacity_free(session, org_id, run_id):
         raise HTTPException(
-            status_code=status.HTTP_202_ACCEPTED,
-            detail="Sandbox concurrency limit reached; run queued. Retry when capacity frees up.",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Sandbox concurrency limit reached; gate left undecided. Retry when capacity frees up.",
         )
 
 

@@ -13,6 +13,7 @@ import json
 import logging
 import threading
 import uuid
+from decimal import Decimal
 from typing import Any
 
 import jmespath
@@ -192,6 +193,26 @@ async def fire_polling_trigger(
                 "status": "skipped",
                 "reason": "concurrency_limit",
                 "active_runs": active_count,
+            }
+
+        # Daily spend limit check (mirrors cron_helpers.fire_cron_trigger) — run
+        # before the connector query so an over-budget trigger stops polling the
+        # external service instead of running the query every cycle.
+        today_cost = await _daily_spend_limit_reached(session, trigger, org_id)
+        if today_cost is not None:
+            await _log_poll_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="spend_limit_reached",
+                error_detail=f"Daily spend limit {trigger.daily_spend_limit} reached (today: {today_cost})",
+            )
+            await _update_next_fire_no_last(session, trigger)
+            return {
+                "status": "skipped",
+                "reason": "spend_limit",
+                "daily_spend_limit": str(trigger.daily_spend_limit),
+                "today_cost": str(today_cost),
             }
 
         # Load connector instance
@@ -409,6 +430,33 @@ async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> in
         )
     )
     return int(result.scalar_one() or 0)
+
+
+async def _daily_spend_limit_reached(
+    session: AsyncSession,
+    trigger: Trigger,
+    org_id: uuid.UUID,
+) -> Decimal | None:
+    """Return today's total run cost when the trigger's daily spend limit is exceeded.
+
+    Returns ``None`` when no limit is configured or the limit has not been
+    reached yet — the trigger may fire.
+    """
+    limit = trigger.daily_spend_limit
+    if limit is None:
+        return None
+    today_start = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    cost_result = await session.execute(
+        select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
+            Run.trigger_id == trigger.id,
+            Run.organisation_id == org_id,
+            Run.created_at >= today_start,
+        )
+    )
+    today_cost = cost_result.scalar_one()
+    if today_cost is not None and today_cost >= limit:
+        return today_cost
+    return None
 
 
 async def _log_poll_event(

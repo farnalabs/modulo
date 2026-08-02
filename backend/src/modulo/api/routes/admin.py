@@ -1709,7 +1709,7 @@ class DeletionRequestResponse(BaseModel):
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def request_org_deletion(
-    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),  # type: ignore[assignment]
+    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),
     session: AsyncSession = Depends(get_db_session),
 ) -> DeletionRequestResponse:
     from modulo.core.audit_logger import append_audit_event
@@ -1792,7 +1792,7 @@ class ConfirmDeletionResponse(BaseModel):
 @router.post("/org/deletion-confirm", response_model=ConfirmDeletionResponse)
 async def confirm_org_deletion(
     req: ConfirmDeletionRequest,
-    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),  # type: ignore[assignment]
+    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
     from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_deletion
@@ -1848,7 +1848,7 @@ class OrgExportResponse(BaseModel):
 @handle_db_errors("admin.cancel_org_deletion")
 @router.patch("/org/deletion-cancel", response_model=CancelDeletionResponse)
 async def cancel_org_deletion(
-    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),  # type: ignore[assignment]
+    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),
     session: AsyncSession = Depends(get_db_session),
 ) -> CancelDeletionResponse:
     from modulo.db.crud.org_deletion import cancel_org_deletion as _cancel
@@ -1885,7 +1885,7 @@ async def cancel_org_deletion(
 @handle_db_errors("admin.export_org_data")
 @router.get("/org/export", response_model=OrgExportResponse)
 async def export_org_data(
-    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),  # type: ignore[assignment]
+    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgExportResponse:
     from modulo.db.crud.org_deletion import export_org_data as _export
@@ -1933,7 +1933,7 @@ async def export_org_data(
 @handle_db_errors("admin.delete_org_immediate")
 @router.delete("/org", response_model=ConfirmDeletionResponse)
 async def delete_org_immediate(
-    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),  # type: ignore[assignment]
+    current_user: TenantPrincipal = require_system_or_org_admin("org.delete"),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
     from modulo.core.audit_logger import append_audit_event
@@ -3094,12 +3094,6 @@ async def admin_get_sandbox_concurrency(
             limit = await get_sandbox_concurrency_limit(session, current_user.organisation_id)
     except asyncio.CancelledError:
         raise
-    except IntegrityError:
-        logger.exception("admin.admin_get_sandbox_concurrency")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from None
     except ProgrammingError:
         logger.exception("routes.admin")
 
