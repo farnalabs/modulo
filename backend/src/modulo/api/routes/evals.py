@@ -19,8 +19,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
@@ -121,7 +120,7 @@ class EvalDefinitionListResponse(BaseModel):
 async def create_eval_definition(
     req: CreateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("eval.definition.create"),
 ) -> dict[str, Any]:
     """Create a new eval definition.
 
@@ -194,7 +193,7 @@ async def list_eval_definitions(
     page_size: int = Query(20, ge=1, le=100),
     pipeline_id: uuid.UUID | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("eval.list"),
 ) -> EvalDefinitionListResponse:
     """List eval definitions for the caller's organisation."""
     from sqlalchemy import func as sa_func
@@ -265,7 +264,7 @@ async def list_eval_definitions(
 async def eval_coverage(
     pipeline_id: uuid.UUID = Query(..., description="Pipeline ID"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("eval.list"),
 ) -> dict[str, Any]:
     """Return eval coverage map for a pipeline."""
     try:
@@ -369,7 +368,7 @@ async def eval_coverage(
 async def get_eval_definition(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("eval.list"),
 ) -> dict[str, Any]:
     """Get a single eval definition by ID."""
     try:
@@ -421,7 +420,7 @@ async def update_eval_definition(
     eval_id: uuid.UUID,
     req: UpdateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("eval.definition.update"),
 ) -> dict[str, Any]:
     """Update an eval definition. Admin only."""
     if principal.org_role != "admin":
@@ -481,7 +480,7 @@ async def update_eval_definition(
 async def delete_eval_definition(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("eval.definition.delete"),
 ) -> None:
     """Delete an eval definition. Admin only."""
     if principal.org_role != "admin":
@@ -537,7 +536,7 @@ async def list_run_evals(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("eval.list"),
 ) -> dict[str, Any]:
     """List all eval results for a given run.
 
@@ -655,7 +654,7 @@ class CreateEvalFromRunRequest(BaseModel):
 async def compare_evals(
     req: CompareEvalsRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("eval.list"),
 ) -> dict[str, Any]:
     """Compare eval results between two runs side by side."""
     try:
@@ -833,7 +832,7 @@ async def compare_evals(
 async def create_eval_from_run(
     req: CreateEvalFromRunRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("eval.definition.create"),
 ) -> dict[str, Any]:
     """Create an eval definition pre-populated from run output."""
     if principal.org_role != "admin":

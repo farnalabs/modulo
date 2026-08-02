@@ -17,8 +17,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.db.crud.model_backend import (
@@ -136,7 +135,7 @@ async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("model_backend.list"),
 ) -> ModelBackendListResponse:
     try:
         async with session.begin():
@@ -239,7 +238,7 @@ def _validate_provider(provider: str) -> None:
 async def create_model_backend_endpoint(
     req: ModelBackendCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("model_backend.create"),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     _validate_provider(req.provider)
@@ -324,7 +323,7 @@ async def create_model_backend_endpoint(
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("model_backend.list"),
 ) -> ModelBackendResponse:
     try:
         async with session.begin():
@@ -368,7 +367,7 @@ async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
     req: ModelBackendUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("model_backend.update"),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
@@ -426,7 +425,7 @@ async def update_model_backend_endpoint(
 async def delete_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("model_backend.delete"),
 ) -> None:
     try:
         async with session.begin():

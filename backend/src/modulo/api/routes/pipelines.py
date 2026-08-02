@@ -21,7 +21,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_team_membership_or_admin
+from modulo.api.dependencies import get_db_session, require_permission, require_team_membership_or_admin
 from modulo.api.team_scope import resolve_pipeline_team_scope, team_membership_exists
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -622,7 +622,7 @@ async def list_pipelines_endpoint(
     include_archived: bool = Query(default=False),
     folder_id: uuid.UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.list"),
 ) -> PipelineListResponse:
     try:
         async with session.begin():
@@ -658,7 +658,7 @@ async def list_pipelines_endpoint(
 async def create_pipeline_endpoint(
     req: PipelineCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.create"),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -697,7 +697,7 @@ async def create_pipeline_endpoint(
 async def get_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.list"),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -722,7 +722,7 @@ async def get_pipeline_endpoint(
 async def get_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.graph.read"),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
@@ -749,7 +749,7 @@ async def replace_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineGraphUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.graph.update"),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineGraphResponse:
     node_data = [node.model_dump(mode="json") for node in req.nodes]
@@ -908,7 +908,7 @@ async def update_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.update"),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     updates = req.model_dump(exclude_unset=True)
@@ -993,7 +993,7 @@ async def update_pipeline_endpoint(
 async def delete_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.delete"),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> None:
     try:
@@ -1018,7 +1018,7 @@ async def delete_pipeline_endpoint(
 async def restore_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.update"),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1041,7 +1041,7 @@ async def restore_pipeline_endpoint(
 async def archive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.update"),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1064,7 +1064,7 @@ async def archive_pipeline_endpoint(
 async def unarchive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.update"),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1102,7 +1102,7 @@ async def clone_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineCloneRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.create"),
 ) -> PipelineResponse:
     _log.info("Copy request: pipeline=%s org=%s user=%s", pipeline_id, principal.organisation_id, principal.account_id)
 
@@ -1326,7 +1326,7 @@ class QualityReportResponse(BaseModel):
 async def trigger_quality_report(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.update"),
 ) -> QualityReportResponse:
     try:
         async with session.begin():
@@ -1472,7 +1472,7 @@ async def list_snapshot_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.list"),
 ) -> SnapshotListResponse:
     try:
         async with session.begin():
@@ -1499,7 +1499,7 @@ async def get_snapshot_detail_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.list"),
 ) -> SnapshotDetailResponse:
     try:
         async with session.begin():
@@ -1526,7 +1526,7 @@ async def tag_snapshot_endpoint(
     snapshot_id: uuid.UUID,
     req: SnapshotTagUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.update"),
 ) -> SnapshotResponse:
     try:
         async with session.begin():
@@ -1552,7 +1552,7 @@ async def rollback_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.graph.update"),
 ) -> SnapshotResponse:
     try:
         async with session.begin():
@@ -1587,7 +1587,7 @@ async def delete_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.delete"),
 ) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
@@ -1620,7 +1620,7 @@ async def diff_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     req: SnapshotDiffQuery,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.list"),
 ) -> SnapshotDiffResponse:
     try:
         async with session.begin():
@@ -1658,7 +1658,7 @@ async def move_pipeline_to_folder_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineFolderMoveRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.update"),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1702,7 +1702,7 @@ async def convert_node_to_agent_endpoint(
     node_id: uuid.UUID,
     req: ConvertToAgentRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.graph.update"),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
@@ -1819,7 +1819,7 @@ async def revert_node_to_manual_endpoint(
     node_id: uuid.UUID,
     snapshot_id: uuid.UUID = Query(...),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.graph.update"),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():

@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -73,6 +73,12 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="admin",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
     app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
         username="admin",
         organisation_id=_ORG_ID,
@@ -86,9 +92,14 @@ def client() -> Generator[TestClient, None, None]:
 def _raise_session(exc: Exception) -> AsyncMock:
     session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(side_effect=exc)
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # Raise on the query itself (not session.begin). The require_permission
+    # kill-switch read (resolve_authz_enforce) fail-closes on SQLAlchemyError,
+    # so the injected failure must surface on the handler's own DB work for
+    # the route's ProgrammingError/SQLAlchemyError mapping to be exercised.
+    session.execute = AsyncMock(side_effect=exc)
     bind_mock = MagicMock()
     bind_mock.dialect.name = "postgresql"
     session.get_bind = AsyncMock(return_value=bind_mock)

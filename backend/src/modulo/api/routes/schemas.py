@@ -16,8 +16,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.connector_hub import ConnectorHub
@@ -138,7 +137,7 @@ async def list_schemas_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.list"),
 ) -> SchemaListResponse:
     try:
         async with session.begin():
@@ -185,7 +184,7 @@ async def list_schemas_endpoint(
 async def create_schema_endpoint(
     req: SchemaCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.create"),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -243,7 +242,7 @@ async def create_schema_endpoint(
 async def get_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.list"),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -288,7 +287,7 @@ async def update_schema_endpoint(
     schema_id: uuid.UUID,
     req: SchemaUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.update"),
 ) -> SchemaResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -333,7 +332,7 @@ async def update_schema_endpoint(
 async def deprecate_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.update"),
 ) -> SchemaResponse:
     """Mark a schema as deprecated."""
     try:
@@ -379,7 +378,7 @@ async def delete_schema_endpoint(
     schema_id: uuid.UUID,
     force: bool = Query(False),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.delete"),
 ) -> None:
     try:
         try:
@@ -438,7 +437,7 @@ async def list_schema_versions_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.list"),
 ) -> SchemaVersionListResponse:
     try:
         async with session.begin():
@@ -493,7 +492,7 @@ async def create_schema_version_endpoint(
     schema_id: uuid.UUID,
     req: SchemaVersionCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.create"),
 ) -> SchemaVersionResponse:
     try:
         async with session.begin():
@@ -551,7 +550,7 @@ async def get_schema_version_endpoint(
     schema_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.list"),
 ) -> SchemaVersionResponse:
     try:
         async with session.begin():
@@ -613,7 +612,7 @@ class SchemaFieldListResponse(BaseModel):
 async def list_schema_fields_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.list"),
 ) -> SchemaFieldListResponse:
     """Return the field list for the latest version of a schema.
 
@@ -709,7 +708,7 @@ class SchemaInferResponse(BaseModel):
 async def infer_schema_endpoint(
     req: SchemaInferRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.infer"),
     settings: Settings = Depends(get_settings),
 ) -> SchemaInferResponse:
     """Sample data from a connector and infer a JSON Schema via LLM.
@@ -922,7 +921,7 @@ class SchemaGenerateResponse(BaseModel):
 async def generate_schema_endpoint(
     req: SchemaGenerateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.create"),
     settings: Settings = Depends(get_settings),
 ) -> SchemaGenerateResponse:
     """Generate a JSON Schema from a natural language description and optional
@@ -1077,7 +1076,7 @@ class SchemaMigrationPlanRequest(BaseModel):
 async def migrate_data_endpoint(
     req: SchemaMigrationRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("schema.update"),
     dry_run: bool = Query(False, description="If true, preview the migration plan without applying it"),
 ) -> SchemaMigrationResponse:
     """Migrate data from one schema version to another.

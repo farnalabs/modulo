@@ -85,6 +85,12 @@ def admin_client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_db_session] = override_session
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -102,6 +108,12 @@ def runner_client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="runner",
     )
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_db_session] = override_session
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -128,6 +140,7 @@ class TestCreateEvalDefinition:
     def test_create_returns_201(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -162,6 +175,7 @@ class TestCreateEvalDefinition:
     def test_create_omit_optionals(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -229,6 +243,7 @@ class TestListEvalDefinitions:
     def test_list_returns_200(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -257,6 +272,7 @@ class TestListEvalDefinitions:
     def test_list_empty(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -277,6 +293,7 @@ class TestListEvalDefinitions:
     def test_list_filter_by_pipeline(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -310,6 +327,7 @@ class TestGetEvalDefinition:
     def test_get_returns_200(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -327,6 +345,7 @@ class TestGetEvalDefinition:
     def test_get_not_found(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -355,6 +374,7 @@ class TestUpdateEvalDefinition:
         mock_session = _make_mock_session()
         eval_def = _make_eval_def(name="Original", pass_threshold=None, suite_id=None)
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -382,6 +402,7 @@ class TestUpdateEvalDefinition:
     def test_update_not_found(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -413,6 +434,7 @@ class TestDeleteEvalDefinition:
     def test_delete_returns_204(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
@@ -430,6 +452,7 @@ class TestDeleteEvalDefinition:
     def test_delete_not_found(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)

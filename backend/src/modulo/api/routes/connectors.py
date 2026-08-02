@@ -17,9 +17,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import mask_config_json
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
@@ -143,7 +142,7 @@ async def list_connectors_endpoint(
     page_size: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("connector.list"),
 ) -> ConnectorListResponse:
     try:
         async with session.begin():
@@ -191,7 +190,7 @@ async def list_connectors_endpoint(
 async def create_connector_endpoint(
     req: ConnectorCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("connector.create"),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
     if req.connector_type_id == "github":
@@ -268,7 +267,7 @@ async def create_connector_endpoint(
 async def get_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("connector.list"),
 ) -> ConnectorResponse:
     try:
         async with session.begin():
@@ -312,7 +311,7 @@ async def update_connector_endpoint(
     connector_id: uuid.UUID,
     req: ConnectorUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("connector.update"),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
@@ -384,7 +383,7 @@ async def update_connector_endpoint(
 async def delete_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("connector.delete"),
 ) -> None:
     try:
         async with session.begin():
