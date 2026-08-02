@@ -39,14 +39,14 @@ export const useOnboardingStore = defineStore('onboarding', () => {
         return
       }
       if (!data) { error.value = 'No response from server'; return }
-      actions.value = data.actions as unknown as OnboardingAction[]
+      actions.value = (data.actions ?? []) as unknown as OnboardingAction[]
       const loginAction = actions.value.find(a => a.id === 'login')
       if (loginAction && !loginAction.completed) {
         loginAction.completed = true
       }
-      progressPct.value = data.progress_pct
-      isFirstRun.value = data.is_first_run
-      dismissed.value = data.dismissed
+      progressPct.value = data.progress_pct ?? 0
+      isFirstRun.value = data.is_first_run ?? true
+      dismissed.value = data.dismissed ?? false
     } catch (e) {
       error.value = formatApiError(e)
     } finally {
