@@ -202,7 +202,7 @@ def require_system_permission(permission: str) -> DependsParameter:
     return _tagged_dep(Depends(_check), permission=permission, permission_kind="system")
 
 
-def require_system_or_org_admin(permission: str) -> DependsParameter:
+def require_system_or_org_admin(permission: str) -> Any:
     """FastAPI dependency factory — the one true hybrid.
 
     Passes if the principal is a system admin OR holds org role ``admin``
