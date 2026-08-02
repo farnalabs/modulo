@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.system_config import get_config, set_config
@@ -59,12 +59,9 @@ async def set_dev_mode(
     req: SetDevModeRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Enable or disable dev mode. Persisted in SystemConfig."""
-    if not current_user.is_system_admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-
     try:
         await set_config(session, "dev_mode", req.enabled)
         return {"enabled": req.enabled, "source": "db"}

@@ -10,8 +10,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.variant_group import (
     check_pipeline_run_quota,
@@ -106,7 +105,7 @@ def _variant_to_response(group: Any) -> dict[str, Any]:
 async def create_group(
     req: CreateVariantGroupRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("variant.create"),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -159,7 +158,7 @@ async def list_groups(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("variant.list"),
 ) -> list[dict[str, Any]]:
     try:
         async with session.begin():
@@ -199,7 +198,7 @@ async def list_groups(
 async def get_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("variant.list"),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -242,7 +241,7 @@ async def update_group(
     group_id: uuid.UUID,
     req: CreateVariantGroupRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("variant.update"),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -293,7 +292,7 @@ async def update_group(
 async def delete_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("variant.delete"),
 ) -> None:
     try:
         async with session.begin():
@@ -335,7 +334,7 @@ async def delete_group(
 async def restore_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("variant.create"),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -378,7 +377,7 @@ async def run_variant(
     group_id: uuid.UUID,
     req: RunVariantRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("variant.run"),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -454,7 +453,7 @@ async def run_variant(
 async def coverage_gaps(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("variant.list"),
 ) -> list[dict[str, Any]]:
     try:
         async with session.begin():
@@ -500,7 +499,7 @@ async def coverage_gaps(
 async def prompt_diffs(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("variant.list"),
 ) -> list[dict[str, Any]]:
     try:
         async with session.begin():

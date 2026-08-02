@@ -16,8 +16,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.events.event_bus import get_event_bus
 from modulo.db.crud.notifications import (
@@ -106,7 +105,7 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
 @router.get("/dashboard", response_model=DashboardNotificationResponse)
 async def get_dashboard(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.self"),
 ) -> DashboardNotificationResponse:
     try:
         async with session.begin():
@@ -151,7 +150,7 @@ async def get_dashboard(
 @router.get("/unread-count", response_model=dict)
 async def get_unread(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.self"),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -187,7 +186,7 @@ async def get_unread(
 @router.get("", response_model=PaginatedNotificationsResponse)
 async def list_notifications(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.self"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     level: str | None = Query(None),
@@ -251,7 +250,7 @@ async def list_notifications(
 async def get_notification_detail(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.self"),
 ) -> NotificationResponse:
     try:
         async with session.begin():
@@ -290,7 +289,7 @@ async def get_notification_detail(
 async def review_later_endpoint(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.self"),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -345,7 +344,7 @@ async def dismiss_endpoint(
     notification_id: uuid.UUID,
     req: DismissRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.self"),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -401,7 +400,7 @@ async def dismiss_endpoint(
 @router.get("/preferences", response_model=NotificationPreferencesResponse)
 async def get_preferences(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.self"),
 ) -> NotificationPreferencesResponse:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -414,7 +413,7 @@ async def get_preferences(
 async def update_preferences(
     req: NotificationPreferencesUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("notification.self"),
 ) -> NotificationPreferencesResponse:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,

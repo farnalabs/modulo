@@ -82,6 +82,8 @@ PERMISSIONS: dict[str, str] = {
     "org.email.view": "operator",
     "org.email.manage": "admin",
     "org.license.view": "operator",
+    "org.license.manage": "admin",
+    "org.authz_enforce.manage": "admin",
     "org.delete": "admin",
     # agents
     "agent.create": "operator",
@@ -126,6 +128,96 @@ PERMISSIONS: dict[str, str] = {
     # audit
     "audit.list": "viewer",
     "audit.manage": "admin",
+    # system administration (strict is_system_admin-only gates; the role
+    # value is a placeholder so the registry import-time validation passes —
+    # require_system_permission ignores the org hierarchy entirely)
+    "system.config.manage": "admin",
+    "system.org.manage": "admin",
+    # admin / secondary routes
+    "cost.manage": "admin",
+    "sso.manage": "admin",
+    "monitor_config.manage": "admin",
+    "runtime_config.manage": "admin",
+    "error_forwarder.manage": "admin",
+    "error_notification.manage": "admin",
+    "housekeeping.manage": "admin",
+    "admin.trigger_events": "admin",
+    "admin.queue_metrics": "admin",
+    # stages
+    "stage.create": "operator",
+    "stage.update": "operator",
+    "stage.delete": "operator",
+    "stage.list": "viewer",
+    # variants
+    "variant.create": "operator",
+    "variant.update": "operator",
+    "variant.delete": "operator",
+    "variant.list": "viewer",
+    "variant.run": "operator",
+    # lifecycle maps
+    "lifecycle_map.create": "operator",
+    "lifecycle_map.update": "operator",
+    "lifecycle_map.delete": "operator",
+    "lifecycle_map.list": "viewer",
+    # environment profiles
+    "environment_profile.create": "operator",
+    "environment_profile.update": "operator",
+    "environment_profile.delete": "operator",
+    "environment_profile.list": "viewer",
+    # environments
+    "environment.create": "operator",
+    "environment.update": "operator",
+    "environment.delete": "operator",
+    "environment.list": "viewer",
+    "environment.test": "operator",
+    # pipeline folders
+    "pipeline_folder.create": "operator",
+    "pipeline_folder.update": "operator",
+    "pipeline_folder.delete": "operator",
+    "pipeline_folder.list": "viewer",
+    # parameter schemas
+    "parameter_schema.create": "operator",
+    "parameter_schema.update": "operator",
+    "parameter_schema.delete": "operator",
+    "parameter_schema.list": "viewer",
+    "parameter_schema.validate": "viewer",
+    "parameter_schema.set.create": "operator",
+    "parameter_schema.set.update": "operator",
+    "parameter_schema.set.delete": "operator",
+    # node categories
+    "node_category.create": "operator",
+    "node_category.update": "operator",
+    "node_category.delete": "operator",
+    "node_category.list": "viewer",
+    # plugins
+    "plugin.list": "viewer",
+    "plugin.health": "viewer",
+    # registry
+    "registry.publish": "operator",
+    "registry.pull": "viewer",
+    "registry.list": "viewer",
+    "registry.publisher.manage": "operator",
+    # observability / notifications
+    "observability.view": "viewer",
+    "notification.view": "viewer",
+    "notification.self": "viewer",
+    # dashboard
+    "dashboard.summary": "viewer",
+    "dashboard.trends": "viewer",
+    "dashboard.daily_run_counts": "viewer",
+    # events
+    "events.list": "viewer",
+    # feedback
+    "feedback.create": "operator",
+    "feedback.list": "viewer",
+    "feedback.update": "operator",
+    "feedback.review": "operator",
+    # contributions
+    "contribution.create": "operator",
+    "contribution.submit": "operator",
+    "contribution.publish": "admin",
+    "contribution.version": "operator",
+    "contribution.list": "viewer",
     # integrations and read-only retrieval
     "integration.status": "viewer",
     "org.config": "viewer",

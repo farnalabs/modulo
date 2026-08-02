@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from starlette import status
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import require_permission
 from modulo.core.events.event_bus import get_event_bus
 from modulo.settings import Settings, get_settings
 
@@ -89,7 +89,7 @@ async def _untrack_connection(org_id: str, queue: asyncio.Queue[dict[str, Any]])
 )
 async def sse_event_stream(
     request: Request,
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("events.list"),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     """SSE endpoint: streams resource-changed events for the current org.

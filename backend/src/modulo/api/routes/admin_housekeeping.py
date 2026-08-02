@@ -8,8 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.housekeeping import ENTITY_MODEL_MAP, scan_all
 from modulo.db.rls import set_rls_org
@@ -17,14 +16,6 @@ from modulo.db.rls import set_rls_org
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/housekeeping", tags=["admin-housekeeping"])
-
-
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required",
-        )
 
 
 class CandidateItem(BaseModel):
@@ -65,9 +56,8 @@ class CleanupResponse(BaseModel):
 @router.get("", response_model=HousekeepingScanResponse)
 async def list_housekeeping(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("housekeeping.manage"),
 ) -> HousekeepingScanResponse:
-    _require_admin(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -120,9 +110,8 @@ async def list_housekeeping(
 async def perform_cleanup(
     req: CleanupRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("housekeeping.manage"),
 ) -> CleanupResponse:
-    _require_admin(principal)
     deleted_count = 0
     errors: list[dict[str, str]] = []
 

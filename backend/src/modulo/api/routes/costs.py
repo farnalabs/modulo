@@ -16,8 +16,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cost_controller import get_cost_report
 from modulo.db.crud.organisation import get_organisation
@@ -60,14 +59,6 @@ class SetSpendLimitRequest(BaseModel):
     daily_spend_limit: float | None = Field(None, ge=0)
 
 
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can perform this action",
-        )
-
-
 @handle_db_errors("costs.get_costs")
 @router.get("", response_model=CostReportResponse)
 async def get_costs(
@@ -75,10 +66,9 @@ async def get_costs(
     period: str = Query("month", pattern=r"^(day|week|month|year)$"),
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostReportResponse:
-    _require_admin(current_user)
 
     try:
         async with session.begin():
@@ -124,10 +114,9 @@ async def get_costs(
 async def get_spend_limits(
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> SpendLimitResponse:
-    _require_admin(current_user)
 
     try:
         async with session.begin():
@@ -178,10 +167,9 @@ async def set_org_spend_limit(
     req: SetSpendLimitRequest,
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    _require_admin(current_user)
 
     try:
         async with session.begin():
@@ -227,10 +215,9 @@ async def set_team_spend_limit(
     req: SetSpendLimitRequest,
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    _require_admin(current_user)
 
     try:
         async with session.begin():
@@ -291,10 +278,9 @@ class UpdateCostControlsRequest(BaseModel):
 async def get_cost_controls(
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
-    _require_admin(current_user)
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
@@ -342,10 +328,9 @@ async def update_cost_controls(
     req: UpdateCostControlsRequest,
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
-    _require_admin(current_user)
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
@@ -406,10 +391,9 @@ async def export_costs(
     format: str = Query("csv", pattern=r"^(csv)$"),
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
-    _require_admin(current_user)
 
     period_map: dict[str, str] = {
         "this_month": "month",
@@ -510,10 +494,9 @@ async def create_report(
     req: CreateReportRequest,
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> ReportResponse:
-    _require_admin(current_user)
 
     try:
         async with session.begin():
@@ -559,10 +542,9 @@ async def create_report(
 async def list_reports(
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ReportResponse]:
-    _require_admin(current_user)
 
     try:
         async with session.begin():
@@ -603,10 +585,9 @@ async def delete_report(
     report_id: uuid.UUID,
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    _require_admin(current_user)
 
     try:
         async with session.begin():
@@ -661,10 +642,9 @@ class AnomalyResponse(BaseModel):
 async def get_anomalies(
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[AnomalyResponse]:
-    _require_admin(current_user)
 
     try:
         async with session.begin():
@@ -775,10 +755,9 @@ async def dismiss_anomaly_endpoint(
     anomaly_id: uuid.UUID,
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    _require_admin(current_user)
 
     try:
         async with session.begin():

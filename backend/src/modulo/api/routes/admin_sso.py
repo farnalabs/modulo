@@ -12,9 +12,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.middleware.sensitive_mask import SensitiveValue
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.sso_provider import (
     create_provider,
@@ -113,22 +112,13 @@ class SsoProviderTestResult(BaseModel):
     provider_info: dict[str, Any] | None = None
 
 
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can manage SSO providers",
-        )
-
-
 @handle_db_errors("admin.sso.get_providers")
 @router.get("/providers", response_model=list[SsoProviderResponse])
 async def get_providers(
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("sso.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SsoProviderResponse]:
-    _require_admin(current_user)
     try:
         providers = await list_providers(session)
         return [SsoProviderResponse.model_validate(p) for p in providers]
@@ -159,11 +149,10 @@ async def get_providers(
 async def create_provider_endpoint(
     req: SsoProviderCreate,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("sso.manage"),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderResponse:
-    _require_admin(current_user)
     try:
         provider = await create_provider(
             session,
@@ -219,11 +208,10 @@ async def update_provider_endpoint(
     provider_id: uuid.UUID,
     req: SsoProviderUpdate,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("sso.manage"),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderResponse:
-    _require_admin(current_user)
     updates = req.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
@@ -277,10 +265,9 @@ async def update_provider_endpoint(
 async def delete_provider_endpoint(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("sso.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    _require_admin(current_user)
     try:
         deleted = await delete_provider(session, provider_id, actor_user_id=current_user.account_id)
     except IntegrityError:
@@ -321,11 +308,10 @@ async def delete_provider_endpoint(
 async def test_provider_connection(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("sso.manage"),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderTestResult:
-    _require_admin(current_user)
     try:
         provider = await get_provider(session, provider_id)
     except IntegrityError:
@@ -509,10 +495,9 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
 async def toggle_provider_endpoint(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("sso.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
-    _require_admin(current_user)
     try:
         provider = await toggle_provider(session, provider_id, actor_user_id=current_user.account_id)
     except IntegrityError:
@@ -569,10 +554,9 @@ async def set_group_mappings_endpoint(
     provider_id: uuid.UUID,
     req: GroupMappingsRequest,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("sso.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
-    _require_admin(current_user)
     mappings_dict = [m.model_dump() for m in req.mappings]
     try:
         provider = await set_group_mappings(session, provider_id, mappings_dict)
@@ -615,10 +599,9 @@ async def set_group_mappings_endpoint(
 async def get_group_mappings_endpoint(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("sso.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
-    _require_admin(current_user)
     try:
         provider = await get_provider(session, provider_id)
     except ProgrammingError as exc:

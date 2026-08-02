@@ -26,8 +26,8 @@ from modulo.api.routes.observability import (
     _invalidate_cache,
     _update_cache,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -51,6 +51,9 @@ def _make_settings() -> Settings:
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
     configure_mock_session(session)
+    authz_result = MagicMock()
+    authz_result.scalar_one_or_none = MagicMock(return_value=True)
+    session.execute = AsyncMock(return_value=authz_result)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -87,6 +90,9 @@ def free_client() -> Generator[TestClient, None, None]:
         organisation_id=_ORG_UUID,
         account_id=_USER_UUID,
         org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="tenant", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="admin"
     )
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
