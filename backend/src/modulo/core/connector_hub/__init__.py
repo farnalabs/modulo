@@ -476,7 +476,7 @@ def _build_connector(
         case "youtrack":
             return YouTrackConnector(
                 token=_get_cred(creds, "token", type_id),
-                base_url=config.get("base_url", "https://youtrack.mycompany.com/api"),
+                base_url=_require_config(config, "base_url", "YouTrackConnector"),
             )
         case "notion":
             return NotionConnector(token=_get_cred(creds, "token", type_id))
