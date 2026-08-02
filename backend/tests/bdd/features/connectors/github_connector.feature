@@ -52,5 +52,35 @@ Feature: GitHub Connector
 
   Scenario: Comment on a pull request
     Given a GitHub connector with valid token
-    When I write resource "pr_comment" on pull number 1 with body "Reviewed"
+    When I write resource "pr_comment" on pull number 1
     Then the write succeeds
+
+  Scenario: Merge a pull request
+    Given a GitHub connector with valid token
+    When I write resource "pr_merge" on pull number 1
+    Then the write succeeds
+
+  Scenario: Request reviewers on a pull request
+    Given a GitHub connector with valid token
+    When I write resource "pr_review_request" on pull number 1
+    Then the write succeeds
+
+  Scenario: Add labels to a pull request
+    Given a GitHub connector with valid token
+    When I write resource "pr_label" on pull number 1
+    Then the write succeeds
+
+  Scenario: Assign an issue
+    Given a GitHub connector with valid token
+    When I write resource "issue_assign" on issue number 42
+    Then the write succeeds
+
+  Scenario: Get a pull request diff
+    Given a GitHub connector with valid token
+    When I query resource "pr_diff" with filters repo "owner/repo" and pull number 1
+    Then the result has records
+
+  Scenario: Search issues
+    Given a GitHub connector with valid token
+    When I query resource "search_issues" with search query "repo:owner/repo is:open"
+    Then the result has records
