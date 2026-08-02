@@ -31,6 +31,19 @@ os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 BACKEND_ROOT = Path(__file__).parents[2]
 
 
+@pytest.fixture(scope="session")
+def session_monkeypatch() -> Generator[pytest.MonkeyPatch, None, None]:
+    """Session-scoped monkeypatch so session-scoped fixtures can set env vars.
+
+    The built-in ``monkeypatch`` fixture is function-scoped; requesting it from
+    a session-scoped fixture raises a ScopeMismatch. This mirror restores all
+    changes on session teardown.
+    """
+    mp = pytest.MonkeyPatch()
+    yield mp
+    mp.undo()
+
+
 @pytest.fixture(autouse=True)
 def _reset_settings_cache() -> Generator[None, None, None]:
     """Keep settings derived from one integration test out of the next."""
@@ -58,7 +71,10 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 
 
 @pytest.fixture(scope="session")
-def db_url(postgres_container: PostgresContainer) -> str:
+def db_url(
+    postgres_container: PostgresContainer,
+    session_monkeypatch: pytest.MonkeyPatch,
+) -> str:
     url = postgres_container.get_connection_url()
     # Convert to asyncpg driver
     url = url.replace("postgresql://", "postgresql+asyncpg://", 1).replace("psycopg2", "asyncpg")
@@ -69,7 +85,7 @@ def db_url(postgres_container: PostgresContainer) -> str:
     # (deploy.yml "Start Postgres"), so without this the live-role re-read in
     # auth.dependencies._verify_identity hits tables that don't exist there and
     # every API-backed integration test fails with a 503.
-    os.environ["DATABASE_URL"] = url
+    session_monkeypatch.setenv("DATABASE_URL", url)
     return url
 
 
