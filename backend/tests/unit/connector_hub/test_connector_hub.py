@@ -21,7 +21,6 @@ from modulo.connectors.base import (
 from modulo.core.connector_hub import (
     ConnectorHub,
     ConnectorNotFoundError,
-    _build_connector,
 )
 from modulo.core.secrets_backend import create_secrets_backend
 
@@ -96,16 +95,20 @@ async def test_initialise_creates_connector(connector_type_id, config_json, cred
     assert connector.connector_type == expected_type
 
 
-def test_build_youtrack_requires_base_url():
-    """_build_connector requires base_url for youtrack — no placeholder default."""
-    with pytest.raises(ValueError, match="requires 'base_url'"):
-        _build_connector("youtrack", {}, {"token": "yt_perm_token_123"})
-    connector = _build_connector(
-        "youtrack",
-        {"base_url": "https://youtrack.example.com/api"},
-        {"token": "yt_perm_token_123"},
+async def test_initialise_youtrack_missing_base_url_is_skipped():
+    """YouTrack without base_url is skipped by initialise — no placeholder default."""
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id="youtrack",
+        config_json={},
+        credentials_ciphertext=_encrypt({"token": "yt_perm_token_123"}),
     )
-    assert connector.connector_type == ConnectorType.YOUTRACK
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value=json.dumps({"token": "yt_perm_token_123"})):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    with pytest.raises(ConnectorNotFoundError):
+        hub.get(ci.id)
 
 
 async def test_get_unknown_raises():
