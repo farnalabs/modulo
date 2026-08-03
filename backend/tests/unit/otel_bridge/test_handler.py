@@ -378,9 +378,7 @@ def test_chat_model_start_empty_messages(bridge: LangGraphOtelBridge, exporter: 
     assert span.attributes.get("langgraph.llm.message_count") == 0
 
 
-def test_chat_model_span_inherits_parent_context(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_chat_model_span_inherits_parent_context(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     """Chat-model spans (the BaseChatModel production path) parent correctly."""
     chain_id = uuid.uuid4()
     chat_id = uuid.uuid4()

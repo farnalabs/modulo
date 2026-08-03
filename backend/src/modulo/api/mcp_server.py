@@ -2115,6 +2115,194 @@ async def create_trigger(
         return _tool_error("Failed to create trigger")
 
 
+@mcp.tool(description="Get a single trigger by ID.")
+@_RETRY_DB
+async def get_trigger(trigger_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "get_trigger")
+
+        org_id = _ctx_org_id_val()
+        try:
+            tid = uuid.UUID(trigger_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
+
+        from sqlalchemy import select
+
+        from modulo.db.models.trigger import Trigger
+
+        async with _session(org_id) as s:
+            q = select(Trigger).where(
+                Trigger.id == tid,
+                Trigger.organisation_id == org_id,
+                Trigger.deleted_at.is_(None),
+            )
+            trigger = (await s.execute(q)).scalar_one_or_none()
+
+        if trigger is None:
+            return {"error": "not_found", "detail": "Trigger not found"}
+
+        return {
+            "id": str(trigger.id),
+            "pipeline_id": str(trigger.pipeline_id),
+            "trigger_type": trigger.trigger_type,
+            "active": trigger.active,
+            "max_concurrent_runs": trigger.max_concurrent_runs,
+            "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
+            "config_json": trigger.config_json or {},
+            "cron_expression": trigger.cron_expression,
+            "cron_timezone": trigger.cron_timezone,
+            "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
+            "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+            "input_template": (trigger.config_json or {}).get("input_template"),
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_trigger failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+    except Exception:
+        _log.exception("get_trigger failed")
+        return _tool_error("Failed to get trigger")
+
+
+@mcp.tool(
+    description="Update an existing trigger's configuration. "
+    "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
+    "cron_timezone is only valid for cron triggers.",
+)
+@_RETRY_DB
+async def update_trigger(
+    trigger_id: str,
+    active: bool | None = None,
+    max_concurrent_runs: int | None = None,
+    cron_expression: str | None = None,
+    cron_timezone: str | None = None,
+    daily_spend_limit: float | None = None,
+    clear_daily_spend_limit: bool = False,
+    config_json: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "update_trigger")
+
+        org_id = _ctx_org_id_val()
+        try:
+            tid = uuid.UUID(trigger_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
+
+        if max_concurrent_runs is not None and max_concurrent_runs < 1:
+            return {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
+        if daily_spend_limit is not None and daily_spend_limit < 0:
+            return {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+
+        from sqlalchemy import select
+
+        from modulo.db.models.trigger import Trigger
+
+        async with _session(org_id) as s:
+            q = select(Trigger).where(
+                Trigger.id == tid,
+                Trigger.organisation_id == org_id,
+                Trigger.deleted_at.is_(None),
+            )
+            trigger = (await s.execute(q)).scalar_one_or_none()
+            if trigger is None:
+                return {"error": "not_found", "detail": "Trigger not found"}
+
+            if (cron_expression is not None or cron_timezone is not None) and trigger.trigger_type != "cron":
+                return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
+
+            next_fire_at = None
+            if cron_expression is not None or cron_timezone is not None:
+                expr = cron_expression if cron_expression is not None else trigger.cron_expression
+                if expr is None:
+                    return {"error": "invalid_cron", "detail": "Cron expression is required"}
+                tz = cron_timezone if cron_timezone is not None else trigger.cron_timezone or "UTC"
+                error = validate_cron_expression(expr, tz)
+                if error:
+                    return {"error": "invalid_cron", "detail": error}
+                next_fire_at = compute_next_fire(expr, timezone=tz)
+
+            if active is not None:
+                trigger.active = active
+            if max_concurrent_runs is not None:
+                trigger.max_concurrent_runs = max_concurrent_runs
+            if clear_daily_spend_limit:
+                trigger.daily_spend_limit = None
+            elif daily_spend_limit is not None:
+                trigger.daily_spend_limit = Decimal(str(daily_spend_limit))
+            if config_json is not None:
+                trigger.config_json = config_json
+            if cron_expression is not None:
+                trigger.cron_expression = cron_expression
+            if cron_timezone is not None:
+                trigger.cron_timezone = cron_timezone
+            if next_fire_at is not None:
+                trigger.next_fire_at = next_fire_at
+            await s.flush()
+
+        return {
+            "id": str(trigger.id),
+            "pipeline_id": str(trigger.pipeline_id),
+            "trigger_type": trigger.trigger_type,
+            "active": trigger.active,
+            "max_concurrent_runs": trigger.max_concurrent_runs,
+            "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
+            "config_json": trigger.config_json or {},
+            "cron_expression": trigger.cron_expression,
+            "cron_timezone": trigger.cron_timezone,
+            "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
+            "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+            "input_template": (trigger.config_json or {}).get("input_template"),
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("update_trigger failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+    except Exception:
+        _log.exception("update_trigger failed")
+        return _tool_error("Failed to update trigger")
+
+
+@mcp.tool(description="Soft-delete a trigger by ID.")
+@_RETRY_DB
+async def delete_trigger(trigger_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "delete_trigger")
+
+        org_id = _ctx_org_id_val()
+        try:
+            tid = uuid.UUID(trigger_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
+
+        from modulo.db.crud.trigger import soft_delete_trigger
+
+        async with _session(org_id) as s:
+            deleted = await soft_delete_trigger(s, tid)
+
+        if deleted is None:
+            return {"error": "not_found", "detail": "Trigger not found"}
+
+        return {"id": str(tid), "deleted": True}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("delete_trigger failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+    except Exception:
+        _log.exception("delete_trigger failed")
+        return _tool_error("Failed to delete trigger")
+
+
 @mcp.tool(description="Delete a pipeline by ID.")
 @_RETRY_DB
 async def delete_pipeline(
