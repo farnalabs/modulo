@@ -20,9 +20,7 @@ def _make_request(path="/api/v1/runs", headers=None, client=None, scope=None):
     request.url.path = path
     request.scope = {} if scope is None else scope
     header_map = headers or {}
-    request.headers.get = MagicMock(
-        side_effect=lambda name, default="": header_map.get(name, default)
-    )
+    request.headers.get = MagicMock(side_effect=lambda name, default="": header_map.get(name, default))
     request.client = client
     return request
 
@@ -45,15 +43,11 @@ def middleware():
 
 class TestClientKey:
     def test_auth_principal_api_key(self):
-        request = _make_request(
-            scope={"auth_principal": {"type": "api_key", "org_id": "org-1", "prefix": "abcd1234"}}
-        )
+        request = _make_request(scope={"auth_principal": {"type": "api_key", "org_id": "org-1", "prefix": "abcd1234"}})
         assert RateLimitMiddleware._client_key(request) == "ak:org-1:abcd1234:/api/v1/runs"
 
     def test_auth_principal_user(self):
-        request = _make_request(
-            scope={"auth_principal": {"type": "user", "org_id": "org-1", "user_id": "user-7"}}
-        )
+        request = _make_request(scope={"auth_principal": {"type": "user", "org_id": "org-1", "user_id": "user-7"}})
         assert RateLimitMiddleware._client_key(request) == "user:org-1:user-7:/api/v1/runs"
 
     def test_auth_principal_takes_precedence_over_authorization_header(self):

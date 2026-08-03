@@ -539,6 +539,9 @@ This replaces the previous "LLM driveability" stretch goal with a standards-base
 | `create_model_backend` | `POST /api/v1/model-backends` | Operator role required. Registers a new LLM provider. API key is provided via a one-time browser setup URL returned by the tool — the key never transits the LLM context. |
 | `list_runs` | `GET /api/v1/runs` | List runs with cursor-based pagination, optional pipeline_id/status filters. |
 | `list_triggers` | `GET /api/v1/triggers` | List trigger configurations, optional pipeline_id filter. |
+| `get_trigger` | `GET /api/v1/triggers/{id}` | Read a single trigger by ID (runner role required). |
+| `update_trigger` | `PUT /api/v1/triggers/{id}` | Update a trigger's configuration — active, max_concurrent_runs, cron_expression/cron_timezone (cron triggers only), daily_spend_limit (clear via `clear_daily_spend_limit`), config_json. Operator role required. |
+| `delete_trigger` | `DELETE /api/v1/triggers/{id}` | Soft-delete a trigger by ID. Operator role required. |
 | `get_run_evals` | `GET /api/v1/runs/{id}/evals` | Get eval results for a completed run. |
 | `list_eval_definitions` | `GET /api/v1/eval-definitions` | List eval configurations, optional pipeline_id filter. |
 | `get_integration_status` | `GET /api/v1/integrations/status` | Health status of all connectors, model backends, and triggers. |
