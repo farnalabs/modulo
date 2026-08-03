@@ -4,6 +4,7 @@ import asyncio
 import logging
 import secrets
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -30,9 +31,17 @@ from modulo.auth.jwt import (
 )
 from modulo.auth.passwords import authenticate_db_user
 from modulo.auth.ws_token import create_ws_token
+from modulo.core.rate_limiter import AuthRateLimiter
 from modulo.db.crud.account import get_account_by_email, get_account_by_id, update_last_login
+from modulo.db.crud.break_glass_deny import is_break_glass_denied
 from modulo.db.crud.org_membership import list_memberships_for_account
-from modulo.db.crud.token_family import advance_sequence, blacklist_family, create_family
+from modulo.db.crud.token_family import (
+    advance_sequence,
+    blacklist_family,
+    consume_break_glass_credential,
+    create_family,
+)
+from modulo.db.models.account import Account
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -86,6 +95,108 @@ class MeResponse(BaseModel):
     is_system_admin: bool = False
 
 
+def get_clock() -> datetime:
+    """Application clock for the break-glass early-deny decision.
+
+    The DB clock (``current_timestamp``) stays authoritative for the SQL
+    predicates; this injected clock is used ONLY for the expired-branch
+    decision so tests can accelerate/retard the early deny deterministically.
+    Skew between the two is bounded: an early false-deny is a conservative
+    DoS, and an early false-accept is re-denied downstream by the DB-clock
+    SQL predicate — the direction is DoS-not-bypass.
+    """
+    return datetime.now(UTC)
+
+
+async def _enforce_break_glass(
+    account: Account,
+    *,
+    now: datetime,
+    limiter: AuthRateLimiter | None,
+    ip: str,
+) -> bool:
+    """Break-glass login hook — early-deny/late-consume decision.
+
+    Called after authentication succeeds. Fail-open fast path: a normal account
+    returns ``False`` immediately with zero extra DB queries (the login fast
+    path is unchanged). For a break-glass account it returns ``True`` when the
+    credential is live — the caller must then run the late compare-and-swap
+    consumption as the FINAL DB statement before token issuance. Deny-eligible
+    credentials (deactivated / NULL-expiry / expired) and hook errors are
+    fail-CLOSED: ``limiter.record_failure`` + a byte-identical 401
+    (detail ``Incorrect email or password``).
+    """
+    if account.is_break_glass is not True:
+        return False
+    try:
+        if is_break_glass_denied(
+            is_break_glass=True,
+            break_glass_expires_at=account.break_glass_expires_at,
+            break_glass_deactivated_at=account.break_glass_deactivated_at,
+            active=account.active,
+            now=now,
+        ):
+            if limiter is not None:
+                await limiter.record_failure(ip)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+            )
+    except asyncio.CancelledError:
+        raise
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("auth.break_glass_hook_error")
+        if limiter is not None:
+            await limiter.record_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+        ) from None
+    return True
+
+
+async def _consume_break_glass_credential(
+    session: AsyncSession,
+    *,
+    account: Account,
+    limiter: AuthRateLimiter | None,
+    ip: str,
+) -> None:
+    """Late compare-and-swap consumption (family-first, CAS-last).
+
+    Runs as the FINAL DB statement inside the login transaction, after the
+    family mint. Fail-closed on ambiguity: a CAS error or a rowcount of 0
+    (already consumed / expired / deactivated / inactive) raises a byte-identical
+    401 and aborts the transaction, rolling back the phantom family.
+    """
+    try:
+        consumed = await consume_break_glass_credential(
+            session,
+            account_id=account.id,
+            current_password_hash=account.password_hash or "",
+            new_password_hash=str(uuid.uuid4()),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("auth.break_glass_cas_error")
+        if limiter is not None:
+            await limiter.record_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+        ) from None
+    if consumed != 1:
+        if limiter is not None:
+            await limiter.record_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+        )
+
+
 @handle_db_errors("auth.login")
 @router.post("/login")
 async def login(
@@ -108,6 +219,13 @@ async def login(
                     detail="Incorrect email or password",
                 )
 
+            must_consume = await _enforce_break_glass(
+                account,
+                now=get_clock(),
+                limiter=limiter,
+                ip=ip,
+            )
+
             if limiter is not None:
                 await limiter.record_success(ip)
             await update_last_login(session, account.id)
@@ -128,6 +246,14 @@ async def login(
                 org_role = None
 
             family = await create_family(session, account.id, org_id)
+
+            if must_consume:
+                await _consume_break_glass_credential(
+                    session,
+                    account=account,
+                    limiter=limiter,
+                    ip=ip,
+                )
     except IntegrityError:
         _log.exception("auth.login")
         _log.warning("login.integrity_error")
@@ -568,6 +694,7 @@ async def csrf_token(
     except asyncio.CancelledError:
         raise
     except HTTPException:
+        _log.debug("HTTPException propagated from csrf_token")
         raise
     except Exception:
         _log.exception("Unexpected error in csrf_token")

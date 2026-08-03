@@ -796,7 +796,9 @@ class PipelineExecutor:
             if not isinstance(out, dict):
                 continue
             est = out.get("cost_estimate_usd")
-            if isinstance(est, (int, float)) and est > 0 and math.isfinite(est):
+            # bool is an int subclass; exclude it so `cost_estimate_usd: true`
+            # doesn't aggregate as $1.
+            if isinstance(est, (int, float)) and not isinstance(est, bool) and est > 0 and math.isfinite(est):
                 sandbox_cost += Decimal(str(est))
         return sandbox_cost
 
