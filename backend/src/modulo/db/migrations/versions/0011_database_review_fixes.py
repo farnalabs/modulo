@@ -48,16 +48,19 @@ def downgrade() -> None:
 
 
 def _add_missing_indexes(bind) -> None:
-    op.create_index(
-        op.f("ix_notifications_target_user_id"),
-        "notifications",
-        ["target_user_id"],
-        unique=False,
-        postgresql_where=sa.text("target_user_id IS NOT NULL"),
-    )
-    # scheduled_reports.created_by may not exist on DBs that ran an older
-    # 0005 (pre-created_by). Skip the index here; 0037_add_scheduled_reports_created_by
-    # adds the column + index idempotently later in the chain.
+    # Deployed DBs that ran a pre-squash 0005 (or older) migration may lack
+    # columns that later migrations add (e.g. account_id, created_by, view_type).
+    # Guard every index creation on column existence so `alembic upgrade` doesn't
+    # fail with "column does not exist"; the column + index are added idempotently
+    # by later reconciliation migrations (0035/0037 and PR #618).
+    if _has_column(bind, "notifications", "target_user_id"):
+        op.create_index(
+            op.f("ix_notifications_target_user_id"),
+            "notifications",
+            ["target_user_id"],
+            unique=False,
+            postgresql_where=sa.text("target_user_id IS NOT NULL"),
+        )
     if _has_column(bind, "scheduled_reports", "created_by"):
         op.create_index(
             op.f("ix_scheduled_reports_created_by"),
@@ -66,63 +69,72 @@ def _add_missing_indexes(bind) -> None:
             unique=False,
             postgresql_where=sa.text("created_by IS NOT NULL"),
         )
-    op.create_index(
-        op.f("ix_connector_instances_account_id"),
-        "connector_instances",
-        ["account_id"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_node_observations_account_id"),
-        "node_observations",
-        ["account_id"],
-        unique=False,
-        postgresql_where=sa.text("account_id IS NOT NULL"),
-    )
-    op.create_index(
-        op.f("ix_primitive_ratings_account_id"),
-        "primitive_ratings",
-        ["account_id"],
-        unique=False,
-        postgresql_where=sa.text("account_id IS NOT NULL"),
-    )
-    op.create_index(
-        op.f("ix_saved_views_view_type"),
-        "saved_views",
-        ["view_type"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_variant_groups_degraded_evals"),
-        "variant_groups",
-        ["degraded_evals"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_lifecycle_maps_account_id"),
-        "lifecycle_maps",
-        ["account_id"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_feedback_records_account_id"),
-        "feedback_records",
-        ["account_id"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_agent_account_id"),
-        "agents",
-        ["account_id"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_pipeline_snapshots_account_id"),
-        "pipeline_snapshots",
-        ["account_id"],
-        unique=False,
-        postgresql_where=sa.text("account_id IS NOT NULL"),
-    )
+    if _has_column(bind, "connector_instances", "account_id"):
+        op.create_index(
+            op.f("ix_connector_instances_account_id"),
+            "connector_instances",
+            ["account_id"],
+            unique=False,
+        )
+    if _has_column(bind, "node_observations", "account_id"):
+        op.create_index(
+            op.f("ix_node_observations_account_id"),
+            "node_observations",
+            ["account_id"],
+            unique=False,
+            postgresql_where=sa.text("account_id IS NOT NULL"),
+        )
+    if _has_column(bind, "primitive_ratings", "account_id"):
+        op.create_index(
+            op.f("ix_primitive_ratings_account_id"),
+            "primitive_ratings",
+            ["account_id"],
+            unique=False,
+            postgresql_where=sa.text("account_id IS NOT NULL"),
+        )
+    if _has_column(bind, "saved_views", "view_type"):
+        op.create_index(
+            op.f("ix_saved_views_view_type"),
+            "saved_views",
+            ["view_type"],
+            unique=False,
+        )
+    if _has_column(bind, "variant_groups", "degraded_evals"):
+        op.create_index(
+            op.f("ix_variant_groups_degraded_evals"),
+            "variant_groups",
+            ["degraded_evals"],
+            unique=False,
+        )
+    if _has_column(bind, "lifecycle_maps", "account_id"):
+        op.create_index(
+            op.f("ix_lifecycle_maps_account_id"),
+            "lifecycle_maps",
+            ["account_id"],
+            unique=False,
+        )
+    if _has_column(bind, "feedback_records", "account_id"):
+        op.create_index(
+            op.f("ix_feedback_records_account_id"),
+            "feedback_records",
+            ["account_id"],
+            unique=False,
+        )
+    if _has_column(bind, "agents", "account_id"):
+        op.create_index(
+            op.f("ix_agent_account_id"),
+            "agents",
+            ["account_id"],
+            unique=False,
+        )
+    if _has_column(bind, "pipeline_snapshots", "account_id"):
+        op.create_index(
+            op.f("ix_pipeline_snapshots_account_id"),
+            "pipeline_snapshots",
+            ["account_id"],
+            unique=False,
+            postgresql_where=sa.text("account_id IS NOT NULL"),
+        )
 
 
 def _remove_missing_indexes() -> None:
