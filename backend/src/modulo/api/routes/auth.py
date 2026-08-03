@@ -694,6 +694,7 @@ async def csrf_token(
     except asyncio.CancelledError:
         raise
     except HTTPException:
+        _log.debug("HTTPException propagated from csrf_token")
         raise
     except Exception:
         _log.exception("Unexpected error in csrf_token")
