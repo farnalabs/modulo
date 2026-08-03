@@ -157,13 +157,13 @@ class TestRollbackToSnapshot:
 
     async def test_rollback_to_snapshot_missing_pipeline_returns_none(self):
         """A missing pipeline row must abort the rollback before any mutation."""
+        pid = uuid.uuid4()
         session = _sequenced_session(
             [
-                _row_result(id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_version=1, graph_json={"nodes": []}),
+                _row_result(id=uuid.uuid4(), pipeline_id=pid, snapshot_version=1, graph_json={"nodes": []}),
                 _missing_result(),  # pipeline lookup returns None
             ]
         )
-        pid = uuid.uuid4()
 
         result = await rollback_to_snapshot(session, pid, uuid.uuid4(), is_privileged=True, caller_type="rest")
 
