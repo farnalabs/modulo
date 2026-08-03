@@ -48,11 +48,11 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] List available transitions via `query("transitions")`
 - [x] Add issue comment via `write("issue_comment")` with `body`
 - [x] List issue comments via `query("issue_comments")` with pagination
-- [ ] Assign/reassign issue via dedicated operation — not implemented
+- [x] Assign/reassign issue via dedicated `write("issue_assign")` operation — accepts `account_id` (direct), `email` or `display_name` (resolved via `GET /user/search`), or explicit `null`/`unassign` to clear the assignee
 - [ ] Add issue attachment — not implemented
 - [ ] List issue remote links — not implemented
-- [ ] Set issue labels — not implemented
-- [ ] Delete issue — not implemented
+- [x] Set issue labels via dedicated `write("issue_label")` operation — `add`/`remove` label names resolved against the issue's current `labels` set before PUT (true add/remove, not a blind replace)
+- [x] Delete issue via dedicated `write("issue_delete")` operation — `DELETE /issue/{issue_key}` with success confirmation
 - [x] JQL search supports pagination cursor via `startAt` parsing
 - [x] JQL search returns total count
 
@@ -125,13 +125,14 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [ ] **Jira Data Center not supported**: URL format is `https://{instance}/rest/api/3` — Jira Server/Data Center uses a different path structure
 - [ ] **No attachment support**: cannot upload or download issue attachments
 - [ ] **No field metadata**: agents cannot discover custom fields, available issue types, or statuses for a given project
-- [ ] **No assign/reassign via dedicated operation**: issue assignment only possible through `issue_update` with `fields.assignee`
-- [ ] **No issue labels management**: cannot add/remove labels via dedicated write resource
-- [ ] **No issue delete**: deletion not exposed through connector interface
 
 ---
 
 ## QA History
+
+### 2026-08-03 — improve-architecture: assign / labels / delete RESOLVED
+- **RESOLVED 3 known gaps** in the Jira connector. (1) Dedicated assignment — `write("issue_assign")` accepts `{"issue_key", "account_id"}` (direct `accountId`), `{"issue_key", "email"}` or `{"issue_key", "display_name"}` (resolved via `GET /user/search?query=...&maxResults=1`, `ValueError` when no user / no `accountId` returned), or explicit `{"account_id": null}` / `{"unassign": true}` to clear the assignee (PUT `{"fields": {"assignee": null}}`). (2) Label management — `write("issue_label")` accepts `{"issue_key", "add": [...], "remove": [...]}`; because Jira's `labels` field is a set (PUT replaces the whole list), new `_compute_target_labels()` fetches the issue's current labels and computes the add/remove target atomically in one PUT. (3) Issue delete — `write("issue_delete")` (`DELETE /issue/{issue_key}`, success confirmation). Added 14 unit tests (`test_jira.py`: assign by account_id / by email / by display_name / unassign via null / unassign via flag / missing key / no-identifier error / user-not-found, labels add+remove / add-dedupe / missing add/remove / missing key, delete + missing key) + 4 BDD scenarios in `jira_connector.feature` (assign, unassign, add/remove labels, delete) with 8 new step definitions in `test_connectors.py` and the mock connector extended. Updated product map (4 behaviours `[ ]`→`[x]`, Known Gaps 6→3, QA History). 49/49 `test_jira.py` + 27/27 `test_jira_resilience.py` unit tests pass, 13/13 jira BDD scenarios pass, ruff clean. Status: partial (Jira Data Center, attachments, field metadata remain).
+
 
 ### 2026-08-02 — improve-architecture: X-RateLimit-* header inspection RESOLVED
 - **RESOLVED** known gap "No X-RateLimit-* header inspection: rate-limit retry is blind (no remaining/quota tracking)". Jira Cloud reports quota state via `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` (epoch) headers on every response. Added `_RATE_LIMIT_HEADERS`, `_parse_rate_limit_reset()` (epoch → wait delay; missing/invalid/elapsed → `None`), `_rate_limit_detail()` and `_rate_limit_metadata()` to `connectors/jira/__init__.py`. `_call_api` now prefers `X-RateLimit-Reset` on HTTP 429 via new `_sleep_delay()` (tight jitter around the quota window) instead of blind backoff, and the final exhausted-429 error surfaces the quota headers. Every query result now carries `metadata["rate_limit"]` (absent → `{}`). Timeout/ConnectError retry paths now use `_jitter()`.

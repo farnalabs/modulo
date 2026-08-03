@@ -415,3 +415,198 @@ async def test_query_projects_rate_limit_metadata(connector):
     result = await connector.query(ConnectorQuery(resource="projects"))
     assert len(result.records) == 1
     assert result.metadata["rate_limit"] == headers
+
+
+# --- issue_assign / issue_label / issue_delete write resources ---
+
+
+@respx.mock
+async def test_write_issue_assign_by_account_id(connector):
+    respx.put(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(204))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_assign",
+            data={"issue_key": "PROJ-123", "account_id": "712020:abc123"},
+        )
+    )
+    assert result["issue_key"] == "PROJ-123"
+    assert result["assignee"] == {"accountId": "712020:abc123"}
+    request = respx.calls.last.request
+    assert request.method == "PUT"
+    assert request.url.path == "/rest/api/3/issue/PROJ-123"
+    assert request.read() == b'{"fields":{"assignee":{"accountId":"712020:abc123"}}}'
+
+
+@respx.mock
+async def test_write_issue_assign_by_email(connector):
+    users = [{"accountId": "712020:email_user"}]
+    respx.get(f"{_BASE}/user/search").mock(return_value=httpx.Response(200, json=users))
+    respx.put(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(204))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_assign",
+            data={"issue_key": "PROJ-123", "email": "alice@example.com"},
+        )
+    )
+    assert result["assignee"] == {"accountId": "712020:email_user"}
+    search_request = respx.calls[0].request
+    assert search_request.url.params["query"] == "alice@example.com"
+    assert respx.calls[1].request.url.path == "/rest/api/3/issue/PROJ-123"
+
+
+@respx.mock
+async def test_write_issue_assign_by_display_name(connector):
+    users = [{"accountId": "712020:dn_user"}]
+    respx.get(f"{_BASE}/user/search").mock(return_value=httpx.Response(200, json=users))
+    respx.put(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(204))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_assign",
+            data={"issue_key": "PROJ-123", "display_name": "Alice Example"},
+        )
+    )
+    assert result["assignee"] == {"accountId": "712020:dn_user"}
+    assert respx.calls[0].request.url.params["query"] == "Alice Example"
+
+
+@respx.mock
+async def test_write_issue_assign_unassign_with_null(connector):
+    respx.put(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(204))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_assign",
+            data={"issue_key": "PROJ-123", "account_id": None},
+        )
+    )
+    assert result["assignee"] is None
+    assert respx.calls.last.request.read() == b'{"fields":{"assignee":null}}'
+
+
+@respx.mock
+async def test_write_issue_assign_unassign_with_flag(connector):
+    respx.put(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(204))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_assign",
+            data={"issue_key": "PROJ-123", "unassign": True},
+        )
+    )
+    assert result["assignee"] is None
+
+
+@respx.mock
+async def test_write_issue_assign_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_assign",
+                data={"account_id": "712020:abc"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_assign_no_identifier(connector):
+    with pytest.raises(ValueError, match="requires 'account_id', 'email', 'display_name', or 'unassign'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_assign",
+                data={"issue_key": "PROJ-123"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_assign_email_not_found(connector):
+    respx.get(f"{_BASE}/user/search").mock(return_value=httpx.Response(200, json=[]))
+    with pytest.raises(ValueError, match="Jira user not found for email"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_assign",
+                data={"issue_key": "PROJ-123", "email": "nobody@example.com"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_label_add_and_remove(connector):
+    current_issue = {
+        "id": "10001",
+        "key": "PROJ-123",
+        "fields": {"labels": ["bug", "stale"]},
+    }
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(200, json=current_issue))
+    respx.put(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(204))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_label",
+            data={"issue_key": "PROJ-123", "add": ["backend"], "remove": ["stale"]},
+        )
+    )
+    assert result["labels"] == ["bug", "backend"]
+    request = respx.calls.last.request
+    assert request.method == "PUT"
+    assert request.read() == b'{"fields":{"labels":["bug","backend"]}}'
+
+
+@respx.mock
+async def test_write_issue_label_add_only_deduplicates(connector):
+    current_issue = {"id": "10001", "key": "PROJ-123", "fields": {"labels": ["bug"]}}
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(200, json=current_issue))
+    respx.put(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(204))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_label",
+            data={"issue_key": "PROJ-123", "add": ["bug", "backend"]},
+        )
+    )
+    assert result["labels"] == ["bug", "backend"]
+
+
+@respx.mock
+async def test_write_issue_label_missing_add_remove(connector):
+    with pytest.raises(ValueError, match="requires 'add' and/or 'remove'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_label",
+                data={"issue_key": "PROJ-123"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_label_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_label",
+                data={"add": ["bug"]},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_delete(connector):
+    respx.delete(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(204))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_delete",
+            data={"issue_key": "PROJ-123"},
+        )
+    )
+    assert result["issue_key"] == "PROJ-123"
+    assert result["deleted"] is True
+    request = respx.calls.last.request
+    assert request.method == "DELETE"
+    assert request.url.path == "/rest/api/3/issue/PROJ-123"
+
+
+@respx.mock
+async def test_write_issue_delete_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_delete",
+                data={},
+            )
+        )
