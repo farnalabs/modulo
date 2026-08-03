@@ -154,6 +154,7 @@ jobs:
         run: |
           merged_prs=""
           conflict_prs=""
+          noop_prs=""
 
           while IFS= read -r pr; do
             NUM=$(echo "$pr" | jq -r '.number')
@@ -182,9 +183,19 @@ jobs:
 
             echo "Attempting squash-merge into merge-queue..."
             if git merge --squash "pr-$NUM" 2>&1; then
-              git commit -m "squash! Merge PR #$NUM: $TITLE" 2>/dev/null || true
-              echo "PR #$NUM merged successfully."
-              merged_prs="$merged_prs $NUM"
+              # A no-op squash merge (nothing staged) means the PR's changes are already
+              # present in main/merge-queue (e.g. a duplicate PR merged earlier). Do NOT
+              # count it as merged: no commit was created, so the downstream
+              # 'git log main..merge-queue' would be empty and 'Merge source PRs' would
+              # fail under `set -e -o pipefail` when grep finds no PR number.
+              if git diff --cached --quiet; then
+                echo "PR #$NUM has no changes relative to merge-queue (already on main) -- recording as duplicate."
+                noop_prs="$noop_prs $NUM"
+              else
+                git commit -m "squash! Merge PR #$NUM: $TITLE"
+                echo "PR #$NUM merged successfully."
+                merged_prs="$merged_prs $NUM"
+              fi
             else
               git merge --abort 2>/dev/null || true
               git reset --hard HEAD 2>/dev/null || true
@@ -195,20 +206,36 @@ jobs:
 
           merged_prs=$(echo "$merged_prs" | xargs)
           conflict_prs=$(echo "$conflict_prs" | xargs)
+          noop_prs=$(echo "$noop_prs" | xargs)
 
           # Store PR numbers in files for later steps
           echo "$merged_prs" > /tmp/merged_prs.txt
           echo "$conflict_prs" > /tmp/conflict_prs.txt
+          echo "$noop_prs" > /tmp/noop_prs.txt
 
           echo "merged_prs=$merged_prs" >> "$GITHUB_OUTPUT"
           echo "conflict_prs=$conflict_prs" >> "$GITHUB_OUTPUT"
+          echo "noop_prs=$noop_prs" >> "$GITHUB_OUTPUT"
           echo "merged_count=$(echo "$merged_prs" | wc -w)" >> "$GITHUB_OUTPUT"
           echo "conflict_count=$(echo "$conflict_prs" | wc -w)" >> "$GITHUB_OUTPUT"
+          echo "noop_count=$(echo "$noop_prs" | wc -w)" >> "$GITHUB_OUTPUT"
 
           echo ""
           echo "=== Results ==="
           echo "Merged: $merged_prs"
+          echo "Duplicates (no changes to merge): $noop_prs"
           echo "Conflicts: $conflict_prs"
+
+      - name: Close duplicate PRs (changes already on main)
+        if: steps.merge.outputs.noop_count != '0' && steps.merge.outputs.noop_count != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          for NUM in $(cat /tmp/noop_prs.txt 2>/dev/null); do
+            echo "  Closing duplicate PR #$NUM (changes already on main)..."
+            gh pr close "$NUM" --comment "Auto-closed by the merge queue as a duplicate: this PR's changes are already on main (merged via another PR), so squash-merging it into the queue produced no commit. If this was a mistake, reopen the PR and re-request a review." 2>/dev/null || true
+          done
 
       - name: Notify fixer of conflicts
         if: steps.merge.outputs.conflict_count != '0' && steps.merge.outputs.conflict_count != ''
@@ -334,7 +361,7 @@ jobs:
         shell: bash
         run: |
           # Extract PR numbers from squash commits on merge-queue (oldest first)
-          PR_NUMS=$(git log main..merge-queue --oneline | grep -oP 'PR #\K\d+' | tac)
+          PR_NUMS=$(git log main..merge-queue --oneline | grep -oP 'PR #\K\d+' | tac || true)
           echo "Merging source PRs (in oldest-first order):"
           echo "$PR_NUMS"
 
