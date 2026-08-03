@@ -1194,6 +1194,19 @@ Without team-level limits, a high-volume team running LLM pipelines can exhaust 
 
 **Limit enforcement atomicity**: `org_daily_run_limit` and `team_daily_run_limit` are checked and incremented atomically within the run creation transaction using `SELECT ... FOR UPDATE` on an `org_daily_run_counts` table (keyed by `org_id` + UTC date). This prevents two simultaneous run-creation requests both passing the check and exceeding the limit. `org_daily_spend_limit` is checked pre-run against the accumulated spend for the UTC day (from usage events) — read from a materialised counter, updated by the cost tracking callback (§7.10). This check is not transactionally atomic (spend accumulates asynchronously), but over-spend by a single run is accepted as the operational cost of non-blocking execution. Both limits are stored in org `settings_json`. The `Cost Controller` component (§5.6) is the single enforcement point for all spend/run limit checks — they are never checked in multiple places.
 
+#### Sandbox Agent Runtime Cost
+
+`sandbox_agent` (E2B) nodes report a `cost_estimate_usd` on the run, computed from the node's wall-clock time plus the agent's self-reported model estimate:
+
+```
+cost_estimate_usd = (wall_clock_seconds / 3600 × E2B_SANDBOX_USD_PER_HOUR)
+                    + agent_reported cost_estimate_usd (when present in the agent's output contract)
+```
+
+`E2B_SANDBOX_USD_PER_HOUR` (default `0.5` USD/hr) is operator-configurable and reflects the hourly E2B sandbox rate; E2B bills per-second sandbox uptime, so wall-clock time is a faithful cost basis. The agent's own `cost_estimate_usd` field (written to `/home/user/output.json` by dogfood agents) is merged in when present and numeric. The estimate is attached to both the node's artifact output and the run's `output`, and `Run.total_cost_usd` aggregates token cost + sandbox cost across all completed nodes (`execute` and HITL `resume` paths equally).
+
+**Attributability boundary**: GitHub Actions billing is unavailable on the free tier and is not tracked. Fly costs are infrastructure-level (the platform hosting Modulo itself) and are NOT attributed per-run. Only E2B sandbox usage is per-run attributable; sandbox cost is an estimate, not an invoice.
+
 ### 8.11 Notifications
 
 Outbound webhook on: `hitl_awaiting`, `run_failed`, `budget_exceeded`, `circuit_breaker_tripped`, `claim_expired`, `hitl_overdue`.
