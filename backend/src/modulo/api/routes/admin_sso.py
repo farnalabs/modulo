@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_feature, require_permission
 from modulo.api.middleware.sensitive_mask import SensitiveValue
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.sso_provider import (
@@ -145,7 +145,12 @@ async def get_providers(
 
 
 @handle_db_errors("admin.sso.create_provider_endpoint")
-@router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/providers",
+    response_model=SsoProviderResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def create_provider_endpoint(
     req: SsoProviderCreate,
     _: object = require_feature("sso"),
@@ -203,7 +208,11 @@ async def create_provider_endpoint(
 
 
 @handle_db_errors("admin.sso.update_provider_endpoint")
-@router.put("/providers/{provider_id}", response_model=SsoProviderResponse)
+@router.put(
+    "/providers/{provider_id}",
+    response_model=SsoProviderResponse,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def update_provider_endpoint(
     provider_id: uuid.UUID,
     req: SsoProviderUpdate,
@@ -261,7 +270,11 @@ async def update_provider_endpoint(
 
 
 @handle_db_errors("admin.sso.delete_provider_endpoint")
-@router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/providers/{provider_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def delete_provider_endpoint(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
@@ -491,7 +504,9 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
 
 
 @handle_db_errors("admin.sso.toggle_provider_endpoint")
-@router.put("/providers/{provider_id}/toggle", response_model=SsoProviderResponse)
+@router.put(
+    "/providers/{provider_id}/toggle", response_model=SsoProviderResponse, dependencies=[Depends(deny_break_glass_mint)]
+)
 async def toggle_provider_endpoint(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
