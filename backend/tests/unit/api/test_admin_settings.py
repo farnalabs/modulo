@@ -267,10 +267,17 @@ class TestUserUpdate:
         fake_account.created_at = _NOW
         fake_account.last_login = None
         fake_account.active = True
+        fake_account.is_break_glass = False
 
-        with patch(
-            "modulo.api.routes.admin.get_account_by_id",
-            AsyncMock(return_value=fake_account),
+        with (
+            patch(
+                "modulo.api.routes.admin.get_account_by_id",
+                AsyncMock(return_value=fake_account),
+            ),
+            patch(
+                "modulo.api.routes.admin.assert_not_last_admin",
+                AsyncMock(),
+            ),
         ):
             resp = client.put(f"{self.URL}/{self.TARGET_ID}", json={"org_role": "operator"})
 
@@ -307,7 +314,10 @@ class TestUserDeactivate:
         fake_account.auth_provider = "local"
         fake_account.created_at = _NOW
         fake_account.last_login = None
-        fake_account.active = True
+        fake_account.is_break_glass = False
+        # The SECURITY DEFINER deactivation sets active=false globally; the route
+        # refreshes the account after the call, so reflect the post-state here.
+        fake_account.active = False
         target_id = str(_OTHER_USER_ID)
 
         fake_membership = MagicMock()
@@ -319,6 +329,10 @@ class TestUserDeactivate:
                 AsyncMock(return_value=fake_account),
             ),
             patch(
+                "modulo.api.routes.admin.assert_not_last_admin",
+                AsyncMock(),
+            ),
+            patch(
                 "modulo.api.routes.admin.list_families_for_account",
                 AsyncMock(return_value=[]),
             ),
@@ -327,7 +341,7 @@ class TestUserDeactivate:
                 AsyncMock(return_value=[]),
             ),
             patch(
-                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=fake_membership),
             ),
             patch(
@@ -367,6 +381,7 @@ class TestUserReactivate:
         fake_account.created_at = _NOW
         fake_account.last_login = None
         fake_account.active = True
+        fake_account.is_break_glass = False
         target_id = str(_OTHER_USER_ID)
 
         fake_membership = MagicMock()

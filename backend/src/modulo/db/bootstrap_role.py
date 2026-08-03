@@ -1,15 +1,33 @@
-"""Bootstraps the modulo_app runtime role with DML-only permissions.
-Connects as the migration/owner user to (re)create the modulo_app role,
-then grants SELECT, INSERT, UPDATE, DELETE on all existing and future
-tables/sequences, plus USAGE on the public schema.
+"""Bootstraps the runtime DB roles with DML-only permissions.
 
-Safe to run multiple times — checks pg_roles before creating,
-and updates the password on each run for consistency.
+Connects as the migration/owner user (DATABASE_ADMIN_URL, superuser) to
+(re)create the roles, then grants DML on existing and future tables/sequences,
+plus USAGE on the public schema. Safe to run multiple times — checks pg_roles
+before creating and updates passwords on each run for consistency.
+
+Deliverable (A) of the break-glass admin recovery plan adds:
+  * ``modulo_breakglass`` (LOGIN, BYPASSRLS) — the dedicated operator role used
+    by the break-glass CLI (dedicated credential from
+    MODULO_BREAK_GLASS_DATABASE_URL; a placeholder password is used when the URL
+    is not configured yet, replaced on a later boot once (B) ships the URL).
+  * ``modulo_migrate`` (NOSUPERUSER, NOLOGIN, BYPASSRLS) — owner of the four
+    transferred tables (accounts, org_memberships, token_families,
+    org_api_keys) and of the ``deactivate_break_glass`` SECURITY DEFINER so the
+    function's cross-org reads/writes work under FORCE RLS.
+  * The ``accounts`` UPDATE ALLOW-LIST re-apply (REVOKE table-level UPDATE +
+    GRANT the explicit writable columns) — guarded by to_regclass so the
+    before-alembic boot run cannot fail on a not-yet-existing table/column.
+  * ``modulo_breakglass`` grants per plan §0(c) — SELECT on the read surfaces,
+    SELECT+INSERT on accounts/org_memberships, SELECT+INSERT on audit_events,
+    SELECT+INSERT/UPDATE on audit_chain_heads, sequence USAGE. The three
+    break-glass column UPDATE grants are deliverable (B) and are NOT applied
+    here. ``modulo_app`` is NEVER granted membership in either role.
 """
 
 import asyncio
 import logging
 import os
+import secrets
 import sys
 from urllib.parse import unquote, urlparse
 
@@ -19,44 +37,160 @@ _log = logging.getLogger(__name__)
 
 REQUIRED_VARS = ["DATABASE_ADMIN_URL", "DATABASE_URL"]
 
+_BREAK_GLASS_ROLE = "modulo_breakglass"
+_MIGRATE_ROLE = "modulo_migrate"
+
+# The single-sourced allow-list constant for writable accounts columns.
+# Every future column added to accounts must be allow-listed here or be
+# read-only (schema-evolution contract — ADR-017/018 amendment).
+ACCOUNTS_WRITABLE_COLUMNS = (
+    "email",
+    "display_name",
+    "password_hash",
+    "active",
+    "auth_provider",
+    "sso_subject",
+    "preferences",
+    "last_login",
+    "is_system_admin",
+    "updated_at",
+)
+
 
 def _parse_role(url: str) -> str:
     """Extract the username from a database URL."""
     return urlparse(url).username or ""
 
 
+def _parse_password(url: str) -> str:
+    """Extract the password from a database URL, URL-unescaped."""
+    parsed = urlparse(url)
+    return unquote(parsed.password) if parsed.password else ""
+
+
+async def _create_or_update_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str | None) -> None:
+    """Idempotently create/update a role, applying LOGIN/BYPASSRLS."""
+    quoted_pass = (password or "").replace("'", "''")
+    exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", name)
+    if not exists:
+        if login:
+            await conn.execute(f"CREATE ROLE \"{name}\" LOGIN BYPASSRLS PASSWORD '{quoted_pass}'")
+        else:
+            await conn.execute(f'CREATE ROLE "{name}" NOSUPERUSER NOLOGIN BYPASSRLS')
+        _log.info("Created role: %s", name)
+    else:
+        if login:
+            await conn.execute(f"ALTER ROLE \"{name}\" WITH LOGIN BYPASSRLS PASSWORD '{quoted_pass}'")
+        else:
+            await conn.execute(f'ALTER ROLE "{name}" WITH NOSUPERUSER NOLOGIN BYPASSRLS')
+        _log.info("Updated role: %s", name)
+
+
+async def _table_exists(conn: asyncpg.Connection, table: str) -> bool:
+    return bool(await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}"))
+
+
+async def _existing_columns(conn: asyncpg.Connection, table: str) -> set[str]:
+    rows = await conn.fetch(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1",
+        table,
+    )
+    return {row["column_name"] for row in rows}
+
+
+async def _apply_accounts_allow_list(conn: asyncpg.Connection, app_user: str) -> None:
+    """Re-apply the accounts UPDATE allow-list for modulo_app.
+
+    Guards on to_regclass + information_schema so the before-alembic boot run
+    never fails on a not-yet-existing table/column. The break-glass columns are
+    deliberately NOT writable by modulo_app (deliverable (A) posture: only
+    direct-DB / SECURITY DEFINER writes can create a break-glass row).
+    """
+    if not await _table_exists(conn, "accounts"):
+        return
+    await conn.execute(f'REVOKE UPDATE ON public.accounts FROM "{app_user}"')
+    await conn.execute("REVOKE UPDATE ON public.accounts FROM PUBLIC")
+
+    cols = await _existing_columns(conn, "accounts")
+    grant_cols = [c for c in ACCOUNTS_WRITABLE_COLUMNS if c in cols]
+    if grant_cols:
+        await conn.execute(f'GRANT UPDATE ({", ".join(grant_cols)}) ON public.accounts TO "{app_user}"')
+        _log.info("Applied accounts UPDATE allow-list for %s: %s", app_user, ", ".join(grant_cols))
+
+
+async def _grant_break_glass(conn: asyncpg.Connection, bg_user: str) -> None:
+    """Grant modulo_breakglass the read/write surfaces it needs (plan §0(c), (A))."""
+    select_tables = ("org_memberships", "token_families", "org_api_keys", "organisations")
+    existing_select = [t for t in select_tables if await _table_exists(conn, t)]
+    if existing_select:
+        await conn.execute(f'GRANT SELECT ON {", ".join(f"public.{t}" for t in existing_select)} TO "{bg_user}"')
+
+    for table in ("accounts", "org_memberships"):
+        if await _table_exists(conn, table):
+            await conn.execute(f'GRANT SELECT, INSERT ON public.{table} TO "{bg_user}"')
+
+    if await _table_exists(conn, "audit_events"):
+        await conn.execute(f'GRANT SELECT, INSERT ON public.audit_events TO "{bg_user}"')
+    if await _table_exists(conn, "audit_chain_heads"):
+        await conn.execute(f'GRANT SELECT, INSERT, UPDATE ON public.audit_chain_heads TO "{bg_user}"')
+
+    await conn.execute(f'GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "{bg_user}"')
+
+
+async def _grant_function_execute(conn: asyncpg.Connection, app_user: str, bg_user: str) -> None:
+    """Idempotently re-apply the SECURITY DEFINER EXECUTE grants."""
+    func_oid = await conn.fetchval(
+        "SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)') IS NOT NULL"
+    )
+    if func_oid:
+        await conn.execute(
+            f'GRANT EXECUTE ON FUNCTION public.deactivate_break_glass(uuid, uuid, boolean) TO "{app_user}", "{bg_user}"'
+        )
+
+
 async def _bootstrap(admin_url: str, app_url: str) -> None:
     admin_conn_str = admin_url.replace("postgresql+asyncpg://", "postgres://").split("?")[0]
     app_user = _parse_role(app_url)
-    parsed = urlparse(app_url)
-    app_pass = unquote(parsed.password) if parsed.password else ""
+    app_pass = _parse_password(app_url)
+
+    bg_url = os.environ.get("MODULO_BREAK_GLASS_DATABASE_URL", "")
+    bg_user = _parse_role(bg_url) or _BREAK_GLASS_ROLE
+    bg_pass = _parse_password(bg_url) or secrets.token_urlsafe(24)
 
     conn = await asyncpg.connect(admin_conn_str, ssl=False)
     try:
-        # Idempotent role creation — skips if already exists
-        row = await conn.fetchrow("SELECT 1 FROM pg_roles WHERE rolname = $1", app_user)
-        quoted_pass = app_pass.replace("'", "''")
-        if not row:
-            await conn.execute(f"CREATE ROLE \"{app_user}\" WITH LOGIN PASSWORD '{quoted_pass}' INHERIT")
-            _log.info("Created role: %s", app_user)
-        else:
-            # Ensure password is up to date
-            await conn.execute(f"ALTER ROLE \"{app_user}\" WITH PASSWORD '{quoted_pass}'")
-            _log.info("Updated password for role: %s", app_user)
+        # Idempotent role creation — skips if already exists.
+        await _create_or_update_role(conn, app_user, login=True, password=app_pass)
 
-        # Grant DML on existing tables
+        await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None)
+        await _create_or_update_role(conn, bg_user, login=True, password=bg_pass)
+
+        # Grant DML on existing tables.
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{app_user}"')
         await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{app_user}"')
         await conn.execute(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{app_user}"')
-        # Grant DML on future tables
+        # Grant DML on future tables.
         await conn.execute(
             f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{app_user}"'
         )
         await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{app_user}"')
+
+        # Re-apply the accounts UPDATE allow-list (active from deliverable A).
+        await _apply_accounts_allow_list(conn, app_user)
+
+        # modulo_breakglass surface grants (A) + function EXECUTE re-apply.
+        await _grant_break_glass(conn, bg_user)
+        await _grant_function_execute(conn, app_user, bg_user)
+
         _log.info("Granted DML permissions to: %s", app_user)
 
     finally:
         await conn.close()
+
+
+async def bootstrap_roles(admin_url: str, app_url: str) -> None:
+    """Public async entry used by the lifespan migration path (before + after alembic)."""
+    await _bootstrap(admin_url, app_url)
 
 
 def main() -> None:

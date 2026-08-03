@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission, require_system_or_org_admin
-from modulo.auth.api_key import revoke_api_key
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -22,6 +21,11 @@ from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import detect_regressions
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
+from modulo.db.crud.last_admin_guard import (
+    LastAdminLockoutError,
+    LastAdminLockoutUnavailableError,
+    assert_not_last_admin,
+)
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.organisation import get_organisation, update_organisation
 from modulo.db.crud.publisher import (
@@ -46,7 +50,6 @@ from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.account import Account
-from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
@@ -865,33 +868,6 @@ class UpdateUserRequest(BaseModel):
     is_active: bool | None = None
 
 
-async def _prevent_last_admin_lockout(
-    current_account_id: uuid.UUID,
-    target_account_id: uuid.UUID,
-    org_id: uuid.UUID,
-    new_role: str | None,
-    db_session: AsyncSession,
-) -> None:
-    if target_account_id != current_account_id:
-        return
-    if new_role is None or new_role == "admin":
-        return
-
-    result = await db_session.execute(
-        select(func.count()).where(
-            OrgMembership.organisation_id == org_id,
-            OrgMembership.role == "admin",
-        )
-    )
-    admin_count = result.scalar() or 0
-
-    if admin_count <= 1:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Cannot remove the last admin. Promote another user to admin first.",
-        )
-
-
 @handle_db_errors("admin.admin_update_user")
 @router.put("/users/{user_id}", response_model=UserListItem)
 async def admin_update_user(
@@ -906,20 +882,32 @@ async def admin_update_user(
             detail="Only admin users can update users",
         )
 
+    if req.is_active is False and user_id == current_user.account_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Cannot deactivate yourself",
+        )
+
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            await _prevent_last_admin_lockout(
-                current_account_id=current_user.account_id,
-                target_account_id=user_id,
+            await assert_not_last_admin(
+                session,
                 org_id=current_user.organisation_id,
-                new_role=req.org_role,
-                db_session=session,
+                target_account_id=user_id,
+                target_role_after=req.org_role,
+                target_active_after=req.is_active,
             )
 
             account = await get_account_by_id(session, user_id)
             if account is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+            if account.is_break_glass:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Break-glass accounts cannot be managed via the admin API",
+                )
 
             if req.is_active is not None:
                 account.active = req.is_active
@@ -935,6 +923,17 @@ async def admin_update_user(
                     .values(role=req.org_role)
                 )
 
+    except LastAdminLockoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.reason,
+        ) from None
+    except LastAdminLockoutUnavailableError:
+        logger.exception("routes.admin.last_admin_guard_unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not verify the last-admin invariant. Please try again.",
+        ) from None
     except ProgrammingError:
         logger.exception("routes.admin")
 
@@ -959,6 +958,51 @@ async def admin_update_user(
 async def _get_org_role(session: AsyncSession, account_id: uuid.UUID, org_id: uuid.UUID) -> str:
     membership = await get_membership_by_account_and_org(session, account_id, org_id)
     return membership.role if membership is not None else ""
+
+
+def _extract_bg_pgcode(exc: BaseException) -> str | None:
+    """Extract the SECURITY DEFINER custom ERRCODE (M2010/M2020/M2040)."""
+    orig = getattr(exc, "orig", None)
+    pgcode = getattr(orig, "pgcode", None)
+    if pgcode is not None:
+        return str(pgcode)
+    sqlstate = getattr(orig, "sqlstate", None)
+    if sqlstate is not None:
+        return str(sqlstate)
+    return None
+
+
+def _raise_bg_pgcode(
+    exc: BaseException,
+    *,
+    unauthorized_status: int,
+    conflict_status: int,
+    not_found_status: int,
+) -> None:
+    """Map the SECURITY DEFINER's custom pgcodes to HTTP statuses.
+
+    M2010 = caller not authorized, M2020 = would orphan org (last admin),
+    M2040 = target does not exist. Raises HTTPException for a matching pgcode,
+    otherwise returns so the caller's generic SQLAlchemyError handling (503)
+    takes over. Called INSIDE the route's ``except SQLAlchemyError`` BEFORE the
+    generic 503 mapping.
+    """
+    pgcode = _extract_bg_pgcode(exc)
+    if pgcode == "M2010":
+        raise HTTPException(
+            status_code=unauthorized_status,
+            detail="Caller is not authorized to deactivate this user",
+        ) from None
+    if pgcode == "M2020":
+        raise HTTPException(
+            status_code=conflict_status,
+            detail="Cannot deactivate the last admin. Promote another user to admin first.",
+        ) from None
+    if pgcode == "M2040":
+        raise HTTPException(
+            status_code=not_found_status,
+            detail="User not found",
+        ) from None
 
 
 @handle_db_errors("admin.admin_deactivate_user")
@@ -990,26 +1034,36 @@ async def admin_deactivate_user(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="User not found",
                 )
-            account.active = False
 
-            families = await list_families_for_account(session, user_id)
-            for family in families:
-                await blacklist_family(session, family.family_id, user_id)
-
-            active_keys = (
-                (
-                    await session.execute(
-                        select(OrgApiKey).where(
-                            OrgApiKey.account_id == user_id,
-                            OrgApiKey.revoked_at.is_(None),
-                        )
-                    )
+            if account.is_break_glass:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Break-glass accounts cannot be deactivated via the admin API",
                 )
-                .scalars()
-                .all()
+
+            membership = await get_membership_by_account_and_org(session, user_id, current_user.organisation_id)
+            if membership is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found in this organisation",
+                )
+
+            await assert_not_last_admin(
+                session,
+                org_id=current_user.organisation_id,
+                target_account_id=user_id,
+                target_role_after=None,
+                target_active_after=False,
             )
-            for key in active_keys:
-                await revoke_api_key(session, key.id, current_user.organisation_id)
+
+            # Caller-bound SECURITY DEFINER: scoped family/key/membership
+            # revocation + account-global active=false + per-org last-admin
+            # M2020 + bg-only destructive tombstone. Atomic single statement.
+            await session.execute(
+                text("SELECT public.deactivate_break_glass(:caller, :target, false)"),
+                {"caller": current_user.account_id, "target": user_id},
+            )
+            await session.refresh(account)
 
             team_memberships = await list_team_memberships_for_account(session, user_id)
             for tm in team_memberships:
@@ -1027,31 +1081,20 @@ async def admin_deactivate_user(
                 payload_json={"target_user_id": str(user_id)},
             )
 
-            # Check if target user is the last admin in the org
-            membership = await session.execute(
-                select(OrgMembership).where(
-                    OrgMembership.account_id == user_id,
-                    OrgMembership.organisation_id == current_user.organisation_id,
-                )
-            )
-            target_membership = membership.scalar_one_or_none()
-            if target_membership is not None and target_membership.role == "admin":
-                admin_result = await session.execute(
-                    select(func.count()).where(
-                        OrgMembership.organisation_id == current_user.organisation_id,
-                        OrgMembership.role == "admin",
-                    )
-                )
-                admin_count = admin_result.scalar() or 0
-                if admin_count <= 1:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail="Cannot deactivate the last admin. Promote another user to admin first.",
-                    )
-
             await session.flush()
 
             org_role = await _get_org_role(session, user_id, current_user.organisation_id)
+    except LastAdminLockoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.reason,
+        ) from None
+    except LastAdminLockoutUnavailableError:
+        logger.exception("admin.admin_deactivate_user.last_admin_guard_unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not verify the last-admin invariant. Please try again.",
+        ) from None
     except IntegrityError:
         logger.exception("admin.admin_deactivate_user")
         raise HTTPException(
@@ -1064,11 +1107,17 @@ async def admin_deactivate_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
         logger.exception("admin.admin_deactivate_user")
         logger.warning(
             "admin_deactivate_user SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "user_id": str(user_id)},
+        )
+        _raise_bg_pgcode(
+            exc,
+            unauthorized_status=status.HTTP_403_FORBIDDEN,
+            conflict_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            not_found_status=status.HTTP_404_NOT_FOUND,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1117,7 +1166,25 @@ async def admin_reactivate_user(
             account = await get_account_by_id(session, user_id)
             if account is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+            if account.is_break_glass:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Break-glass accounts cannot be managed via the admin API",
+                )
+
             account.active = True
+
+            from sqlalchemy import update as sa_update
+
+            await session.execute(
+                sa_update(OrgMembership)
+                .where(
+                    OrgMembership.account_id == user_id,
+                    OrgMembership.organisation_id == current_user.organisation_id,
+                )
+                .values(deactivated_at=None)
+            )
 
             from modulo.core.audit_logger import append_audit_event
 
@@ -1203,6 +1270,12 @@ async def admin_reset_password(
             account = await get_account_by_id(session, user_id)
             if account is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+            if account.is_break_glass:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Break-glass accounts cannot be managed via the admin API",
+                )
 
             temporary_password = secrets.token_urlsafe(18)[:24]
             account.password_hash = hash_password(temporary_password)

@@ -19,15 +19,23 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
+from modulo.api.routes.admin import _raise_bg_pgcode
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal, require_scim_feature
+from modulo.db.crud.last_admin_guard import (
+    LastAdminLockoutError,
+    LastAdminLockoutUnavailableError,
+    assert_not_last_admin,
+)
 from modulo.db.crud.scim import (
     scim_add_group_member,
     scim_create_group,
     scim_create_user,
+    scim_deactivate_user,
     scim_delete_group_by_id,
     scim_delete_user_by_id,
     scim_get_group,
@@ -68,6 +76,26 @@ def _scim_error(status_code: int, detail: str) -> HTTPException:
             "status": str(status_code),
         },
     )
+
+
+_SCIM_ADMIN_CALLER_SQL = text(
+    "SELECT a.id FROM org_memberships om JOIN accounts a ON a.id = om.account_id "
+    "WHERE om.organisation_id = :org AND om.role = 'admin' AND om.deactivated_at IS NULL "
+    "AND a.active IS TRUE AND a.is_break_glass IS FALSE ORDER BY om.joined_at, a.id LIMIT 1"
+)
+
+
+async def _resolve_scim_admin_caller(session: AsyncSession, org_id: uuid.UUID) -> uuid.UUID | None:
+    """Deterministically resolve the SCIM caller for a deactivation.
+
+    SCIM authenticates via the shared MODULO_SCIM_TOKEN (no per-user identity),
+    so the caller is resolved to the org's first active non-break-glass admin
+    (deterministic incl. the ``joined_at, a.id`` tiebreaker). Break-glass
+    accounts are excluded; if none exists the deactivation is rejected 409.
+    """
+    result = await session.execute(_SCIM_ADMIN_CALLER_SQL, {"org": org_id})
+    row = result.first()
+    return row[0] if row is not None else None
 
 
 def _user_to_scim(account: Account, base_url: str) -> dict[str, object]:
@@ -284,7 +312,7 @@ async def create_user(
                 from modulo.db.crud.org_membership import get_membership_by_account_and_org
 
                 membership = await get_membership_by_account_and_org(session, existing.id, principal.organisation_id)
-                if membership is not None:
+                if membership is not None and membership.deactivated_at is None:
                     raise _scim_error(
                         status.HTTP_409_CONFLICT,
                         f"User with userName {req.userName} already exists in this org",
@@ -398,15 +426,46 @@ async def replace_user(
             if account is None:
                 raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
-            display_name = req.name.formatted if req.name and req.name.formatted else req.userName
-            account = await scim_update_user(
-                session,
-                account,
-                org_id=principal.organisation_id,
-                email=req.userName,
-                display_name=display_name,
-                active=req.active,
-            )
+            if not req.active:
+                caller = await _resolve_scim_admin_caller(session, principal.organisation_id)
+                if caller is None:
+                    raise _scim_error(
+                        status.HTTP_409_CONFLICT,
+                        "No active admin exists in this org; provision a replacement admin first",
+                    )
+                await assert_not_last_admin(
+                    session,
+                    org_id=principal.organisation_id,
+                    target_account_id=user_id,
+                    target_role_after=None,
+                    target_active_after=False,
+                )
+                account = await scim_deactivate_user(
+                    session,
+                    principal.organisation_id,
+                    user_id,
+                    caller_account_id=caller,
+                )
+                if account is None:
+                    raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+            else:
+                display_name = req.name.formatted if req.name and req.name.formatted else req.userName
+                account = await scim_update_user(
+                    session,
+                    account,
+                    org_id=principal.organisation_id,
+                    email=req.userName,
+                    display_name=display_name,
+                    active=req.active,
+                )
+    except LastAdminLockoutError as exc:
+        raise _scim_error(status.HTTP_409_CONFLICT, exc.reason) from None
+    except LastAdminLockoutUnavailableError:
+        _log.exception("scim.replace_user.last_admin_guard_unavailable")
+        raise _scim_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Could not verify the last-admin invariant. Please try again.",
+        ) from None
     except HTTPException:
         raise
     except IntegrityError:
@@ -422,8 +481,14 @@ async def replace_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
         _log.exception("scim.replace_user")
+        _raise_bg_pgcode(
+            exc,
+            unauthorized_status=status.HTTP_409_CONFLICT,
+            conflict_status=status.HTTP_409_CONFLICT,
+            not_found_status=status.HTTP_404_NOT_FOUND,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -453,6 +518,7 @@ async def patch_user(
             if account is None:
                 raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
 
+            deactivate_requested = False
             for op in req.Operations:
                 if op.op not in ("replace", "remove", "add"):
                     raise _scim_error(
@@ -465,6 +531,7 @@ async def patch_user(
                             account.email = str(op.value["userName"])
                         if "active" in op.value:
                             account.active = bool(op.value["active"])
+                            deactivate_requested = deactivate_requested or not bool(op.value["active"])
                         if isinstance(op.value.get("name"), dict):
                             name_data = op.value["name"]
                             given = name_data.get("givenName") or ""
@@ -473,16 +540,50 @@ async def patch_user(
                             account.display_name = str(formatted).strip()
                     if op.path == "active":
                         account.active = bool(op.value)
+                        deactivate_requested = deactivate_requested or not bool(op.value)
                 elif op.op == "remove":
                     if op.path == "active":
                         account.active = False
+                        deactivate_requested = True
                 elif op.op == "add":
                     if isinstance(op.value, dict) and "userName" in op.value:
                         account.email = str(op.value["userName"])
                         if "active" in op.value:
                             account.active = bool(op.value["active"])
+                            deactivate_requested = deactivate_requested or not bool(op.value["active"])
 
-            await session.flush()
+            if deactivate_requested:
+                caller = await _resolve_scim_admin_caller(session, principal.organisation_id)
+                if caller is None:
+                    raise _scim_error(
+                        status.HTTP_409_CONFLICT,
+                        "No active admin exists in this org; provision a replacement admin first",
+                    )
+                await assert_not_last_admin(
+                    session,
+                    org_id=principal.organisation_id,
+                    target_account_id=user_id,
+                    target_role_after=None,
+                    target_active_after=False,
+                )
+                account = await scim_deactivate_user(
+                    session,
+                    principal.organisation_id,
+                    user_id,
+                    caller_account_id=caller,
+                )
+                if account is None:
+                    raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+            else:
+                await session.flush()
+    except LastAdminLockoutError as exc:
+        raise _scim_error(status.HTTP_409_CONFLICT, exc.reason) from None
+    except LastAdminLockoutUnavailableError:
+        _log.exception("scim.patch_user.last_admin_guard_unavailable")
+        raise _scim_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Could not verify the last-admin invariant. Please try again.",
+        ) from None
     except HTTPException:
         _log.warning("SCIM patch_user: re-raising HTTPException")
         raise
@@ -499,8 +600,14 @@ async def patch_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
         _log.exception("scim.patch_user")
+        _raise_bg_pgcode(
+            exc,
+            unauthorized_status=status.HTTP_409_CONFLICT,
+            conflict_status=status.HTTP_409_CONFLICT,
+            not_found_status=status.HTTP_404_NOT_FOUND,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
@@ -525,7 +632,36 @@ async def delete_user(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            deleted = await scim_delete_user_by_id(session, principal.organisation_id, user_id)
+            caller = await _resolve_scim_admin_caller(session, principal.organisation_id)
+            if caller is None:
+                raise _scim_error(
+                    status.HTTP_409_CONFLICT,
+                    "No active admin exists in this org; provision a replacement admin first",
+                )
+            account = await scim_get_user(session, principal.organisation_id, user_id)
+            if account is None:
+                raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+            await assert_not_last_admin(
+                session,
+                org_id=principal.organisation_id,
+                target_account_id=user_id,
+                target_role_after=None,
+                target_active_after=False,
+            )
+            deleted = await scim_delete_user_by_id(
+                session,
+                principal.organisation_id,
+                user_id,
+                caller_account_id=caller,
+            )
+    except LastAdminLockoutError as exc:
+        raise _scim_error(status.HTTP_409_CONFLICT, exc.reason) from None
+    except LastAdminLockoutUnavailableError:
+        _log.exception("scim.delete_user.last_admin_guard_unavailable")
+        raise _scim_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Could not verify the last-admin invariant. Please try again.",
+        ) from None
     except HTTPException:
         _log.warning("SCIM delete_user: re-raising HTTPException")
         raise
@@ -542,8 +678,14 @@ async def delete_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
         _log.exception("scim.delete_user")
+        _raise_bg_pgcode(
+            exc,
+            unauthorized_status=status.HTTP_409_CONFLICT,
+            conflict_status=status.HTTP_409_CONFLICT,
+            not_found_status=status.HTTP_404_NOT_FOUND,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
