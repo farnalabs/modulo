@@ -31,7 +31,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] health_check() calls `GET /user` to validate token
 - [x] Return `HealthResult(ok=False)` with HTTP status on non-200
 - [x] Return `HealthResult(ok=True)` with authenticated user info on success
-- [ ] Report `X-Request-Id` on API errors for GitLab support debugging
+- [x] Report `X-Request-Id` on API errors for GitLab support debugging
 
 ### OAuth Scopes — capability verification
 
@@ -65,7 +65,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Delete file via `write("file_delete")` with `project_id`, `path`, optional `ref`/`branch` (default `main`), `sha`, and `message` — `DELETE /projects/{id}/repository/files/{path}`
 - [ ] Recursive directory listing — not implemented
 - [ ] Batch file operations — not implemented
-- [ ] Path traversal protection — relies on GitLab API server-side; no local validation
+- [x] Path traversal protection — local validation rejects absolute paths and `..` segments on `query("file")`, `write("file")`, and `write("file_delete")` before they reach the API
 
 ### Merge Request Operations — listing and creation
 
@@ -76,7 +76,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Approve MR via `write("mr_approve")` with `project_id`, `iid`, optional `sha`
 - [x] Add MR comment via `write("mr_comment")` / `write("mr_note")` with `project_id`, `iid`, `body`
 - [x] Accept merge request with squash — `write("mr_merge")` with `squash: true`
-- [ ] List MR diff/changed files — not implemented
+- [x] List MR diff/changed files via `query("mr_changes")` with `project` and `iid` — `GET /projects/{id}/merge_requests/{iid}/changes`, returned as `records[0]["changes"]`
 - [x] Set MR labels via `write("mr_labels")` with `project`, `iid`, `labels`
 - [ ] Request MR approval — not implemented
 - [x] `query("mrs")` supports pagination — `next_cursor` from `X-Next-Page`, cursor forwarded as `page`
@@ -96,8 +96,8 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] `GET /projects` non-2xx response (not just 401/403) returns HealthResult(ok=False)
 - [x] Detect expired tokens (401) vs insufficient scopes (403) vs network errors
 - [x] Report which scope/endpoint is denied in health check detail
+- [x] Report the GitLab instance version on self-hosted health checks (best-effort `GET /version` probe, appended as `(GitLab <version>)`; a missing/forbidden/failed probe never fails the health check)
 - [ ] Per-operation scope verification — no granular check before `write()` calls
-- [ ] Report self-hosted GitLab version for diagnostic purposes
 
 ### Error Handling
 
@@ -117,6 +117,9 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] All `query()` and `write()` `r.json()` calls use `_safe_json` — no bare `except Exception` in JSON parsing
 - [x] Health check catches httpx.RequestError returning HealthResult(ok=False)
 - [x] Health check catches JSON decode errors returning HealthResult(ok=False) — narrowed to `json.JSONDecodeError`
+- [x] API error detail includes GitLab's `X-Request-Id` header when present (via `_error_detail`)
+- [x] Health check failure details include GitLab's `X-Request-Id` header when present (via `_id_suffix`)
+- [x] Path traversal blocked locally — absolute paths and `..` segments raise ValueError on `query("file")`, `write("file")`, `write("file_delete")` before any request is sent
 - [ ] Missing token during construction is not validated until first API call
 - [ ] Project path encoding fails gracefully on malformed project IDs (e.g. None, numbers)
 
@@ -135,14 +138,23 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 
 ## Known Gaps
 
-- [ ] **No X-Request-Id reporting**: API errors don't surface GitLab's `X-Request-Id` header for support debugging
-- [ ] **MR operations limited**: MR diff/changed-files listing and approval *requests* remain (merge, approve, comment/note, and labels now implemented)
+- [ ] **MR operations limited**: approval *requests* (adding specific approvers to approval rules) remain — merge, approve, comment/note, labels, and diff/changed-files listing are now implemented
 - [ ] **Scope verification incomplete**: health check distinguishes expired-token vs missing-scope and reports denied endpoints, but `write_repository`/`api` scopes are not individually probed and pre-run ConnectorHub blocking is not enforced
-- [ ] **No self-hosted version reporting**: health check doesn't report the GitLab server version for diagnostics (base URL is now configurable)
 - [ ] **Self-hosted discovery**: `base_url` is configurable per connector instance, but there is no instance-discovery/onboarding flow for self-hosted GitLab
 - [ ] **Recursive directory listing & batch file ops**: not implemented
 
 ## QA History
+
+### 2026-08-03 — improve-architecture: 4 known gaps RESOLVED (MR changes, X-Request-Id, self-hosted version, path traversal)
+
+**RESOLVED known gaps** "No X-Request-Id reporting", "MR diff/changed-files listing", "No self-hosted version reporting", and "Path traversal protection". Added to `connectors/gitlab/__init__.py`:
+
+- **MR diff/changed files** — new `query("mr_changes")` (`GET /projects/{id}/merge_requests/{iid}/changes`) returning the full MR response as `records[0]`, so `records[0]["changes"]` is the list of changed files (`old_path`/`new_path`/`new_file`/`renamed_file`/`deleted_file`/`diff`) alongside the MR title/source/target.
+- **X-Request-Id reporting** — new `_request_id()` / `_error_detail()` / `_id_suffix()` helpers. The final `_call_api` ValueError now appends `(request_id: <id>)` from GitLab's `X-Request-Id` header (on 4xx/5xx and exhausted retries), and every health-check failure detail (401 expired token, 403 missing scope, non-200, `/projects` failure) carries the request id when present, for GitLab support debugging.
+- **Self-hosted version reporting** — `health_check()` now does a best-effort `GET /version` probe on self-hosted instances (`base_url != https://gitlab.com/api/v4`), appending `(GitLab <version>)` to the success detail. The probe is strictly diagnostic: a 403/404 or network error is swallowed and never fails the health check.
+- **Path traversal protection** — new `_validate_path()` helper rejects absolute paths and `..` segments on `query("file")`, `write("file")`, and `write("file_delete")` with a clear `ValueError` before any request is sent.
+
+**Tests:** 10 unit tests (`test_gitlab.py`: mr_changes records + missing-iid, path-traversal on query/write/file_delete, absolute-path rejection, nested relative path still allowed; `test_gitlab_resilience.py`: X-Request-Id on 500 / exhausted-429 / health-401, self-hosted version in detail, version-probe 403 and network-error both non-fatal, hosted instance does not probe `/version`) + 3 BDD scenarios in `gitlab_issues.feature` (query MR changes, health check reports instance version, path traversal on file write blocked) with 2 new step definitions and the mock connector extended. Updated product map (6 behaviours `[ ]`→`[x]`, Known Gaps 6→4, QA History). 146/146 gitlab unit tests pass, ruff clean. Status: partial (MR approval requests, individual scope probing + pre-run ConnectorHub blocking, recursive/batch file ops, self-hosted discovery remain).
 
 ### 2026-08-02 — improve-architecture (index 144)
 

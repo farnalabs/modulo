@@ -105,6 +105,48 @@ def _parse_next_page(response: httpx.Response) -> str | None:
     return str(page) if page > 0 else None
 
 
+def _request_id(response: httpx.Response) -> str | None:
+    """Read GitLab's ``X-Request-Id`` header for support debugging.
+
+    GitLab tags every API response (including errors) with a request id that
+    support can correlate against server logs. Surfacing it on failures makes
+    it possible to open a meaningful support ticket.
+    """
+    value = response.headers.get("X-Request-Id")
+    return value or None
+
+
+def _error_detail(response: httpx.Response) -> str:
+    """Build an error detail string, appending the request id when present."""
+    detail = response.text[:200]
+    request_id = _request_id(response)
+    if request_id:
+        detail = f"{detail} (request_id: {request_id})"
+    return detail
+
+
+def _id_suffix(response: httpx.Response) -> str:
+    """Return the `` (request_id: ...)`` suffix for a response, if reported."""
+    request_id = _request_id(response)
+    return f" (request_id: {request_id})" if request_id else ""
+
+
+def _validate_path(path: str, resource: str) -> None:
+    """Reject path traversal attempts before they reach the GitLab API.
+
+    GitLab validates repository file paths server-side, but a local check
+    gives a fast, unambiguous error and prevents ``..`` segments from ever
+    being URL-encoded and sent to the repository-files endpoints.
+    """
+    if not isinstance(path, str) or not path:
+        raise ValueError(f"GitLab resource {resource!r} requires a non-empty 'path'")
+    if path.startswith(("/", "\\")):
+        raise ValueError(f"GitLab resource {resource!r}: path must be relative: {path!r}")
+    normalized = path.replace("\\", "/")
+    if any(segment == ".." for segment in normalized.split("/")):
+        raise ValueError(f"GitLab resource {resource!r}: path traversal blocked: {path!r}")
+
+
 def _paginate_params(params: dict[str, Any], cursor: str | None) -> None:
     """Add GitLab page param from a pagination cursor, if present."""
     if cursor:
@@ -156,6 +198,7 @@ class GitLabConnector(ConnectorBase):
       "issue_discussions" — list discussions on an issue
       "merge_requests"    — list merge requests (filters: state, labels, milestone)
       "merge_request"     — get single MR by IID
+      "mr_changes"        — get the diff/changed files of a merge request (records[0]["changes"])
       "branch"            — get single branch
       "branches"          — list branches
       "tags"              — list tags
@@ -251,7 +294,7 @@ class GitLabConnector(ConnectorBase):
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
-                detail = exc.response.text[:200]
+                detail = _error_detail(exc.response)
                 if exc.response.status_code == 429:
                     quota = _rate_limit_detail(exc.response)
                     if quota:
@@ -334,14 +377,14 @@ class GitLabConnector(ConnectorBase):
             async with self._client() as client:
                 r = await client.get("/user")
                 if r.status_code == 401:
-                    return HealthResult(ok=False, detail="Invalid or expired GitLab token (HTTP 401)")
+                    return HealthResult(ok=False, detail=f"Invalid or expired GitLab token (HTTP 401){_id_suffix(r)}")
                 if r.status_code == 403:
                     return HealthResult(
                         ok=False,
-                        detail="Missing scopes: token cannot access /user (needs read_user/api)",
+                        detail=("Missing scopes: token cannot access /user (needs read_user/api)" + _id_suffix(r)),
                     )
                 if r.status_code != 200:
-                    return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                    return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {_error_detail(r)}")
 
                 try:
                     user_info = r.json()
@@ -351,19 +394,38 @@ class GitLabConnector(ConnectorBase):
 
                 projects_r = await client.get("/projects", params={"per_page": 1})
                 if projects_r.status_code == 401:
-                    return HealthResult(ok=False, detail="Invalid or expired GitLab token (HTTP 401)")
+                    detail = f"Invalid or expired GitLab token (HTTP 401){_id_suffix(projects_r)}"
+                    return HealthResult(ok=False, detail=detail)
                 if projects_r.status_code == 403:
                     return HealthResult(
                         ok=False,
-                        detail="Missing scopes: read_api/api not granted (projects API denied)",
+                        detail=(
+                            "Missing scopes: read_api/api not granted (projects API denied)" + _id_suffix(projects_r)
+                        ),
                     )
                 if not projects_r.is_success:
                     return HealthResult(
                         ok=False,
-                        detail=f"Projects API returned HTTP {projects_r.status_code}: {projects_r.text[:200]}",
+                        detail=f"Projects API returned HTTP {projects_r.status_code}: {_error_detail(projects_r)}",
                     )
 
-            return HealthResult(ok=True, detail=username)
+                # Diagnostic-only: report the instance version (most useful for
+                # self-hosted GitLab). Best-effort — a missing/inaccessible
+                # /version endpoint must never fail the health check.
+                version = None
+                if self._base_url != _GITLAB_API:
+                    try:
+                        version_r = await client.get("/version")
+                        if version_r.is_success:
+                            version_info = _safe_json(version_r)
+                            version = version_info.get("version")
+                    except (httpx.RequestError, ValueError):
+                        version = None
+
+            detail = username
+            if version:
+                detail = f"{username} (GitLab {version})"
+            return HealthResult(ok=True, detail=detail)
         except httpx.RequestError as e:
             return HealthResult(ok=False, detail=str(e))
 
@@ -386,6 +448,7 @@ class GitLabConnector(ConnectorBase):
             case "file":
                 project = self._require_filter(q.filters, "project", q.resource)
                 path = self._require_filter(q.filters, "path", q.resource)
+                _validate_path(path, q.resource)
                 ref = q.filters.get("ref", "main")
                 encoded = _project_path(project)
                 r = await self._call_api(
@@ -422,6 +485,15 @@ class GitLabConnector(ConnectorBase):
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/merge_requests/{mr_iid}",
+                )
+                return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
+            case "mr_changes":
+                project = self._require_filter(q.filters, "project", q.resource)
+                mr_iid = self._require_filter(q.filters, "iid", q.resource)
+                encoded = _project_path(project)
+                r = await self._call_api(
+                    "GET",
+                    f"/projects/{encoded}/merge_requests/{mr_iid}/changes",
                 )
                 return ConnectorResult(records=[_safe_json(r)], metadata={"rate_limit": _rate_limit_metadata(r)})
             case "issues":
@@ -576,6 +648,7 @@ class GitLabConnector(ConnectorBase):
             case "file":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 path = self._require_filter(payload.data, "path", payload.resource)
+                _validate_path(path, payload.resource)
                 encoded = _project_path(project)
                 body: dict[str, Any] = {
                     "branch": payload.data.get("ref", "main"),
@@ -593,6 +666,7 @@ class GitLabConnector(ConnectorBase):
             case "file_delete":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 path = self._require_filter(payload.data, "path", payload.resource)
+                _validate_path(path, payload.resource)
                 encoded = _project_path(project)
                 delete_params: dict[str, Any] = {
                     "branch": payload.data.get("ref", payload.data.get("branch", "main")),
