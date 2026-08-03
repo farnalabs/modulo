@@ -112,6 +112,9 @@ def test_aggregate_sandbox_cost_ignores_non_dict():
         "node-e": {"output": "not-a-dict"},
         "node-f": {"output": {"cost_estimate_usd": "not-a-number"}},
         "node-g": {"output": {"cost_estimate_usd": None}},
+        # Non-finite floats must not corrupt the run total.
+        "node-h": {"output": {"cost_estimate_usd": float("inf")}},
+        "node-i": {"output": {"cost_estimate_usd": float("nan")}},
     }
 
     assert PipelineExecutor._aggregate_sandbox_cost(completed_node_outputs) == Decimal(0)

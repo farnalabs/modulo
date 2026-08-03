@@ -84,6 +84,10 @@ def test_compute_sandbox_cost_merges_agent_reported():
     assert _compute_sandbox_cost(0.0, {"cost_estimate_usd": "n/a"}) == 0.0
     assert _compute_sandbox_cost(0.0, {"summary": "no cost field"}) == 0.0
     assert _compute_sandbox_cost(0.0, None) == 0.0
+    # Non-finite values (NaN/inf) must not corrupt the estimate.
+    assert _compute_sandbox_cost(0.0, {"cost_estimate_usd": "nan"}) == 0.0
+    assert _compute_sandbox_cost(0.0, {"cost_estimate_usd": "inf"}) == 0.0
+    assert _compute_sandbox_cost(3600.0, {"cost_estimate_usd": float("inf")}) == round(_E2B_SANDBOX_USD_PER_HOUR, 6)
 
 
 async def test_sandbox_agent_success_output_includes_cost_estimate_usd():

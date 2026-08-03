@@ -44,6 +44,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import os
 import re as _re
 import time
@@ -101,7 +102,8 @@ def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
     Combines Modulo's own sandbox uptime estimate (wall-clock seconds at the
     configured E2B hourly rate) with the agent's self-reported cost estimate
     (``cost_estimate_usd`` in its structured output contract, written by the
-    agent to /home/user/output.json). Returns a plain JSON-serialisable float.
+    agent to /home/user/output.json). Non-finite estimates (NaN/inf) are
+    discarded. Returns a plain JSON-serialisable float.
     """
     sandbox_cost = round((elapsed_seconds / 3600.0) * _E2B_SANDBOX_USD_PER_HOUR, 6)
     agent_reported_cost = 0.0
@@ -110,7 +112,12 @@ def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
             agent_reported_cost = float(output_json.get("cost_estimate_usd") or 0)
         except (TypeError, ValueError):
             agent_reported_cost = 0.0
-    return round(sandbox_cost + agent_reported_cost, 6)
+        if not math.isfinite(agent_reported_cost):
+            agent_reported_cost = 0.0
+    total = sandbox_cost + agent_reported_cost
+    if not math.isfinite(total):
+        return 0.0
+    return round(total, 6)
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:

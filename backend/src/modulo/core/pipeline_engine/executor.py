@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import socket
 import uuid
@@ -780,7 +781,8 @@ class PipelineExecutor:
         "output": {...}}``; the inner ``output`` dict carries the numeric
         ``cost_estimate_usd`` attached by
         :func:`modulo.core.pipeline_engine.node_runner._compute_sandbox_cost`.
-        Non-dict outputs, missing estimates, and non-positive values contribute
+        Non-dict outputs, missing estimates, non-positive, and non-finite
+        values (NaN/inf, which would otherwise corrupt the run total) contribute
         zero. Kept as a small pure helper so cost parity is testable and shared
         between :meth:`execute` and :meth:`resume`.
         """
@@ -794,7 +796,7 @@ class PipelineExecutor:
             if not isinstance(out, dict):
                 continue
             est = out.get("cost_estimate_usd")
-            if isinstance(est, (int, float)) and est > 0:
+            if isinstance(est, (int, float)) and est > 0 and math.isfinite(est):
                 sandbox_cost += Decimal(str(est))
         return sandbox_cost
 
