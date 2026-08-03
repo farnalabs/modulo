@@ -587,3 +587,260 @@ async def test_query_file_nested_relative_path_allowed(connector):
         ConnectorQuery(resource="file", filters={"project": "group/project", "path": "src/main.py"})
     )
     assert result.records[0]["content"] == "print('hi')"
+
+
+@respx.mock
+async def test_query_tree(connector):
+    """Repository tree listing returns entries with name/type/path."""
+    entries = [
+        {"id": "a1", "name": "README.md", "type": "blob", "path": "README.md"},
+        {"id": "a2", "name": "src", "type": "tree", "path": "src"},
+    ]
+    route = respx.get(f"{_API}/projects/group%2Fproject/repository/tree").mock(
+        return_value=httpx.Response(200, json=entries)
+    )
+    result = await connector.query(ConnectorQuery(resource="tree", filters={"project": "group/project"}))
+    assert len(result.records) == 2
+    assert result.records[0]["type"] == "blob"
+    assert route.calls.last.request.url.params.get("recursive") is None
+
+
+@respx.mock
+async def test_query_tree_recursive_with_path_and_ref(connector):
+    """recursive + path + ref filters forwarded to the tree endpoint."""
+    route = respx.get(f"{_API}/projects/group%2Fproject/repository/tree").mock(
+        return_value=httpx.Response(200, json=[{"name": "main.py", "type": "blob", "path": "src/main.py"}])
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="tree",
+            filters={"project": "group/project", "path": "src", "ref": "dev", "recursive": True},
+        )
+    )
+    assert result.records[0]["path"] == "src/main.py"
+    url = route.calls.last.request.url
+    assert url.params.get("recursive") == "true"
+    assert url.params.get("path") == "src"
+    assert url.params.get("ref") == "dev"
+
+
+@respx.mock
+async def test_query_tree_next_cursor(connector):
+    respx.get(f"{_API}/projects/group%2Fproject/repository/tree").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"name": "a", "type": "blob", "path": "a"}],
+            headers={"X-Next-Page": "2"},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="tree", filters={"project": "group/project"}))
+    assert result.next_cursor == "2"
+
+
+@respx.mock
+async def test_query_tree_path_traversal_blocked(connector):
+    with pytest.raises(ValueError, match="path traversal"):
+        await connector.query(
+            ConnectorQuery(resource="tree", filters={"project": "group/project", "path": "../src"})
+        )
+
+
+@respx.mock
+async def test_query_tree_missing_project(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.query(ConnectorQuery(resource="tree", filters={}))
+
+
+@respx.mock
+async def test_write_files_batch_commit(connector):
+    """Batch file ops go through the Commits API as one atomic commit."""
+    commit_response = {"id": "abc123", "short_id": "abc123", "title": "Update via Modulo"}
+    route = respx.post(f"{_API}/projects/group%2Fproject/repository/commits").mock(
+        return_value=httpx.Response(201, json=commit_response)
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="files",
+            data={
+                "project": "group/project",
+                "actions": [
+                    {"action": "create", "file_path": "src/a.py", "content": "print(1)"},
+                    {"action": "update", "file_path": "src/b.py", "content": "print(2)"},
+                    {"action": "delete", "file_path": "src/old.py"},
+                ],
+            },
+        )
+    )
+    assert result["id"] == "abc123"
+    body = json.loads(route.calls.last.request.content)
+    assert body["branch"] == "main"
+    assert body["commit_message"] == "Update via Modulo"
+    assert body["actions"] == [
+        {"action": "create", "file_path": "src/a.py", "content": "print(1)"},
+        {"action": "update", "file_path": "src/b.py", "content": "print(2)"},
+        {"action": "delete", "file_path": "src/old.py"},
+    ]
+
+
+@respx.mock
+async def test_write_files_custom_branch_message(connector):
+    route = respx.post(f"{_API}/projects/group%2Fproject/repository/commits").mock(
+        return_value=httpx.Response(201, json={"id": "x"})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="files",
+            data={
+                "project": "group/project",
+                "ref": "feature",
+                "message": "Bulk change",
+                "actions": [{"action": "create", "file_path": "docs/a.md", "content": "hi"}],
+            },
+        )
+    )
+    body = json.loads(route.calls.last.request.content)
+    assert body["branch"] == "feature"
+    assert body["commit_message"] == "Bulk change"
+
+
+@respx.mock
+async def test_write_files_move_action(connector):
+    route = respx.post(f"{_API}/projects/group%2Fproject/repository/commits").mock(
+        return_value=httpx.Response(201, json={"id": "y"})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="files",
+            data={
+                "project": "group/project",
+                "actions": [{"action": "move", "file_path": "src/new.py", "previous_path": "src/old.py"}],
+            },
+        )
+    )
+    body = json.loads(route.calls.last.request.content)
+    assert body["actions"] == [
+        {"action": "move", "file_path": "src/new.py", "previous_path": "src/old.py"},
+    ]
+
+
+@respx.mock
+async def test_write_files_empty_actions(connector):
+    with pytest.raises(ValueError, match="non-empty 'actions'"):
+        await connector.write(ConnectorPayload(resource="files", data={"project": "group/project", "actions": []}))
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.write(ConnectorPayload(resource="files", data={"project": "group/project"}))
+
+
+@respx.mock
+async def test_write_files_invalid_action_type(connector):
+    with pytest.raises(ValueError, match="must be one of"):
+        await connector.write(
+            ConnectorPayload(
+                resource="files",
+                data={"project": "group/project", "actions": [{"action": "explode", "file_path": "a"}]},
+            )
+        )
+
+
+@respx.mock
+async def test_write_files_missing_file_path(connector):
+    with pytest.raises(ValueError, match="requires 'file_path'"):
+        await connector.write(
+            ConnectorPayload(resource="files", data={"project": "group/project", "actions": [{"action": "create"}]})
+        )
+
+
+@respx.mock
+async def test_write_files_move_requires_previous_path(connector):
+    with pytest.raises(ValueError, match="requires 'previous_path'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="files",
+                data={"project": "group/project", "actions": [{"action": "move", "file_path": "new.py"}]},
+            )
+        )
+
+
+@respx.mock
+async def test_write_files_path_traversal_blocked(connector):
+    with pytest.raises(ValueError, match="path traversal"):
+        await connector.write(
+            ConnectorPayload(
+                resource="files",
+                data={"project": "group/project", "actions": [{"action": "create", "file_path": "../evil.txt"}]},
+            )
+        )
+
+
+@respx.mock
+async def test_write_files_move_previous_path_traversal_blocked(connector):
+    with pytest.raises(ValueError, match="path traversal"):
+        await connector.write(
+            ConnectorPayload(
+                resource="files",
+                data={
+                    "project": "group/project",
+                    "actions": [{"action": "move", "file_path": "ok.py", "previous_path": "../evil.py"}],
+                },
+            )
+        )
+
+
+@respx.mock
+async def test_write_mr_approval_request(connector):
+    """POST /approval_rules creates a rule requesting approval from specific users."""
+    rule_response = {"id": 3, "name": "Requested approvers", "rule_type": "approval", "approvals_required": 1}
+    route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/approval_rules").mock(
+        return_value=httpx.Response(201, json=rule_response)
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="mr_approval_request",
+            data={"project": "group/project", "iid": "7", "user_ids": [10, 11]},
+        )
+    )
+    assert result["id"] == 3
+    body = json.loads(route.calls.last.request.content)
+    assert body["rule_type"] == "approval"
+    assert body["user_ids"] == [10, 11]
+    assert body["approvals_required"] == 1
+
+
+@respx.mock
+async def test_write_mr_approval_request_by_email(connector):
+    route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/approval_rules").mock(
+        return_value=httpx.Response(201, json={"id": 4, "name": "Requested approvers"})
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="mr_approval_request",
+            data={
+                "project": "group/project",
+                "iid": "7",
+                "user_emails": ["alice@example.com"],
+                "name": "Review team",
+                "approvals_required": 2,
+            },
+        )
+    )
+    assert result["id"] == 4
+    body = json.loads(route.calls.last.request.content)
+    assert body["user_emails"] == ["alice@example.com"]
+    assert body["name"] == "Review team"
+    assert body["approvals_required"] == 2
+
+
+@respx.mock
+async def test_write_mr_approval_request_requires_users(connector):
+    with pytest.raises(ValueError, match="requires 'user_ids' and/or 'user_emails'"):
+        await connector.write(
+            ConnectorPayload(resource="mr_approval_request", data={"project": "group/project", "iid": "7"})
+        )
+
+
+@respx.mock
+async def test_write_mr_approval_request_missing_project(connector):
+    with pytest.raises(ValueError, match="Missing required filter"):
+        await connector.write(
+            ConnectorPayload(resource="mr_approval_request", data={"iid": "7", "user_ids": [1]})
+        )
