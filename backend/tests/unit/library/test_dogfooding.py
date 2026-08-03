@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -11,9 +12,7 @@ from modulo.core.library.agents import __all__ as agent_exports
 from modulo.core.library.agents import definitions as agent_defs
 from modulo.core.library.workflows.definitions import DOGFOODING_PIPELINE
 
-KNOWN_AGENTS: set[str] = {getattr(agent_defs, name)["name"].lower().replace(" ", "-") for name in agent_exports} | {
-    "complexity-reviewer"
-}
+KNOWN_AGENTS: set[str] = {getattr(agent_defs, name)["name"].lower().replace(" ", "-") for name in agent_exports}
 
 VALID_CONNECTOR_TYPES: set[str] = {
     "source_control",
@@ -147,8 +146,6 @@ def test_default_config_keys() -> None:
 
 
 def test_json_roundtrip() -> None:
-    import json
-
     serialized = json.dumps(DOGFOODING_PIPELINE, default=str)
     deserialized = json.loads(serialized)
     assert deserialized["name"] == "Dogfooding Pipeline"
