@@ -7,31 +7,12 @@ from typing import Any
 import pytest
 
 from modulo.core.library import DOGFOODING_PIPELINE as IMPORTED_DOGFOODING
+from modulo.core.library.agents import __all__ as agent_exports
+from modulo.core.library.agents import definitions as agent_defs
 from modulo.core.library.workflows.definitions import DOGFOODING_PIPELINE
 
-KNOWN_AGENTS: set[str] = {
-    "changelog-aggregator",
-    "changelog-writer",
-    "code-reviewer",
-    "compliance-checker",
-    "correction-proposer",
-    "dependency-analyzer",
-    "doc-generator",
-    "eval-proposal-writer",
-    "feedback-analyzer",
-    "migration-planner",
-    "prd-summarizer",
-    "prompt-improver",
-    "release-note-generator",
-    "rollback-planner",
-    "schema-inferrer",
-    "security-reviewer",
-    "status-reporter",
-    "test-generator",
-    "ticket-estimator",
-    "ticket-triager",
-    "ticket-writer",
-    "complexity-reviewer",
+KNOWN_AGENTS: set[str] = {getattr(agent_defs, name)["name"].lower().replace(" ", "-") for name in agent_exports} | {
+    "complexity-reviewer"
 }
 
 VALID_CONNECTOR_TYPES: set[str] = {
