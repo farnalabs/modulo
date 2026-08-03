@@ -491,6 +491,13 @@ class TestAuthRateLimiterCore:
         assert limiter._compute_backoff(9) == 60
         assert limiter._compute_backoff(10) == 120
 
+    def test_compute_backoff_does_not_divide_by_zero(self):
+        """_compute_backoff must not ZeroDivisionError when max_attempts is 0."""
+        limiter = AuthRateLimiterCls(redis_client=MagicMock(), max_attempts=0, window_s=60)
+        assert limiter._compute_backoff(0) == 30
+        assert limiter._compute_backoff(1) == 60
+        assert limiter._compute_backoff(10) == 3600
+
 
 class TestShutdownRateLimiters:
     async def test_shutdown_closes_all_clients(self):

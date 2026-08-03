@@ -136,5 +136,5 @@ class AuthRateLimiter:
         await pipe.execute()
 
     def _compute_backoff(self, count: int) -> int:
-        tier = count // self._max_attempts
+        tier = count // max(self._max_attempts, 1)
         return min(int(pow(2, tier - 1) * 60), 3600)

@@ -129,7 +129,7 @@ class Settings(BaseSettings):
 
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)
-    modulo_auth_max_attempts: int = Field(10)
+    modulo_auth_max_attempts: int = Field(10, ge=1)
     modulo_auth_window_seconds: int = Field(60)
 
     # Inactivity timeout in minutes (default 480 = 8h). Set to 0 to disable.
