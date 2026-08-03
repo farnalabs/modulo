@@ -3125,6 +3125,20 @@ V1 SSO (OIDC/SAML) supports group-to-team mapping via claims. On JIT user provis
 
 The My Profile page (`/admin/my-profile`) provides the frontend UI for password change with client-side validation (min length, match confirmation) and error display. Users without a local password (SSO/OIDC/SAML provisioned) cannot use this endpoint.
 
+### 9.5 Break-Glass Admin Recovery (Org Autonomy)
+
+When an organisation's only admin cannot authenticate (forgotten password, mistaken deactivation, SCIM deactivating/demoting the last admin, role demotion, lost secrets), an operator can issue a **break-glass recovery credential** — a synthetic, invisible, single-use, TTL-bounded admin account. The credential works through the normal `POST /api/v1/auth/login` flow (email + password) and is consumed on first successful login.
+
+**One-shot consumption (login hook, compare-and-swap):**
+
+- After `authenticate_db_user` succeeds, the login route runs a break-glass hook:
+  - **Early deny** — a break-glass account that is deactivated, NULL-expiry, expired, or inactive is denied immediately with a byte-identical 401 (`detail: "Incorrect email or password"`, no `WWW-Authenticate`), identical to a wrong-password response on a normal account. The failure is recorded on the auth rate limiter.
+  - **Late CAS (family-first, CAS-last)** — for a live credential, the route mints the token family first and then runs the consume compare-and-swap as the FINAL DB statement before token issuance: `UPDATE accounts SET password_hash = <random non-bcrypt> WHERE id = :id AND password_hash = :old AND <live predicate>`, where the live predicate is emitted from the shared break-glass expiry builder and compares against the DB clock. A rowcount of 1 means this login consumed the credential; a rowcount of 0 (already consumed / expired / deactivated) raises 401 and rolls back the phantom family inside the same transaction. A CAS error is fail-closed to 401.
+- **Fail-open for normal accounts** — the hook does zero extra DB queries when the account is not break-glass, and a hook error can never deny a normal login. Fail-closed only for break-glass accounts (a hook/CAS error → 401 + rate-limiter failure).
+- **Refresh denied** — once the credential is no longer live (expired or deactivated), the SQL-predicate deny in role resolution folds every membership to `None`, so the refresh path denies 401 without minting or advancing anything. A consumed-but-unexpired session keeps refreshing until the TTL, bounding the session lifetime.
+
+**Invisibility and hygiene:** break-glass accounts are excluded from tenant-facing lists, seat counts, and SCIM sync; they are not billable; they cannot mint API keys, webhooks, OAuth clients, or other long-lived secrets; and deactivation re-randomizes the password hash into a tombstone. The credential is single-use, so replay of a captured password is impossible after the first login. See the break-glass admin recovery plan and ADR-017/018 for the full threat model and operator protocol.
+
 ---
 
 ## 10. Extensibility and Distribution

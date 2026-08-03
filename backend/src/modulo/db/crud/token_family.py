@@ -2,10 +2,13 @@
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.break_glass_deny import live_predicate, render_sql
 from modulo.db.models.token_family import TokenFamily
 
 
@@ -104,3 +107,45 @@ async def is_family_blacklisted(session: AsyncSession, family_id: uuid.UUID, acc
     if family is None:
         return False
     return family.is_blacklisted
+
+
+async def consume_break_glass_credential(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    current_password_hash: str,
+    new_password_hash: str,
+) -> int:
+    """Compare-and-swap a break-glass one-shot credential (login-hook CAS).
+
+    Atomically UPDATEs ``accounts.password_hash`` to *new_password_hash* only
+    when the row still holds *current_password_hash* AND the credential is
+    still live — the CAS WHERE is emitted from the shared break-glass builder
+    (``live_predicate``), so an already-consumed / expired / deactivated /
+    inactive credential matches nothing and the UPDATE changes zero rows.
+
+    Returns the number of rows changed: 1 when this caller consumed the
+    credential, 0 when it was already spent. Raw ``text()`` (never the ORM) so
+    the UPDATE does not inherit ``TimestampMixin.updated_at``'s onupdate —
+    credential consumption is deliberately invisible to ``updated_at``.
+    """
+    cas_where = render_sql(live_predicate())
+    statement = " ".join(
+        (
+            "UPDATE public.accounts SET password_hash = :bg_new_hash",
+            "WHERE accounts.id = :bg_account_id",
+            "AND accounts.password_hash = :bg_old_hash AND",
+            cas_where,
+        )
+    )
+    result = cast(
+        CursorResult[Any],
+        await session.execute(
+            text(statement).bindparams(
+                bg_new_hash=new_password_hash,
+                bg_account_id=account_id,
+                bg_old_hash=current_password_hash,
+            )
+        ),
+    )
+    return result.rowcount or 0
