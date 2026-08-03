@@ -137,7 +137,10 @@ async def test_allow_list_set_equality(db_engine: AsyncEngine) -> None:
             row[0]
             for row in (
                 await conn.execute(
-                    text("SELECT column_name FROM information_schema.columns WHERE table_name = 'accounts'")
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'accounts'"
+                    )
                 )
             ).fetchall()
         }
