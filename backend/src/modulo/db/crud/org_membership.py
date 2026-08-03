@@ -5,9 +5,10 @@ OrgMemberships are org-scoped: they link an Account to an Organisation.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.break_glass_deny import denied_predicate
 from modulo.db.models.account import Account
 from modulo.db.models.org_membership import OrgMembership
 
@@ -90,22 +91,33 @@ async def resolve_role_from_membership(session: AsyncSession, account_id: str, o
     """Return the LIVE org role for the account in the org, or None if no active membership.
 
     Filters ``deactivated_at IS NULL`` — a soft-deactivated membership must not
-    resolve a role (ADR 017). The INNER JOIN on ``accounts`` additionally
-    requires ``accounts.active IS TRUE`` (deliverable A of the break-glass plan):
-    an account deactivated globally resolves to None in every org, closing the
-    account-global-deactivation latent bug. Lives in the db layer (pure ORM
-    query) so the service-layer backstop (db.crud.hitl_gate_guard) can reuse it
-    without importing ``auth.dependencies`` (which would transitively reach the
-    api layer, violating the import-linter contracts).
+    resolve a role (ADR 017). The INNER JOIN on ``accounts`` requires
+    ``accounts.active IS TRUE`` (deliverable A of the break-glass plan): an
+    account deactivated globally resolves to None in every org, closing the
+    account-global-deactivation latent bug. It ALSO excludes deny-eligible
+    break-glass accounts via ``NOT is_break_glass_denied`` (deliverable B,
+    chunk 1): an expired / NULL-expiry / deactivated / inactive break-glass
+    account resolves to None, and every existing caller's None-check denies.
+    INNER-JOIN semantics: a membership whose account row is missing resolves
+    to None. Lives in the db layer (pure ORM query) so the service-layer
+    backstop (db.crud.hitl_gate_guard) can reuse it without importing
+    ``auth.dependencies`` (which would transitively reach the api layer,
+    violating the import-linter contracts).
     """
     result = await session.execute(
         select(OrgMembership.role)
-        .join(Account, Account.id == OrgMembership.account_id)
+        .join(
+            Account,
+            and_(
+                Account.id == OrgMembership.account_id,
+                Account.active.is_(True),
+                ~denied_predicate(),
+            ),
+        )
         .where(
             OrgMembership.account_id == account_id,
             OrgMembership.organisation_id == organisation_id,
             OrgMembership.deactivated_at.is_(None),
-            Account.active.is_(True),
         )
     )
     return result.scalar_one_or_none()

@@ -22,6 +22,11 @@ Deliverable (A) of the break-glass admin recovery plan adds:
     SELECT+INSERT/UPDATE on audit_chain_heads, sequence USAGE. The three
     break-glass column UPDATE grants are deliverable (B) and are NOT applied
     here. ``modulo_app`` is NEVER granted membership in either role.
+  * Deliverable (B): after the grants are re-applied, the allow-list and role
+    posture are ASSERTED (fatal): no table-level UPDATE grant on accounts for
+    modulo_app OR PUBLIC, UPDATE-grant set-equality with the allow-list, the
+    three break-glass columns not writable by modulo_app, ``rolsuper = false``
+    for the app role, and no membership in the privileged roles.
 """
 
 import asyncio
@@ -148,6 +153,84 @@ async def _grant_function_execute(conn: asyncpg.Connection, app_user: str, bg_us
         )
 
 
+async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -> list[str]:
+    """Return a list of allow-list / role-posture violations, or [] when clean.
+
+    Deliverable (B) assertions (plan §0(e)) — the allow-list boundary and role
+    posture must survive every boot:
+    * no table-level UPDATE grant on ``accounts`` for ``modulo_app`` OR PUBLIC
+      (``information_schema.role_table_grants`` is table-level only by
+      construction — no ``column_name`` predicate);
+    * the set of ``accounts`` columns ``modulo_app`` can UPDATE equals the
+      allow-listed writable columns (inverted schema-evolution set-equality),
+      and the three break-glass columns are NOT writable by it;
+    * ``rolsuper = false`` for the app role;
+    * ``modulo_app`` is not a member of ``modulo_breakglass`` / ``modulo_migrate``.
+
+    Runs only when the ``accounts`` table exists — the before-alembic boot run
+    on a fresh DB has no tables yet (skip rather than false-pass).
+    """
+    if not await _table_exists(conn, "accounts"):
+        return []
+
+    violations: list[str] = []
+
+    rows = await conn.fetch(
+        "SELECT grantee FROM information_schema.role_table_grants "
+        "WHERE table_schema = 'public' AND table_name = 'accounts' "
+        "AND privilege_type = 'UPDATE' AND grantee IN ($1, 'PUBLIC')",
+        app_user,
+    )
+    if rows:
+        violations.append(
+            "accounts has a table-level UPDATE grant for: " + ", ".join(sorted(r["grantee"] for r in rows))
+        )
+
+    cols = await _existing_columns(conn, "accounts")
+    writable = set(ACCOUNTS_WRITABLE_COLUMNS) & cols
+    granted: set[str] = set()
+    for col in cols:
+        ok = await conn.fetchval("SELECT has_column_privilege($1, 'public.accounts', $2, 'UPDATE')", app_user, col)
+        if ok:
+            granted.add(col)
+    if granted != writable:
+        violations.append(
+            f"modulo_app accounts UPDATE grant drift: granted={sorted(granted)} allow_list={sorted(writable)}"
+        )
+
+    for col in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at"):
+        if col not in cols:
+            continue
+        ok = await conn.fetchval("SELECT has_column_privilege($1, 'public.accounts', $2, 'UPDATE')", app_user, col)
+        if ok:
+            violations.append(f"modulo_app can UPDATE break-glass column {col}")
+
+    if await conn.fetchval("SELECT rolsuper FROM pg_roles WHERE rolname = $1", app_user):
+        violations.append(f"app role {app_user} is a superuser")
+
+    member_rows = await conn.fetch(
+        "SELECT b.rolname FROM pg_auth_members m "
+        "JOIN pg_roles a ON a.oid = m.member JOIN pg_roles b ON b.oid = m.roleid "
+        "WHERE a.rolname = $1 AND b.rolname IN ($2, $3)",
+        app_user,
+        _MIGRATE_ROLE,
+        _BREAK_GLASS_ROLE,
+    )
+    if member_rows:
+        violations.append(
+            f"app role {app_user} is a member of: " + ", ".join(sorted(r["rolname"] for r in member_rows))
+        )
+
+    return violations
+
+
+async def _assert_role_posture(conn: asyncpg.Connection, app_user: str) -> None:
+    """Fatal when the allow-list / role-posture assertions find a violation."""
+    violations = await _find_allow_list_violations(conn, app_user)
+    if violations:
+        raise RuntimeError("Break-glass role posture assertion FAILED:\n  " + "\n  ".join(violations))
+
+
 async def _bootstrap(admin_url: str, app_url: str) -> None:
     admin_conn_str = admin_url.replace("postgresql+asyncpg://", "postgres://").split("?")[0]
     app_user = _parse_role(app_url)
@@ -181,6 +264,9 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
         # modulo_breakglass surface grants (A) + function EXECUTE re-apply.
         await _grant_break_glass(conn, bg_user)
         await _grant_function_execute(conn, app_user, bg_user)
+
+        # Deliverable (B): the allow-list + role-posture assertions (fatal).
+        await _assert_role_posture(conn, app_user)
 
         _log.info("Granted DML permissions to: %s", app_user)
 
