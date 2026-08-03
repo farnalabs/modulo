@@ -3,9 +3,12 @@
 import asyncio
 import logging
 import re
+import uuid
 from typing import Any
 
 import jsonschema  # type: ignore[import-untyped]
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.composite_engine.composite_binding import (
     CompositeValidationError,
@@ -13,10 +16,30 @@ from modulo.core.composite_engine.composite_binding import (
     ValidationResult,
 )
 from modulo.core.composite_engine.schema_mapping import apply_field_mapping
+from modulo.db.models.composite_template import CompositeTemplate
 
 logger = logging.getLogger(__name__)
 
 _PARAM_PLACEHOLDER_RE = re.compile(r"\{\{parameter\.(\w+)\}\}")
+
+_MAX_COMPOSITE_DEPTH = 5
+
+# Fields that may carry a renderable prompt on a pipeline node. Parameter
+# placeholders are injected into whichever of these is present.
+_PROMPT_FIELDS = ("prompt", "prompt_template", "agent_prompt")
+
+
+def _is_composite_node(node: dict[str, Any]) -> bool:
+    """Return True when a node is a composite (referencing a CompositeTemplate)."""
+    return node.get("node_type") == "composite" or node.get("composite_ref") is not None
+
+
+def _inject_node_parameters(node: dict[str, Any], parameter_values: dict[str, Any]) -> None:
+    """Replace ``{{parameter.<name>}}`` placeholders on every prompt field of *node*."""
+    for field in _PROMPT_FIELDS:
+        value = node.get(field)
+        if isinstance(value, str) and value:
+            node[field] = _inject_parameters(value, parameter_values)
 
 
 def _eval_fail(eval_name: str, msg: str) -> str:
@@ -309,11 +332,337 @@ def _remap_edge_refs(
     _node_index: int,
     sub_nodes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Remap edge source/target references relative to expanded nodes.
+    """Validate and return template edges for a single expanded node.
 
-    TODO: This is a placeholder. Cross-node edges from composite templates
-    are returned as-is without parent-relative ID remapping. When composite
-    nodes produce edges referencing internal node IDs, those IDs need
-    prefixing with the parent node ID to avoid collisions after expansion.
+    ``expand_composite_node`` keeps the template's human-readable sub-node ids
+    (``advocate-for``, ``mediator``, ...) so edge refs are returned unchanged
+    after verifying each references a known sub-node id. Collision-safe
+    remapping (template ids → snapshot UUIDs, including composite fan-in and
+    fan-out) is performed by :func:`expand_composites_in_graph` via
+    :func:`_rewire_edges`; that path is what the runtime snapshot uses.
     """
-    return list(edges)
+    sub_ids = {str(n.get("id")) for n in sub_nodes}
+    remapped: list[dict[str, Any]] = []
+    for edge in edges:
+        new_edge = dict(edge)
+        src = str(edge.get("source"))
+        tgt = str(edge.get("target"))
+        if src not in sub_ids or tgt not in sub_ids:
+            logger.warning(
+                "Composite edge %s references sub-node id(s) not present in the template "
+                "of composite node %s: source=%s target=%s",
+                edge.get("id", "?"),
+                parent_node_id,
+                src,
+                tgt,
+            )
+        remapped.append(new_edge)
+    return remapped
+
+
+class _ExpandedComposite:
+    """Result of expanding one composite node, including any nested composites."""
+
+    __slots__ = ("bindings", "edges", "entry_node_ids", "exit_node_ids", "nodes")
+
+    def __init__(
+        self,
+        *,
+        nodes: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+        bindings: list[dict[str, Any]],
+        entry_node_ids: list[str],
+        exit_node_ids: list[str],
+    ) -> None:
+        self.nodes = nodes
+        self.edges = edges
+        self.bindings = bindings
+        self.entry_node_ids = entry_node_ids
+        self.exit_node_ids = exit_node_ids
+
+
+def _resolve_endpoint(
+    endpoint_id: str,
+    leaf_map: dict[str, str],
+    composite_map: dict[str, _ExpandedComposite],
+    *,
+    endpoint: str,
+) -> list[str]:
+    """Resolve a node reference to concrete snapshot node ids.
+
+    Leaf (non-composite) ids map through ``leaf_map``. Composite ids fan out:
+    a source resolves to the composite's *exit* nodes, a target to its *entry*
+    nodes. Unknown ids pass through unchanged.
+    """
+    if endpoint_id in leaf_map:
+        return [leaf_map[endpoint_id]]
+    expansion = composite_map.get(endpoint_id)
+    if expansion is not None:
+        if endpoint == "entry":
+            return list(expansion.entry_node_ids)
+        return list(expansion.exit_node_ids)
+    return [endpoint_id]
+
+
+def _rewire_edge_metadata(
+    edge: dict[str, Any],
+    source: str,
+    target: str,
+    *,
+    leaf_map: dict[str, str],
+    composite_map: dict[str, _ExpandedComposite],
+) -> dict[str, Any]:
+    """Copy an edge with remapped source/target, preserving all routing metadata.
+
+    ``type``, ``condition_expression``, ``max_iterations`` and other routing
+    metadata are preserved verbatim. ``default_target`` (used by loop
+    edges) is remapped through the same id resolution so a default that points
+    at a composite node lands on its first entry sub-node.
+    """
+    remapped = dict(edge)
+    remapped["source"] = source
+    remapped["target"] = target
+    if "source_node_id" in remapped:
+        remapped["source_node_id"] = source
+    if "target_node_id" in remapped:
+        remapped["target_node_id"] = target
+    default_target = remapped.get("default_target")
+    if default_target is not None:
+        resolved = _resolve_endpoint(str(default_target), leaf_map, composite_map, endpoint="entry")
+        if resolved:
+            remapped["default_target"] = resolved[0]
+    return remapped
+
+
+def _rewire_edges(
+    edges: list[dict[str, Any]],
+    *,
+    leaf_map: dict[str, str],
+    composite_map: dict[str, _ExpandedComposite],
+) -> list[dict[str, Any]]:
+    """Rewire edges through a node-id map, fanning in/out around composite nodes.
+
+    A source id that maps to a composite node produces one edge per *exit*
+    sub-node; a target id that maps to a composite node produces one edge per
+    *entry* sub-node. All other edge metadata is preserved.
+    """
+    rewired: list[dict[str, Any]] = []
+    for edge in edges:
+        source = str(edge.get("source"))
+        target = str(edge.get("target"))
+        source_ids = _resolve_endpoint(source, leaf_map, composite_map, endpoint="exit")
+        target_ids = _resolve_endpoint(target, leaf_map, composite_map, endpoint="entry")
+        for src in source_ids:
+            for tgt in target_ids:
+                rewired.append(_rewire_edge_metadata(edge, src, tgt, leaf_map=leaf_map, composite_map=composite_map))
+    return rewired
+
+
+class _CompositeExpander:
+    """Expands composite nodes in a live pipeline graph at snapshot creation."""
+
+    def __init__(self, session: AsyncSession, org_id: uuid.UUID | None, *, depth_limit: int) -> None:
+        self._session = session
+        self._org_id = org_id
+        self._depth_limit = depth_limit
+        self._template_cache: dict[uuid.UUID, CompositeTemplate | None] = {}
+
+    async def _load_template(self, template_id: uuid.UUID) -> CompositeTemplate | None:
+        if template_id in self._template_cache:
+            return self._template_cache[template_id]
+        filters = [CompositeTemplate.id == template_id, CompositeTemplate.deleted_at.is_(None)]
+        if self._org_id is not None:
+            filters.append(CompositeTemplate.organisation_id == self._org_id)
+        result = await self._session.execute(select(CompositeTemplate).where(*filters))
+        template = result.scalar_one_or_none()
+        self._template_cache[template_id] = template
+        return template
+
+    async def expand(
+        self,
+        nodes: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Expand every composite node in *nodes*.
+
+        Returns ``(expanded_nodes, expanded_edges, composite_bindings)`` where
+        ``expanded_nodes`` contains only flat node types and the composite nodes
+        are removed, ``expanded_edges`` is parent edges rewired to the
+        composites' entry/exit sub-nodes plus remapped sub-graph edges, and
+        ``composite_bindings`` records each composite template bound.
+        """
+        composite_nodes = [n for n in nodes if _is_composite_node(n)]
+        if not composite_nodes:
+            return nodes, edges, []
+
+        expansions: dict[str, _ExpandedComposite] = {}
+        bindings: list[dict[str, Any]] = []
+        internal_edges: list[dict[str, Any]] = []
+        for node in composite_nodes:
+            node_id = str(node.get("id"))
+            ref = node.get("composite_ref")
+            if ref is None:
+                raise ValueError(f"Composite node '{node_id}' is missing required 'composite_ref' field")
+            try:
+                ref_uuid = uuid.UUID(str(ref))
+            except (ValueError, TypeError):
+                raise ValueError(f"Composite node '{node_id}' has invalid composite_ref '{ref}'") from None
+            template = await self._load_template(ref_uuid)
+            if template is None:
+                raise ValueError(f"Composite node '{node_id}' references missing CompositeTemplate '{ref}'")
+            parameter_values = node.get("composite_parameter_values")
+            if not isinstance(parameter_values, dict):
+                parameter_values = {}
+            expansion = await self._expand_composite(node, template, parameter_values, depth=1)
+            expansions[node_id] = expansion
+            bindings.extend(expansion.bindings)
+            internal_edges.extend(expansion.edges)
+
+        final_nodes: list[dict[str, Any]] = []
+        for node in nodes:
+            node_expansion = expansions.get(str(node.get("id")))
+            if node_expansion is not None:
+                final_nodes.extend(node_expansion.nodes)
+            else:
+                final_nodes.append(node)
+
+        leaf_map = {str(n["id"]): str(n["id"]) for n in nodes if not _is_composite_node(n)}
+        final_edges = internal_edges + _rewire_edges(edges, leaf_map=leaf_map, composite_map=expansions)
+
+        return final_nodes, final_edges, bindings
+
+    async def _expand_composite(
+        self,
+        composite_node: dict[str, Any],
+        template: CompositeTemplate,
+        parameter_values: dict[str, Any],
+        *,
+        depth: int,
+    ) -> _ExpandedComposite:
+        """Expand one composite node's sub-pipeline into flat nodes and edges."""
+        if depth > self._depth_limit:
+            raise ValueError(
+                f"Composite nesting exceeds depth limit {self._depth_limit} for node '{composite_node.get('id')}'"
+            )
+
+        graph = template.sub_pipeline_graph_json
+        if not isinstance(graph, dict):
+            raise ValueError(f"Composite template '{template.id}' has no sub-pipeline graph")
+        sub_nodes = graph.get("nodes")
+        sub_edges = graph.get("edges")
+        if not isinstance(sub_nodes, list) or not sub_nodes:
+            raise ValueError(f"Composite template '{template.id}' has no sub-pipeline nodes to expand")
+        if not isinstance(sub_edges, list):
+            sub_edges = []
+
+        parent_node_id = str(composite_node.get("id"))
+
+        leaf_id_map: dict[str, str] = {}
+        for sub in sub_nodes:
+            old_id = sub.get("id")
+            if not old_id:
+                raise ValueError(f"Composite template '{template.id}' has a sub-node without an id")
+            key = str(old_id)
+            if key in leaf_id_map:
+                raise ValueError(f"Composite template '{template.id}' has duplicate sub-node id '{key}'")
+            leaf_id_map[key] = str(uuid.uuid4())
+
+        composite_id_map: dict[str, _ExpandedComposite] = {}
+        incoming_ids: set[str] = {str(e.get("target")) for e in sub_edges}
+        outgoing_ids: set[str] = {str(e.get("source")) for e in sub_edges}
+
+        flat_nodes: list[dict[str, Any]] = []
+        bindings: list[dict[str, Any]] = []
+        entry_ids: list[str] = []
+        exit_ids: list[str] = []
+
+        for idx, sub in enumerate(sub_nodes):
+            old_id = str(sub.get("id"))
+            if _is_composite_node(sub):
+                ref = sub.get("composite_ref")
+                if ref is None:
+                    raise ValueError(f"Composite sub-node '{old_id}' is missing required 'composite_ref' field")
+                nested_template = await self._load_template(uuid.UUID(str(ref)))
+                if nested_template is None:
+                    raise ValueError(f"Composite sub-node '{old_id}' references missing CompositeTemplate '{ref}'")
+                nested_values = sub.get("composite_parameter_values")
+                if not isinstance(nested_values, dict):
+                    nested_values = parameter_values
+                nested = await self._expand_composite(sub, nested_template, nested_values, depth=depth + 1)
+                composite_id_map[old_id] = nested
+                del leaf_id_map[old_id]
+                flat_nodes.extend(nested.nodes)
+                bindings.extend(nested.bindings)
+                if old_id not in incoming_ids:
+                    entry_ids.extend(nested.entry_node_ids)
+                if old_id not in outgoing_ids:
+                    exit_ids.extend(nested.exit_node_ids)
+                continue
+
+            new_id = leaf_id_map[old_id]
+            expanded = dict(sub)
+            expanded["id"] = new_id
+            expanded["_composite_parent_id"] = parent_node_id
+            expanded["_composite_index"] = idx
+            _inject_node_parameters(expanded, parameter_values)
+            flat_nodes.append(expanded)
+            if old_id not in incoming_ids:
+                entry_ids.append(new_id)
+            if old_id not in outgoing_ids:
+                exit_ids.append(new_id)
+
+        remapped_edges = _rewire_edges(sub_edges, leaf_map=leaf_id_map, composite_map=composite_id_map)
+
+        output_schema_json = composite_node.get("output_schema_json")
+        if isinstance(output_schema_json, dict) and exit_ids:
+            exit_id_set = set(exit_ids)
+            for node in flat_nodes:
+                if node.get("id") in exit_id_set:
+                    node.setdefault("output_schema_json", output_schema_json)
+
+        bindings.append(
+            {
+                "composite_template_id": str(template.id),
+                "composite_version": template.version,
+                "parameter_values": parameter_values,
+                "input_mapping": composite_node.get("composite_input_mapping"),
+                "output_mapping": composite_node.get("composite_output_mapping"),
+            }
+        )
+
+        return _ExpandedComposite(
+            nodes=flat_nodes,
+            edges=remapped_edges,
+            bindings=bindings,
+            entry_node_ids=entry_ids,
+            exit_node_ids=exit_ids,
+        )
+
+
+async def expand_composites_in_graph(
+    session: AsyncSession,
+    org_id: uuid.UUID | None,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    *,
+    depth_limit: int = _MAX_COMPOSITE_DEPTH,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Expand every composite node in a live pipeline graph into flat sub-nodes.
+
+    Fetches the ``CompositeTemplate`` records referenced by composite nodes
+    (org-scoped by the caller's RLS context, plus an explicit ``organisation_id``
+    filter when *org_id* is provided), expands each composite's sub-pipeline in
+    place — assigning fresh UUIDs to every sub-node, injecting composite
+    parameter values, remapping sub-graph edges, rewiring parent edges to the
+    composite's entry/exit sub-nodes, and propagating the composite's
+    ``output_schema_json`` to its exit sub-nodes. Nested composites are expanded
+    recursively up to *depth_limit*.
+
+    Returns:
+        ``(expanded_nodes, expanded_edges, composite_bindings)`` where
+        ``expanded_nodes`` contains only flat node types
+        (agent/manual/connector/sandbox_agent), so the compiled runtime accepts
+        the resulting snapshot graph unchanged.
+    """
+    expander = _CompositeExpander(session, org_id, depth_limit=depth_limit)
+    return await expander.expand(nodes, edges)

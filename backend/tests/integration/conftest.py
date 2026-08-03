@@ -64,6 +64,16 @@ async def _domain_table_names(database_url: str) -> set[str]:
         await engine.dispose()
 
 
+def _with_credentials(database_url: str, user: str, password: str) -> str:
+    """Swap the username/password in an asyncpg URL (keeps host/port/db)."""
+    from urllib.parse import quote
+
+    prefix, _, rest = database_url.partition("://")
+    host_part, _, db = rest.partition("/")
+    host = host_part.split("@")[-1]
+    return f"{prefix}://{quote(user)}:{quote(password)}@{host}/{db}"
+
+
 @pytest.fixture(scope="session")
 def postgres_container() -> Generator[PostgresContainer, None, None]:
     with PostgresContainer("postgres:16-alpine") as pg:
@@ -114,10 +124,50 @@ def migrated_db_url(db_url: str) -> str:
         await eng.dispose()
 
     asyncio.run(_ensure_alembic_table())
-    # Override DATABASE_URL so alembic env.py uses the testcontainer, not any
-    # CI env var pointing at the service postgres.
-    with patch.dict(os.environ, {"DATABASE_URL": db_url}):
+
+    async def _provision_break_glass_roles() -> None:
+        """Provision the break-glass DB roles BEFORE the migrations run.
+
+        0036 re-owns four tables to ``modulo_migrate`` and grants EXECUTE on
+        ``deactivate_break_glass`` to ``modulo_app``/``modulo_breakglass``, so
+        all three roles must exist before ``alembic upgrade heads``.
+        """
+        eng = create_async_engine(db_url)
+        async with eng.connect() as conn:
+            await conn.execute(text('DROP ROLE IF EXISTS "modulo_migrate"'))
+            await conn.execute(text('DROP ROLE IF EXISTS "modulo_breakglass"'))
+            await conn.execute(text('DROP ROLE IF EXISTS "modulo_app"'))
+            await conn.execute(text("CREATE ROLE modulo_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
+            await conn.execute(text("CREATE ROLE modulo_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
+            await conn.execute(text("CREATE ROLE modulo_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
+            await conn.commit()
+        await eng.dispose()
+
+    asyncio.run(_provision_break_glass_roles())
+
+    app_url = _with_credentials(db_url, "modulo_app", "apppass")
+    bg_url = _with_credentials(db_url, "modulo_breakglass", "bgpass")
+
+    # Run the PRODUCTION bootstrap_role.py BEFORE and AFTER alembic (deliverable
+    # A: the boundary must survive every boot). Before alembic it only creates
+    # the roles (tables don't exist yet, so the allow-list re-apply no-ops via
+    # to_regclass); after alembic it re-applies the accounts UPDATE allow-list,
+    # the modulo_breakglass grants, and the SECURITY DEFINER EXECUTE grants.
+    from modulo.db.bootstrap_role import bootstrap_roles
+
+    with patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": db_url,
+            "DATABASE_ADMIN_URL": db_url,
+            "MODULO_BREAK_GLASS_DATABASE_URL": bg_url,
+        },
+    ):
+        asyncio.run(bootstrap_roles(db_url, app_url))
+        # Override DATABASE_URL so alembic env.py uses the testcontainer, not any
+        # CI env var pointing at the service postgres.
         command.upgrade(config, "heads")
+        asyncio.run(bootstrap_roles(db_url, app_url))
 
     async def _existing_cols(conn: Any, table: str) -> set[str]:
         result = await conn.execute(
@@ -262,6 +312,49 @@ async def app_engine(migrated_db_url: str, non_superuser_role: str) -> AsyncEngi
         finally:
             cursor.close()
 
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def modulo_app_engine(migrated_db_url: str) -> AsyncEngine:
+    """Engine whose connections run as the real modulo_app role (RLS applies).
+
+    ``SET ROLE modulo_app`` sets ``current_user`` only (``session_user`` stays
+    the superuser), which is exactly how the REST + SCIM routes run. The
+    caller-bound SECURITY DEFINER's non-operator branch is exercised this way.
+    """
+    from sqlalchemy import event
+
+    engine = create_async_engine(migrated_db_url, echo=False, poolclass=NullPool)
+
+    @event.listens_for(engine.sync_engine, "checkout")
+    def _set_role_on_checkout(
+        dbapi_connection: object,
+        _connection_record: object,
+        _connection_proxy: object,
+    ) -> None:
+        cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+        try:
+            cursor.execute('SET ROLE "modulo_app"')
+        finally:
+            cursor.close()
+
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def breakglass_engine(migrated_db_url: str) -> AsyncEngine:
+    """A REAL LOGIN engine connecting as modulo_breakglass.
+
+    Connecting directly (not via SET ROLE) makes ``session_user =
+    'modulo_breakglass'``, which is the ONLY path that satisfies the SECURITY
+    DEFINER's operator branch — a SET ROLE session does NOT (negative assertion
+    covered in test_break_glass.py).
+    """
+    bg_url = _with_credentials(migrated_db_url, "modulo_breakglass", "bgpass")
+    engine = create_async_engine(bg_url, echo=False, poolclass=NullPool)
     yield engine
     await engine.dispose()
 

@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
@@ -18,7 +19,10 @@ from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.pipeline_execution import CAPACITY_TIMEOUT_TTL_MINUTES, stale_run_recovery_sweep
 from modulo.db.rls import set_rls_org
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.xdist_group(name="org_sandbox_capacity"),
+]
 
 _SANDBOX_GRAPH = {
     "nodes": [{"id": "sandbox-1", "node_type": "sandbox_agent", "agent_prompt": "do work"}],
@@ -222,6 +226,23 @@ def patched_redispatch(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     mock = AsyncMock(return_value="enqueued")
     monkeypatch.setattr(pe, "_re_dispatch_capacity_blocked", mock)
     return mock
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_runs_between_tests(db_engine: AsyncEngine) -> None:
+    """Truncate the ``runs`` table before every test in this module.
+
+    ``stale_run_recovery_sweep`` scans ALL orgs' runs globally, so a sweep test
+    that runs earlier in the same worker session leaves capacity-marked pending
+    runs behind that a later sweep test would also pick up (asserting
+    ``stranded_capacity_redispatched == 0``). ``xdist_group`` only serializes
+    the module under ``--dist loadgroup``, but CI invokes ``-n 2`` (default
+    ``load`` dist), so the module can still interleave across workers within
+    the shared session DB — truncation guarantees per-test isolation either way.
+    """
+    async with db_engine.connect() as conn:
+        await conn.execute(text("TRUNCATE runs RESTART IDENTITY CASCADE"))
+        await conn.commit()
 
 
 def _make_executor(db_engine: AsyncEngine) -> PipelineExecutor:
