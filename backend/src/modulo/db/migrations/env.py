@@ -91,13 +91,19 @@ def do_run_migrations(connection: Connection) -> None:
     # Alembic creates alembic_version with VARCHAR(32) by default, but
     # post-squash branch migration IDs exceed 32 chars (e.g.
     # 0006_post_squash_pipeline_archived_at is 44 chars).  Widen the column
-    # before any migration runs so the version UPDATE never truncates.
+    # before any migration runs so the version UPDATE never truncates.  On a
+    # fresh database the table does not exist yet, so Alembic would create it
+    # as VARCHAR(32) and the first UPDATE would truncate — pre-create it with
+    # the wide type in that case.
     if backend == "postgresql":
         from sqlalchemy import inspect as sa_inspect
 
         if sa_inspect(connection).has_table("alembic_version"):
             connection.execute(sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
             _log.info("Widened alembic_version.version_num to VARCHAR(255)")
+        else:
+            connection.execute(sa.text("CREATE TABLE alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
+            _log.info("Pre-created alembic_version.version_num as VARCHAR(255)")
 
     context.configure(
         connection=connection,
