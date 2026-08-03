@@ -3,7 +3,6 @@ and returns 410 Gone after the sunset date has passed.
 
 Usage:
     from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
-from typing import ClassVar
 
     app.add_middleware(DeprecationHeaderMiddleware)
     DeprecationHeaderMiddleware.deprecate(
