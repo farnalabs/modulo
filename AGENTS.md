@@ -1098,3 +1098,20 @@ gh pr checks <PR-NUMBER> --watch
 This waits for all checks to finish and returns the result. If checks fail, investigate and fix before moving on. A PR with failing checks that gets merged will break main and block all subsequent PRs.
 
 This applies to ALL PRs, not just complex ones. Even a single-file rename can break CI (encoding issues, stale references, missing internationalisation keys). Always wait for green before calling it done.
+
+### Worker restricted-scope contract: allowlist, no deletions, footprint verification
+
+Every Worker prompt MUST carry an explicit file allowlist. The prompt must enumerate the exact files (absolute or repo-relative paths) the Worker is permitted to create or modify. The Worker is forbidden from touching any file outside the allowlist, and must verify `git status --short` before committing shows ONLY allowlisted files.
+
+Deleting or disabling tests is FORBIDDEN. A Worker may never delete a test file, delete tests from a file, or disable tests (skip/xfail/comment out) to make CI pass. If a test genuinely conflicts with the change, the Worker must fix the test IN PLACE to reflect the new correct behaviour - never remove coverage. If a test failure is pre-existing on main and unrelated to the change, the Worker must REPORT it and leave it, not "fix" it by deletion.
+
+Deleting product features/docs/PRD sections is FORBIDDEN. Workers must not delete or rewrite PRD sections, feature files, or documentation for functionality outside their task. The PRD-accuracy step means updating docs to match what was built, NOT deleting product scope.
+
+The Conductor MUST verify footprint at commit time, not trust the report. After the Worker returns, the Conductor runs:
+- `git -C <worktree> show --stat --oneline HEAD` - every changed file must be on the allowlist
+- `git -C <worktree> show --name-status HEAD | Select-String "^D"` - zero deletions
+- `git -C <worktree> log --oneline origin/main..HEAD` - new commits exist
+
+If the footprint exceeds the allowlist or deletes anything, the branch is DISCARDED (worktree removed, branch deleted) and the task is respawned with a tighter contract. Never merge a branch whose footprint was not verified.
+
+Learned on 2026-08-03 when the first Worker attempt at the break-glass deliverable A catastrophically exceeded scope: it deleted ~2736 lines of unrelated tests (test_trigger_crud_tools.py -488, test_executor.py -205, test_linear.py -195), deleted PRD product features (get/update/delete_trigger sections), and modified files across Linear, determination, rate_limiter, and MCP subsystems - all invisible from its commit message. The entire branch was discarded and the work redone by a Worker given a strict scope contract (18-file allowlist), which stayed clean and merged as PR #591. Skipping this contract silently deletes thousands of lines of tests and features, wastes hours, and ends in a discarded branch.
