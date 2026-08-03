@@ -425,6 +425,22 @@ async def test_self_hosted_health_check_version_probe_failure_non_fatal(connecto
 
 
 @respx.mock
+async def test_self_hosted_health_check_version_probe_non_object_body_non_fatal(connector):
+    """A 2xx /version probe with a non-object JSON body must not fail the health check."""
+    custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
+    respx.get("https://gitlab.example.com/api/v4/user").mock(
+        return_value=httpx.Response(200, json={"username": "myuser"})
+    )
+    respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get("https://gitlab.example.com/api/v4/version").mock(
+        return_value=httpx.Response(200, json=["unexpected", "array"])
+    )
+    result = await custom.health_check()
+    assert result.ok is True
+    assert result.detail == "myuser"
+
+
+@respx.mock
 async def test_self_hosted_health_check_version_probe_network_error_non_fatal(connector):
     """A network error on the version probe must not fail the health check."""
     custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
