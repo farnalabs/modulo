@@ -505,7 +505,7 @@ async def test_migration_downgrade_round_trip(migrated_db_url: str) -> None:
     are restored to the captured baseline, then re-applies cleanly.
     """
     config = _make_alembic_config()
-    await asyncio.to_thread(command.downgrade, config, "0036_merge_heads")
+    await asyncio.to_thread(command.downgrade, config, "0036_merge_all_heads")
 
     engine = create_async_engine(migrated_db_url, poolclass=NullPool)
     try:
