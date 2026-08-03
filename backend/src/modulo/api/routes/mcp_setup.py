@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.mcp_setup_handoff import consume_handoff
@@ -30,7 +30,7 @@ class CompleteSetupRequest(BaseModel):
 
 
 @handle_db_errors("mcp_setup.complete_model_backend_setup")
-@router.post("/model-backends/{backend_id}/complete-setup")
+@router.post("/model-backends/{backend_id}/complete-setup", dependencies=[Depends(deny_break_glass_mint)])
 async def complete_model_backend_setup(
     backend_id: uuid.UUID,
     payload: CompleteSetupRequest,

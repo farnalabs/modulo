@@ -19,7 +19,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.oauth import (
@@ -65,7 +65,12 @@ class DeleteOAuthClientResponse(BaseModel):
 
 
 @handle_db_errors("mcp_oauth.register_oauth_client")
-@router.post("/clients", response_model=CreateOAuthClientResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/clients",
+    response_model=CreateOAuthClientResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def register_oauth_client(
     req: CreateOAuthClientRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -185,7 +190,11 @@ async def list_oauth_clients_endpoint(
 
 
 @handle_db_errors("mcp_oauth.remove_oauth_client")
-@router.delete("/clients/{client_id}", response_model=DeleteOAuthClientResponse)
+@router.delete(
+    "/clients/{client_id}",
+    response_model=DeleteOAuthClientResponse,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def remove_oauth_client(
     client_id: str,
     session: AsyncSession = Depends(get_db_session),
