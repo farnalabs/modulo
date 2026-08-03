@@ -35,6 +35,7 @@ unit-tests:
   - backend/tests/unit/model_backends/test_vertexai.py
   - backend/tests/unit/model_backends/test_vllm.py
   - backend/tests/unit/model_backends/test_watsonx.py
+  - backend/tests/unit/mcp/test_mcp_schema_tools.py
 code:
   - backend/src/modulo/api/routes/mcp_setup.py
   - backend/src/modulo/core/mcp_setup_handoff/

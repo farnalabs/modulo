@@ -25,6 +25,7 @@ unit-tests:
   - backend/tests/unit/core/test_eval_suite.py
   - backend/tests/unit/core/test_eval_regressions.py
   - backend/tests/unit/core/test_eval_judge_injection.py
+  - backend/tests/unit/mcp/test_mcp_run_tools.py
 depends-on: [feat-pipelines-core]
 status: partial
 ---

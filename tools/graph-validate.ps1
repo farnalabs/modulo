@@ -26,7 +26,8 @@ Get-ChildItem -Recurse -Filter "*.md" -LiteralPath $productMap|Where-Object{$_.N
   $bdd=@();if($fm-match'(?m)^bdd:\s*(.+?)[\r\n]'){$bList=$Matches[1].Trim();if($bList-match'^\['){$bdd=$bList-replace'[\[\]" ]',''-split','}};if($fm-match'(?m)^bdd:\s*\n((?:\s+- .+\n?)+)'){$bBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};if($bBlock){$bdd=@($bdd)+$bBlock}}
   $dep=@();if($fm-match'(?m)^depends-on:\s*\[(.*?)\]'){$dep=$Matches[1]-replace' ',''-split','};if($fm-match'(?m)^depends-on:\s*\n((?:\s+- .+\n?)+)'){$depBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};$dep=@($dep+$depBlock)|Where-Object{$_}}
   $codePaths=@();if($fm-match'(?m)^code:\s*\[(.*?)\]'){$codePaths=$Matches[1]-replace' ',''-split','};if($fm-match'(?m)^code:\s*\n((?:\s+- .+\n?)+)'){$lines=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''.Trim()}|Where-Object{$_};$codePaths=@($codePaths)+$lines|Where-Object{$_}}
-  $entries+=@{id=$id;prd=$prd;bdd=$bdd;depends=$dep;codePaths=$codePaths;path=$_.FullName;name=$_.Name}
+  $unitTests=@();if($fm-match'(?m)^unit-tests:\s*\[(.*?)\]'){$unitTests=$Matches[1]-split','|ForEach-Object{$_-replace'\s+\(.*\)\s*$',''-replace' ',''-replace'"',''}|Where-Object{$_}};if($fm-match'(?m)^unit-tests:\s*\n((?:\s+- .+\n?)+)'){$utLines=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace'#.*',''-replace'\s+\(.*\)\s*$',''.Trim()}|Where-Object{$_};$unitTests=@($unitTests)+$utLines|Where-Object{$_}}
+  $entries+=@{id=$id;prd=$prd;bdd=$bdd;depends=$dep;codePaths=$codePaths;unitTests=$unitTests;path=$_.FullName;name=$_.Name}
   if(-not$id){$issues+="NODE|$($_.Name)|missing id field"}
   if(-not$prd){$issues+="NODE|$($_.Name)|missing prd field"}
   if($fm-notmatch'(?m)^status:\s*(covered|partial|gap)'){$issues+="NODE|$($_.Name)|missing or invalid status"}
@@ -46,6 +47,9 @@ foreach($e in $entries){if(-not$e.prd-or$e.prd-match'(?i)^N/A$'){continue};$refs
 
 # 5. Validate code paths exist
 foreach($e in $entries){if($e.codePaths){foreach($line in $e.codePaths){if(-not$line.Trim()){continue};$r=Join-Path $repoRoot $line.Trim();if(-not(Test-Path -LiteralPath $r)){if(-not(Test-Path -LiteralPath "$r.py")-and-not(Test-Path -LiteralPath "$r.vue")-and-not(Test-Path -LiteralPath "$r.ts")){$issues+="CODE|$($e.id)|$line not found"}}}}}
+
+# 5b. Validate unit-tests refs exist
+foreach($e in $entries){if($e.unitTests){foreach($line in $e.unitTests){if(-not$line.Trim()){continue};$r=Join-Path $repoRoot $line.Trim();if(-not(Test-Path -LiteralPath $r)){$issues+="UTEST|$($e.id)|$line not found"}}}}
 
 # 6. Fix _index.md
 if($Fix){$idx=Join-Path $productMap "_index.md";$ic=Get-Content -Raw -Encoding UTF8 -LiteralPath $idx;$ni=@("## Index","");$grps=$entries|Group-Object{[System.IO.Path]::GetFileName((Split-Path -Parent $_.path))}|Sort-Object Name;$gl=@{core="Core Platform";auth="Auth and Security";teams="Teams";evals="Evals and Feedback";connectors="Connectors";pipelines="Pipelines";frontend="Frontend";observability="Observability";infra="Infrastructure";"model-backends"="Model Backends";variants="Run Variants"};foreach($g in $grps){$l=$gl[$g.Name];if(-not$l){$l=$g.Name};$ni+="### $l";foreach($e in $g.Group|Sort-Object id){$rp=$e.path.Replace($productMap,"").TrimStart("\").Replace("\","/");if($e.prd){$ni+="- [$($e.id)]($rp) => PRD $($e.prd)"}else{$ni+="- [$($e.id)]($rp)"}};$ni+=""};$h=$ic-replace'(?s)## Index.*','';$f=$ic-replace'(?s).*## Index.*?\n##','##';$nc=($h.TrimEnd()+"`r`n`r`n"+($ni-join"`r`n")+"`r`n`r`n"+$f).TrimEnd();Set-Content -Encoding UTF8 -LiteralPath $idx -Value $nc;Write-Host "Updated _index.md" -ForegroundColor Green}

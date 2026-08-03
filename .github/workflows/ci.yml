@@ -133,6 +133,24 @@ jobs:
         shell: bash
         run: pwsh -NoProfile -File tools/validate-manifest.ps1 -CI
 
+  tools-tests:
+    name: PowerShell tool tests (Pester)
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: false
+      - name: Setup PowerShell
+        shell: bash
+        run: |
+          if ! command -v pwsh &>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq powershell
+          fi
+      - name: Run Pester suite under tools/tests
+        shell: bash
+        run: pwsh -NoProfile -File tools/run-pester-tests.ps1
 
   gitleaks:
     name: Secret scan
@@ -179,7 +197,7 @@ jobs:
   notify-pr-failure:
     name: Trigger Branch Fixer
     if: github.event_name == 'pull_request' && always() && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
-    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
+    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, tools-tests, gitleaks]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -257,7 +275,7 @@ jobs:
   notify-pr-review:
     name: Trigger PR Reviewer
     if: github.event_name == 'pull_request' && success()
-    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
+    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, tools-tests, gitleaks]
     runs-on: ubicloud-standard-2
     steps:
       - name: Send webhook to Modulo PR Review Agent
@@ -310,7 +328,7 @@ jobs:
   modulo-smoke-test:
     name: Run Modulo Smoke Test
     if: github.event_name == 'push' || github.event_name == 'pull_request'
-    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
+    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, tools-tests, gitleaks]
     runs-on: ubicloud-standard-2
     steps:
       - name: Smoke test not applicable

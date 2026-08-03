@@ -17,6 +17,8 @@ code:
 unit-tests:
   - backend/tests/unit/core/test_pipeline_engine.py
   - backend/tests/unit/api/test_error_handling.py
+  - backend/tests/unit/mcp/test_mcp_run_tools.py
+  - backend/tests/unit/mcp/test_mcp_runtime_tools.py
 depends-on: [feat-core-agent-model, feat-core-schema-system, feat-core-trigger-system]
 status: partial
 ---
