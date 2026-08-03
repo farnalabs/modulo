@@ -1,7 +1,8 @@
 """Test configuration for SCIM unit tests.
 
 Sets minimal env vars so ``get_settings()`` (called by module-level imports
-in ``modulo.api.main``) can construct a ``Settings`` instance.
+in ``modulo.api.main``) can construct a ``Settings`` instance. Shared
+constants and factories live in ``helpers.py``.
 """
 
 import os
