@@ -11,10 +11,13 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 from contextvars import Token
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.params import Depends as DependsParameter
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import InvalidTokenError as JWTError
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -26,7 +29,7 @@ from sqlalchemy.ext.asyncio import (
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.api.team_scope import TeamScopeProvider, team_membership_exists
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
 from modulo.auth.permissions import (
     PermissionConfigurationError,
     PermissionDenied,
@@ -596,3 +599,133 @@ async def get_plan_context(
         logger.warning("Session does not support resolve_plan_context — returning CommunityTier")
 
         return CommunityTier()
+
+
+async def get_current_tenant_user_optional(
+    credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> TenantPrincipal | None:
+    """Optional tenant principal (``None`` when unauthenticated).
+
+    Fail-closed for break-glass accounts (plan v17, deliverable (B)): ANY
+    break-glass account — live or denied — resolving through this optional path
+    is treated as deny and returns ``None``, so webhook routes never grant a
+    break-glass account org context or a permission bypass. The account is
+    loaded by PK (``session.get``); a read failure (exception) folds to
+    ``None`` (a DB blip must not fail-open a break-glass principal).
+
+    The login-route create_family mint for break-glass logins is DELIBERATELY
+    excluded — it IS the recovery path. Consumers import this function directly
+    from ``modulo.api.dependencies`` (the previous PEP 562 lazy re-export in
+    ``auth.dependencies`` was removed; ``webhooks.py`` imports it here).
+    """
+    if credentials is None:
+        return None
+    try:
+        principal = decode_principal(credentials.credentials, settings.secret_key)
+        if principal.organisation_id is None or principal.org_role is None:
+            return None
+    except JWTError:
+        return None
+
+    try:
+        from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
+        from modulo.db.models.account import Account
+
+        now = datetime.now(UTC)
+        async with session.begin():
+            account = await session.get(Account, principal.account_id)
+    except SQLAlchemyError:
+        logger.exception("auth.break_glass_optional_read_failed")
+        return None
+
+    if account is not None and account.is_break_glass is True:
+        is_break_glass_account = is_break_glass_denied(
+            is_break_glass=account.is_break_glass,
+            break_glass_expires_at=account.break_glass_expires_at,
+            break_glass_deactivated_at=account.break_glass_deactivated_at,
+            active=account.active,
+            now=now,
+        ) or is_break_glass_live(
+            is_break_glass=account.is_break_glass,
+            break_glass_expires_at=account.break_glass_expires_at,
+            break_glass_deactivated_at=account.break_glass_deactivated_at,
+            active=account.active,
+            now=now,
+        )
+        if is_break_glass_account:
+            logger.warning(
+                "auth.break_glass_optional_denied",
+                extra={"account_id": str(principal.account_id), "username": principal.username},
+            )
+            return None
+
+    return TenantPrincipal(
+        username=principal.username,
+        organisation_id=principal.organisation_id,
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+        is_system_admin=principal.is_system_admin,
+    )
+
+
+async def deny_break_glass_mint(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> AuthenticatedPrincipal:
+    """Raise 403 when the current principal's account is a break-glass account.
+
+    Break-glass accounts can NEVER mint secrets or credentials — live OR denied
+    (plan v17, API-key + long-lived deny). Enforced via a shared DI/dependency
+    marker on the enumerated secret-bearing create/update/delete routes with a
+    uniform 403. The login-route create_family mint for break-glass logins is
+    DELIBERATELY EXCLUDED — it IS the recovery path.
+
+    The account is loaded by primary key (``session.get``) and the deny rule is
+    the union of the shared ``is_break_glass_denied`` / ``is_break_glass_live``
+    decisions from ``db.crud.break_glass_deny`` (single-sourced — never
+    duplicated here). The ``is True`` identity check guards against ORM test
+    doubles whose auto-created attributes are truthy mocks, not booleans. A DB
+    read failure folds to 503 (fail-closed: a blip must not fail-open a
+    break-glass mint).
+    """
+    try:
+        from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
+        from modulo.db.models.account import Account
+
+        now = datetime.now(UTC)
+        async with session.begin():
+            account = await session.get(Account, current_user.account_id)
+    except SQLAlchemyError:
+        logger.exception("permission.break_glass_mint_read_failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+    if account is None:
+        return current_user
+    if account.is_break_glass is True:
+        is_break_glass_account = is_break_glass_denied(
+            is_break_glass=account.is_break_glass,
+            break_glass_expires_at=account.break_glass_expires_at,
+            break_glass_deactivated_at=account.break_glass_deactivated_at,
+            active=account.active,
+            now=now,
+        ) or is_break_glass_live(
+            is_break_glass=account.is_break_glass,
+            break_glass_expires_at=account.break_glass_expires_at,
+            break_glass_deactivated_at=account.break_glass_deactivated_at,
+            active=account.active,
+            now=now,
+        )
+        if is_break_glass_account:
+            logger.warning(
+                "permission.break_glass_mint_denied",
+                extra={"account_id": str(current_user.account_id), "username": current_user.username},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Break-glass accounts cannot create or modify secrets/credentials",
+            )
+    return current_user

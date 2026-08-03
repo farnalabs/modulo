@@ -72,30 +72,6 @@ class SystemAdminRequired(HTTPException):
         )
 
 
-async def get_current_tenant_user_optional(
-    credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
-    settings: Settings = Depends(get_settings),
-) -> TenantPrincipal | None:
-    """Like get_current_tenant_user but returns None instead of 401 when no credentials."""
-    if credentials is None:
-        return None
-    try:
-        from modulo.auth.jwt import decode_principal
-
-        principal = decode_principal(credentials.credentials, settings.secret_key)
-        if principal.organisation_id is None or principal.org_role is None:
-            return None
-        return TenantPrincipal(
-            username=principal.username,
-            organisation_id=principal.organisation_id,
-            account_id=principal.account_id,
-            org_role=principal.org_role,
-            is_system_admin=principal.is_system_admin,
-        )
-    except JWTError:
-        return None
-
-
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
     settings: Settings = Depends(get_settings),
