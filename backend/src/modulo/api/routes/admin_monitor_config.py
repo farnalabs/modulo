@@ -11,8 +11,6 @@ from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.system_config import get_config, set_config
 
-logger = logging.getLogger(__name__)
-
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/monitor-config", tags=["admin-monitor-config"])
@@ -86,7 +84,7 @@ async def get_monitor_config(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("Unexpected error in get_monitor_config")
+        _log.exception("Unexpected error in get_monitor_config")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
@@ -123,7 +121,7 @@ async def set_monitor_config(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("Unexpected error in set_monitor_config")
+        _log.exception("Unexpected error in set_monitor_config")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",

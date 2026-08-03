@@ -63,9 +63,9 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Return created/updated file info from API
 - [x] `raise_for_status()` on HTTP errors
 - [x] Delete file via `write("file_delete")` with `project_id`, `path`, optional `ref`/`branch` (default `main`), `sha`, and `message` — `DELETE /projects/{id}/repository/files/{path}`
-- [ ] Recursive directory listing — not implemented
-- [ ] Batch file operations — not implemented
-- [x] Path traversal protection — local validation rejects absolute paths and `..` segments on `query("file")`, `write("file")`, and `write("file_delete")` before they reach the API
+- [x] Recursive directory listing via `query("tree")` — `GET /projects/{id}/repository/tree` with optional `path`, `ref`, and `recursive` filters; returns blob/tree entries
+- [x] Batch file operations via `write("files")` / `write("commit")` — one atomic `POST /projects/{id}/repository/commits` with `actions` (`create`/`update`/`delete`/`move`/`chmod`), each action requiring a validated `file_path`; `move` requires `previous_path`
+- [x] Path traversal protection — local validation rejects absolute paths and `..` segments on `query("file")`, `query("tree")`, `write("file")`, `write("files")`, and `write("file_delete")` before they reach the API
 
 ### Merge Request Operations — listing and creation
 
@@ -78,7 +78,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Accept merge request with squash — `write("mr_merge")` with `squash: true`
 - [x] List MR diff/changed files via `query("mr_changes")` with `project` and `iid` — `GET /projects/{id}/merge_requests/{iid}/changes`, returned as `records[0]["changes"]`
 - [x] Set MR labels via `write("mr_labels")` with `project`, `iid`, `labels`
-- [ ] Request MR approval — not implemented
+- [x] Request MR approval via `write("mr_approval_request")` — creates an approval rule (`POST /projects/{id}/merge_requests/{iid}/approval_rules`, `rule_type: "approval"`) requesting approval from specific `user_ids` and/or `user_emails`; requires at least one user; optional `name`/`approvals_required`
 - [x] `query("mrs")` supports pagination — `next_cursor` from `X-Next-Page`, cursor forwarded as `page`
 
 ### Capability Declaration
@@ -138,12 +138,20 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 
 ## Known Gaps
 
-- [ ] **MR operations limited**: approval *requests* (adding specific approvers to approval rules) remain — merge, approve, comment/note, labels, and diff/changed-files listing are now implemented
 - [ ] **Scope verification incomplete**: health check distinguishes expired-token vs missing-scope and reports denied endpoints, but `write_repository`/`api` scopes are not individually probed and pre-run ConnectorHub blocking is not enforced
 - [ ] **Self-hosted discovery**: `base_url` is configurable per connector instance, but there is no instance-discovery/onboarding flow for self-hosted GitLab
-- [ ] **Recursive directory listing & batch file ops**: not implemented
 
 ## QA History
+
+### 2026-08-04 — improve-architecture: 3 known gaps RESOLVED (recursive tree listing, batch file ops, MR approval request)
+
+**RESOLVED known gaps** "Recursive directory listing & batch file ops", "MR approval requests", and the "Request MR approval" behaviour. Added to `connectors/gitlab/__init__.py`:
+
+- **Recursive directory listing** — new `query("tree")` (`GET /projects/{id}/repository/tree`) with optional `path`, `ref`, and `recursive` filters (forwarded verbatim) plus pagination via the existing `X-Next-Page` cursor contract. Returns blob/tree entries with `name`/`type`/`path`.
+- **Batch file operations** — new `write("files")` / `write("commit")` using GitLab's Commits API (`POST /projects/{id}/repository/commits`) to apply multiple file changes atomically in a single commit. Accepts `branch`/`ref` (default `main`) and `message`, plus an `actions` list where each action is `{action, file_path, content, previous_path}`. `action` is whitelisted to GitLab's `create`/`update`/`delete`/`move`/`chmod`; empty actions, non-object actions, missing `file_path`, and `move` without `previous_path` all raise clear `ValueError`s. Every `file_path` (and `previous_path`) is run through the existing `_validate_path()` traversal guard.
+- **MR approval request** — new `write("mr_approval_request")` creates an approval rule (`POST /projects/{id}/merge_requests/{iid}/approval_rules`, `rule_type: "approval"`) requesting approval from specific users via `user_ids` and/or `user_emails`; at least one user reference is required (`ValueError` otherwise), with optional `name` and `approvals_required`.
+
+**Tests:** 18 unit tests in `test_gitlab.py` (tree entries + recursive/path/ref params + next_cursor + path-traversal + missing-project, batch commit body + custom branch/message + move action + empty-actions + invalid-action + missing-file_path + move-missing-previous_path + traversal on file_path and previous_path, mr_approval_request by ids / by emails with name+approvals_required / no-users error / missing project) + 5 BDD scenarios in `gitlab_issues.feature` (recursive tree listing with nested entries, batch write reports commit id, batch path traversal blocked, approval request reports requested approvers, approval request without users errors) with 7 new step definitions and the mock connector extended. Updated product map `connectors/gitlab-connector.md` (3 behaviours `[ ]`→`[x]`, Known Gaps 4→2, QA History). 148/148 gitlab unit tests + 5/5 new gitlab BDD scenarios pass, ruff clean, mypy strict clean (19 pre-existing connector-suite BDD failures unchanged). Status: partial (individual scope probing + pre-run ConnectorHub blocking, self-hosted discovery remain).
 
 ### 2026-08-03 — improve-architecture: 4 known gaps RESOLVED (MR changes, X-Request-Id, self-hosted version, path traversal)
 

@@ -61,7 +61,7 @@ dependencies = [
     # Auth + crypto
     "PyJWT[crypto]>=2.10.1",
     "passlib[bcrypt]>=1.7.4",
-    "cryptography>=42.0.0",
+    "cryptography>=50.0.0",
     # Docker SDK (local_docker runtime provider)
     "docker>=7.0.0,<8.0.0",
     # SSO / OIDC
@@ -96,7 +96,7 @@ dependencies = [
     "langchain-ibm>=1.1.0",
     "redis>=6.4.0",
     "saq[web]==0.26.4",
-    "aiohttp>=3.14.2",
+    "aiohttp>=3.14.3",
 ]
 
 [project.urls]

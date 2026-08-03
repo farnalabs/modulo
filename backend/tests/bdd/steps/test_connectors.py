@@ -2171,6 +2171,15 @@ def step_gitlab_connector(ctx):
                     records=[{"id": 10, "name": "test", "status": "success"}],
                     total=1,
                 )
+            case "tree":
+                return ConnectorResult(
+                    records=[
+                        {"id": "t1", "name": "src", "type": "tree", "path": "src"},
+                        {"id": "t2", "name": "README.md", "type": "blob", "path": "README.md"},
+                        {"id": "t3", "name": "main.py", "type": "blob", "path": "src/main.py"},
+                    ],
+                    total=3,
+                )
             case _:
                 raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
 
@@ -2205,6 +2214,30 @@ def step_gitlab_connector(ctx):
                 return {"id": 50, "iid": int(payload.data.get("iid", 0)), "approved": True}
             case "mr_comment":
                 return {"id": 300, "body": payload.data.get("body", ""), "author": {"id": 1}}
+            case "files" | "commit":
+                actions = payload.data.get("actions", [])
+                for action in actions:
+                    path = action.get("file_path", "")
+                    if any(part == ".." for part in path.replace("\\", "/").split("/")):
+                        raise ValueError(f"GitLab resource 'files': path traversal blocked: {path!r}")
+                    previous = action.get("previous_path")
+                    if previous and any(part == ".." for part in previous.replace("\\", "/").split("/")):
+                        raise ValueError(f"GitLab resource 'files': path traversal blocked: {previous!r}")
+                if not actions:
+                    raise ValueError("GitLab resource 'files' requires a non-empty 'actions' list")
+                return {"id": "abc123", "short_id": "abc123", "title": payload.data.get("message", "Update via Modulo")}
+            case "mr_approval_request":
+                if not payload.data.get("user_ids") and not payload.data.get("user_emails"):
+                    raise ValueError(
+                        f"GitLab resource {payload.resource!r} requires 'user_ids' and/or 'user_emails'",
+                    )
+                return {
+                    "id": 3,
+                    "name": payload.data.get("name", "Requested approvers"),
+                    "rule_type": "approval",
+                    "approvals_required": payload.data.get("approvals_required", 1),
+                    "users": payload.data.get("user_ids", []),
+                }
             case _:
                 raise ValueError(f"Unsupported GitLab write: {payload.resource!r}")
 
@@ -2561,6 +2594,145 @@ def step_gitlab_write_mr_comment(project, iid, body, ctx):
     except Exception as exc:
         ctx["write_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query GitLab tree for project "{project}" with path "{path}" and recursive'))
+def step_gitlab_query_tree_recursive(project, path, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(
+        resource="tree",
+        filters={"project": project, "path": path, "recursive": True},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the tree result contains nested entries")
+def step_gitlab_tree_nested(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No tree query result"
+    paths = {r["path"] for r in result.records}
+    assert "src/main.py" in paths, f"Expected nested entry src/main.py in {paths}"
+
+
+@when(parsers.parse('I write GitLab files batch for project "{project}"'))
+def step_gitlab_write_files_batch(project, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="files",
+        data={
+            "project": project,
+            "actions": [
+                {"action": "create", "file_path": "src/a.py", "content": "print(1)"},
+                {"action": "update", "file_path": "src/b.py", "content": "print(2)"},
+                {"action": "delete", "file_path": "src/old.py"},
+            ],
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the batch write reports a commit id")
+def step_gitlab_batch_commit_id(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No batch write result"
+    assert result.get("id"), f"Expected a commit id in {result}"
+
+
+@when(parsers.parse('I write GitLab files batch for project "{project}" with traversal path "{path}"'))
+def step_gitlab_write_files_traversal(project, path, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="files",
+        data={
+            "project": project,
+            "actions": [{"action": "create", "file_path": path, "content": "x"}],
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write GitLab mr_approval_request for project "{project}" and iid "{iid}" for users "{user_ids}"',
+    ),
+)
+def step_gitlab_write_mr_approval_request(project, iid, user_ids, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    parsed_ids = [int(uid) for uid in user_ids.split(",") if uid.strip()]
+    payload = ConnectorPayload(
+        resource="mr_approval_request",
+        data={"project": project, "iid": iid, "user_ids": parsed_ids},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the approval request reports the requested approvers")
+def step_gitlab_approval_request_users(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No approval request result"
+    assert result.get("rule_type") == "approval"
+    assert result.get("users") == [10, 11], f"Expected users [10, 11] in {result}"
+
+
+@when(parsers.parse('I write GitLab mr_approval_request for project "{project}" and iid "{iid}" with no users'))
+def step_gitlab_write_mr_approval_request_no_users(project, iid, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="mr_approval_request",
+        data={"project": project, "iid": iid},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the approval request errors with a missing users message")
+def step_gitlab_approval_request_missing_users(ctx):
+    assert ctx["query_error"], "Expected an error, got none"
+    assert "user_ids" in ctx["query_error"] or "user_emails" in ctx["query_error"], ctx["query_error"]
 
 
 @given("a GitLab connector with invalid token")
