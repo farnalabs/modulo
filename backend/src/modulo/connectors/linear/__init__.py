@@ -33,6 +33,7 @@ _ISSUE_FIELDS = """
   assignee { id name email }
   team { id name key }
   labels { nodes { id name color } }
+  cycle { id name }
   createdAt
   updatedAt
   url
@@ -198,6 +199,91 @@ query($teamId: String!) {
 }
 """
 
+_LABEL_FIELDS = """
+  id
+  name
+  color
+  description
+"""
+
+_CREATE_LABEL_MUTATION = f"""
+mutation($input: LabelCreateInput!) {{
+  labelCreate(input: $input) {{
+    success
+    label {{
+      {_LABEL_FIELDS}
+    }}
+  }}
+}}
+"""
+
+_UPDATE_LABEL_MUTATION = f"""
+mutation($id: String!, $input: LabelUpdateInput!) {{
+  labelUpdate(id: $id, input: $input) {{
+    success
+    label {{
+      {_LABEL_FIELDS}
+    }}
+  }}
+}}
+"""
+
+_DELETE_LABEL_MUTATION = """
+mutation($id: String!) {
+  labelDelete(id: $id) {
+    success
+  }
+}
+"""
+
+_CYCLE_LOOKUP_QUERY = """
+query($teamId: String!, $cursor: String) {
+  team(id: $teamId) {
+    cycles(first: 100, after: $cursor) {
+      nodes {
+        id
+        name
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+"""
+
+_ARCHIVE_ISSUE_MUTATION = """
+mutation($id: String!, $trash: Boolean) {
+  issueArchive(id: $id, trash: $trash) {
+    success
+  }
+}
+"""
+
+_DELETE_ISSUE_MUTATION = """
+mutation($id: String!) {
+  issueDelete(id: $id) {
+    success
+  }
+}
+"""
+
+_ISSUE_LABEL_IDS_QUERY = """
+query($id: String!) {
+  issue(id: $id) {
+    id
+    labels {
+      nodes {
+        id
+      }
+    }
+  }
+}
+"""
+
+_LABEL_CREATE_INPUT_KEYS = ("name", "teamId", "color", "description", "parentId")
+
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
     value = response.headers.get("Retry-After")
@@ -239,6 +325,22 @@ class LinearConnector(ConnectorBase):
       "issue"           — create an issue; data: {"title": "...", "teamId": "...", ...}
       "issue_update"    — update an issue; data: {"id": "...", "title": "...", ...}
       "issue_comment"   — add a comment to an issue; data: {"issueId": "...", "body": "..."}
+      "issue_state"     — transition an issue's workflow state; data: {"id", "state": "<name>"} + required
+                          {"teamId"} when using a state name (resolved via team_states), or
+                          {"id", "stateId": "<id>"} to set a raw workflow state ID directly
+      "issue_cycle"     — assign an issue to a cycle; data: {"id", "cycleId": "<id>"} to assign,
+                          {"id", "cycle": "<name>", "teamId"} to resolve a cycle name via
+                          team_cycles, or {"id", "cycleId": null} to remove the cycle
+      "issue_label"     — add/remove labels on an issue; data: {"id": "...",
+                          "addLabelIds": ["<label-id>", ...]} and/or {"id": "...",
+                          "removeLabelIds": ["<label-id>", ...]}; at least one of the two is
+                          required; applied atomically via a single issueUpdate (current labels
+                          are fetched first so the result is a true add/remove, not a replace)
+      "issue_archive"   — archive an issue; data: {"id": "..."} with optional {"trash": bool}
+      "issue_delete"    — permanently delete an issue; data: {"id": "..."}
+      "label"           — create a label; data: {"name": "...", "teamId": "...", ...}
+      "label_update"    — update a label; data: {"id": "...", "name": "...", ...}
+      "label_delete"    — delete a label; data: {"id": "..."}
     """
 
     def __init__(self, api_key: str) -> None:
@@ -314,6 +416,45 @@ class LinearConnector(ConnectorBase):
                 raise ValueError("Linear API response 'data' must be an object")
             return cast(dict[str, Any], raw_data)
         raise ValueError("Linear API request failed after retries") from last_exc
+
+    async def _resolve_state_id(self, team_id: str, state_name: str) -> str:
+        """Resolve a workflow state name to its ID via the team's states."""
+        data = await self._graphql(_TEAM_STATES_QUERY, {"teamId": team_id})
+        team = data.get("team")
+        if team is None:
+            raise ValueError(f"Linear team {team_id!r} not found")
+        states = team.get("states", {}).get("nodes", [])
+        for state in states:
+            if state.get("name", "").lower() == state_name.lower():
+                state_id = state.get("id")
+                if state_id:
+                    return cast(str, state_id)
+        raise ValueError(f"Linear workflow state {state_name!r} not found for team {team_id}")
+
+    async def _resolve_cycle_id(self, team_id: str, cycle_name: str) -> str:
+        """Resolve a cycle name to its ID via the team's cycles, paginating through all pages."""
+        cursor: str | None = None
+        while True:
+            data = await self._graphql(
+                _CYCLE_LOOKUP_QUERY,
+                {"teamId": team_id, "cursor": cursor},
+            )
+            team = data.get("team")
+            if team is None:
+                raise ValueError(f"Linear team {team_id!r} not found")
+            cycles_data = team.get("cycles", {})
+            for cycle in cycles_data.get("nodes", []):
+                if cycle.get("name", "").lower() == cycle_name.lower():
+                    cycle_id = cycle.get("id")
+                    if cycle_id:
+                        return cast(str, cycle_id)
+            page_info = cycles_data.get("pageInfo", {})
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
+            if not cursor:
+                break
+        raise ValueError(f"Linear cycle {cycle_name!r} not found for team {team_id}")
 
     async def health_check(self) -> HealthResult:
         try:
@@ -434,5 +575,140 @@ class LinearConnector(ConnectorBase):
                     raise ValueError("Failed to create Linear issue comment")
                 comment: dict[str, Any] = result.get("comment", {})
                 return comment
+            case "issue_state":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_state payload")
+                state_id = payload.data.get("stateId")
+                if not state_id:
+                    state_name = payload.data.get("state")
+                    team_id = payload.data.get("teamId")
+                    if not state_name or not team_id:
+                        raise ValueError(
+                            "issue_state requires 'stateId' or both 'state' (name) and 'teamId'",
+                        )
+                    state_id = await self._resolve_state_id(team_id, state_name)
+                return await self._update_issue(issue_id, {"stateId": state_id})
+            case "issue_cycle":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_cycle payload")
+                if "cycleId" in payload.data:
+                    cycle_id = payload.data.get("cycleId")
+                else:
+                    cycle_name = payload.data.get("cycle")
+                    team_id = payload.data.get("teamId")
+                    if not cycle_name or not team_id:
+                        raise ValueError(
+                            "issue_cycle requires 'cycleId' or both 'cycle' (name) and 'teamId'",
+                        )
+                    cycle_id = await self._resolve_cycle_id(team_id, cycle_name)
+                return await self._update_issue(issue_id, {"cycleId": cycle_id})
+            case "issue_label":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_label payload")
+                add_ids = payload.data.get("addLabelIds") or []
+                remove_ids = payload.data.get("removeLabelIds") or []
+                if not add_ids and not remove_ids:
+                    raise ValueError("issue_label requires 'addLabelIds' and/or 'removeLabelIds'")
+                return await self._update_issue_labels(issue_id, add_ids, remove_ids)
+            case "issue_archive":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_archive payload")
+                trash = payload.data.get("trash", False)
+                data = await self._graphql(
+                    _ARCHIVE_ISSUE_MUTATION,
+                    {"id": issue_id, "trash": trash},
+                )
+                result = data.get("issueArchive", {})
+                if not result.get("success"):
+                    raise ValueError(f"Failed to archive Linear issue: {issue_id}")
+                return {"id": issue_id, "archived": True, "trash": bool(trash)}
+            case "issue_delete":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_delete payload")
+                data = await self._graphql(_DELETE_ISSUE_MUTATION, {"id": issue_id})
+                result = data.get("issueDelete", {})
+                if not result.get("success"):
+                    raise ValueError(f"Failed to delete Linear issue: {issue_id}")
+                return {"id": issue_id, "deleted": True}
+            case "label":
+                name = payload.data.get("name")
+                team_id = payload.data.get("teamId")
+                if not name or not team_id:
+                    raise ValueError("label write requires 'name' and 'teamId'")
+                input_data = {k: v for k, v in payload.data.items() if k in _LABEL_CREATE_INPUT_KEYS}
+                data = await self._graphql(
+                    _CREATE_LABEL_MUTATION,
+                    {"input": input_data},
+                )
+                result = data.get("labelCreate", {})
+                if not result.get("success"):
+                    raise ValueError(f"Failed to create Linear label: {name}")
+                created: dict[str, Any] = result.get("label", {})
+                return created
+            case "label_update":
+                label_id = payload.data.get("id")
+                if not label_id:
+                    raise ValueError("Missing 'id' in label_update payload")
+                input_data = {k: v for k, v in payload.data.items() if k != "id"}
+                data = await self._graphql(
+                    _UPDATE_LABEL_MUTATION,
+                    {"id": label_id, "input": input_data},
+                )
+                result = data.get("labelUpdate", {})
+                if not result.get("success"):
+                    raise ValueError(f"Failed to update Linear label: {label_id}")
+                updated_label: dict[str, Any] = result.get("label", {})
+                return updated_label
+            case "label_delete":
+                label_id = payload.data.get("id")
+                if not label_id:
+                    raise ValueError("Missing 'id' in label_delete payload")
+                data = await self._graphql(_DELETE_LABEL_MUTATION, {"id": label_id})
+                result = data.get("labelDelete", {})
+                if not result.get("success"):
+                    raise ValueError(f"Failed to delete Linear label: {label_id}")
+                return {"id": label_id, "deleted": True}
             case _:
                 raise ValueError(f"Unsupported Linear write resource: {payload.resource!r}")
+
+    async def _update_issue(self, issue_id: str, update: dict[str, Any]) -> dict[str, Any]:
+        """Apply an issue update mutation and return the updated issue."""
+        data = await self._graphql(_UPDATE_ISSUE_MUTATION, {"id": issue_id, "input": update})
+        result = data.get("issueUpdate", {})
+        if not result.get("success"):
+            raise ValueError(f"Failed to update Linear issue: {issue_id}")
+        return cast(dict[str, Any], result.get("issue", {}))
+
+    async def _current_label_ids(self, issue_id: str) -> list[str]:
+        """Fetch the IDs of the labels currently applied to an issue."""
+        data = await self._graphql(_ISSUE_LABEL_IDS_QUERY, {"id": issue_id})
+        issue = data.get("issue")
+        if issue is None:
+            raise ValueError(f"Linear issue {issue_id!r} not found")
+        labels = issue.get("labels", {}).get("nodes", [])
+        return [label.get("id") for label in labels if label.get("id")]
+
+    async def _update_issue_labels(
+        self,
+        issue_id: str,
+        add_ids: list[str],
+        remove_ids: list[str],
+    ) -> dict[str, Any]:
+        """Add/remove labels on an issue atomically via a single issueUpdate.
+
+        The Linear issueUpdate ``labelIds`` field is a *set* — it replaces the full
+        label list. To make ``issue_label`` a true add/remove (not a replace), the
+        current label IDs are fetched first and the target set computed from them.
+        """
+        current = await self._current_label_ids(issue_id)
+        remove_set = frozenset(remove_ids)
+        target = [label_id for label_id in current if label_id not in remove_set]
+        for label_id in add_ids:
+            if label_id not in target:
+                target.append(label_id)
+        return await self._update_issue(issue_id, {"labelIds": target})

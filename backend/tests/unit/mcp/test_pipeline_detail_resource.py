@@ -205,3 +205,17 @@ class TestResourcePipelineDetailSuccess:
         result = await resource_pipeline_detail(pipeline_id=str(_PIPELINE_ID))
 
         assert "not found" in result
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_invalid_pipeline_id_returns_error(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_session.return_value.__aenter__ = AsyncMock()
+
+        result = await resource_pipeline_detail(pipeline_id="not-a-uuid")
+
+        assert "Invalid UUID" in result
+        mock_session.return_value.__aenter__.assert_not_called()

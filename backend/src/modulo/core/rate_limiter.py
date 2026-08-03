@@ -112,7 +112,7 @@ class AuthRateLimiter:
         pipe.zcard(key)
         _, count = await pipe.execute()
 
-        if count >= self._max_attempts:
+        if count >= max(self._max_attempts, 1):
             backoff = self._compute_backoff(count)
             await self._redis.setex(lockout_key, backoff, "1")
             return (False, backoff)
@@ -135,7 +135,6 @@ class AuthRateLimiter:
         pipe.delete(lockout_key)
         await pipe.execute()
 
-    @staticmethod
-    def _compute_backoff(count: int) -> int:
-        tier = count // 10
+    def _compute_backoff(self, count: int) -> int:
+        tier = count // max(self._max_attempts, 1)
         return min(int(pow(2, tier - 1) * 60), 3600)

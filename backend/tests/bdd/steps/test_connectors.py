@@ -385,6 +385,13 @@ def step_github_connector(ctx):
                     ],
                     total=2,
                 )
+            case "pr_diff":
+                return ConnectorResult(records=[{"diff": "diff --git a/README.md b/README.md"}], total=1)
+            case "search_issues":
+                return ConnectorResult(
+                    records=[{"number": 9, "title": "Search hit"}],
+                    total=1,
+                )
             case _:
                 raise ValueError(f"Unsupported resource: {q.resource!r}")
 
@@ -396,6 +403,15 @@ def step_github_connector(ctx):
                 "content": {"name": "new.md"},
                 "commit": {"sha": "abc123"},
             }
+        if payload.resource in (
+            "pr",
+            "pr_merge",
+            "pr_review_request",
+            "pr_label",
+            "pr_comment",
+            "issue_assign",
+        ):
+            return {"number": 1, "ok": True}
         raise ValueError(f"Unsupported write: {payload.resource!r}")
 
     mock_connector.write = mock_write
@@ -501,6 +517,109 @@ def step_github_write_file(resource, content, path, ctx):
         ctx["query_error"] = None
     except Exception as exc:
         ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with head "{head}" and base "{base}"'))
+def step_github_write_pr(resource, head, base, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    connector = ctx["connector"]
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"repo": "owner/repo", "head": head, "base": base},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" on pull number {number:d}'))
+def step_github_write_on_pr(resource, number, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    connector = ctx["connector"]
+    payload = ConnectorPayload(
+        resource=resource,
+        data={
+            "repo": "owner/repo",
+            "pull_number": str(number),
+            "labels": ["ready", "review"],
+            "reviewers": ["alice"],
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" on issue number {number:d}'))
+def step_github_write_on_issue(resource, number, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    connector = ctx["connector"]
+    payload = ConnectorPayload(
+        resource=resource,
+        data={
+            "repo": "owner/repo",
+            "issue_number": str(number),
+            "assignees": ["alice"],
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and pull number {number:d}'))
+def step_github_query_pr_with_pull_number(resource, repo, number, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    q = ConnectorQuery(resource=resource, filters={"repo": repo, "pull_number": str(number)})
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with search query "{search_query}"'))
+def step_github_query_search(resource, search_query, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    q = ConnectorQuery(resource=resource, filters={"q": search_query})
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
         ctx["query_error"] = str(exc)
 
 
@@ -937,6 +1056,87 @@ def step_linear_connector(ctx):
                     "identifier": "ENG-1",
                     "title": "Updated title",
                 }
+            case "issue_state":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_state payload")
+                state_id = payload.data.get("stateId")
+                state_name = payload.data.get("state")
+                team_id = payload.data.get("teamId")
+                if not state_id:
+                    if not state_name or not team_id:
+                        raise ValueError(
+                            "issue_state requires 'stateId' or both 'state' (name) and 'teamId'",
+                        )
+                    if state_name not in {"In Progress", "Done", "Backlog", "Todo"}:
+                        raise ValueError(f"Linear workflow state {state_name!r} not found for team {team_id}")
+                    state_id = f"state-{len(state_name)}"
+                return {
+                    "id": issue_id,
+                    "identifier": "ENG-1",
+                    "title": "Fix login bug",
+                    "state": {"id": state_id, "name": state_name or "In Progress"},
+                }
+            case "issue_cycle":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_cycle payload")
+                if "cycleId" in payload.data:
+                    cycle_id = payload.data.get("cycleId")
+                else:
+                    cycle_name = payload.data.get("cycle")
+                    team_id = payload.data.get("teamId")
+                    if not cycle_name or not team_id:
+                        raise ValueError(
+                            "issue_cycle requires 'cycleId' or both 'cycle' (name) and 'teamId'",
+                        )
+                    cycle_id = f"cy-{len(cycle_name)}"
+                return {
+                    "id": issue_id,
+                    "identifier": "ENG-1",
+                    "title": "Fix login bug",
+                    "cycle": {"id": cycle_id} if cycle_id else None,
+                }
+            case "issue_label":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_label payload")
+                add_ids = payload.data.get("addLabelIds") or []
+                remove_ids = payload.data.get("removeLabelIds") or []
+                if not add_ids and not remove_ids:
+                    raise ValueError("issue_label requires 'addLabelIds' and/or 'removeLabelIds'")
+                return {
+                    "id": issue_id,
+                    "identifier": "ENG-1",
+                    "title": "Fix login bug",
+                    "labels": {"nodes": [{"id": label_id, "name": label_id, "color": None} for label_id in add_ids]},
+                }
+            case "issue_archive":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_archive payload")
+                return {"id": issue_id, "archived": True, "trash": bool(payload.data.get("trash", False))}
+            case "issue_delete":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_delete payload")
+                return {"id": issue_id, "deleted": True}
+            case "label":
+                name = payload.data.get("name")
+                team_id = payload.data.get("teamId")
+                if not name or not team_id:
+                    raise ValueError("label write requires 'name' and 'teamId'")
+                return {"id": "lb-1", "name": name, "color": payload.data.get("color")}
+            case "label_update":
+                label_id = payload.data.get("id")
+                if not label_id:
+                    raise ValueError("Missing 'id' in label_update payload")
+                return {"id": label_id, "name": payload.data.get("name", ""), "color": None}
+            case "label_delete":
+                label_id = payload.data.get("id")
+                if not label_id:
+                    raise ValueError("Missing 'id' in label_delete payload")
+                return {"id": label_id, "deleted": True}
             case _:
                 raise ValueError(f"Unsupported Linear write: {payload.resource!r}")
 
@@ -1045,6 +1245,254 @@ def step_linear_update_issue(resource, id_val, ctx):
     except Exception as exc:
         ctx["write_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I transition Linear issue "{issue_id}" to state "{state}" in team "{team}"'))
+def step_linear_issue_state_by_name(issue_id, state, team, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_state", data={"id": issue_id, "state": state, "teamId": team})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I transition Linear issue "{issue_id}" to state id "{state_id}"'))
+def step_linear_issue_state_by_id(issue_id, state_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_state", data={"id": issue_id, "stateId": state_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I transition Linear issue "{issue_id}" to state "{state}" without a team'))
+def step_linear_issue_state_no_team(issue_id, state, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_state", data={"id": issue_id, "state": state})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I assign Linear issue "{issue_id}" to cycle "{cycle}" in team "{team}"'))
+def step_linear_issue_cycle_by_name(issue_id, cycle, team, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_cycle", data={"id": issue_id, "cycle": cycle, "teamId": team})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I assign Linear issue "{issue_id}" to cycle id "{cycle_id}"'))
+def step_linear_issue_cycle_by_id(issue_id, cycle_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_cycle", data={"id": issue_id, "cycleId": cycle_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I remove Linear issue "{issue_id}" from its cycle'))
+def step_linear_issue_cycle_remove(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_cycle", data={"id": issue_id, "cycleId": None})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I create Linear label "{name}" in team "{team}"'))
+def step_linear_label_create(name, team, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="label", data={"name": name, "teamId": team})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I update Linear label "{label_id}" to name "{name}"'))
+def step_linear_label_update(label_id, name, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="label_update", data={"id": label_id, "name": name})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I delete Linear label "{label_id}"'))
+def step_linear_label_delete(label_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="label_delete", data={"id": label_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I add Linear labels "{label_ids}" to issue "{issue_id}"'))
+def step_linear_issue_label_add(label_ids, issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    ids = [item.strip() for item in label_ids.split(",") if item.strip()]
+    payload = ConnectorPayload(resource="issue_label", data={"id": issue_id, "addLabelIds": ids})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I remove Linear label "{label_id}" from issue "{issue_id}"'))
+def step_linear_issue_label_remove(label_id, issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_label", data={"id": issue_id, "removeLabelIds": [label_id]})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I change Linear issue "{issue_id}" labels without any label ids'))
+def step_linear_issue_label_missing(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_label", data={"id": issue_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I archive Linear issue "{issue_id}"'))
+def step_linear_issue_archive(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_archive", data={"id": issue_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I archive Linear issue "{issue_id}" to trash'))
+def step_linear_issue_archive_trash(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_archive", data={"id": issue_id, "trash": True})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I delete Linear issue "{issue_id}"'))
+def step_linear_issue_delete(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_delete", data={"id": issue_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then(parsers.parse('the issue state is "{state}"'))
+def step_linear_issue_state_is(state, ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert result.get("state", {}).get("name") == state
 
 
 @when("I perform a health check")

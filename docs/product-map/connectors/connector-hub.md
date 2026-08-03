@@ -100,7 +100,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 - [x] `type_id = "trello"` → `TrelloConnector(api_key=creds.api_key, token=creds.token)` — two required credentials; no BDD; ConnectorType.TRELLO; enum entry exists; unit tests exist (test_trello_connector.py)
 - [x] `type_id = "asana"` → `AsanaConnector(personal_access_token=creds.personal_access_token)`; no BDD; ConnectorType.ASANA; enum entry exists; unit tests exist (test_asana_connector.py)
 - [x] `type_id = "monday"` → `MondayConnector(api_key=creds.api_key)`; no BDD; ConnectorType.MONDAY; enum entry exists; unit tests exist (test_monday_connector.py)
-- [x] `type_id = "youtrack"` → `YouTrackConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `https://youtrack.mycompany.com/api`; BDD feature file exists (youtrack_connector.feature: issues, issue, projects); ConnectorType.YOUTRACK; enum entry exists; unit tests exist (test_youtrack_connector.py)
+- [x] `type_id = "youtrack"` → `YouTrackConnector(token=creds.token, base_url=config.base_url)` — `base_url` required (`ValueError` if missing); BDD feature file exists (youtrack_connector.feature: issues, issue, projects); ConnectorType.YOUTRACK; enum entry exists; unit tests exist (test_youtrack_connector.py)
 - [x] `type_id = "notion"` → `NotionConnector(token=creds.token)`; BDD feature file exists (notion_connector.feature: health, databases, search); ConnectorType.NOTION; enum entry exists; unit tests exist (test_notion_connector.py)
 
 #### Package Registries
@@ -266,7 +266,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 - [x] GraphQL errors in response body raise `ValueError("Linear API error: ...")`
 - [x] `health_check()` runs `viewer` query — returns `ok=False` with detail on HTTP errors or missing viewer
 - [x] Generic exceptions in health check are caught and returned as `ok=False` (never propagate)
-- [x] BDD scenarios exist — `linear_connector.feature` has 8 scenarios (5 happy-path + 3 error-path) with real step definitions
+- [x] BDD scenarios exist — `linear_connector.feature` has 24 scenarios (21 happy-path + 3 error-path) with real step definitions
 
 ### Slack Connector
 

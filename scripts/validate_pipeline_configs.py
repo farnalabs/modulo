@@ -4,7 +4,6 @@ Checks for known bug patterns in sandbox_agent pipeline configs:
 1. Empty ``agent_prompt`` that would cause opencode to hang
 2. ``timeout_seconds`` defaulting to 600 (too short for complex tasks)
 3. ``template_id`` not set to ``"opencode"``
-4. ``**env_vars_extra`` placed after system env vars (security bypass)
 """
 
 from __future__ import annotations
@@ -15,7 +14,23 @@ import json
 import sys
 from pathlib import Path
 
+import yaml
+
 _EXIT_CODE = 0
+
+_DEFAULT_FALLBACKS = [
+    (
+        "timeout_seconds",
+        600,
+        "sandbox_agent timeout_seconds defaults to 600 — "
+        "too short for complex tasks like rebase + lint fix + push. Use 1200 (20 min).",
+    ),
+    (
+        "template_id",
+        "base",
+        "sandbox_agent template_id defaults to 'base' — use 'opencode' template (has opencode CLI pre-installed).",
+    ),
+]
 
 
 def _fail(message: str) -> None:
@@ -30,35 +45,20 @@ def _scan_node_runner(path: Path) -> None:
     tree = ast.parse(source, filename=str(path))
 
     for node in ast.walk(tree):
-        # Look for `node_def.get("timeout_seconds", 600)` — default of 600
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Attribute) and func.attr == "get":
-                args = node.args
-                if len(args) >= 1 and isinstance(args[0], ast.Constant) and args[0].value == "timeout_seconds":
-                    default = args[1] if len(args) >= 2 else None
-                    if default is not None and isinstance(default, ast.Constant) and default.value == 600:
-                        _fail(
-                            f"{path}:{node.lineno}: "
-                            "sandbox_agent timeout_seconds defaults to 600 — "
-                            "too short for complex tasks like rebase + lint fix + push. "
-                            "Use 1200 (20 min)."
-                        )
-
-        # Look for template_id default to "base" — should be "opencode"
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Attribute) and func.attr == "get":
-                args = node.args
-                if len(args) >= 1 and isinstance(args[0], ast.Constant) and args[0].value == "template_id":
-                    default = args[1] if len(args) >= 2 else None
-                    if default is not None and isinstance(default, ast.Constant) and default.value == "base":
-                        _fail(
-                            f"{path}:{node.lineno}: "
-                            "sandbox_agent template_id defaults to 'base' — "
-                            "use 'opencode' template (has opencode CLI pre-installed)."
-                        )
-
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "get":
+            continue
+        args = node.args
+        if not args or not isinstance(args[0], ast.Constant) or not isinstance(args[0].value, str):
+            continue
+        default = args[1] if len(args) >= 2 else None
+        if not isinstance(default, ast.Constant):
+            continue
+        for key, bad_value, message in _DEFAULT_FALLBACKS:
+            if args[0].value == key and default.value == bad_value:
+                _fail(f"{path}:{node.lineno}: {message}")
 
 
 def _scan_pipeline_config_files() -> None:
@@ -81,10 +81,8 @@ def _scan_pipeline_config_files() -> None:
             if path.suffix == ".json":
                 data = json.loads(content)
             elif path.suffix in (".yaml", ".yml"):
-                import yaml
-
                 data = yaml.safe_load(content)
-        except (json.JSONDecodeError, ValueError, ImportError):
+        except (json.JSONDecodeError, ValueError):
             continue
 
         if not data:
@@ -120,7 +118,6 @@ def _check_node_config(path: Path, obj: dict, prefix: str = "") -> None:
                 "increase to 1200 for complex tasks"
             )
 
-
     # Recurse into children/edges
     for key in ("nodes", "edges", "items", "steps", "children"):
         children = obj.get(key)
@@ -137,7 +134,6 @@ def main() -> int:
     node_runner = repo_root / "backend" / "src" / "modulo" / "core" / "pipeline_engine" / "node_runner.py"
     if node_runner.exists():
         _scan_node_runner(node_runner)
-
 
     # Scan pipeline config files
     _scan_pipeline_config_files()
