@@ -2,13 +2,17 @@
 
 import uuid
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.composite_engine.expander import (
     _inject_parameters,
     expand_composite_node,
+    expand_composites_in_graph,
 )
+from modulo.db.models.composite_template import CompositeTemplate
 
 
 def _template(
@@ -136,3 +140,265 @@ class TestInjectParameters:
     def test_non_string_value(self) -> None:
         result = _inject_parameters("Count: {{parameter.n}}", {"n": 42})
         assert result == "Count: 42"
+
+
+class _FakeResult:
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def scalar_one_or_none(self) -> object:
+        return self._value
+
+    def scalar_one(self) -> object:
+        return self._value
+
+
+def _session_returns(*values: object) -> AsyncMock:
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=[_FakeResult(v) for v in values])
+    return session
+
+
+def _orm_template(
+    template_id: uuid.UUID,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]] | None = None,
+    version: str = "1.0.0",
+) -> MagicMock:
+    template = MagicMock(spec=CompositeTemplate)
+    template.id = template_id
+    template.version = version
+    template.sub_pipeline_graph_json = {"nodes": nodes, "edges": edges or []}
+    return template
+
+
+def _composite_node(composite_id: uuid.UUID, template_id: uuid.UUID, **extra: Any) -> dict[str, Any]:
+    node: dict[str, Any] = {
+        "id": str(composite_id),
+        "node_type": "composite",
+        "composite_ref": str(template_id),
+    }
+    node.update(extra)
+    return node
+
+
+class TestExpandCompositesInGraph:
+    async def test_no_composite_nodes_returns_unchanged(self) -> None:
+        session = AsyncMock(spec=AsyncSession)
+        node_id = str(uuid.uuid4())
+        nodes = [{"id": node_id, "node_type": "agent"}]
+        edges = [{"source": node_id, "target": node_id, "type": "normal"}]
+        out_nodes, out_edges, bindings = await expand_composites_in_graph(session, None, nodes, edges)
+        assert out_nodes == nodes
+        assert out_edges == edges
+        assert bindings == []
+        session.execute.assert_not_called()
+
+    async def test_single_composite_expands_to_flat_node_with_uuid(self) -> None:
+        template_id = uuid.uuid4()
+        template = _orm_template(template_id, [{"id": "advocate", "node_type": "agent", "prompt": "Hello"}])
+        session = _session_returns(template)
+        composite_id = uuid.uuid4()
+        nodes = [_composite_node(composite_id, template_id)]
+        out_nodes, out_edges, bindings = await expand_composites_in_graph(session, None, nodes, [])
+
+        assert len(out_nodes) == 1
+        node = out_nodes[0]
+        assert node["id"] != str(composite_id)
+        uuid.UUID(node["id"])
+        assert node["_composite_parent_id"] == str(composite_id)
+        assert node["_composite_index"] == 0
+        assert node["prompt"] == "Hello"
+        assert out_edges == []
+        assert bindings == [
+            {
+                "composite_template_id": str(template_id),
+                "composite_version": "1.0.0",
+                "parameter_values": {},
+                "input_mapping": None,
+                "output_mapping": None,
+            }
+        ]
+
+    async def test_parent_edges_rewired_through_single_sub_node(self) -> None:
+        template_id = uuid.uuid4()
+        template = _orm_template(template_id, [{"id": "only", "node_type": "agent"}])
+        session = _session_returns(template)
+        composite_id = uuid.uuid4()
+        upstream = uuid.uuid4()
+        downstream = uuid.uuid4()
+        nodes = [
+            {"id": str(upstream), "node_type": "agent"},
+            _composite_node(composite_id, template_id),
+            {"id": str(downstream), "node_type": "agent"},
+        ]
+        edges = [
+            {"id": "e1", "source": str(upstream), "target": str(composite_id), "type": "normal"},
+            {"id": "e2", "source": str(composite_id), "target": str(downstream), "type": "normal"},
+        ]
+        out_nodes, out_edges, _ = await expand_composites_in_graph(session, None, nodes, edges)
+
+        assert len(out_nodes) == 3
+        sub_id = next(n["id"] for n in out_nodes if n.get("_composite_parent_id") == str(composite_id))
+        e1 = next(e for e in out_edges if e["id"] == "e1")
+        e2 = next(e for e in out_edges if e["id"] == "e2")
+        assert e1["source"] == str(upstream)
+        assert e1["target"] == sub_id
+        assert e1["type"] == "normal"
+        assert e2["source"] == sub_id
+        assert e2["target"] == str(downstream)
+
+    async def test_multiple_entry_sub_nodes_fan_in_parent_edge(self) -> None:
+        template_id = uuid.uuid4()
+        template = _orm_template(
+            template_id,
+            [
+                {"id": "for", "node_type": "agent"},
+                {"id": "against", "node_type": "agent"},
+                {"id": "mediator", "node_type": "agent"},
+            ],
+            edges=[
+                {"id": "s1", "source": "for", "target": "mediator"},
+                {"id": "s2", "source": "against", "target": "mediator"},
+            ],
+        )
+        session = _session_returns(template)
+        composite_id = uuid.uuid4()
+        upstream = uuid.uuid4()
+        downstream = uuid.uuid4()
+        nodes = [
+            {"id": str(upstream), "node_type": "agent"},
+            _composite_node(composite_id, template_id),
+            {"id": str(downstream), "node_type": "agent"},
+        ]
+        edges = [
+            {"id": "p1", "source": str(upstream), "target": str(composite_id), "type": "normal"},
+            {"id": "p2", "source": str(composite_id), "target": str(downstream), "type": "normal"},
+        ]
+        out_nodes, out_edges, _ = await expand_composites_in_graph(session, None, nodes, edges)
+
+        sub = {n["_composite_index"]: n["id"] for n in out_nodes if n.get("_composite_parent_id") == str(composite_id)}
+        for_id = sub[0]
+        against_id = sub[1]
+        mediator_id = sub[2]
+
+        p1_edges = [e for e in out_edges if e["id"] == "p1"]
+        assert sorted(e["target"] for e in p1_edges) == sorted([for_id, against_id])
+
+        p2_edges = [e for e in out_edges if e["id"] == "p2"]
+        assert [e["source"] for e in p2_edges] == [mediator_id]
+
+        assert any(e["id"] == "s1" and e["source"] == for_id and e["target"] == mediator_id for e in out_edges)
+        assert any(e["id"] == "s2" and e["source"] == against_id and e["target"] == mediator_id for e in out_edges)
+
+    async def test_parameter_injection_in_prompt_template(self) -> None:
+        template_id = uuid.uuid4()
+        template = _orm_template(
+            template_id,
+            [{"id": "a", "node_type": "agent", "prompt_template": "You are {{parameter.role}}"}],
+        )
+        session = _session_returns(template)
+        composite_id = uuid.uuid4()
+        nodes = [_composite_node(composite_id, template_id, composite_parameter_values={"role": "Python"})]
+        out_nodes, _, bindings = await expand_composites_in_graph(session, None, nodes, [])
+        assert out_nodes[0]["prompt_template"] == "You are Python"
+        assert bindings[0]["parameter_values"] == {"role": "Python"}
+
+    async def test_template_not_found_raises(self) -> None:
+        template_id = uuid.uuid4()
+        session = _session_returns(None)
+        nodes = [_composite_node(uuid.uuid4(), template_id)]
+        with pytest.raises(ValueError, match=str(template_id)):
+            await expand_composites_in_graph(session, None, nodes, [])
+
+    async def test_empty_subgraph_raises(self) -> None:
+        template_id = uuid.uuid4()
+        template = _orm_template(template_id, [])
+        session = _session_returns(template)
+        nodes = [_composite_node(uuid.uuid4(), template_id)]
+        with pytest.raises(ValueError, match="no sub-pipeline nodes"):
+            await expand_composites_in_graph(session, None, nodes, [])
+
+    async def test_nested_composite_expands_recursively(self) -> None:
+        inner_tid = uuid.uuid4()
+        inner = _orm_template(inner_tid, [{"id": "leaf", "node_type": "agent", "prompt": "inner"}])
+        outer_tid = uuid.uuid4()
+        outer = _orm_template(outer_tid, [{"id": "nested", "node_type": "composite", "composite_ref": str(inner_tid)}])
+        session = _session_returns(outer, inner)
+        nodes = [_composite_node(uuid.uuid4(), outer_tid)]
+        out_nodes, _, bindings = await expand_composites_in_graph(session, None, nodes, [])
+
+        assert len(out_nodes) == 1
+        node = out_nodes[0]
+        assert node["prompt"] == "inner"
+        assert node["_composite_parent_id"] == "nested"
+        assert len(bindings) == 2
+        assert {b["composite_template_id"] for b in bindings} == {str(outer_tid), str(inner_tid)}
+
+    async def test_depth_limit_guards_self_referential_composite(self) -> None:
+        template_id = uuid.uuid4()
+        template = _orm_template(
+            template_id,
+            [{"id": "self", "node_type": "composite", "composite_ref": str(template_id)}],
+        )
+        session = _session_returns(template)
+        nodes = [_composite_node(uuid.uuid4(), template_id)]
+        with pytest.raises(ValueError, match="depth limit"):
+            await expand_composites_in_graph(session, None, nodes, [])
+
+    async def test_output_schema_propagated_to_exit_sub_node(self) -> None:
+        template_id = uuid.uuid4()
+        template = _orm_template(
+            template_id,
+            [{"id": "a", "node_type": "agent"}, {"id": "b", "node_type": "agent"}],
+            edges=[{"source": "a", "target": "b"}],
+        )
+        session = _session_returns(template)
+        schema: dict[str, Any] = {"type": "object"}
+        nodes = [_composite_node(uuid.uuid4(), template_id, output_schema_json=schema)]
+        out_nodes, _, _ = await expand_composites_in_graph(session, None, nodes, [])
+        b_node = next(n for n in out_nodes if n["_composite_index"] == 1)
+        assert b_node.get("output_schema_json") == schema
+
+    async def test_multiple_composite_nodes_get_distinct_uuids(self) -> None:
+        template_id = uuid.uuid4()
+        template = _orm_template(template_id, [{"id": "a", "node_type": "agent"}])
+        session = _session_returns(template)
+        nodes = [
+            _composite_node(uuid.uuid4(), template_id),
+            _composite_node(uuid.uuid4(), template_id),
+        ]
+        out_nodes, _, bindings = await expand_composites_in_graph(session, None, nodes, [])
+        assert len(out_nodes) == 2
+        assert out_nodes[0]["id"] != out_nodes[1]["id"]
+        assert len(bindings) == 2
+
+    async def test_loop_edge_default_target_remapped(self) -> None:
+        template_id = uuid.uuid4()
+        template = _orm_template(template_id, [{"id": "only", "node_type": "agent"}])
+        session = _session_returns(template)
+        composite_id = uuid.uuid4()
+        downstream = uuid.uuid4()
+        nodes = [
+            _composite_node(composite_id, template_id),
+            {"id": str(downstream), "node_type": "agent"},
+        ]
+        edges = [
+            {
+                "id": "loop1",
+                "source": str(composite_id),
+                "target": str(composite_id),
+                "type": "loop",
+                "max_iterations": 3,
+                "default_target": str(composite_id),
+            },
+            {"id": "n1", "source": str(composite_id), "target": str(downstream), "type": "normal"},
+        ]
+        out_nodes, out_edges, _ = await expand_composites_in_graph(session, None, nodes, edges)
+
+        sub_id = next(n["id"] for n in out_nodes if n.get("_composite_parent_id") == str(composite_id))
+        loop = next(e for e in out_edges if e["id"] == "loop1")
+        assert loop["source"] == sub_id
+        assert loop["target"] == sub_id
+        assert loop["max_iterations"] == 3
+        assert loop["default_target"] == sub_id

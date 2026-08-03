@@ -379,6 +379,7 @@ def _when_delete_user(user_id: str, scim_client: Any, request: Any, ctx: dict[st
     resolved = _resolve_id(user_id)
     with (
         patch("modulo.api.routes.scim.scim_delete_user_by_id", return_value=MagicMock()),
+        patch("modulo.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
         patch("modulo.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
@@ -403,6 +404,7 @@ def _when_patch_user_deactivate(user_id: str, scim_client: Any, request: Any, ct
 
     with (
         patch("modulo.api.routes.scim.scim_get_user", return_value=patched_user),
+        patch("modulo.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
         patch("modulo.api.routes.scim.scim_update_user", return_value=patched_user),
         patch("modulo.api.routes.scim.set_rls_org"),
     ):

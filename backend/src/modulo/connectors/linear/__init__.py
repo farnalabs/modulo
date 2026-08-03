@@ -524,16 +524,14 @@ class LinearConnector(ConnectorBase):
         exact = [e for e in named if _normalize_name(e["name"]) == norm]
         if len(exact) > 1:
             raise ValueError(
-                f"Multiple Linear {entity}s named {name!r} for team {team_id}; "
-                f"pass the {entity}Id directly",
+                f"Multiple Linear {entity}s named {name!r} for team {team_id}; pass the {entity}Id directly",
             )
         if exact:
             return cast(str, exact[0]["id"])
         fuzzy = [e for e in named if _fuzzy_matches(e["name"], name)]
         if len(fuzzy) > 1:
             raise ValueError(
-                f"Multiple Linear {entity}s match {name!r} for team {team_id}; "
-                f"pass the {entity}Id directly",
+                f"Multiple Linear {entity}s match {name!r} for team {team_id}; pass the {entity}Id directly",
             )
         if fuzzy:
             return cast(str, fuzzy[0]["id"])
