@@ -1,7 +1,7 @@
 """Reconcile pre-squash staging schema drift that blocks ``alembic upgrade heads``.
 
 Revision ID: 0064_reconcile_staging_schema
-Revises: 0037_break_glass_enforcement
+Revises: 0037_break_glass_enforcement, 0037_add_scheduled_reports_created_by
 Create Date: 2026-08-03
 
 The staging database (``staging-modulo`` on Fly) is a pre-squash schema stamped
@@ -36,6 +36,14 @@ The ``scheduled_reports`` legacy shape is detected by the presence of the
 and recreated with the current ORM schema ONLY when that legacy shape is
 detected AND the table is empty (0 rows, verified on staging); a populated
 legacy table is left untouched with a warning rather than risking data loss.
+
+Interaction with ``0037_add_scheduled_reports_created_by`` (PR #615): that
+migration adds the ``created_by`` column + partial index to whatever
+``scheduled_reports`` shape exists. On the legacy staging table this leaves the
+table still legacy-shaped (``period`` etc. remain), so this migration's
+``period``-based detection still fires and the drop+recreate reconciles the full
+table. A healthy table is unaffected by both. This migration is a graph merge
+point (tuple ``down_revision``) resolving the parallel heads #612 and #615.
 """
 
 from collections.abc import Sequence
@@ -44,7 +52,10 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0064_reconcile_staging_schema"
-down_revision: str | Sequence[str] | None = "0037_break_glass_enforcement"
+down_revision: str | Sequence[str] | None = (
+    "0037_break_glass_enforcement",
+    "0037_add_scheduled_reports_created_by",
+)
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

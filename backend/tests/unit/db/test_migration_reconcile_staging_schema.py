@@ -139,9 +139,40 @@ class TestReconcileDriftedSchema:
         created_tables = {call.args[0] for call in mock_op.create_table.call_args_list}
         assert created_tables == {"mcp_setup_tokens", "lifecycle_maps"}
 
+    def test_reconciles_legacy_scheduled_reports_after_615_created_by_add(
+        self, reconcile_migration: ModuleType
+    ) -> None:
+        """Legacy shape that PR #615 already added created_by to must still reconcile.
+
+        0037_add_scheduled_reports_created_by adds the column + index idempotently
+        but leaves the table legacy-shaped (period/group_by remain). Detection by
+        ``period`` (not ``created_by`` absence) must still fire the drop+recreate.
+        """
+        post_615 = {
+            "scheduled_reports": [
+                "id",
+                "organisation_id",
+                "period",
+                "group_by",
+                "format",
+                "account_id",
+                "created_by",
+            ],
+        }
+        mock_op = _run_upgrade(reconcile_migration, post_615)
+
+        dropped_tables = [call.args[0] for call in mock_op.drop_table.call_args_list]
+        assert "scheduled_reports" in dropped_tables
+        assert "scheduled_reports" in {call.args[0] for call in mock_op.create_table.call_args_list}
+        index_names = {call.args[0] for call in mock_op.create_index.call_args_list}
+        assert "ix_scheduled_reports_created_by" in index_names
+
 
 class TestReconcileMigrationMetadata:
-    def test_down_revision_is_current_head(self) -> None:
+    def test_down_revision_merges_parallel_heads(self) -> None:
         migration = _load_migration("0064_reconcile_staging_schema.py", "migration_0064_meta")
         assert migration.revision == "0064_reconcile_staging_schema"
-        assert migration.down_revision == "0037_break_glass_enforcement"
+        assert migration.down_revision == (
+            "0037_break_glass_enforcement",
+            "0037_add_scheduled_reports_created_by",
+        )
