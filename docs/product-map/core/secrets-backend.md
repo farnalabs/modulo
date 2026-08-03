@@ -19,6 +19,7 @@ unit-tests:
   - backend/tests/unit/secrets_backend/test_fernet_backend.py
   - backend/tests/unit/secrets_backend/test_vault_backend.py
   - backend/tests/unit/secrets_backend/test_aws_backend.py
+  - backend/tests/unit/mcp/test_mcp_secret_tools.py
 status: partial
 ---
 

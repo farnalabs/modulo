@@ -6,6 +6,7 @@ bdd: []
 unit-tests:
   - backend/tests/unit/core/test_feature_flag_registry.py
   - backend/tests/unit/core/test_plan_context.py
+  - backend/tests/unit/mcp/test_mcp_config_tools.py
 code:
   - backend/src/modulo/api/routes/admin_tiers.py
   - backend/src/modulo/db/models/tier_catalog.py

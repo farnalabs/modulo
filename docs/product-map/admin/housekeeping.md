@@ -7,6 +7,7 @@ bdd:
 unit-tests:
   - backend/tests/unit/api/test_admin_housekeeping.py
   - backend/tests/unit/core/test_housekeeping.py
+  - backend/tests/unit/mcp/test_mcp_config_tools.py
 code:
   - backend/src/modulo/core/housekeeping.py
   - backend/src/modulo/api/routes/admin_housekeeping.py
@@ -61,7 +62,7 @@ Admin page for scanning and cleaning up unused/orphaned resources.
 - [x] MCP tools catch `MCPAuthorizationError` → `insufficient_scope`, `ProgrammingError` → `migration_required`
 
 ## Known Gaps
-- MCP tools (`list_housekeeping`, `perform_housekeeping`) have no dedicated unit tests
+- (Resolved) MCP tools (`list_housekeeping`, `perform_housekeeping`) have no dedicated unit tests — covered by `backend/tests/unit/mcp/test_mcp_config_tools.py`
 - No e2e/Playwright coverage for the housekeeping UI (checkbox interactions, confirm dialog)
 - Cleanup is performed by individual `DELETE` calls per item rather than a bulk operation
 - The scan runs 16 sequential category queries per request — no parallelism or caching
