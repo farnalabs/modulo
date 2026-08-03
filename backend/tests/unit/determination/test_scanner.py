@@ -233,6 +233,50 @@ async def test_connector_with_no_repos_produces_repos_sample() -> None:
 
 
 @respx.mock
+async def test_pull_query_failure_produces_error_sample() -> None:
+    """A failed per-repo pulls query must surface as an error sample, not crash the scan."""
+    ci = _fake_ci("github", creds={"token": "ghp_test"})
+    async with _hub(ci) as hub:
+        await hub.initialise([ci])
+
+        respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
+        respx.get(f"{_GITHUB_API}/user/repos").mock(
+            httpx.Response(200, json=[{"full_name": "owner/repo1"}])
+        )
+        respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(
+            httpx.Response(500, text="Server Error")
+        )
+
+        samples = await run_scan(hub)
+    by_resource = {s.resource: s for s in samples}
+    assert "repos" in by_resource
+    assert by_resource["repos"].error is None
+    assert "pulls" in by_resource
+    assert by_resource["pulls"].error is not None
+    assert by_resource["pulls"].records == []
+    assert by_resource["pulls"].sample_count == 0
+    assert "500" in by_resource["pulls"].error
+
+
+@respx.mock
+async def test_nameless_repo_skips_pull_query() -> None:
+    """A repo record with no name must not trigger a per-repo pulls query."""
+    ci = _fake_ci("github", creds={"token": "ghp_test"})
+    async with _hub(ci) as hub:
+        await hub.initialise([ci])
+
+        respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
+        respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[{"id": 1}]))
+
+        samples = await run_scan(hub)
+    resources = {s.resource for s in samples}
+    assert "repos" in resources
+    assert "pulls" not in resources
+    repos_sample = next(s for s in samples if s.resource == "repos")
+    assert repos_sample.error is None
+
+
+@respx.mock
 async def test_multiple_connectors_scanned_independently() -> None:
     ci1 = _fake_ci("github", creds={"token": "ghp_one"})
     ci2 = _fake_ci("github", creds={"token": "ghp_two"})
