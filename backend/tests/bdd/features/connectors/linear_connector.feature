@@ -119,3 +119,28 @@ Feature: Linear Connector
     Given a Linear connector with valid API key
     When I delete Linear issue "uuid-1234"
     Then the write succeeds
+
+  Scenario: Assign an issue to a user by assignee id
+    Given a Linear connector with valid API key
+    When I assign Linear issue "uuid-1234" to assignee id "usr-1"
+    Then the write succeeds
+
+  Scenario: Assign an issue to a user by email
+    Given a Linear connector with valid API key
+    When I assign Linear issue "uuid-1234" to the user with email "alice@example.com"
+    Then the write succeeds
+
+  Scenario: Assign an issue to a user by name
+    Given a Linear connector with valid API key
+    When I assign Linear issue "uuid-1234" to the user named "Alice Smith"
+    Then the write succeeds
+
+  Scenario: Unassign an issue
+    Given a Linear connector with valid API key
+    When I unassign Linear issue "uuid-1234"
+    Then the write succeeds
+
+  Scenario: Assign an issue without a user reference raises an error
+    Given a Linear connector with valid API key
+    When I assign Linear issue "uuid-1234" without a user reference
+    Then the write fails
