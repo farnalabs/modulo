@@ -23,12 +23,15 @@ an injected ``now`` expression is accepted for deterministic tests only.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
+from typing import Any, cast
 
 from sqlalchemy import and_, or_
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.engine import Dialect
 from sqlalchemy.sql import ColumnElement
-from sqlalchemy.sql.expression import text
+from sqlalchemy.sql.expression import TextClause, text
 
 from modulo.db.models.account import Account
 
@@ -41,12 +44,12 @@ BREAK_GLASS_COLUMNS = (
 )
 
 
-def _now_expr(now: ColumnElement | None) -> ColumnElement:
+def _now_expr(now: ColumnElement[Any] | None) -> ColumnElement[Any] | TextClause:
     """DB clock by default; injected expression for deterministic tests."""
     return now if now is not None else text("current_timestamp")
 
 
-def denied_predicate(now: ColumnElement | None = None) -> ColumnElement[bool]:
+def denied_predicate(now: ColumnElement[Any] | None = None) -> ColumnElement[bool]:
     """SQLAlchemy predicate: TRUE when the ``accounts`` row is deny-eligible.
 
     Mirrors the pure ``is_break_glass_denied`` decision so every deny site and
@@ -66,7 +69,7 @@ def denied_predicate(now: ColumnElement | None = None) -> ColumnElement[bool]:
     )
 
 
-def live_predicate(now: ColumnElement | None = None) -> ColumnElement[bool]:
+def live_predicate(now: ColumnElement[Any] | None = None) -> ColumnElement[bool]:
     """SQLAlchemy predicate: TRUE when the credential is currently usable."""
     now_expr = _now_expr(now)
     return and_(
@@ -84,7 +87,7 @@ def render_sql(predicate: ColumnElement[bool]) -> str:
     Future chunks (login-hook CAS WHERE) compile the SAME builder output here
     so the SQL-text rule and the ORM JOIN rule can never diverge.
     """
-    return str(predicate.compile(dialect=postgresql.dialect()))
+    return str(predicate.compile(dialect=cast(Callable[[], Dialect], postgresql.dialect)()))
 
 
 def is_break_glass_denied(
