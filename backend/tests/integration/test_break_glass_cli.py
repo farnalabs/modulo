@@ -37,10 +37,7 @@ async def _create_org(engine: AsyncEngine) -> uuid.UUID:
     org_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
             {"id": str(org_id), "name": f"BGCLI {org_id.hex[:8]}", "slug": f"bgcli-{org_id.hex[:8]}"},
         )
     return org_id
@@ -58,8 +55,7 @@ async def _create_admin(engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:id, :aid, :oid, 'admin')"
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"
             ),
             {"id": str(uuid.uuid4()), "aid": str(acc_id), "oid": str(org_id)},
         )
@@ -75,9 +71,7 @@ async def bg_session(breakglass_engine: AsyncEngine) -> AsyncSession:
 
 async def _audit_types(session: AsyncSession, org_id: uuid.UUID) -> set[str]:
     async with session.begin():
-        result = await session.execute(
-            select(AuditEvent.event_type).where(AuditEvent.organisation_id == org_id)
-        )
+        result = await session.execute(select(AuditEvent.event_type).where(AuditEvent.organisation_id == org_id))
         return {row[0] for row in result.all()}
 
 
@@ -85,9 +79,7 @@ async def test_activate_creates_row_and_audit(db_engine: AsyncEngine, bg_session
     org_id = await _create_org(db_engine)
     now = datetime.now(UTC)
 
-    credential = await bg.activate(
-        bg_session, now=now, org_id=org_id, ttl_minutes=30, actor="operator", reason="TKT-1"
-    )
+    credential = await bg.activate(bg_session, now=now, org_id=org_id, ttl_minutes=30, actor="operator", reason="TKT-1")
     assert credential and len(credential) >= 20
 
     rows: list[dict] = []
@@ -114,9 +106,7 @@ async def test_activate_creates_row_and_audit(db_engine: AsyncEngine, bg_session
 async def test_deactivate_refused_then_forced(db_engine: AsyncEngine, bg_session: AsyncSession) -> None:
     org_id = await _create_org(db_engine)
     now = datetime.now(UTC)
-    credential = await bg.activate(
-        bg_session, now=now, org_id=org_id, ttl_minutes=30, actor="operator", reason="TKT-2"
-    )
+    credential = await bg.activate(bg_session, now=now, org_id=org_id, ttl_minutes=30, actor="operator", reason="TKT-2")
     assert credential
 
     # Plain deactivate refuses while a live activation exists.
@@ -157,9 +147,7 @@ async def test_deactivate_refused_then_forced(db_engine: AsyncEngine, bg_session
     assert "break_glass_deactivated" in types
 
 
-async def test_force_last_admin_removes_last_non_bg_admin(
-    db_engine: AsyncEngine, bg_session: AsyncSession
-) -> None:
+async def test_force_last_admin_removes_last_non_bg_admin(db_engine: AsyncEngine, bg_session: AsyncSession) -> None:
     org_id = await _create_org(db_engine)
     admin_id = await _create_admin(db_engine, org_id)
 
@@ -177,17 +165,13 @@ async def test_force_last_admin_removes_last_non_bg_admin(
     assert "last_admin_forcibly_removed" in types
 
 
-async def test_force_last_admin_refuses_bg_only_org(
-    db_engine: AsyncEngine, bg_session: AsyncSession
-) -> None:
+async def test_force_last_admin_refuses_bg_only_org(db_engine: AsyncEngine, bg_session: AsyncSession) -> None:
     org_id = await _create_org(db_engine)
     now = datetime.now(UTC)
     await bg.activate(bg_session, now=now, org_id=org_id, ttl_minutes=30, actor="operator", reason="TKT-4")
 
     with pytest.raises(bg.PreconditionError):
-        await bg.force_last_admin(
-            bg_session, org_id=org_id, actor="operator", reason="TKT-4", now=now
-        )
+        await bg.force_last_admin(bg_session, org_id=org_id, actor="operator", reason="TKT-4", now=now)
 
 
 async def test_status_all_lists_all_orgs(db_engine: AsyncEngine, bg_session: AsyncSession) -> None:
