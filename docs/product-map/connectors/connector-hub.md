@@ -266,7 +266,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 - [x] GraphQL errors in response body raise `ValueError("Linear API error: ...")`
 - [x] `health_check()` runs `viewer` query — returns `ok=False` with detail on HTTP errors or missing viewer
 - [x] Generic exceptions in health check are caught and returned as `ok=False` (never propagate)
-- [x] BDD scenarios exist — `linear_connector.feature` has 8 scenarios (5 happy-path + 3 error-path) with real step definitions
+- [x] BDD scenarios exist — `linear_connector.feature` has 24 scenarios (21 happy-path + 3 error-path) with real step definitions
 
 ### Slack Connector
 

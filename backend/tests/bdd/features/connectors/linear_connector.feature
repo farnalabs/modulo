@@ -89,3 +89,33 @@ Feature: Linear Connector
     Given a Linear connector with valid API key
     When I transition Linear issue "uuid-1234" to state "In Progress" without a team
     Then the write fails
+
+  Scenario: Add a label to an issue
+    Given a Linear connector with valid API key
+    When I add Linear labels "lb-1,lb-2" to issue "uuid-1234"
+    Then the write succeeds
+
+  Scenario: Remove a label from an issue
+    Given a Linear connector with valid API key
+    When I remove Linear label "lb-1" from issue "uuid-1234"
+    Then the write succeeds
+
+  Scenario: Add a label without any label IDs raises an error
+    Given a Linear connector with valid API key
+    When I change Linear issue "uuid-1234" labels without any label ids
+    Then the write fails
+
+  Scenario: Archive an issue
+    Given a Linear connector with valid API key
+    When I archive Linear issue "uuid-1234"
+    Then the write succeeds
+
+  Scenario: Archive an issue to trash
+    Given a Linear connector with valid API key
+    When I archive Linear issue "uuid-1234" to trash
+    Then the write succeeds
+
+  Scenario: Delete an issue
+    Given a Linear connector with valid API key
+    When I delete Linear issue "uuid-1234"
+    Then the write succeeds

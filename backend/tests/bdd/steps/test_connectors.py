@@ -1097,6 +1097,30 @@ def step_linear_connector(ctx):
                     "title": "Fix login bug",
                     "cycle": {"id": cycle_id} if cycle_id else None,
                 }
+            case "issue_label":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_label payload")
+                add_ids = payload.data.get("addLabelIds") or []
+                remove_ids = payload.data.get("removeLabelIds") or []
+                if not add_ids and not remove_ids:
+                    raise ValueError("issue_label requires 'addLabelIds' and/or 'removeLabelIds'")
+                return {
+                    "id": issue_id,
+                    "identifier": "ENG-1",
+                    "title": "Fix login bug",
+                    "labels": {"nodes": [{"id": label_id, "name": label_id, "color": None} for label_id in add_ids]},
+                }
+            case "issue_archive":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_archive payload")
+                return {"id": issue_id, "archived": True, "trash": bool(payload.data.get("trash", False))}
+            case "issue_delete":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_delete payload")
+                return {"id": issue_id, "deleted": True}
             case "label":
                 name = payload.data.get("name")
                 team_id = payload.data.get("teamId")
@@ -1356,6 +1380,103 @@ def step_linear_label_delete(label_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="label_delete", data={"id": label_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I add Linear labels "{label_ids}" to issue "{issue_id}"'))
+def step_linear_issue_label_add(label_ids, issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    ids = [item.strip() for item in label_ids.split(",") if item.strip()]
+    payload = ConnectorPayload(resource="issue_label", data={"id": issue_id, "addLabelIds": ids})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I remove Linear label "{label_id}" from issue "{issue_id}"'))
+def step_linear_issue_label_remove(label_id, issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_label", data={"id": issue_id, "removeLabelIds": [label_id]})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I change Linear issue "{issue_id}" labels without any label ids'))
+def step_linear_issue_label_missing(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_label", data={"id": issue_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I archive Linear issue "{issue_id}"'))
+def step_linear_issue_archive(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_archive", data={"id": issue_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I archive Linear issue "{issue_id}" to trash'))
+def step_linear_issue_archive_trash(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_archive", data={"id": issue_id, "trash": True})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I delete Linear issue "{issue_id}"'))
+def step_linear_issue_delete(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_delete", data={"id": issue_id})
     import asyncio
 
     try:
