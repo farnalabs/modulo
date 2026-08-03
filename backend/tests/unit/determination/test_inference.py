@@ -109,6 +109,38 @@ def test_pr_camelcase_created_at_detects_stale_bottleneck() -> None:
     assert "Potential review bottleneck: 1 PRs/MRs open for >5 days" in bottleneck.finding
 
 
+def test_naive_created_at_without_timezone_does_not_crash() -> None:
+    """A timezone-less ISO timestamp must be interpreted as UTC, never crash inference.
+
+    datetime.fromisoformat('2026-06-20T00:00:00') yields a naive datetime;
+    subtracting an aware datetime from it would raise TypeError.
+    """
+    samples = [make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(10)[:-1]}])]
+    findings = infer(samples)
+    bottleneck = next((f for f in findings if f.category == "bottleneck"), None)
+    assert bottleneck is not None
+    assert "Potential review bottleneck" in bottleneck.finding
+
+
+def test_date_only_created_at_does_not_crash() -> None:
+    """A bare date (parsed as naive midnight UTC) must be handled gracefully."""
+    date_only = iso_days_ago(10).split("T")[0]
+    samples = [make_sample("pulls", [{"number": 1, "created_at": date_only}])]
+    findings = infer(samples)
+    assert any(f.category == "stage" and "Code review" in f.finding for f in findings)
+    bottleneck = next((f for f in findings if f.category == "bottleneck"), None)
+    assert bottleneck is not None
+    assert "Potential review bottleneck" in bottleneck.finding
+
+
+def test_non_string_created_at_is_ignored() -> None:
+    """Non-string created_at values must not crash or produce a bottleneck finding."""
+    samples = [make_sample("pulls", [{"number": 1, "created_at": 12345}])]
+    findings = infer(samples)
+    assert any(f.category == "stage" and "Code review" in f.finding for f in findings)
+    assert not any(f.category == "bottleneck" for f in findings)
+
+
 def test_pr_camelcase_created_at_recent_no_stale_bottleneck() -> None:
     samples = [make_sample("pulls", [{"number": 1, "createdAt": iso_days_ago(1)}])]
     findings = infer(samples)
