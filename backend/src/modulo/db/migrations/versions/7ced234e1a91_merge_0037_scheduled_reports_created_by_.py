@@ -18,9 +18,6 @@ works again and the "Check migration heads" CI gate passes.
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
-from alembic import op
-
 revision: str = "7ced234e1a91"
 down_revision: str | Sequence[str] | None = (
     "0037_add_scheduled_reports_created_by",
