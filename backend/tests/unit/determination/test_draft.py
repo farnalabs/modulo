@@ -4,7 +4,7 @@ from modulo.connectors.base import ConnectorType
 from modulo.determination.draft import DraftEdge, generate_draft
 from modulo.determination.inference import infer
 
-from .helpers import make_finding, make_sample
+from .helpers import iso_days_ago, make_finding, make_sample
 
 
 def test_empty_data_returns_empty_draft() -> None:
@@ -29,10 +29,10 @@ def test_repos_create_start_end_nodes() -> None:
     findings = infer(samples)
     draft = generate_draft(samples, findings)
     node_ids = {n.id for n in draft.nodes}
-    assert "start" in node_ids
-    assert "end" in node_ids
-    assert "development" in node_ids
-    assert draft.edges != []
+    assert node_ids == {"start", "development", "end"}
+    dev = next(n for n in draft.nodes if n.id == "development")
+    assert dev.node_type == "agent"
+    assert draft.edges == [DraftEdge(source="development", target="end")]
 
 
 def test_planning_and_development_creates_hitl_gate() -> None:
@@ -61,7 +61,7 @@ def test_full_sdlc_creates_all_stages() -> None:
             connector_type=ConnectorType.JIRA,
         ),
         make_sample("repos", [{"name": "repo-a", "description": "uses .github/workflows"}]),
-        make_sample("pulls", [{"number": 1, "created_at": "2026-06-20T00:00:00Z"}]),
+        make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}]),
     ]
     findings = infer(samples)
     draft = generate_draft(samples, findings)
@@ -81,7 +81,7 @@ def test_automation_suggestions_included() -> None:
             connector_type=ConnectorType.JIRA,
         ),
         make_sample("repos", [{"name": "repo-a"}]),
-        make_sample("pulls", [{"number": 1, "created_at": "2026-06-20T00:00:00Z"}]),
+        make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}]),
     ]
     findings = infer(samples)
     draft = generate_draft(samples, findings)
@@ -96,7 +96,7 @@ def test_automation_suggestions_included() -> None:
 
 
 def test_review_only_draft_connects_from_start() -> None:
-    samples = [make_sample("pulls", [{"number": 1, "created_at": "2026-06-20T00:00:00Z"}])]
+    samples = [make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}])]
     findings = infer(samples)
     draft = generate_draft(samples, findings)
     node_ids = {n.id for n in draft.nodes}
@@ -194,3 +194,47 @@ def test_placeholder_nodes_have_correct_types() -> None:
     review = next((n for n in draft.nodes if n.id == "review"), None)
     assert review is not None
     assert review.node_type == "agent"
+
+
+def test_planning_to_ci_without_development() -> None:
+    """CI/CD must wire to the preceding planning stage when no development stage exists."""
+    samples = [
+        make_sample(
+            "issues",
+            [{"fields": {"status": {"name": "Backlog"}, "summary": "T1"}}],
+            connector_type=ConnectorType.JIRA,
+        ),
+        # A description-only repo record triggers CI detection without a development stage
+        make_sample("repos", [{"description": "uses .github/workflows"}]),
+    ]
+    findings = infer(samples)
+    draft = generate_draft(samples, findings)
+    node_ids = {n.id for n in draft.nodes}
+    assert node_ids == {"start", "planning", "ci_cd", "end"}
+    assert "development" not in node_ids
+    edge = next((e for e in draft.edges if e.target == "ci_cd"), None)
+    assert edge is not None
+    assert edge.source == "planning"
+    assert edge.hitl_gate is False
+
+
+def test_review_sourced_from_planning_when_no_development() -> None:
+    """A review stage must fall back to the last prior stage when development is absent."""
+    samples = [
+        make_sample(
+            "issues",
+            [{"fields": {"status": {"name": "Backlog"}, "summary": "T1"}}],
+            connector_type=ConnectorType.JIRA,
+        ),
+        make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}]),
+    ]
+    findings = infer(samples)
+    draft = generate_draft(samples, findings)
+    node_ids = {n.id for n in draft.nodes}
+    assert node_ids == {"start", "planning", "review", "end"}
+    assert "development" not in node_ids
+    edge = next((e for e in draft.edges if e.target == "review"), None)
+    assert edge is not None
+    assert edge.source == "planning"
+    assert edge.hitl_gate is True
+    assert not any(e.source == "review" and e.target == "review" for e in draft.edges)
