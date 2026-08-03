@@ -35,7 +35,8 @@ class TestComputeBackoff:
         ],
     )
     def test_backoff_values(self, failures: int, expected: int) -> None:
-        assert AuthRateLimiter._compute_backoff(failures) == expected
+        limiter = AuthRateLimiter(redis_client=MagicMock(), max_attempts=10, window_s=60)
+        assert limiter._compute_backoff(failures) == expected
 
 
 class TestAuthRateLimiterWithMockRedis:

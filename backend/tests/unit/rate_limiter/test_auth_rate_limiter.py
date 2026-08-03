@@ -8,6 +8,7 @@ Covers:
   - AuthRateLimiter check_login/record_failure/record_success/backoff paths
 """
 
+import asyncio
 import time
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock
@@ -96,7 +97,8 @@ class TestGetAuthRateLimiter:
         limiter = get_auth_rate_limiter(settings)
         assert limiter is None
 
-    def test_returns_limiter_when_enabled(self):
+    def test_returns_limiter_when_enabled(self, monkeypatch):
+        monkeypatch.setattr("redis.asyncio.Redis.from_url", lambda url, **kwargs: MagicMock())
         settings = _make_settings(enabled=True)
         limiter = get_auth_rate_limiter(settings)
         assert limiter is not None
@@ -115,11 +117,39 @@ class TestGetAuthRateLimiter:
         limiter = get_auth_rate_limiter(settings)
         assert limiter is None
 
-    def test_singleton_returns_same_instance(self):
+    def test_singleton_returns_same_instance(self, monkeypatch):
+        monkeypatch.setattr("redis.asyncio.Redis.from_url", lambda url, **kwargs: MagicMock())
         settings = _make_settings(enabled=True)
         first = get_auth_rate_limiter(settings)
         second = get_auth_rate_limiter(settings)
         assert first is second
+
+    def test_redis_connect_failure_returns_none(self, monkeypatch):
+        """A Redis connect error must degrade to None (rate limiting skipped), not raise."""
+        from modulo.api.middleware import rate_limiter as rl_mod
+
+        before_clients = set(rl_mod._redis_clients)
+        monkeypatch.setattr(
+            "redis.asyncio.Redis.from_url",
+            MagicMock(side_effect=ConnectionError("boom")),
+        )
+        limiter = get_auth_rate_limiter(_make_settings(enabled=True))
+        assert limiter is None
+        assert rl_mod._auth_rate_limiter is None
+        assert rl_mod._redis_clients == before_clients
+
+    def test_redis_cancelled_error_propagates(self, monkeypatch):
+        """asyncio.CancelledError must never be swallowed by get_auth_rate_limiter."""
+        from modulo.api.middleware import rate_limiter as rl_mod
+
+        before_clients = set(rl_mod._redis_clients)
+        monkeypatch.setattr(
+            "redis.asyncio.Redis.from_url",
+            MagicMock(side_effect=asyncio.CancelledError()),
+        )
+        with pytest.raises(asyncio.CancelledError):
+            get_auth_rate_limiter(_make_settings(enabled=True))
+        assert rl_mod._redis_clients == before_clients
 
 
 class TestAuthRateLimitMiddlewareDisabled:
@@ -445,12 +475,21 @@ class TestAuthRateLimiterCore:
         ],
     )
     def test_compute_backoff_caps_at_3600(self, count, expected):
-        assert AuthRateLimiterCls._compute_backoff(count) == expected
+        limiter = AuthRateLimiterCls(redis_client=MagicMock(), max_attempts=10, window_s=60)
+        assert limiter._compute_backoff(count) == expected
 
     def test_compute_backoff_tier_boundaries(self):
-        assert AuthRateLimiterCls._compute_backoff(10) == 60
-        assert AuthRateLimiterCls._compute_backoff(11) == 60
-        assert AuthRateLimiterCls._compute_backoff(19) == 60
+        limiter = AuthRateLimiterCls(redis_client=MagicMock(), max_attempts=10, window_s=60)
+        assert limiter._compute_backoff(10) == 60
+        assert limiter._compute_backoff(11) == 60
+        assert limiter._compute_backoff(19) == 60
+
+    def test_compute_backoff_respects_configured_max_attempts(self):
+        """Backoff tiers must be derived from max_attempts, not a hardcoded 10."""
+        limiter = AuthRateLimiterCls(redis_client=MagicMock(), max_attempts=5, window_s=60)
+        assert limiter._compute_backoff(5) == 60
+        assert limiter._compute_backoff(9) == 60
+        assert limiter._compute_backoff(10) == 120
 
 
 class TestShutdownRateLimiters:
@@ -476,3 +515,16 @@ class TestShutdownRateLimiters:
         failing.aclose.assert_awaited_once()
         ok.aclose.assert_awaited_once()
         assert rl_mod._redis_clients == set()
+
+    async def test_shutdown_propagates_cancelled_error(self):
+        """asyncio.CancelledError from aclose must propagate, not be logged."""
+        from modulo.api.middleware import rate_limiter as rl_mod
+
+        failing = MagicMock()
+        failing.aclose = AsyncMock(side_effect=asyncio.CancelledError())
+        rl_mod._redis_clients.update({failing})
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await shutdown_rate_limiters()
+        finally:
+            rl_mod._redis_clients.clear()

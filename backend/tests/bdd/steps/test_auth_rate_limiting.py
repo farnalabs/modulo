@@ -59,7 +59,10 @@ def _make_mock_redis() -> MagicMock:
 def _configure_mock_redis_failure_count(mock_redis: MagicMock, ip: str, count: int) -> None:
     """Configure the mock Redis so check_login(ip) sees *count* failures."""
     if count >= 10:
-        mock_redis.ttl = AsyncMock(return_value=60)
+        # A lockout is active; its TTL is the exponential backoff for *count*
+        # failures, mirroring check_login's setex(lockout_key, backoff, "1").
+        limiter = AuthRateLimiterCls(redis_client=mock_redis, max_attempts=10, window_s=60)
+        mock_redis.ttl = AsyncMock(return_value=limiter._compute_backoff(count))
     else:
         mock_redis.ttl = AsyncMock(return_value=0)
         pipe = MagicMock()

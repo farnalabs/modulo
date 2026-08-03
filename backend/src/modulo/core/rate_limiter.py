@@ -135,7 +135,6 @@ class AuthRateLimiter:
         pipe.delete(lockout_key)
         await pipe.execute()
 
-    @staticmethod
-    def _compute_backoff(count: int) -> int:
-        tier = count // 10
+    def _compute_backoff(self, count: int) -> int:
+        tier = count // self._max_attempts
         return min(int(pow(2, tier - 1) * 60), 3600)
