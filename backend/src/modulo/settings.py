@@ -108,8 +108,9 @@ class Settings(BaseSettings):
     saq_redis_pool_size: int = Field(default=5, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
     # Per-run agent runtime cost: E2B sandbox hourly rate used to estimate
     # sandbox_agent node cost from wall-clock time (E2B bills per-second
-    # sandbox uptime). Operators should set this to their E2B sandbox rate.
-    e2b_sandbox_usd_per_hour: float = Field(default=0.5, alias="E2B_SANDBOX_USD_PER_HOUR", ge=0)
+    # sandbox uptime). Default reflects the dashboard-confirmed opencode
+    # template = 2 vCPU / 2 GiB at E2B per-second rates (~$0.133/hr).
+    e2b_sandbox_usd_per_hour: float = Field(default=0.13, alias="E2B_SANDBOX_USD_PER_HOUR", ge=0)
 
     # ------------------------------------------------------------------
     # Health check timeouts (seconds) — configurable per-check limits for

@@ -125,7 +125,7 @@ Rate limiting uses a Redis token-bucket algorithm. Falls back to in-memory witho
 | `MODULO_E2B_API_KEY` | For E2B | — | E2B sandbox API key for runtime provider |
 | `MODULO_MAX_LOCAL_CONCURRENCY` | No | `2` | Max concurrent local agents (LocalRuntimeProvider) |
 | `OLLAMA_BASE_URL` | For Ollama | `http://localhost:11434` | Ollama server URL for local model backends |
-| `E2B_SANDBOX_USD_PER_HOUR` | No | `0.5` | Hourly USD rate for an E2B sandbox, used to estimate per-run agent runtime cost from wall-clock time; set to your E2B sandbox rate |
+| `E2B_SANDBOX_USD_PER_HOUR` | No | `0.13` | Hourly USD rate for an E2B sandbox, used to estimate per-run agent runtime cost from wall-clock time; default reflects the opencode template (2 vCPU / 2 GiB) rate; set to your E2B sandbox rate |
 
 ---
 
