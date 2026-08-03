@@ -50,3 +50,27 @@ Feature: Jira Connector
     When I query resource "issue" with issue_key "PROJ-123"
     Then the result is an error
     And the error reports the Jira rate-limit quota
+
+  Scenario: Assign an issue to an account
+    Given a Jira connector with valid credentials
+    When I assign issue "PROJ-123" to account "712020:abc123"
+    Then the write succeeds
+    And the write returns assignee for issue "PROJ-123"
+
+  Scenario: Unassign an issue
+    Given a Jira connector with valid credentials
+    When I unassign issue "PROJ-123"
+    Then the write succeeds
+    And the write returns no assignee
+
+  Scenario: Add and remove issue labels
+    Given a Jira connector with valid credentials
+    When I update labels on issue "PROJ-123" adding "backend" and removing "stale"
+    Then the write succeeds
+    And the write returns the updated labels
+
+  Scenario: Delete an issue
+    Given a Jira connector with valid credentials
+    When I delete issue "PROJ-123"
+    Then the write succeeds
+    And the write returns deletion confirmation for "PROJ-123"
