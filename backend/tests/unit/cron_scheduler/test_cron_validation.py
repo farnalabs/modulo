@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
 
-from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
+from modulo.core.cron_helpers import compute_next_fire, compute_next_send, validate_cron_expression
 
 
 class TestValidateCronExpression:
@@ -145,3 +145,34 @@ class TestComputeNextFire:
         )
 
         assert result == datetime.datetime(2026, 1, 1, 9, tzinfo=datetime.UTC)
+
+
+class TestComputeNextSend:
+    def test_next_send_returns_future_datetime(self):
+        now = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+        next_send = compute_next_send("* * * * *", after=now)
+        assert next_send > now
+        assert next_send.minute == 1
+        assert next_send.hour == 12
+        assert next_send.day == 1
+
+    def test_next_send_daily_at_9am(self):
+        now = datetime.datetime(2026, 1, 1, 8, 0, 0, tzinfo=datetime.UTC)
+        next_send = compute_next_send("0 9 * * *", after=now)
+        assert next_send.hour == 9
+        assert next_send.minute == 0
+        assert next_send.day == 1
+
+    def test_next_send_daily_past_today_rolls_to_tomorrow(self):
+        now = datetime.datetime(2026, 1, 1, 10, 0, 0, tzinfo=datetime.UTC)
+        next_send = compute_next_send("0 9 * * *", after=now)
+        assert next_send.day == 2
+        assert next_send.hour == 9
+
+    def test_next_send_without_after_defaults_to_now(self):
+        result = compute_next_send("* * * * *")
+        assert result > datetime.datetime.now(datetime.UTC)
+
+    def test_next_send_invalid_expression_raises(self):
+        with pytest.raises(ValueError):
+            compute_next_send("not-a-cron")
