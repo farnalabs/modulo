@@ -235,18 +235,24 @@ mutation($id: String!) {
 }
 """
 
-_CYCLE_ARCHIVE_QUERY = """
-query($teamId: String!) {
+_CYCLE_LOOKUP_QUERY = """
+query($teamId: String!, $cursor: String) {
   team(id: $teamId) {
-    cycles(first: 100) {
+    cycles(first: 100, after: $cursor) {
       nodes {
         id
         name
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
       }
     }
   }
 }
 """
+
+_LABEL_CREATE_INPUT_KEYS = ("name", "teamId", "color", "description", "parentId")
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
@@ -377,7 +383,10 @@ class LinearConnector(ConnectorBase):
     async def _resolve_state_id(self, team_id: str, state_name: str) -> str:
         """Resolve a workflow state name to its ID via the team's states."""
         data = await self._graphql(_TEAM_STATES_QUERY, {"teamId": team_id})
-        states = data.get("team", {}).get("states", {}).get("nodes", [])
+        team = data.get("team")
+        if team is None:
+            raise ValueError(f"Linear team {team_id!r} not found")
+        states = team.get("states", {}).get("nodes", [])
         for state in states:
             if state.get("name", "").lower() == state_name.lower():
                 state_id = state.get("id")
@@ -386,14 +395,28 @@ class LinearConnector(ConnectorBase):
         raise ValueError(f"Linear workflow state {state_name!r} not found for team {team_id}")
 
     async def _resolve_cycle_id(self, team_id: str, cycle_name: str) -> str:
-        """Resolve a cycle name to its ID via the team's cycles."""
-        data = await self._graphql(_CYCLE_ARCHIVE_QUERY, {"teamId": team_id})
-        cycles = data.get("team", {}).get("cycles", {}).get("nodes", [])
-        for cycle in cycles:
-            if cycle.get("name", "").lower() == cycle_name.lower():
-                cycle_id = cycle.get("id")
-                if cycle_id:
-                    return cast(str, cycle_id)
+        """Resolve a cycle name to its ID via the team's cycles, paginating through all pages."""
+        cursor: str | None = None
+        while True:
+            data = await self._graphql(
+                _CYCLE_LOOKUP_QUERY,
+                {"teamId": team_id, "cursor": cursor},
+            )
+            team = data.get("team")
+            if team is None:
+                raise ValueError(f"Linear team {team_id!r} not found")
+            cycles_data = team.get("cycles", {})
+            for cycle in cycles_data.get("nodes", []):
+                if cycle.get("name", "").lower() == cycle_name.lower():
+                    cycle_id = cycle.get("id")
+                    if cycle_id:
+                        return cast(str, cycle_id)
+            page_info = cycles_data.get("pageInfo", {})
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
+            if not cursor:
+                break
         raise ValueError(f"Linear cycle {cycle_name!r} not found for team {team_id}")
 
     async def health_check(self) -> HealthResult:
@@ -549,9 +572,10 @@ class LinearConnector(ConnectorBase):
                 team_id = payload.data.get("teamId")
                 if not name or not team_id:
                     raise ValueError("label write requires 'name' and 'teamId'")
+                input_data = {k: v for k, v in payload.data.items() if k in _LABEL_CREATE_INPUT_KEYS}
                 data = await self._graphql(
                     _CREATE_LABEL_MUTATION,
-                    {"input": payload.data},
+                    {"input": input_data},
                 )
                 result = data.get("labelCreate", {})
                 if not result.get("success"):

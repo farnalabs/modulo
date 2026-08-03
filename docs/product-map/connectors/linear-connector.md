@@ -125,6 +125,10 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 1
 
 ## QA History
 
+### 2026-08-03 — improve-architecture: review-fix hardening (PR #565)
+
+Addressed reviewer nits on the connector feature-gap delivery: renamed the cycle lookup query to `_CYCLE_LOOKUP_QUERY` and made `_resolve_cycle_id()` paginate through all cycles (a team with >100 cycles can no longer miss a name match); hardened `_resolve_state_id()`/`_resolve_cycle_id()` to raise a clean `ValueError` when a nonexistent `teamId` returns a null `team`; and whitelisted `LabelCreateInput` keys in `write("label")` instead of passing the raw payload. Added 4 unit tests (label input whitelisting, state/cycle team-not-found, cross-page cycle name match). 56/56 `test_linear.py` unit tests pass, ruff clean.
+
 ### 2026-08-03 — improve-architecture: 3 known gaps RESOLVED (state transition by name, label management, cycle assignment)
 
 **RESOLVED known gaps** "State transitions require raw stateId", "No label management", "No cycle/sprint assignment". Added 3 new write resources to `connectors/linear/__init__.py`:

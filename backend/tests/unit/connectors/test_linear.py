@@ -786,3 +786,83 @@ async def test_write_label_delete(connector):
 async def test_write_label_delete_missing_id(connector):
     with pytest.raises(ValueError, match="Missing 'id' in label_delete payload"):
         await connector.write(ConnectorPayload(resource="label_delete", data={}))
+
+
+@respx.mock
+async def test_write_label_create_whitelists_input(connector):
+    respx.post(_GRAPHQL).mock(return_value=_LABEL_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(
+            resource="label",
+            data={"name": "bug", "teamId": "team-1", "color": "#ff0000", "description": "Bugs", "evil": "drop"},
+        )
+    )
+    assert result["id"] == "lb-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["name"] == "bug"
+    assert body["variables"]["input"]["teamId"] == "team-1"
+    assert "evil" not in body["variables"]["input"]
+
+
+@respx.mock
+async def test_write_issue_state_team_not_found(connector):
+    respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"team": None}}))
+    with pytest.raises(ValueError, match="team 'missing-team' not found"):
+        await connector.write(
+            ConnectorPayload(resource="issue_state", data={"id": "issue-1", "state": "Done", "teamId": "missing-team"})
+        )
+
+
+@respx.mock
+async def test_write_issue_cycle_team_not_found(connector):
+    respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"team": None}}))
+    with pytest.raises(ValueError, match="team 'missing-team' not found"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_cycle",
+                data={"id": "issue-1", "cycle": "Sprint 24", "teamId": "missing-team"},
+            )
+        )
+
+
+_CYCLES_PAGE1 = _mock_response(
+    {
+        "data": {
+            "team": {
+                "cycles": {
+                    "nodes": [{"id": "cy-23", "name": "Sprint 23"}],
+                    "pageInfo": {"hasNextPage": True, "endCursor": "cursor-23"},
+                }
+            }
+        }
+    }
+)
+
+_CYCLES_PAGE2 = _mock_response(
+    {
+        "data": {
+            "team": {
+                "cycles": {
+                    "nodes": [{"id": "cy-24", "name": "Sprint 24"}],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        }
+    }
+)
+
+
+@respx.mock
+async def test_write_issue_cycle_name_on_second_page(connector):
+    respx.post(_GRAPHQL).mock(side_effect=[_CYCLES_PAGE1, _CYCLES_PAGE2, _UPDATE_ISSUE_RESPONSE])
+    result = await connector.write(
+        ConnectorPayload(resource="issue_cycle", data={"id": "issue-1", "cycle": "Sprint 24", "teamId": "team-1"})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["cycleId"] == "cy-24"
+    second_page_request = respx.calls[1].request
+    second_body = json.loads(second_page_request.content)
+    assert second_body["variables"]["cursor"] == "cursor-23"
