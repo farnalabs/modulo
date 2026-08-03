@@ -54,6 +54,31 @@ def _missing_result() -> MagicMock:
     return result
 
 
+def _denied_diff(reason_code: str, *, caller_type: str = "rest") -> DiffResult:
+    return DiffResult(
+        weakened_edges=[
+            EdgeWeakening(
+                correlation_key=("a", "b", "normal"),
+                weakening_types=["structural:gate_removed"],
+                reason_code=reason_code,
+            )
+        ],
+        has_weakening=True,
+        denied=True,
+        reason_code=reason_code,
+        caller_type=caller_type,
+    )
+
+
+def _target_snapshot(sid: uuid.UUID, pipeline_id: uuid.UUID, *, version: int = 1) -> MagicMock:
+    target = MagicMock(spec=PipelineSnapshot)
+    target.id = sid
+    target.pipeline_id = pipeline_id
+    target.snapshot_version = version
+    target.graph_json = {"nodes": [], "edges": []}
+    return target
+
+
 class TestRollbackToSnapshot:
     async def test_rollback_to_snapshot_creates_new_snapshot(self):
         session = AsyncMock()
@@ -226,6 +251,65 @@ class TestRollbackToSnapshot:
         assert mock_resolve.await_args.kwargs["caller_type"] == "mcp"
         assert mock_resolve.await_args.kwargs["is_privileged"] is True
 
+    async def test_rollback_mcp_caller_forced_unprivileged(self):
+        session = AsyncMock()
+        pid = uuid.uuid4()
+        target_sid = uuid.uuid4()
+
+        call_count = 0
+
+        async def execute_side(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = _target_snapshot(target_sid, pid)
+            elif call_count == 2:
+                pipeline = MagicMock()
+                pipeline.id = pid
+                pipeline.organisation_id = uuid.uuid4()
+                pipeline.graph_nodes_json = []
+                result.scalar_one_or_none.return_value = pipeline
+            return result
+
+        session.execute = AsyncMock(side_effect=execute_side)
+
+        new_snapshot = MagicMock(spec=PipelineSnapshot)
+        allowed_diff = DiffResult(
+            weakened_edges=[],
+            has_weakening=False,
+            denied=False,
+            reason_code=None,
+            caller_type="mcp",
+        )
+
+        with (
+            patch(
+                "modulo.db.crud.pipeline_snapshot_versioning.resolve_effective_privilege",
+                new_callable=AsyncMock,
+                return_value=False,
+            ) as mock_resolve,
+            patch(
+                "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+                new_callable=AsyncMock,
+                return_value=allowed_diff,
+            ) as mock_diff,
+            patch(
+                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                new_callable=AsyncMock,
+                return_value=new_snapshot,
+            ),
+        ):
+            result = await rollback_to_snapshot(session, pid, target_sid, is_privileged=True, caller_type="mcp")
+
+        assert result is new_snapshot
+        # Privilege is resolved under the lock and must not leak through for MCP.
+        mock_resolve.assert_awaited_once()
+        assert mock_resolve.await_args.kwargs["is_privileged"] is True
+        assert mock_resolve.await_args.kwargs["caller_type"] == "mcp"
+        assert mock_diff.await_args.kwargs["is_privileged"] is False
+        assert mock_diff.await_args.kwargs["caller_type"] == "mcp"
+
     async def test_rollback_to_snapshot_raises_when_gate_weakening_denied(self):
         """A denied gate-weakening diff must raise and leave the graph untouched."""
         pid = uuid.uuid4()
@@ -271,6 +355,49 @@ class TestRollbackToSnapshot:
         assert excinfo.value.correlation_keys == [("a", "b", "normal")]
         mock_create.assert_not_awaited()
         session.add.assert_not_called()
+
+    async def test_rollback_to_snapshot_denied_weakening_raises_before_mutation(self):
+        session = AsyncMock()
+        pid = uuid.uuid4()
+        target_sid = uuid.uuid4()
+
+        call_count = 0
+
+        async def execute_side(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = _target_snapshot(target_sid, pid)
+            elif call_count == 2:
+                pipeline = MagicMock()
+                pipeline.id = pid
+                pipeline.organisation_id = uuid.uuid4()
+                pipeline.graph_nodes_json = []
+                result.scalar_one_or_none.return_value = pipeline
+            return result
+
+        session.execute = AsyncMock(side_effect=execute_side)
+
+        with (
+            patch(
+                "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+                new_callable=AsyncMock,
+                return_value=_denied_diff("legacy-snapshot-ambiguous"),
+            ),
+            patch(
+                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                new_callable=AsyncMock,
+            ) as mock_create,
+            pytest.raises(HitlGateWeakeningDenied) as exc_info,
+        ):
+            await rollback_to_snapshot(session, pid, target_sid, is_privileged=False, caller_type="rest")
+
+        assert exc_info.value.reason_code == "legacy-snapshot-ambiguous"
+        # The graph mutation must never run when the gate guard denies.
+        session.delete.assert_not_called()
+        session.add.assert_not_called()
+        mock_create.assert_not_awaited()
 
     async def test_rollback_to_snapshot_audits_gate_weakening_when_allowed(self):
         """A non-denied weakening must record a hitl_gate_removed audit event."""
@@ -333,6 +460,71 @@ class TestRollbackToSnapshot:
         assert audit_kwargs["actor_user_id"] == account_id
         assert audit_kwargs["resource_type"] == "pipeline"
         assert audit_kwargs["resource_id"] == pid
+
+    async def test_rollback_appends_audit_event_on_weakening(self):
+        session = AsyncMock()
+        pid = uuid.uuid4()
+        target_sid = uuid.uuid4()
+
+        call_count = 0
+
+        async def execute_side(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = _target_snapshot(target_sid, pid)
+            elif call_count == 2:
+                pipeline = MagicMock()
+                pipeline.id = pid
+                pipeline.organisation_id = uuid.uuid4()
+                pipeline.graph_nodes_json = []
+                result.scalar_one_or_none.return_value = pipeline
+            return result
+
+        session.execute = AsyncMock(side_effect=execute_side)
+
+        weakening_diff = DiffResult(
+            weakened_edges=[
+                EdgeWeakening(
+                    correlation_key=("a", "b", "normal"),
+                    weakening_types=["human_only"],
+                    reason_code="insufficient-role",
+                )
+            ],
+            has_weakening=True,
+            denied=False,
+            reason_code=None,
+            caller_type="rest",
+        )
+        new_snapshot = MagicMock(spec=PipelineSnapshot)
+
+        with (
+            patch(
+                "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+                new_callable=AsyncMock,
+                return_value=weakening_diff,
+            ),
+            patch(
+                "modulo.db.crud.pipeline_snapshot_versioning.append_audit_event",
+                new_callable=AsyncMock,
+            ) as mock_audit,
+            patch(
+                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                new_callable=AsyncMock,
+                return_value=new_snapshot,
+            ),
+        ):
+            result = await rollback_to_snapshot(session, pid, target_sid, is_privileged=True, caller_type="rest")
+
+        assert result is new_snapshot
+        mock_audit.assert_awaited_once()
+        assert mock_audit.await_args.kwargs["event_type"] == "hitl_gate_removed"
+        assert mock_audit.await_args.kwargs["resource_id"] == pid
+        payload = mock_audit.await_args.kwargs["payload_json"]
+        assert payload["denied"] is False
+        assert payload["caller_type"] == "rest"
+        assert payload["affected_edges"][0]["weakening_types"] == ["human_only"]
 
     async def test_rollback_to_snapshot_replaces_graph_nodes_and_edges(self):
         """Rollback must overwrite the live graph and rebuild edges before snapshotting."""
@@ -670,6 +862,31 @@ class TestListSnapshots:
         sql = str(select_stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "LIMIT 10" in sql
         assert "OFFSET 20" in sql
+        # Rows are always ordered newest-version-first.
+        assert "snapshot_version DESC" in sql.replace("\n", " ")
+        # Both queries are scoped to non-deleted pipelines.
+        assert "deleted_at IS NULL" in sql.replace("\n", " ")
+
+    async def test_list_snapshots_programming_error_returns_empty(self):
+        session = AsyncMock()
+        pid = uuid.uuid4()
+
+        call_count = 0
+
+        async def execute_side(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                result = MagicMock()
+                result.scalars.return_value = []
+                return result
+            raise ProgrammingError("select count(*)", {}, Exception("boom"))
+
+        session.execute = AsyncMock(side_effect=execute_side)
+
+        snapshots, total = await list_snapshots(session, pid)
+        assert snapshots == []
+        assert total == 0
 
     async def test_list_snapshots_excludes_deleted_pipelines(self):
         """Snapshots for soft-deleted pipelines must be filtered out of both queries."""

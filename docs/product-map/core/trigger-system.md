@@ -28,6 +28,8 @@ unit-tests:
   - backend/tests/unit/api/test_webhook_replay.py
   - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/mcp/test_get_trigger_events.py
+  - backend/tests/unit/mcp/test_trigger_crud_tools.py
+  - backend/tests/unit/mcp/test_trigger_mgmt_tools.py
   - backend/tests/unit/cleanup_jobs/test_webhook_dedup_cleanup.py
 status: partial
 ---

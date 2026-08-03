@@ -10,7 +10,7 @@ BeforeAll {
     $script:RepoRoot = Resolve-Path (Join-Path $toolsDir "..")
 
     # Create a temp directory for test fixtures
-    $script:TestDir = Join-Path $env:TEMP "modulo-manifest-test-$(Get-Random)"
+    $script:TestDir = Join-Path ([IO.Path]::GetTempPath()) "modulo-manifest-test-$(Get-Random)"
     New-Item -ItemType Directory -Path $TestDir -Force | Out-Null
 
     # Create a minimal router file

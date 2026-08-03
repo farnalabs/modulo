@@ -17,7 +17,7 @@ status: partial
 
 # Linear Connector
 
-Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 24 scenarios (21 happy-path + 3 error-path) with step definitions in `backend/tests/bdd/features/connectors/linear_connector.feature` and `backend/tests/bdd/steps/test_connectors.py`. Provides read/write access to Linear issues for agent pipelines. Authenticated via Linear API key. Belongs to the `issue-tracker` connector type family alongside `JiraConnector`.
+Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 28 scenarios with step definitions in `backend/tests/bdd/features/connectors/linear_connector.feature` and `backend/tests/bdd/steps/test_connectors.py`. Provides read/write access to Linear issues for agent pipelines. Authenticated via Linear API key. Belongs to the `issue-tracker` connector type family alongside `JiraConnector`.
 
 ## Behaviours
 
@@ -57,15 +57,17 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 2
 - [x] Read issue comments via `query("issue_comments")` with `issueId` filter
 - [x] Create issue comments via `write("issue_comment")` with `issueId` and `body`
 - [x] Support cursor-based pagination for `query("search")` — `next_cursor` populated from `pageInfo`
-- [x] **State transition by name** — `write("issue_state")` accepts `{"id", "state": "<name>", "teamId"}` and resolves the workflow state name to an ID via the team's states before applying `issueUpdate`
+- [x] **State transition by name** — `write("issue_state")` accepts `{"id", "state": "<name>", "teamId"}` and resolves the workflow state name to an ID via the team's states before applying `issueUpdate`; name resolution is exact-first (case/punctuation-insensitive) then fuzzy, and raises a clear error on duplicate/ambiguous names
 - [x] **State transition by raw state ID** — `write("issue_state")` accepts `{"id", "stateId"}` to set a workflow state ID directly without resolution
 - [x] **Label creation** — `write("label")` creates a label via `labelCreate` with `name`, `teamId`, optional `color`/`description`
 - [x] **Label update/rename** — `write("label_update")` renames/recolors a label via `labelUpdate` with `id` and optional `name`/`color`/`description`
 - [x] **Label deletion** — `write("label_delete")` deletes a label via `labelDelete` with `id`
-- [x] **Cycle assignment by name** — `write("issue_cycle")` accepts `{"id", "cycle": "<name>", "teamId"}` and resolves the cycle name to an ID via the team's cycles before applying `issueUpdate`
+- [x] **Cycle assignment by name** — `write("issue_cycle")` accepts `{"id", "cycle": "<name>", "teamId"}` and resolves the cycle name to an ID via the team's cycles before applying `issueUpdate`; name resolution is exact-first (case/punctuation-insensitive) then fuzzy, and raises a clear error on duplicate/ambiguous names
 - [x] **Cycle assignment by raw cycle ID** — `write("issue_cycle")` accepts `{"id", "cycleId"}` to set the cycle ID directly
 - [x] **Cycle removal** — `write("issue_cycle")` accepts `{"id", "cycleId": null}` to unassign an issue from its cycle
 - [x] **Label assignment (add/remove)** — `write("issue_label")` accepts `{"id", "addLabelIds": [...]}` and/or `{"id", "removeLabelIds": [...]}` (at least one required); current label IDs are fetched first and the target set computed so it is a true add/remove, applied via a single `issueUpdate`
+- [x] **Assign/reassign issue** — `write("issue_assign")` accepts `{"id", "assigneeId": "<id>"}` (direct), `{"id", "email": "..."}` or `{"id", "name": "..."}` (resolved via Linear user search, `ValueError` when no user), or `{"assigneeId": null}` / `{"unassign": true}` to clear the assignee; applied via a single `issueUpdate`
+- [x] **Unassign issue** — `write("issue_unassign")` with `{"id"}` clears the assignee via a single `issueUpdate`
 - [x] **Cycle read-back on issues** — `_ISSUE_FIELDS` returns `cycle { id name }` on issue reads and writes
 - [x] **Archive issue** — `write("issue_archive")` with `{"id"}` (optional `{"trash": bool}`) via `issueArchive`, returns `{"id", "archived": True, "trash": ...}`
 - [x] **Delete issue** — `write("issue_delete")` with `{"id"}` via `issueDelete`, returns `{"id", "deleted": True}`
@@ -119,10 +121,15 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 2
 
 ## Known Gaps
 
-- [ ] **Assign/unassign issue**: no dedicated `issue_assign`/`issue_unassign` write resources — assignment is only available via `issue_update` (which can set `assigneeId` directly)
-- [ ] **State/cycle name resolution is case-insensitive exact-match only**: no fuzzy matching or duplicate-name disambiguation when two workflow states or cycles share a name
+- (none — the two documented gaps were resolved on 2026-08-03; see QA History)
 
 ## QA History
+
+### 2026-08-03 — improve-architecture: 2 known gaps RESOLVED (dedicated assign/unassign + fuzzy/duplicate-name disambiguation)
+- **RESOLVED** "Assign/unassign issue" — added `write("issue_assign")` (accepts `{"id", "assigneeId": "<id>"}` direct, `{"id", "email": "..."}` or `{"id", "name": "..."}` resolved via a new Linear `users(first: 1, filter: ...)` GraphQL query with `ValueError` on no-match, or `{"assigneeId": null}` / `{"unassign": true}` to clear) and `write("issue_unassign")` (`{"id"}`), both applied via a single `issueUpdate` and returning the updated issue.
+- **RESOLVED** "State/cycle name resolution is case-insensitive exact-match only" — added `_normalize_name()` (case/punctuation-insensitive) and `_fuzzy_matches()` (token-containment) helpers plus a shared `_resolve_entity_by_name()`: exact (normalised) match first, fuzzy fallback second, clear `ValueError` when two or more entities match the same name (duplicate exact names or an ambiguous fuzzy prefix) so callers pass the raw ID. State lookup now paginates through all pages via new `_STATE_LOOKUP_QUERY` + `_team_states()`/`_team_named_entities()` (mirroring the existing paginated cycle lookup), so a name on page 2 can no longer be missed.
+- Added 14 unit tests (`test_linear.py`: assign by id/email/name/unassign-flag/null-assignee, assign missing id + missing user reference + user-not-found + update failure, unassign + missing id, fuzzy state "progress"→"In Progress", punctuation-insensitive "in-progress", duplicate exact state names raise, ambiguous fuzzy cycle name raises, exact-beats-fuzzy) + 5 BDD scenarios in `linear_connector.feature` (assign by assignee id / by email / by name, unassign, missing-user-reference error) with 5 new step definitions in `test_connectors.py` and the mock connector extended to mirror the new resources.
+- Updated product map (2 behaviours `[ ]`→`[x]`, both Known Gaps → RESOLVED, QA History). 91/91 linear unit tests + 28/28 linear BDD scenarios pass (pre-existing 18 connector-suite BDD failures unchanged), ruff clean. Status: partial (only cross-cutting gaps remain — expired-key vs network-error distinction, per-operation permission checks, GraphQL query-complexity limits).
 
 ### 2026-08-03 — improve-architecture: 3 known gaps RESOLVED (issue_label add/remove, cycle read-back, issue archive/delete)
 

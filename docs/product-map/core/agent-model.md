@@ -18,6 +18,7 @@ unit-tests:
   - backend/tests/unit/api/test_agent_prompts.py
   - backend/tests/unit/db/test_agent_executable.py
   - backend/tests/integration/crud/test_agent.py
+  - backend/tests/unit/mcp/test_mcp_schema_tools.py
 status: partial
 ---
 

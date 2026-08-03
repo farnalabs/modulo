@@ -1114,7 +1114,7 @@ def step_jira_write_returns_deletion(key, ctx):
 
 
 # ============================================================================
-# connectors/linear_connector.feature  —  5 scenarios
+# connectors/linear_connector.feature  —  28 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/linear_connector.feature")
@@ -1236,6 +1236,31 @@ def step_linear_connector(ctx):
                 if not issue_id:
                     raise ValueError("Missing 'id' in issue_delete payload")
                 return {"id": issue_id, "deleted": True}
+            case "issue_assign":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_assign payload")
+                if "assigneeId" in payload.data:
+                    assignee_id = payload.data.get("assigneeId")
+                elif payload.data.get("unassign") is True:
+                    assignee_id = None
+                elif payload.data.get("email") == "alice@example.com" or payload.data.get("name") == "Alice Smith":
+                    assignee_id = "usr-1"
+                else:
+                    raise ValueError("issue_assign requires 'assigneeId', 'email', 'name', or 'unassign': true")
+                return {
+                    "id": issue_id,
+                    "identifier": "ENG-1",
+                    "title": "Fix login bug",
+                    "assignee": {"id": assignee_id, "name": "Alice Smith", "email": "alice@example.com"}
+                    if assignee_id
+                    else None,
+                }
+            case "issue_unassign":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_unassign payload")
+                return {"id": issue_id, "identifier": "ENG-1", "title": "Fix login bug", "assignee": None}
             case "label":
                 name = payload.data.get("name")
                 team_id = payload.data.get("teamId")
@@ -1592,6 +1617,86 @@ def step_linear_issue_delete(issue_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_delete", data={"id": issue_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I assign Linear issue "{issue_id}" to assignee id "{assignee_id}"'))
+def step_linear_issue_assign_by_id(issue_id, assignee_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_assign", data={"id": issue_id, "assigneeId": assignee_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I assign Linear issue "{issue_id}" to the user with email "{email}"'))
+def step_linear_issue_assign_by_email(issue_id, email, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_assign", data={"id": issue_id, "email": email})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I assign Linear issue "{issue_id}" to the user named "{name}"'))
+def step_linear_issue_assign_by_name(issue_id, name, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_assign", data={"id": issue_id, "name": name})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I unassign Linear issue "{issue_id}"'))
+def step_linear_issue_unassign(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_unassign", data={"id": issue_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I assign Linear issue "{issue_id}" without a user reference'))
+def step_linear_issue_assign_missing(issue_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource="issue_assign", data={"id": issue_id})
     import asyncio
 
     try:

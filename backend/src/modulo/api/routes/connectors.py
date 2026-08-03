@@ -136,7 +136,7 @@ def _to_response(ci: Any) -> ConnectorResponse:
 
 
 @handle_db_errors("connectors.list_connectors_endpoint")
-@router.get("", response_model=ConnectorListResponse)
+@router.get("", response_model=ConnectorListResponse, responses={401: {"description": "Unauthorized"}})
 async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),

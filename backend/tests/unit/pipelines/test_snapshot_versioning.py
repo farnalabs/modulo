@@ -208,6 +208,8 @@ class TestDiffSnapshots:
         modified = result["edges_modified"][0]
         assert modified["edge"] == {"source": "a", "target": "b"}
         assert modified["changes"]["edge_type"] == {"old": "normal", "new": "loop"}
+        assert len(result["edges_added"]) == 0
+        assert len(result["edges_removed"]) == 0
 
     async def test_diff_modified_edge_hitl_gate_config(self):
         sid_a = uuid.uuid4()
@@ -230,6 +232,33 @@ class TestDiffSnapshots:
         assert len(result["edges_modified"]) == 1
         modified = result["edges_modified"][0]
         assert modified["changes"]["hitl_gate_config"] == {"old": {"human_only": True}, "new": None}
+        assert "edge_type" not in modified["changes"]
+
+    async def test_diff_modified_edge_hitl_gate_config_value_change(self):
+        sid_a = uuid.uuid4()
+        sid_b = uuid.uuid4()
+        snap_a = _mock_snapshot(
+            sid_a,
+            1,
+            edges=[{"source": "a", "target": "b", "type": "normal", "hitl_gate_config": {"human_only": True}}],
+        )
+        snap_b = _mock_snapshot(
+            sid_b,
+            2,
+            edges=[{"source": "a", "target": "b", "type": "normal", "hitl_gate_config": {"human_only": False}}],
+        )
+
+        session = _diff_session(snap_a, snap_b)
+
+        result = await diff_snapshots(session, sid_a, sid_b)
+        assert result is not None
+        assert len(result["edges_modified"]) == 1
+        modified = result["edges_modified"][0]
+        assert modified["changes"]["hitl_gate_config"] == {
+            "old": {"human_only": True},
+            "new": {"human_only": False},
+        }
+        assert "edge_type" not in modified["changes"]
 
     async def test_diff_modified_node_connector_binding(self):
         sid_a = uuid.uuid4()

@@ -317,6 +317,28 @@ class TestCancelRun(_AuthContext):
     @patch("modulo.db.crud.run.get_run")
     @patch("modulo.db.crud.run.request_cancellation")
     @patch("modulo.api.mcp_server._session")
+    async def test_run_not_found_when_request_cancellation_returns_none(
+        self,
+        mock_session: AsyncMock,
+        mock_request_cancellation: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_get_run.return_value = _make_mock_run(status="running")
+        mock_request_cancellation.return_value = None
+
+        run_id = str(uuid.uuid4())
+        result = await cancel_run(run_id=run_id)
+
+        assert result == {"error": "run_not_found", "run_id": run_id}
+        mock_request_cancellation.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.db.crud.run.get_run")
+    @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server._session")
     async def test_success_requests_cancellation(
         self,
         mock_session: AsyncMock,
