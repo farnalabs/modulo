@@ -88,12 +88,23 @@ _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 # uptime, so (elapsed_seconds / 3600) x rate is a faithful cost estimate.
 # Operators can override via E2B_SANDBOX_USD_PER_HOUR.
 _E2B_SANDBOX_USD_PER_HOUR = 0.5
-try:
-    from modulo.settings import get_settings
 
-    _E2B_SANDBOX_USD_PER_HOUR = float(get_settings().e2b_sandbox_usd_per_hour)
-except Exception:
-    _log.debug("sandbox_cost.e2b_rate_lookup_failed; using default", exc_info=True)
+
+def _e2b_sandbox_usd_per_hour() -> float:
+    """Return the configured E2B hourly sandbox rate (USD).
+
+    Looked up per call (not at import time) so operator changes to
+    ``E2B_SANDBOX_USD_PER_HOUR`` take effect without a process reload;
+    ``get_settings`` is lru-cached and env-based, so this stays cheap.
+    Falls back to the module default when settings cannot be loaded.
+    """
+    try:
+        from modulo.settings import get_settings
+
+        return float(get_settings().e2b_sandbox_usd_per_hour)
+    except Exception:
+        _log.debug("sandbox_cost.e2b_rate_lookup_failed; using default", exc_info=True)
+        return _E2B_SANDBOX_USD_PER_HOUR
 
 
 def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
@@ -105,11 +116,15 @@ def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
     agent to /home/user/output.json). Non-finite estimates (NaN/inf) are
     discarded. Returns a plain JSON-serialisable float.
     """
-    sandbox_cost = round((elapsed_seconds / 3600.0) * _E2B_SANDBOX_USD_PER_HOUR, 6)
+    sandbox_cost = round((elapsed_seconds / 3600.0) * _e2b_sandbox_usd_per_hour(), 6)
     agent_reported_cost = 0.0
     if isinstance(output_json, dict):
+        # bool is an int subclass; `cost_estimate_usd: true` must not count as $1.
+        _est = output_json.get("cost_estimate_usd")
+        if isinstance(_est, bool):
+            _est = 0.0
         try:
-            agent_reported_cost = float(output_json.get("cost_estimate_usd") or 0)
+            agent_reported_cost = float(_est or 0)
         except (TypeError, ValueError):
             agent_reported_cost = 0.0
         if not math.isfinite(agent_reported_cost):
