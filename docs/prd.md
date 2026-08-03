@@ -539,6 +539,9 @@ This replaces the previous "LLM driveability" stretch goal with a standards-base
 | `create_model_backend` | `POST /api/v1/model-backends` | Operator role required. Registers a new LLM provider. API key is provided via a one-time browser setup URL returned by the tool — the key never transits the LLM context. |
 | `list_runs` | `GET /api/v1/runs` | List runs with cursor-based pagination, optional pipeline_id/status filters. |
 | `list_triggers` | `GET /api/v1/triggers` | List trigger configurations, optional pipeline_id filter. |
+| `get_trigger` | `GET /api/v1/triggers/{id}` | Read a single trigger by ID (runner role required). |
+| `update_trigger` | `PUT /api/v1/triggers/{id}` | Update a trigger's configuration — active, max_concurrent_runs, cron_expression/cron_timezone (cron triggers only), daily_spend_limit (clear via `clear_daily_spend_limit`), config_json. Operator role required. |
+| `delete_trigger` | `DELETE /api/v1/triggers/{id}` | Soft-delete a trigger by ID. Operator role required. |
 | `get_run_evals` | `GET /api/v1/runs/{id}/evals` | Get eval results for a completed run. |
 | `list_eval_definitions` | `GET /api/v1/eval-definitions` | List eval configurations, optional pipeline_id filter. |
 | `get_integration_status` | `GET /api/v1/integrations/status` | Health status of all connectors, model backends, and triggers. |
@@ -1193,6 +1196,19 @@ Pricing tables: local `config/model_pricing.yaml`. Shipped with defaults. User-m
 Without team-level limits, a high-volume team running LLM pipelines can exhaust org quota without any governance. These limits ensure admins can operate shared deployments safely.
 
 **Limit enforcement atomicity**: `org_daily_run_limit` and `team_daily_run_limit` are checked and incremented atomically within the run creation transaction using `SELECT ... FOR UPDATE` on an `org_daily_run_counts` table (keyed by `org_id` + UTC date). This prevents two simultaneous run-creation requests both passing the check and exceeding the limit. `org_daily_spend_limit` is checked pre-run against the accumulated spend for the UTC day (from usage events) — read from a materialised counter, updated by the cost tracking callback (§7.10). This check is not transactionally atomic (spend accumulates asynchronously), but over-spend by a single run is accepted as the operational cost of non-blocking execution. Both limits are stored in org `settings_json`. The `Cost Controller` component (§5.6) is the single enforcement point for all spend/run limit checks — they are never checked in multiple places.
+
+#### Sandbox Agent Runtime Cost
+
+`sandbox_agent` (E2B) nodes report a `cost_estimate_usd` on the run, computed from the node's wall-clock time plus the agent's self-reported model estimate:
+
+```
+cost_estimate_usd = (wall_clock_seconds / 3600 × E2B_SANDBOX_USD_PER_HOUR)
+                    + agent_reported cost_estimate_usd (when present in the agent's output contract)
+```
+
+`E2B_SANDBOX_USD_PER_HOUR` (default `0.5` USD/hr) is operator-configurable and reflects the hourly E2B sandbox rate; E2B bills per-second sandbox uptime, so wall-clock time is a faithful cost basis. The agent's own `cost_estimate_usd` field (written to `/home/user/output.json` by dogfood agents) is merged in when present and numeric. The estimate is attached to both the node's artifact output and the run's `output`, and `Run.total_cost_usd` aggregates token cost + sandbox cost across all completed nodes (`execute` and HITL `resume` paths equally).
+
+**Attributability boundary**: GitHub Actions billing is unavailable on the free tier and is not tracked. Fly costs are infrastructure-level (the platform hosting Modulo itself) and are NOT attributed per-run. Only E2B sandbox usage is per-run attributable; sandbox cost is an estimate, not an invoice.
 
 ### 8.11 Notifications
 

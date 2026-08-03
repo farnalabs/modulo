@@ -60,6 +60,172 @@ def test_compute_token_costs_treats_null_counters_as_zero():
     }
 
 
+def test_aggregate_sandbox_cost_sums_positive_estimates():
+    """Only positive numeric cost_estimate_usd values inside node output dicts count."""
+    completed_node_outputs: dict[str, Any] = {
+        "node-a": {
+            "output": {
+                "status": "completed",
+                "cost_estimate_usd": 0.5,
+            }
+        },
+        "node-b": {
+            "output": {
+                "status": "completed",
+                "cost_estimate_usd": 0.25,
+            }
+        },
+        # No cost_estimate_usd key at all → contributes 0.
+        "node-c": {
+            "output": {
+                "status": "completed",
+                "summary": "no cost reported",
+            }
+        },
+        # Zero and negative estimates must not count toward the run cost.
+        "node-d": {
+            "output": {
+                "status": "failed",
+                "cost_estimate_usd": 0,
+            }
+        },
+        "node-e": {
+            "output": {
+                "status": "failed",
+                "cost_estimate_usd": -1.0,
+            }
+        },
+    }
+
+    total = PipelineExecutor._aggregate_sandbox_cost(completed_node_outputs)
+
+    assert total == Decimal("0.75")
+
+
+def test_aggregate_sandbox_cost_ignores_non_dict():
+    """Garbage entries (None, strings, missing 'output') don't crash and contribute 0."""
+    completed_node_outputs: dict[str, Any] = {
+        "node-a": None,
+        "node-b": "some-string",
+        "node-c": 42,
+        "node-d": {"output": None},
+        "node-e": {"output": "not-a-dict"},
+        "node-f": {"output": {"cost_estimate_usd": "not-a-number"}},
+        "node-g": {"output": {"cost_estimate_usd": None}},
+        # Non-finite floats must not corrupt the run total.
+        "node-h": {"output": {"cost_estimate_usd": float("inf")}},
+        "node-i": {"output": {"cost_estimate_usd": float("nan")}},
+    }
+
+    assert PipelineExecutor._aggregate_sandbox_cost(completed_node_outputs) == Decimal(0)
+    assert PipelineExecutor._aggregate_sandbox_cost(None) == Decimal(0)
+    assert PipelineExecutor._aggregate_sandbox_cost({}) == Decimal(0)
+
+
+async def test_execute_adds_sandbox_cost_to_total_cost_usd():
+    """execute() folds completed sandbox-node cost into the run's total_cost_usd.
+
+    A completed node's ``on_chain_end`` output carrying a positive
+    ``cost_estimate_usd`` must reach ``update_run_status`` via the executor's
+    sandbox-cost aggregation — not just be recorded on the node.
+    """
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "node-a",
+            "data": {
+                "output": {
+                    "output": {"status": "completed", "cost_estimate_usd": 0.5},
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            return_value=final_run,
+        ) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.core.pipeline_engine.executor.check_and_record_spend"),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    final_call = mock_update.call_args_list[-1]
+    assert final_call.kwargs.get("total_cost_usd") == Decimal("0.5")
+
+
+async def test_resume_adds_sandbox_cost_to_total_cost_usd():
+    """resume() mirrors execute(): nodes completed during resume contribute cost.
+
+    A resumed HITL run that completes a sandbox node must surface the node's
+    ``cost_estimate_usd`` in the final ``update_run_status`` total.
+    """
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_resume_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "node-a",
+            "data": {
+                "output": {
+                    "output": {"status": "completed", "cost_estimate_usd": 0.75},
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    compiled.aupdate_state = AsyncMock()
+
+    checkpointer_mock = MagicMock()
+    checkpointer_mock.__aenter__ = AsyncMock(return_value=checkpointer_mock)
+    checkpointer_mock.__aexit__ = AsyncMock(return_value=False)
+
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            return_value=final_run,
+        ) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+        patch("modulo.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
+        patch("modulo.core.pipeline_engine.executor.check_and_record_spend"),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._checkpointer_conn_string = "sqlite:///test.db"
+        await executor.resume(run_id=run.id, org_id=uuid.uuid4(), resume_data={"action": "approved"})
+
+    final_call = mock_update.call_args_list[-1]
+    assert final_call.kwargs.get("total_cost_usd") == Decimal("0.75")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -147,6 +313,45 @@ def _make_session_factory(session: AsyncMock) -> MagicMock:
         yield session
 
     return MagicMock(side_effect=lambda: _ctx())
+
+
+def _make_resume_session(snapshot: MagicMock) -> AsyncMock:
+    """Session mock whose execute() order matches resume()'s query sequence.
+
+    resume() queries the snapshot FIRST, then the pipeline — the opposite of
+    execute(), so the shared _make_session iterator is not reusable here.
+    """
+    pipeline = _make_pipeline()
+
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = pipeline
+
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one.return_value = snapshot
+
+    eval_result = MagicMock()
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = []
+    eval_result.scalars.return_value = scalars_mock
+
+    count_result = MagicMock()
+    count_result.scalar.return_value = 0
+
+    execute_results = iter([snapshot_result, pipeline_result, eval_result, count_result])
+
+    async def _execute(*_args: Any, **_kwargs: Any) -> Any:
+        try:
+            return next(execute_results)
+        except StopIteration:
+            return count_result
+
+    session = AsyncMock(spec=AsyncSession)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = _execute
+    return session
 
 
 def _mock_graph_validator() -> MagicMock:
