@@ -118,8 +118,6 @@ from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
 
-_log = logging.getLogger(__name__)
-
 # Uptime tracking -- set at module import time, read by health endpoints.
 logger = logging.getLogger(__name__)
 
