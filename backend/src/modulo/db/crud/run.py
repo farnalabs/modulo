@@ -293,8 +293,10 @@ def _graph_contains_sandbox_agent(graph_json: dict[str, Any] | None) -> bool:
 
     Fail-open: ``None``, non-dicts, and missing ``nodes`` return ``False``
     (treat as non-sandbox, never block). Only the top-level ``nodes`` list is
-    scanned — composite ``composite_ref`` → ``sub_pipeline_graph_json`` is
-    deliberately not recursed (composite pipelines are not compilable today).
+    scanned — composite pipelines ARE compilable today: snapshots are expanded
+    at creation time (``create_snapshot_from_live_graph``), so any sandbox
+    sub-node of a composite template appears directly in the snapshot's
+    top-level ``nodes`` and is found by this scan.
     """
     if not isinstance(graph_json, dict):
         return False
