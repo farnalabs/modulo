@@ -13,8 +13,7 @@ primary_region = 'lhr'
 # Restart policy — crash-loop guard + max-restart in the entrypoint is the
 # control (plan F8): no auto-restart here; a crash-looping SAQ worker fails the
 # container and the LB moves traffic decisively.
-[restart]
-  policy = "no"
+restart = []
 
 [http_service]
   internal_port = 8080  # nginx serves SPA; proxies API/WS/MCP to uvicorn
