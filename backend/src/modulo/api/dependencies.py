@@ -616,9 +616,9 @@ async def get_current_tenant_user_optional(
     ``None`` (a DB blip must not fail-open a break-glass principal).
 
     The login-route create_family mint for break-glass logins is DELIBERATELY
-    excluded — it IS the recovery path. ``auth.dependencies`` re-exports this
-    function lazily (PEP 562) so existing ``from modulo.auth.dependencies import
-    get_current_tenant_user_optional`` callers are unchanged.
+    excluded — it IS the recovery path. Consumers import this function directly
+    from ``modulo.api.dependencies`` (the previous PEP 562 lazy re-export in
+    ``auth.dependencies`` was removed; ``webhooks.py`` imports it here).
     """
     if credentials is None:
         return None
