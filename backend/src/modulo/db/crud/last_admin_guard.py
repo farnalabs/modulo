@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Awaitable
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.account import Account
@@ -64,7 +64,10 @@ async def _acquire_org_lock(session: AsyncSession, org_id: uuid.UUID) -> None:
     k1, k2 = _str_to_lock_keys(str(org_id))
     deadline = asyncio.get_running_loop().time() + _LOCK_TIMEOUT_SECONDS
     while True:
-        result = await session.execute(func.pg_try_advisory_xact_lock(k1, k2).label("acquired"))
+        result = await session.execute(
+            text("SELECT pg_try_advisory_xact_lock(:key1, :key2)"),
+            {"key1": k1, "key2": k2},
+        )
         if bool(result.scalar_one()):
             return
         if asyncio.get_running_loop().time() >= deadline:
