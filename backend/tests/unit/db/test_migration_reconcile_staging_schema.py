@@ -132,12 +132,38 @@ class TestReconcileDriftedSchema:
             assert any(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY' in sql for sql in executed_sql)
             assert any(f'CREATE POLICY rls_org_isolation ON "{table}"' in sql for sql in executed_sql)
 
+    def test_creates_0005_tenant_isolation_triggers(self, reconcile_migration: ModuleType) -> None:
+        """Recreated tables must get the same tenant triggers 0005 installs.
+
+        0005's ``_create_triggers`` installs ``trg_<table>_<column>_tenant``
+        triggers calling ``enforce_same_organisation()`` for these tables; 0064
+        recreates the tables, so it must reinstall the identical triggers or the
+        repaired schema would permanently lack the cross-org FK enforcement.
+        """
+        mock_op = _run_upgrade(reconcile_migration, self._DRIFTED)
+
+        executed_sql = " ".join(str(call.args[0].text) for call in mock_op.execute.call_args_list)
+        for table, column, parent in (
+            ("mcp_setup_tokens", "created_by", "accounts"),
+            ("lifecycle_maps", "account_id", "accounts"),
+            ("lifecycle_maps", "owner_team_id", "teams"),
+            ("scheduled_reports", "created_by", "accounts"),
+        ):
+            expected = (
+                f'CREATE TRIGGER "trg_{table}_{column}_tenant" '
+                f'BEFORE INSERT OR UPDATE OF "{column}", "organisation_id" ON "{table}" '
+                f"FOR EACH ROW EXECUTE FUNCTION enforce_same_organisation('{parent}', '{column}')"
+            )
+            assert expected in executed_sql
+
     def test_refuses_to_drop_populated_legacy_scheduled_reports(self, reconcile_migration: ModuleType) -> None:
         mock_op = _run_upgrade(reconcile_migration, self._DRIFTED, scheduled_report_rows=3)
 
         assert mock_op.drop_table.call_args_list == []
         created_tables = {call.args[0] for call in mock_op.create_table.call_args_list}
         assert created_tables == {"mcp_setup_tokens", "lifecycle_maps"}
+        executed_sql = " ".join(str(call.args[0].text) for call in mock_op.execute.call_args_list)
+        assert 'CREATE TRIGGER "trg_scheduled_reports_created_by_tenant"' not in executed_sql
 
     def test_reconciles_legacy_scheduled_reports_after_615_created_by_add(
         self, reconcile_migration: ModuleType

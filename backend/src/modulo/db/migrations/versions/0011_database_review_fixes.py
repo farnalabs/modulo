@@ -79,7 +79,7 @@ def _create_index_if_present(bind: Any, index_name: str, table: str, columns: li
         return
     missing = [c for c in columns if not _column_exists(bind, table, c)]
     if missing:
-        _warn(f"SKIP index {index_name} on {table}.{missing[0]}: missing column (drift-tolerant)")
+        _warn(f"SKIP index {index_name} on {table}.{', '.join(missing)}: missing column(s) (drift-tolerant)")
         return
     op.create_index(index_name, table, columns, unique=False, **kwargs)
 
@@ -102,7 +102,7 @@ def _create_foreign_key_if_present(
         return
     missing = [c for c in columns if not _column_exists(bind, table, c)]
     if missing:
-        _warn(f"SKIP FK {constraint_name} on {table}: missing column {missing[0]} (drift-tolerant)")
+        _warn(f"SKIP FK {constraint_name} on {table}: missing column(s) {', '.join(missing)} (drift-tolerant)")
         return
     if not _table_exists(bind, referent_table):
         _warn(f"SKIP FK {constraint_name} on {table}: referent table {referent_table} missing (drift-tolerant)")
@@ -110,8 +110,8 @@ def _create_foreign_key_if_present(
     missing_ref = [c for c in referent_columns if not _column_exists(bind, referent_table, c)]
     if missing_ref:
         _warn(
-            f"SKIP FK {constraint_name} on {table}: missing referent column "
-            f"{referent_table}.{missing_ref[0]} (drift-tolerant)"
+            f"SKIP FK {constraint_name} on {table}: missing referent column(s) "
+            f"{referent_table}.{', '.join(missing_ref)} (drift-tolerant)"
         )
         return
     op.create_foreign_key(

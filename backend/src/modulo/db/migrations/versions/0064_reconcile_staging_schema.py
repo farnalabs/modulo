@@ -23,7 +23,11 @@ heads`` fail at ``0011_database_review_fixes`` (now drift-tolerant), which hard
 This migration repairs all three, mirroring the exact DDL from
 ``0005_v2_features_system`` (so the migrated schema matches the SQLAlchemy ORM
 metadata exactly) plus the pieces 0011 adds on a healthy DB (the ``created_by``
-FK/indexes).
+FK/indexes). Because it (re)creates these tables, it also reinstalls the same
+tenant-isolation triggers 0005 installs on a fresh schema
+(``trg_<table>_<column>_tenant`` calling ``enforce_same_organisation()``) —
+otherwise the repaired schema would permanently lack that cross-org FK
+enforcement (defense-in-depth on top of RLS) that fresh/prod have.
 
 IDEMPOTENCY: every step is guarded by an existence check. On a healthy DB the
 three tables already exist in their current shape, so each branch is a no-op —
@@ -61,6 +65,12 @@ depends_on: str | Sequence[str] | None = None
 
 _STRICT_RLS = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
 
+_TENANT_TRIGGERS: dict[str, tuple[tuple[str, str], ...]] = {
+    "mcp_setup_tokens": (("created_by", "accounts"),),
+    "lifecycle_maps": (("account_id", "accounts"), ("owner_team_id", "teams")),
+    "scheduled_reports": (("created_by", "accounts"),),
+}
+
 
 def _table_exists(bind: object, table: str) -> bool:
     return sa.inspect(bind).has_table(table)
@@ -81,6 +91,28 @@ def _enable_rls(table: str) -> None:
     """Mirror 0005 ``_enable_rls`` for a single strict-RLS table."""
     op.execute(sa.text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'))
     op.execute(sa.text(f'CREATE POLICY rls_org_isolation ON "{table}" USING ({_STRICT_RLS})'))
+
+
+def _create_tenant_triggers(table: str) -> None:
+    """Install the 0005 tenant-isolation triggers for a (re)created table.
+
+    0005's ``_create_triggers`` installs ``trg_<table>_<column>_tenant`` triggers
+    (calling ``enforce_same_organisation()``) on a fresh schema. 0064 (re)created
+    these tables here, so it must reinstall the exact same triggers or the
+    repaired schema would permanently lack the cross-org FK enforcement that
+    fresh/prod have. Only called from the create/recreate branches, so on a
+    healthy DB (tables already present) this emits nothing.
+    """
+    for child_column, parent_table in _TENANT_TRIGGERS[table]:
+        trigger = f"trg_{table}_{child_column}_tenant"
+        _warn(f"CREATE trigger {trigger}: restoring 0005 tenant-isolation enforcement")
+        op.execute(
+            sa.text(
+                f'CREATE TRIGGER "{trigger}" '
+                f'BEFORE INSERT OR UPDATE OF "{child_column}", "organisation_id" ON "{table}" '
+                f"FOR EACH ROW EXECUTE FUNCTION enforce_same_organisation('{parent_table}', '{child_column}')"
+            )
+        )
 
 
 def _create_mcp_setup_tokens() -> None:
@@ -121,6 +153,7 @@ def _create_mcp_setup_tokens() -> None:
         ondelete="RESTRICT",
     )
     _enable_rls("mcp_setup_tokens")
+    _create_tenant_triggers("mcp_setup_tokens")
 
 
 def _create_lifecycle_maps() -> None:
@@ -160,6 +193,7 @@ def _create_lifecycle_maps() -> None:
     op.create_index(op.f("ix_lifecycle_maps_organisation_id"), "lifecycle_maps", ["organisation_id"], unique=False)
     op.create_index(op.f("ix_lifecycle_maps_account_id"), "lifecycle_maps", ["account_id"], unique=False)
     _enable_rls("lifecycle_maps")
+    _create_tenant_triggers("lifecycle_maps")
 
 
 def _reconcile_scheduled_reports() -> None:
@@ -220,6 +254,7 @@ def _reconcile_scheduled_reports() -> None:
         postgresql_where=sa.text("created_by IS NOT NULL"),
     )
     _enable_rls("scheduled_reports")
+    _create_tenant_triggers("scheduled_reports")
 
 
 def upgrade() -> None:
