@@ -240,12 +240,8 @@ async def test_pull_query_failure_produces_error_sample() -> None:
         await hub.initialise([ci])
 
         respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
-        respx.get(f"{_GITHUB_API}/user/repos").mock(
-            httpx.Response(200, json=[{"full_name": "owner/repo1"}])
-        )
-        respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(
-            httpx.Response(500, text="Server Error")
-        )
+        respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[{"full_name": "owner/repo1"}]))
+        respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(httpx.Response(500, text="Server Error"))
 
         samples = await run_scan(hub)
     by_resource = {s.resource: s for s in samples}
