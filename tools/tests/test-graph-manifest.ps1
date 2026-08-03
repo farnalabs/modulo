@@ -10,7 +10,7 @@ BeforeAll {
     $script:ManifestValidatorPath = Join-Path $toolsDir "validate-manifest.ps1"
     $script:RepoRoot = Resolve-Path (Join-Path $toolsDir "..")
 
-    $script:TestDir = Join-Path $env:TEMP "modulo-graph-manifest-test-$(Get-Random)"
+    $script:TestDir = Join-Path ([IO.Path]::GetTempPath()) "modulo-graph-manifest-test-$(Get-Random)"
     New-Item -ItemType Directory -Path $TestDir -Force | Out-Null
 
     # Create a minimal router file
@@ -312,6 +312,21 @@ Describe "Unit-test path validation in product map entries" {
         Set-Content -Path $utestPath -Value "export const fixtures = {};`n"
         $goodEntry = "---`nid: feat-utest-annotated`nprd: N/A`nstatus: partial`ncode:`n  - backend/src/modulo/api/routes/existing_route.py`nunit-tests:`n  - frontend/tests/e2e/setup/fixtures.ts (loginAsAdmin real auth on staging)`n---"
         $goodPath = Join-Path (Join-Path (Join-Path $TestDir "docs") "product-map") "feat-utest-annotated.md"
+        Set-Content -Path $goodPath -Value $goodEntry
+        try {
+            $result = Invoke-GraphValidator $WellFormedManifest
+            $result.ExitCode | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath $goodPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "passes when an inline-array unit-tests: entry carries a trailing annotation" {
+        $utestPath = Join-Path (Join-Path (Join-Path (Join-Path $TestDir "backend") "tests") "unit") "inline_annotated_test.py"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $utestPath) -Force | Out-Null
+        Set-Content -Path $utestPath -Value "def test_ok(): pass`n"
+        $goodEntry = "---`nid: feat-utest-inline-annotated`nprd: N/A`nstatus: partial`ncode:`n  - backend/src/modulo/api/routes/existing_route.py`nunit-tests: [backend/tests/unit/inline_annotated_test.py (inline annotation with spaces)]`n---"
+        $goodPath = Join-Path (Join-Path (Join-Path $TestDir "docs") "product-map") "feat-utest-inline-annotated.md"
         Set-Content -Path $goodPath -Value $goodEntry
         try {
             $result = Invoke-GraphValidator $WellFormedManifest
