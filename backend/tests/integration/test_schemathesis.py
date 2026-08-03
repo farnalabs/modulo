@@ -23,6 +23,7 @@ import socket
 import pytest
 import schemathesis
 from hypothesis import HealthCheck, settings
+from schemathesis.specs.openapi.checks import status_code_conformance
 
 
 def _redis_reachable() -> bool:
@@ -59,4 +60,8 @@ filtered = schema.include(
 @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
 def test_api_fuzz_get_endpoints(case):
     """All read-only GET endpoints must respond without 500 errors."""
-    case.call_and_validate()
+    # The fuzzer runs unauthenticated, so auth-protected GET endpoints
+    # legitimately return 401/403. Those codes are undocumented in the schema,
+    # so drop strict status-code conformance while keeping not_a_server_error
+    # (5xx) and response_schema_conformance (2xx bodies) active.
+    case.call_and_validate(excluded_checks=[status_code_conformance])
