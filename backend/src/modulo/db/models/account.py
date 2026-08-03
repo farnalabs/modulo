@@ -13,6 +13,10 @@ class Account(Base, TimestampMixin):
     __tablename__ = "accounts"
     __table_args__ = (
         CheckConstraint("auth_provider IN ('local', 'oidc', 'saml', 'scim')", name="ck_accounts_auth_provider"),
+        CheckConstraint(
+            "NOT is_break_glass OR break_glass_expires_at IS NOT NULL OR break_glass_deactivated_at IS NOT NULL",
+            name="ck_accounts_break_glass_expiry",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
@@ -25,3 +29,6 @@ class Account(Base, TimestampMixin):
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     preferences: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, server_default=sa_text("'{}'"))
     is_system_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    is_break_glass: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    break_glass_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    break_glass_deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

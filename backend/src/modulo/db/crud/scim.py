@@ -6,7 +6,7 @@ Groups → internal Team, with members → TeamMembership
 
 import uuid
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +47,14 @@ async def scim_create_user(
                 org_id=org_id,
                 role=org_role,
             )
+        elif membership.deactivated_at is not None:
+            # Re-create reversibility: an IdP delete-then-recreate must not 409
+            # forever. The membership is tombstoned (deactivated_at set), so
+            # clear the tombstone, re-activate the account, and reset the hash
+            # (SCIM-managed accounts authenticate via the IdP/SSO flow — a
+            # password login on a NULL-hash SCIM account is 401 by design).
+            membership.deactivated_at = None
+            existing.password_hash = None
         existing.active = active
         await session.flush()
         return existing
@@ -111,14 +119,52 @@ async def scim_update_user(
     return account
 
 
-async def scim_delete_user_by_id(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+async def scim_deactivate_user(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    caller_account_id: uuid.UUID,
+) -> Account | None:
+    """Tombstone a SCIM-managed user via the caller-bound deactivate_break_glass.
+
+    The SECURITY DEFINER revokes families/keys scoped to the caller's shared
+    orgs, deactivates the membership(s), sets ``accounts.active = false``
+    globally, and applies the destructive tombstone for break-glass targets.
+    Atomic single statement; raises M2010/M2020/M2040 via custom ERRCODE that
+    the route maps to SCIM status codes.
+    """
+    account = await scim_get_user(session, org_id, user_id)
+    if account is None:
+        return None
+    await session.execute(
+        text("SELECT public.deactivate_break_glass(:caller, :target, false)"),
+        {"caller": caller_account_id, "target": user_id},
+    )
+    await session.refresh(account)
+    return account
+
+
+async def scim_delete_user_by_id(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    caller_account_id: uuid.UUID,
+) -> bool:
+    """SCIM DELETE parity — tombstone via deactivate_break_glass, not hard-delete.
+
+    The membership row is soft-deactivated (deactivated_at set) so an IdP
+    delete-then-recreate is reversible (see scim_create_user). Returns False
+    when the user does not exist in the org.
+    """
     account = await scim_get_user(session, org_id, user_id)
     if account is None:
         return False
-    membership = await get_membership_by_account_and_org(session, user_id, org_id)
-    if membership is not None:
-        await session.delete(membership)
-        await session.flush()
+    await session.execute(
+        text("SELECT public.deactivate_break_glass(:caller, :target, false)"),
+        {"caller": caller_account_id, "target": user_id},
+    )
     return True
 
 
