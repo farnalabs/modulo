@@ -1,5 +1,6 @@
 """Unit tests for agent_signal trigger — fire_agent_signal and helpers."""
 
+import asyncio
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -441,3 +442,28 @@ class TestFireAgentSignal:
         assert any(
             getattr(c[0][0], "validation_result", None) == "validation_failed" for c in mock_session.add.call_args_list
         )
+
+    async def test_create_run_cancelled_error_propagates(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """asyncio.CancelledError must never be swallowed by the error handler."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        mock_create_run.side_effect = asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await fire_agent_signal(
+                mock_session,
+                org_id=org_id,
+                source_run_id=uuid.uuid4(),
+                source_pipeline_id=source_pipeline_id,
+                completed_node_id="my-node",
+            )
