@@ -1,4 +1,3 @@
-import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -6,8 +5,6 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import BaseMessage
 
 from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
-
-logger = logging.getLogger(__name__)
 
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 
