@@ -128,6 +128,11 @@ class JiraConnector(ConnectorBase):
       "issue_update"    — update an issue; data: {"issue_key": "PROJ-123", "fields": {...}}
       "issue_comment"   — add a comment to an issue; data: {"issue_key": "PROJ-123", "body": "..."}
       "transition"      — transition an issue; data: {"issue_key": "PROJ-123", "transition_id": "..."}
+      "issue_assign"    — assign an issue to an account; data: {"issue_key": "PROJ-123",
+                           "account_id": "712020:...", "email": "a@example.com", "display_name": "..."}
+                           (all three id lookups accepted; explicit null/unassign flag removes the assignee)
+      "issue_label"     — add/remove labels; data: {"issue_key": "PROJ-123", "add": ["bug"], "remove": [...]}
+      "issue_delete"    — delete an issue; data: {"issue_key": "PROJ-123"}
 
     Query results expose ``metadata["rate_limit"]`` mirroring Jira Cloud's
     ``X-RateLimit-Limit`` / ``X-RateLimit-Remaining`` / ``X-RateLimit-Reset``
@@ -343,6 +348,30 @@ class JiraConnector(ConnectorBase):
                 fields: dict[str, Any] = payload.data.get("fields", {})
                 r = await self._call_api("PUT", f"/issue/{issue_key}", json={"fields": fields})
                 return {"issue_key": issue_key, "updated": True}
+            case "issue_assign":
+                if "issue_key" not in payload.data:
+                    raise ValueError("Jira issue assign requires 'issue_key' in data")
+                issue_key = payload.data["issue_key"]
+                assignee_field = await self._resolve_assignee(payload.data)
+                r = await self._call_api("PUT", f"/issue/{issue_key}", json={"fields": {"assignee": assignee_field}})
+                return {"issue_key": issue_key, "assignee": assignee_field}
+            case "issue_label":
+                if "issue_key" not in payload.data:
+                    raise ValueError("Jira issue label requires 'issue_key' in data")
+                issue_key = payload.data["issue_key"]
+                add_labels = payload.data.get("add") or []
+                remove_labels = payload.data.get("remove") or []
+                if not add_labels and not remove_labels:
+                    raise ValueError("Jira issue_label requires 'add' and/or 'remove' in data")
+                target_labels = await self._compute_target_labels(issue_key, add_labels, remove_labels)
+                r = await self._call_api("PUT", f"/issue/{issue_key}", json={"fields": {"labels": target_labels}})
+                return {"issue_key": issue_key, "labels": target_labels}
+            case "issue_delete":
+                if "issue_key" not in payload.data:
+                    raise ValueError("Jira issue delete requires 'issue_key' in data")
+                issue_key = payload.data["issue_key"]
+                await self._call_api("DELETE", f"/issue/{issue_key}")
+                return {"issue_key": issue_key, "deleted": True}
             case "issue_comment":
                 if "issue_key" not in payload.data:
                     raise ValueError("Jira issue comment requires 'issue_key' in data")
@@ -367,3 +396,51 @@ class JiraConnector(ConnectorBase):
                 return {"issue_key": issue_key, "transitioned": True}
             case _:
                 raise ValueError(f"Unsupported Jira write resource: {payload.resource!r}")
+
+    async def _resolve_assignee(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        """Resolve the ``assignee`` field value for an issue.
+
+        Accepts ``account_id`` (direct), ``email`` or ``display_name`` (looked up
+        via the Jira user-search API), or an explicit ``unassign`` flag / ``null``
+        ``account_id`` to clear the assignee. Returns ``None`` to unassign.
+        """
+        if "account_id" in data:
+            if data["account_id"] is None:
+                return None
+            return {"accountId": data["account_id"]}
+        if "email" in data or "display_name" in data:
+            query = data.get("email") or data.get("display_name")
+            key = "email" if "email" in data else "display_name"
+            r = await self._call_api("GET", "/user/search", params={"query": query, "maxResults": 1})
+            users = await self._parse_json(r)
+            if not isinstance(users, list) or not users:
+                raise ValueError(f"Jira user not found for {key} {query!r}")
+            account_id = users[0].get("accountId")
+            if not account_id:
+                raise ValueError(f"Jira user search for {key} {query!r} returned no accountId")
+            return {"accountId": account_id}
+        if data.get("unassign"):
+            return None
+        raise ValueError("Jira issue_assign requires 'account_id', 'email', 'display_name', or 'unassign' in data")
+
+    async def _compute_target_labels(
+        self,
+        issue_key: str,
+        add: list[str],
+        remove: list[str],
+    ) -> list[str]:
+        """Compute the target label set for an issue.
+
+        Jira's ``labels`` field is a *set* — PUT replaces the full list. To make
+        ``issue_label`` a true add/remove (not a replace), the current labels are
+        fetched first and the target set computed from them.
+        """
+        r = await self._call_api("GET", f"/issue/{issue_key}")
+        body = await self._parse_json(r)
+        current = body.get("fields", {}).get("labels") or []
+        remove_set = frozenset(remove)
+        target = [label for label in current if label not in remove_set]
+        for label in add:
+            if label not in target:
+                target.append(label)
+        return target

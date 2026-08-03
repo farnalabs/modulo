@@ -132,7 +132,7 @@ class SchemaVersionListResponse(BaseModel):
 
 
 @handle_db_errors("schemas.list_schemas_endpoint")
-@router.get("", response_model=SchemaListResponse)
+@router.get("", response_model=SchemaListResponse, responses={401: {"description": "Unauthorized"}})
 async def list_schemas_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),

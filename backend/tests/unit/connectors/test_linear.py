@@ -1061,3 +1061,233 @@ async def test_write_issue_delete_failure(connector):
     respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"issueDelete": {"success": False}}}))
     with pytest.raises(ValueError, match="Failed to delete Linear issue"):
         await connector.write(ConnectorPayload(resource="issue_delete", data={"id": "issue-1"}))
+
+
+_USERS_RESPONSE = _mock_response(
+    {
+        "data": {
+            "users": {
+                "nodes": [
+                    {"id": "usr-1", "name": "Alice Smith", "email": "alice@example.com"},
+                ]
+            }
+        }
+    }
+)
+
+_USERS_EMPTY_RESPONSE = _mock_response({"data": {"users": {"nodes": []}}})
+
+
+@respx.mock
+async def test_write_issue_assign_by_assignee_id(connector):
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_assign", data={"id": "issue-1", "assigneeId": "usr-1"})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["assigneeId"] == "usr-1"
+
+
+@respx.mock
+async def test_write_issue_assign_by_email(connector):
+    respx.post(_GRAPHQL, content__contains="users(first: 1").mock(return_value=_USERS_RESPONSE)
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_assign", data={"id": "issue-1", "email": "alice@example.com"})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["assigneeId"] == "usr-1"
+    user_request = respx.calls[0].request
+    user_body = json.loads(user_request.content)
+    assert user_body["variables"]["filter"] == {"email": {"eq": "alice@example.com"}}
+
+
+@respx.mock
+async def test_write_issue_assign_by_name(connector):
+    respx.post(_GRAPHQL, content__contains="users(first: 1").mock(return_value=_USERS_RESPONSE)
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_assign", data={"id": "issue-1", "name": "Alice Smith"})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["assigneeId"] == "usr-1"
+    user_request = respx.calls[0].request
+    user_body = json.loads(user_request.content)
+    assert user_body["variables"]["filter"] == {"name": {"eq": "Alice Smith"}}
+
+
+@respx.mock
+async def test_write_issue_assign_unassign_flag(connector):
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_assign", data={"id": "issue-1", "unassign": True})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert "assigneeId" in body["variables"]["input"]
+    assert body["variables"]["input"]["assigneeId"] is None
+
+
+@respx.mock
+async def test_write_issue_assign_null_assignee(connector):
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_assign", data={"id": "issue-1", "assigneeId": None})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert "assigneeId" in body["variables"]["input"]
+    assert body["variables"]["input"]["assigneeId"] is None
+
+
+@respx.mock
+async def test_write_issue_assign_missing_fields(connector):
+    with pytest.raises(ValueError, match="Missing 'id' in issue_assign payload"):
+        await connector.write(ConnectorPayload(resource="issue_assign", data={"assigneeId": "usr-1"}))
+    with pytest.raises(ValueError, match="issue_assign requires 'assigneeId', 'email', 'name'"):
+        await connector.write(ConnectorPayload(resource="issue_assign", data={"id": "issue-1"}))
+
+
+@respx.mock
+async def test_write_issue_assign_user_not_found(connector):
+    respx.post(_GRAPHQL).mock(return_value=_USERS_EMPTY_RESPONSE)
+    with pytest.raises(ValueError, match=r"user with email 'nobody@example\.com' not found"):
+        await connector.write(
+            ConnectorPayload(resource="issue_assign", data={"id": "issue-1", "email": "nobody@example.com"})
+        )
+
+
+@respx.mock
+async def test_write_issue_assign_update_failure(connector):
+    respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"issueUpdate": {"success": False, "issue": None}}}))
+    with pytest.raises(ValueError, match="Failed to update Linear issue"):
+        await connector.write(ConnectorPayload(resource="issue_assign", data={"id": "issue-1", "assigneeId": "usr-1"}))
+
+
+@respx.mock
+async def test_write_issue_unassign(connector):
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(ConnectorPayload(resource="issue_unassign", data={"id": "issue-1"}))
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert "assigneeId" in body["variables"]["input"]
+    assert body["variables"]["input"]["assigneeId"] is None
+
+
+@respx.mock
+async def test_write_issue_unassign_missing_id(connector):
+    with pytest.raises(ValueError, match="Missing 'id' in issue_unassign payload"):
+        await connector.write(ConnectorPayload(resource="issue_unassign", data={}))
+
+
+_FUZZY_STATES_RESPONSE = _mock_response(
+    {
+        "data": {
+            "team": {
+                "states": {
+                    "nodes": [
+                        {"id": "st-todo", "name": "Todo", "type": "unstarted", "position": 0},
+                        {"id": "st-progress", "name": "In Progress", "type": "started", "position": 1},
+                        {"id": "st-done", "name": "Done", "type": "completed", "position": 2},
+                    ]
+                }
+            }
+        }
+    }
+)
+
+_DUPLICATE_STATES_RESPONSE = _mock_response(
+    {
+        "data": {
+            "team": {
+                "states": {
+                    "nodes": [
+                        {"id": "st-done-a", "name": "Done", "type": "completed", "position": 2},
+                        {"id": "st-done-b", "name": "done", "type": "completed", "position": 3},
+                    ]
+                }
+            }
+        }
+    }
+)
+
+_AMBIGUOUS_CYCLES_RESPONSE = _mock_response(
+    {
+        "data": {
+            "team": {
+                "cycles": {
+                    "nodes": [
+                        {"id": "cy-24", "name": "Sprint 24"},
+                        {"id": "cy-25", "name": "Sprint 25"},
+                    ]
+                }
+            }
+        }
+    }
+)
+
+
+@respx.mock
+async def test_write_issue_state_fuzzy_name(connector):
+    respx.post(_GRAPHQL, content__contains="states(first: 100").mock(return_value=_FUZZY_STATES_RESPONSE)
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_state", data={"id": "issue-1", "state": "progress", "teamId": "team-1"})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["stateId"] == "st-progress"
+
+
+@respx.mock
+async def test_write_issue_state_fuzzy_punctuation_insensitive(connector):
+    respx.post(_GRAPHQL, content__contains="states(first: 100").mock(return_value=_FUZZY_STATES_RESPONSE)
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_state", data={"id": "issue-1", "state": "in-progress", "teamId": "team-1"})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["stateId"] == "st-progress"
+
+
+@respx.mock
+async def test_write_issue_state_duplicate_name_raises(connector):
+    respx.post(_GRAPHQL).mock(return_value=_DUPLICATE_STATES_RESPONSE)
+    with pytest.raises(ValueError, match="Multiple Linear workflow states named 'Done'"):
+        await connector.write(
+            ConnectorPayload(resource="issue_state", data={"id": "issue-1", "state": "Done", "teamId": "team-1"})
+        )
+
+
+@respx.mock
+async def test_write_issue_cycle_ambiguous_fuzzy_name_raises(connector):
+    respx.post(_GRAPHQL, content__contains="cycles(first: 100").mock(return_value=_AMBIGUOUS_CYCLES_RESPONSE)
+    with pytest.raises(ValueError, match="Multiple Linear cycles match 'sprint'"):
+        await connector.write(
+            ConnectorPayload(resource="issue_cycle", data={"id": "issue-1", "cycle": "sprint", "teamId": "team-1"})
+        )
+
+
+@respx.mock
+async def test_write_issue_cycle_exact_beats_fuzzy(connector):
+    respx.post(_GRAPHQL, content__contains="cycles(first: 100").mock(return_value=_AMBIGUOUS_CYCLES_RESPONSE)
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_cycle", data={"id": "issue-1", "cycle": "Sprint 24", "teamId": "team-1"})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["cycleId"] == "cy-24"

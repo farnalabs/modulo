@@ -53,7 +53,11 @@
               selectedFolderId === element.folder.id ? 'bg-accent text-accent-foreground font-medium' : 'text-foreground',
             ]"
             :style="{ paddingLeft: `${12 + element.depth * 16}px` }"
+            role="button"
+            tabindex="0"
             @click="$emit('select-folder', element.folder.id)"
+            @keydown.enter="$emit('select-folder', element.folder.id)"
+            @keydown.space.prevent="$emit('select-folder', element.folder.id)"
             @dragover.prevent
             @drop="onFolderDrop(element.folder.id, $event)"
           >

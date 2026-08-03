@@ -130,7 +130,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
 
 
 @handle_db_errors("model_backends.list_model_backends_endpoint")
-@router.get("", response_model=ModelBackendListResponse)
+@router.get("", response_model=ModelBackendListResponse, responses={401: {"description": "Unauthorized"}})
 async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),

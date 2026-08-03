@@ -253,6 +253,37 @@ query($teamId: String!, $cursor: String) {
 }
 """
 
+_STATE_LOOKUP_QUERY = """
+query($teamId: String!, $cursor: String) {
+  team(id: $teamId) {
+    states(first: 100, after: $cursor) {
+      nodes {
+        id
+        name
+        type
+        position
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+"""
+
+_USERS_QUERY = """
+query($filter: UserFilter) {
+  users(first: 1, filter: $filter) {
+    nodes {
+      id
+      name
+      email
+    }
+  }
+}
+"""
+
 _ARCHIVE_ISSUE_MUTATION = """
 mutation($id: String!, $trash: Boolean) {
   issueArchive(id: $id, trash: $trash) {
@@ -305,6 +336,24 @@ def _compute_delay(attempt: int, response: httpx.Response | None = None) -> floa
     return float(min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY))
 
 
+def _normalize_name(name: str) -> str:
+    """Normalise a name for case-insensitive, punctuation-insensitive comparison."""
+    return " ".join("".join(ch if ch.isalnum() else " " for ch in name.lower()).split())
+
+
+def _fuzzy_matches(name: str, query: str) -> bool:
+    """True when every normalised query token appears inside the candidate name.
+
+    Used as the fuzzy fallback after an exact (normalised) match fails, so
+    e.g. "progress" resolves to "In Progress" but never overrides an exact hit.
+    """
+    query_tokens = set(_normalize_name(query).split())
+    if not query_tokens:
+        return False
+    name_tokens = set(_normalize_name(name).split())
+    return query_tokens.issubset(name_tokens)
+
+
 class LinearConnector(ConnectorBase):
     """Read/write Linear issues via the GraphQL API.
 
@@ -327,10 +376,18 @@ class LinearConnector(ConnectorBase):
       "issue_comment"   — add a comment to an issue; data: {"issueId": "...", "body": "..."}
       "issue_state"     — transition an issue's workflow state; data: {"id", "state": "<name>"} + required
                           {"teamId"} when using a state name (resolved via team_states), or
-                          {"id", "stateId": "<id>"} to set a raw workflow state ID directly
+                          {"id", "stateId": "<id>"} to set a raw workflow state ID directly; name
+                          resolution is exact-first then fuzzy, raising on ambiguous/duplicate names
       "issue_cycle"     — assign an issue to a cycle; data: {"id", "cycleId": "<id>"} to assign,
                           {"id", "cycle": "<name>", "teamId"} to resolve a cycle name via
-                          team_cycles, or {"id", "cycleId": null} to remove the cycle
+                          team_cycles, or {"id", "cycleId": null} to remove the cycle; name
+                          resolution is exact-first then fuzzy, raising on ambiguous/duplicate names
+      "issue_assign"    — assign/reassign an issue; data: {"id", "assigneeId": "<id>"} (direct),
+                          {"id", "email": "..."} or {"id", "name": "..."} (resolved via Linear user
+                          search), or {"id", "assigneeId": null} / {"id", "unassign": true} to clear
+                          the assignee; when both "assigneeId" and "unassign": true are supplied,
+                          "assigneeId" wins (checked first, including an explicit null)
+      "issue_unassign"  — clear the assignee on an issue; data: {"id": "..."}
       "issue_label"     — add/remove labels on an issue; data: {"id": "...",
                           "addLabelIds": ["<label-id>", ...]} and/or {"id": "...",
                           "removeLabelIds": ["<label-id>", ...]}; at least one of the two is
@@ -417,44 +474,104 @@ class LinearConnector(ConnectorBase):
             return cast(dict[str, Any], raw_data)
         raise ValueError("Linear API request failed after retries") from last_exc
 
-    async def _resolve_state_id(self, team_id: str, state_name: str) -> str:
-        """Resolve a workflow state name to its ID via the team's states."""
-        data = await self._graphql(_TEAM_STATES_QUERY, {"teamId": team_id})
-        team = data.get("team")
-        if team is None:
-            raise ValueError(f"Linear team {team_id!r} not found")
-        states = team.get("states", {}).get("nodes", [])
-        for state in states:
-            if state.get("name", "").lower() == state_name.lower():
-                state_id = state.get("id")
-                if state_id:
-                    return cast(str, state_id)
-        raise ValueError(f"Linear workflow state {state_name!r} not found for team {team_id}")
+    async def _team_states(self, team_id: str) -> list[dict[str, Any]]:
+        """Fetch all workflow states for a team, paginating through every page."""
+        return await self._team_named_entities(team_id, _STATE_LOOKUP_QUERY, "states")
 
-    async def _resolve_cycle_id(self, team_id: str, cycle_name: str) -> str:
-        """Resolve a cycle name to its ID via the team's cycles, paginating through all pages."""
+    async def _team_cycles(self, team_id: str) -> list[dict[str, Any]]:
+        """Fetch all cycles for a team, paginating through every page."""
+        return await self._team_named_entities(team_id, _CYCLE_LOOKUP_QUERY, "cycles")
+
+    async def _team_named_entities(
+        self,
+        team_id: str,
+        query: str,
+        field: str,
+    ) -> list[dict[str, Any]]:
+        """Paginate a team's ``field`` connection (``states``/``cycles``) into a flat list."""
         cursor: str | None = None
+        entities: list[dict[str, Any]] = []
         while True:
-            data = await self._graphql(
-                _CYCLE_LOOKUP_QUERY,
-                {"teamId": team_id, "cursor": cursor},
-            )
+            data = await self._graphql(query, {"teamId": team_id, "cursor": cursor})
             team = data.get("team")
             if team is None:
                 raise ValueError(f"Linear team {team_id!r} not found")
-            cycles_data = team.get("cycles", {})
-            for cycle in cycles_data.get("nodes", []):
-                if cycle.get("name", "").lower() == cycle_name.lower():
-                    cycle_id = cycle.get("id")
-                    if cycle_id:
-                        return cast(str, cycle_id)
-            page_info = cycles_data.get("pageInfo", {})
+            connection = team.get(field, {})
+            entities.extend(node for node in connection.get("nodes", []) if isinstance(node, dict))
+            page_info = connection.get("pageInfo", {})
             if not page_info.get("hasNextPage"):
                 break
             cursor = page_info.get("endCursor")
             if not cursor:
                 break
-        raise ValueError(f"Linear cycle {cycle_name!r} not found for team {team_id}")
+        return entities
+
+    def _resolve_entity_by_name(
+        self,
+        entities: list[dict[str, Any]],
+        name: str,
+        entity: str,
+        team_id: str,
+    ) -> str:
+        """Resolve a state/cycle name to an ID — exact match first, then fuzzy.
+
+        Raises a clear ``ValueError`` when the name is ambiguous (two or more
+        entities match) so the caller can pass the raw ID instead, and when no
+        entity matches at all.
+        """
+        named = [e for e in entities if e.get("id") and e.get("name")]
+        norm = _normalize_name(name)
+        exact = [e for e in named if _normalize_name(e["name"]) == norm]
+        if len(exact) > 1:
+            raise ValueError(
+                f"Multiple Linear {entity}s named {name!r} for team {team_id}; "
+                f"pass the {entity}Id directly",
+            )
+        if exact:
+            return cast(str, exact[0]["id"])
+        fuzzy = [e for e in named if _fuzzy_matches(e["name"], name)]
+        if len(fuzzy) > 1:
+            raise ValueError(
+                f"Multiple Linear {entity}s match {name!r} for team {team_id}; "
+                f"pass the {entity}Id directly",
+            )
+        if fuzzy:
+            return cast(str, fuzzy[0]["id"])
+        raise ValueError(f"Linear {entity} {name!r} not found for team {team_id}")
+
+    async def _resolve_state_id(self, team_id: str, state_name: str) -> str:
+        """Resolve a workflow state name to its ID via the team's states."""
+        states = await self._team_states(team_id)
+        return self._resolve_entity_by_name(states, state_name, "workflow state", team_id)
+
+    async def _resolve_cycle_id(self, team_id: str, cycle_name: str) -> str:
+        """Resolve a cycle name to its ID via the team's cycles, paginating all pages."""
+        cycles = await self._team_cycles(team_id)
+        return self._resolve_entity_by_name(cycles, cycle_name, "cycle", team_id)
+
+    async def _resolve_user_id(self, *, email: str | None = None, name: str | None = None) -> str:
+        """Resolve a Linear user to an ID by email or display name.
+
+        Uses Linear's server-side exact ``eq`` filter (``users(first: 1)``) rather than the
+        client-side exact-then-fuzzy/ambiguity resolution used for states and cycles; a name
+        matching multiple users returns the first hit without raising (asymmetry with
+        ``_resolve_entity_by_name``, acceptable because the server limits to one result).
+        """
+        if email:
+            user_filter: dict[str, Any] = {"email": {"eq": email}}
+            label = f"user with email {email!r}"
+        elif name:
+            user_filter = {"name": {"eq": name}}
+            label = f"user named {name!r}"
+        else:
+            raise ValueError("issue_assign requires 'assigneeId', 'email', 'name', or 'unassign': true")
+        data = await self._graphql(_USERS_QUERY, {"filter": user_filter})
+        users = data.get("users", {}).get("nodes", [])
+        for user in users:
+            user_id = user.get("id")
+            if user_id:
+                return cast(str, user_id)
+        raise ValueError(f"Linear {label} not found")
 
     async def health_check(self) -> HealthResult:
         try:
@@ -613,6 +730,24 @@ class LinearConnector(ConnectorBase):
                 if not add_ids and not remove_ids:
                     raise ValueError("issue_label requires 'addLabelIds' and/or 'removeLabelIds'")
                 return await self._update_issue_labels(issue_id, add_ids, remove_ids)
+            case "issue_assign":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_assign payload")
+                if "assigneeId" in payload.data:
+                    assignee_id = payload.data.get("assigneeId")
+                elif payload.data.get("unassign") is True:
+                    assignee_id = None
+                else:
+                    email = payload.data.get("email")
+                    name = payload.data.get("name")
+                    assignee_id = await self._resolve_user_id(email=email, name=name)
+                return await self._update_issue(issue_id, {"assigneeId": assignee_id})
+            case "issue_unassign":
+                issue_id = payload.data.get("id")
+                if not issue_id:
+                    raise ValueError("Missing 'id' in issue_unassign payload")
+                return await self._update_issue(issue_id, {"assigneeId": None})
             case "issue_archive":
                 issue_id = payload.data.get("id")
                 if not issue_id:

@@ -65,6 +65,7 @@
                 data-testid="run-detail-hitl-notes"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 placeholder="Review notes (optional)"
+                aria-label="Review notes"
               />
               <div class="flex gap-2">
                 <button

@@ -152,6 +152,30 @@ jobs:
 
 
 
+  migration-heads-check:
+    name: Check migration heads
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Verify single migration head
+        working-directory: backend
+        shell: bash
+        run: |
+          uv sync --frozen
+          uv run --no-sync python -m alembic heads 2>&1 | tee /tmp/alembic_heads.txt
+          HEAD_COUNT=$(grep -c "\(head\)\|\(effective head\)" /tmp/alembic_heads.txt || true)
+          if [ "$HEAD_COUNT" -ne 1 ]; then
+            echo "::error::Alembic migration graph has $HEAD_COUNT heads (expected 1). Create a merge migration."
+            exit 1
+          fi
+          echo "Migration heads OK ($HEAD_COUNT head)"
+
   notify-pr-failure:
     name: Trigger Branch Fixer
     if: github.event_name == 'pull_request' && always() && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
