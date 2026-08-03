@@ -18,12 +18,13 @@ _log = logging.getLogger(__name__)
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    headers = dict(exc.headers or {})
     if isinstance(exc, ProblemException):
         problem = exc.problem
         problem.request_id = getattr(request.state, "request_id", None)
-        return problem.to_response()
+        return problem.to_response(headers=headers)
     problem = problem_from_http_exception(request, exc)
-    return problem.to_response()
+    return problem.to_response(headers=headers)
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

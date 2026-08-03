@@ -57,7 +57,11 @@ filtered = schema.include(
 
 
 @filtered.parametrize()
-@settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=3, suppress_health_check=[HealthCheck.too_slow])
+# 3 examples per endpoint (not 10): each schemathesis example spins the full app
+# lifespan (migrations + seeding) via from_asgi, so higher counts make the
+# deploy gate impractically slow for marginal extra coverage on these simple
+# auth-guarded GET endpoints.
 def test_api_fuzz_get_endpoints(case):
     """All read-only GET endpoints must respond without 500 errors."""
     # The fuzzer runs unauthenticated, so auth-protected GET endpoints
