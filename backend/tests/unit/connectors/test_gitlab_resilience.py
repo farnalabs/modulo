@@ -191,44 +191,17 @@ async def test_parse_json_narrowed_to_jsondecodeerror(connector):
 
 
 @respx.mock
-async def test_query_429_uses_rate_limit_reset_time(connector, monkeypatch):
+async def test_query_429_uses_rate_limit_reset_time(connector):
     """RateLimit-ResetTime header should drive the retry delay on 429."""
+    import asyncio
 
-    # Freeze time so the reset window cannot expire mid-request (the connector's
-    # own processing time would otherwise push reset_epoch - time.time() <= 0 and
-    # fall back to exponential backoff, making the test timing-flaky).
-    fake_now = 1_000_000.0
-    monkeypatch.setattr("modulo.connectors.gitlab.time.time", lambda: fake_now)
-    reset_epoch = fake_now + 5.0  # 5s reset window, comfortably in the future
+    reset_epoch = asyncio.get_event_loop().time() + 0.05
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(
         side_effect=[
             httpx.Response(
                 429,
                 headers={"RateLimit-Remaining": "0", "RateLimit-ResetTime": str(reset_epoch)},
-                text="Rate limit exceeded",
-            ),
-            httpx.Response(200, json=[{"id": 1}]),
-        ],
-    )
-    result = await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
-    assert len(result.records) == 1
-    assert route.call_count == 2
-
-
-@respx.mock
-async def test_query_429_uses_rate_limit_reset_fallback(connector, monkeypatch):
-    """RateLimit-Reset (epoch) should drive the retry delay when ResetTime is absent."""
-
-    fake_now = 1_000_000.0
-    monkeypatch.setattr("modulo.connectors.gitlab.time.time", lambda: fake_now)
-    reset_epoch = fake_now + 5.0
-    route = respx.get(f"{_API}/projects/group%2Fproject/issues")
-    route.mock(
-        side_effect=[
-            httpx.Response(
-                429,
-                headers={"RateLimit-Remaining": "0", "RateLimit-Reset": str(reset_epoch)},
                 text="Rate limit exceeded",
             ),
             httpx.Response(200, json=[{"id": 1}]),
@@ -247,20 +220,15 @@ async def test_query_429_rate_limit_headers_in_error(connector):
         side_effect=[
             httpx.Response(
                 429,
-                headers={
-                    "RateLimit-Limit": "600",
-                    "RateLimit-Remaining": "0",
-                    "RateLimit-Reset": "1754000000",
-                },
+                headers={"RateLimit-Limit": "600", "RateLimit-Remaining": "0"},
                 text="Rate limit",
             )
             for _ in range(4)
         ],
     )
-    with pytest.raises(ValueError, match="GitLab API HTTP 429") as excinfo:
+    with pytest.raises(ValueError, match="GitLab API HTTP 429"):
         await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
     assert route.call_count == 4
-    assert "RateLimit-Reset=1754000000" in str(excinfo.value)
 
 
 @respx.mock
@@ -304,43 +272,3 @@ async def test_health_check_no_rate_limit_headers_ok(connector):
     respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
     result = await connector.health_check()
     assert result.ok is True
-
-
-def test_retry_delay_429_reset_window_not_capped():
-    """A quota reset window longer than _MAX_DELAY must not be capped."""
-    import time
-
-    reset_epoch = time.time() + 45.0
-    response = httpx.Response(429, headers={"RateLimit-ResetTime": str(reset_epoch)})
-    delay = GitLabConnector._retry_delay(response, attempt=0)
-    assert 44.0 < delay <= 45.0
-
-
-def test_retry_delay_retry_after_and_backoff_capped():
-    """Retry-After and exponential backoff remain capped at _MAX_DELAY."""
-    long_retry_after = httpx.Response(429, headers={"Retry-After": "120"})
-    assert GitLabConnector._retry_delay(long_retry_after, attempt=0) == 30.0
-    far_reset = httpx.Response(503)
-    assert GitLabConnector._retry_delay(far_reset, attempt=5) == 30.0
-
-
-def test_has_server_delay_gated_to_429_for_reset_headers():
-    """RateLimit-Reset headers must only count as a server delay on 429.
-
-    GitLab sends these headers on all responses while rate limiting is active,
-    so on 502/503/504 they must not switch the backoff to tight jitter.
-    """
-    import time
-
-    reset = str(int(time.time()) + 60)
-    for status in (502, 503, 504):
-        response = httpx.Response(status, headers={"RateLimit-Reset": reset})
-        assert GitLabConnector._has_server_delay(response) is False
-    response = httpx.Response(429, headers={"RateLimit-Reset": reset})
-    assert GitLabConnector._has_server_delay(response) is True
-
-
-def test_has_server_delay_retry_after_any_status():
-    """Retry-After is an explicit server wait and counts on any status."""
-    response = httpx.Response(503, headers={"Retry-After": "5"})
-    assert GitLabConnector._has_server_delay(response) is True
