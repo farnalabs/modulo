@@ -38,6 +38,9 @@ _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
 _MAX_DELAY = 30.0
 
+# GitLab rate-limit headers sent on 429 responses (and some 200s for quota info)
+_RATELIMIT_HEADERS = ("RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Observed", "RateLimit-ResetTime")
+
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from GitLab API response."""
@@ -51,13 +54,12 @@ def _parse_retry_after(response: httpx.Response) -> float | None:
 
 
 def _parse_rate_limit_reset(response: httpx.Response) -> float | None:
-    """Parse GitLab's rate-limit reset header (epoch seconds) into a retry delay.
+    """Parse GitLab's RateLimit-ResetTime header (epoch seconds) into a retry delay.
 
-    When a 429 response includes ``RateLimit-ResetTime`` (or ``RateLimit-Reset``
-    from some proxies), the client can wait until the quota window resets
-    instead of guessing with backoff.
+    When a 429 response includes ``RateLimit-ResetTime``, the client can wait
+    until the quota window resets instead of guessing with backoff.
     """
-    value = response.headers.get("RateLimit-ResetTime") or response.headers.get("RateLimit-Reset")
+    value = response.headers.get("RateLimit-ResetTime")
     if not value:
         return None
     try:
@@ -71,7 +73,7 @@ def _parse_rate_limit_reset(response: httpx.Response) -> float | None:
 def _rate_limit_detail(response: httpx.Response) -> str:
     """Summarise GitLab rate-limit quota headers for error/health detail strings."""
     parts = []
-    for header in _RATE_LIMIT_HEADERS:
+    for header in _RATELIMIT_HEADERS:
         value = response.headers.get(header)
         if value:
             parts.append(f"{header}={value}")
@@ -135,9 +137,9 @@ class GitLabConnector(ConnectorBase):
     """Read/write GitLab via the REST API v4.
 
     Supports self-hosted GitLab instances via the ``base_url`` constructor
-    argument (defaults to the hosted ``https://gitlab.com/api/v4`` endpoint).
-    Pass ``base_url`` (e.g. ``https://gitlab.example.com/api/v4``) to target
-    a self-hosted GitLab instance.
+    argument (defaults to the hosted ``https://gitlab.com/api/v4`` endpoint);
+    pass ``base_url`` (e.g. ``https://gitlab.example.com/api/v4``) to target a
+    self-hosted GitLab instance.
     List resources return ``next_cursor`` from GitLab's ``X-Next-Page``
     header; pass it back as ``ConnectorQuery.cursor`` to fetch the next page
     (GitLab ``page`` query param). List results also expose ``metadata["rate_limit"]``
@@ -173,9 +175,9 @@ class GitLabConnector(ConnectorBase):
       "label"             — create a project label
       "milestone"         — create a project milestone
       "merge_request"     — create a merge request (filters: source_branch, target_branch, title, description)
-      "file_delete"       — delete a file (data: project, path, ref, commit_message)
-      "mr_merge"          — merge a merge request (data: project, iid, optional squash)
-      "mr_approve"        — approve a merge request (data: project, iid)
+      "mr_merge"          — merge a merge request (data: project, iid, optional squash,
+                            merge_commit_message/should_remove_source_branch/merge_when_pipeline_succeeds)
+      "mr_approve"        — approve a merge request (data: project, iid, optional sha)
       "mr_comment"        — add a comment to a merge request (data: project, iid, body)
       "mr_note"           — add a comment to a merge request (data: project, iid, body)
       "mr_labels"         — set labels on a merge request (data: project, iid, labels)
@@ -187,38 +189,8 @@ class GitLabConnector(ConnectorBase):
         self._base_url = base_url.rstrip("/")
 
     @staticmethod
-    def _jitter(delay: float, *, tight: bool = False) -> float:
-        """Add jitter to a retry delay.
-
-        Full jitter (``[0, delay)``) is used for exponential backoff to avoid
-        the thundering herd. Server-derived waits (quota reset / Retry-After)
-        use tight jitter around the requested value so the window is honoured
-        instead of being collapsed to near-immediate retries.
-        """
-        if tight:
-            return random.uniform(delay * 0.9, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
+    def _jitter(delay: float) -> float:
         return random.uniform(0, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
-
-    @staticmethod
-    def _has_server_delay(response: httpx.Response) -> bool:
-        """Whether the response carries an explicit server-provided retry delay.
-
-        ``Retry-After`` is honoured on any retryable status. GitLab reports the
-        ``RateLimit-Reset`` headers on *every* response while rate limiting is
-        active, so they only count as a server delay on HTTP 429 (the quota
-        window); on other retryable statuses they would otherwise switch the
-        backoff to tight jitter and undermine thundering-herd protection.
-        """
-        if _parse_retry_after(response) is not None:
-            return True
-        return response.status_code == 429 and _parse_rate_limit_reset(response) is not None
-
-    def _sleep_delay(self, response: httpx.Response, attempt: int) -> float:
-        """Compute the sleep before a retry, honouring server-provided wait times."""
-        delay = self._retry_delay(response, attempt)
-        if self._has_server_delay(response):
-            return self._jitter(delay, tight=True)
-        return self._jitter(delay)
 
     def _require_filter(self, filters: dict[str, Any], key: str, resource: str) -> Any:
         try:
@@ -242,14 +214,14 @@ class GitLabConnector(ConnectorBase):
                     if r.status_code == 304:
                         raise ValueError("GitLab API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                        await asyncio.sleep(self._sleep_delay(r, attempt))
+                        await asyncio.sleep(self._jitter(self._retry_delay(r, attempt)))
                         continue
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._sleep_delay(exc.response, attempt))
+                    await asyncio.sleep(self._jitter(self._retry_delay(exc.response, attempt)))
                     continue
                 detail = exc.response.text[:200]
                 if exc.response.status_code == 429:
@@ -260,19 +232,19 @@ class GitLabConnector(ConnectorBase):
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
+                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (2**attempt), _MAX_DELAY)))
                     continue
                 raise ValueError("GitLab API timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
+                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (2**attempt), _MAX_DELAY)))
                     continue
                 raise ValueError("GitLab API connection error") from exc
             except httpx.HTTPError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
+                    await asyncio.sleep(self._jitter(min(_BASE_DELAY * (2**attempt), _MAX_DELAY)))
                     continue
                 raise ValueError(f"GitLab API HTTP error: {exc}") from exc
         raise ValueError("GitLab API request failed after retries") from last_exc
@@ -281,23 +253,17 @@ class GitLabConnector(ConnectorBase):
     def _retry_delay(response: httpx.Response, attempt: int) -> float:
         """Compute the delay before the next retry attempt.
 
-        Prefers ``Retry-After``, then GitLab's rate-limit reset headers
-        (``RateLimit-ResetTime`` / ``RateLimit-Reset`` — only on HTTP 429, the
-        quota reset window), then exponential backoff.
-
-        The quota reset window is left uncapped so a GitLab quota window longer
-        than ``_MAX_DELAY`` is truly honoured (capping it would fire the retry
-        early and hit another 429). ``Retry-After`` and backoff remain capped
-        at ``_MAX_DELAY``.
+        Prefers ``Retry-After``, then GitLab's ``RateLimit-ResetTime`` (only on
+        HTTP 429 — the quota reset window), then exponential backoff.
         """
         if response.status_code == 429:
             reset_delay = _parse_rate_limit_reset(response)
             if reset_delay is not None:
-                return reset_delay
+                return min(reset_delay, _MAX_DELAY)
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
             return min(retry_after, _MAX_DELAY)
-        return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
+        return min(float(_BASE_DELAY * (2**attempt)), _MAX_DELAY)
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
@@ -594,9 +560,7 @@ class GitLabConnector(ConnectorBase):
                 project = self._require_filter(payload.data, "project", payload.resource)
                 path = self._require_filter(payload.data, "path", payload.resource)
                 encoded = _project_path(project)
-                delete_params: dict[str, Any] = {
-                    "branch": payload.data.get("ref", payload.data.get("branch", "main")),
-                }
+                delete_params: dict[str, Any] = {"branch": payload.data.get("branch", payload.data.get("ref", "main"))}
                 if payload.data.get("sha"):
                     delete_params["sha"] = payload.data["sha"]
                 delete_body: dict[str, Any] = {
@@ -608,7 +572,9 @@ class GitLabConnector(ConnectorBase):
                     params=delete_params,
                     json=delete_body,
                 )
-                return _safe_json_object(r)
+                if r.content:
+                    return _safe_json_object(r)
+                return {"status": "deleted"}
             case "mr" | "merge_request":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 source_branch = self._require_filter(payload.data, "source_branch", payload.resource)
@@ -625,17 +591,6 @@ class GitLabConnector(ConnectorBase):
                     "POST",
                     f"/projects/{encoded}/merge_requests",
                     json=body,
-                )
-                return _safe_json_object(r)
-            case "mr_comment" | "mr_note":
-                project = self._require_filter(payload.data, "project", payload.resource)
-                mr_iid = self._require_filter(payload.data, "iid", payload.resource)
-                note_body = self._require_filter(payload.data, "body", payload.resource)
-                encoded = _project_path(project)
-                r = await self._call_api(
-                    "POST",
-                    f"/projects/{encoded}/merge_requests/{mr_iid}/notes",
-                    json={"body": note_body},
                 )
                 return _safe_json_object(r)
             case "mr_merge":
@@ -668,6 +623,17 @@ class GitLabConnector(ConnectorBase):
                     "POST",
                     f"/projects/{encoded}/merge_requests/{mr_iid}/approve",
                     json=approve_body,
+                )
+                return _safe_json_object(r)
+            case "mr_comment" | "mr_note":
+                project = self._require_filter(payload.data, "project", payload.resource)
+                mr_iid = self._require_filter(payload.data, "iid", payload.resource)
+                note_body = self._require_filter(payload.data, "body", payload.resource)
+                encoded = _project_path(project)
+                r = await self._call_api(
+                    "POST",
+                    f"/projects/{encoded}/merge_requests/{mr_iid}/notes",
+                    json={"body": note_body},
                 )
                 return _safe_json_object(r)
             case "mr_labels":
