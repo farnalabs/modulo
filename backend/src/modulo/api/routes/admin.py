@@ -891,11 +891,20 @@ async def admin_update_user(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+
+            target_role_after = req.org_role
+            if target_role_after is None:
+                current_membership = await get_membership_by_account_and_org(
+                    session, user_id, current_user.organisation_id
+                )
+                if current_membership is not None:
+                    target_role_after = current_membership.role
+
             await assert_not_last_admin(
                 session,
                 org_id=current_user.organisation_id,
                 target_account_id=user_id,
-                target_role_after=req.org_role,
+                target_role_after=target_role_after,
                 target_active_after=req.is_active,
             )
 
@@ -911,6 +920,17 @@ async def admin_update_user(
 
             if req.is_active is not None:
                 account.active = req.is_active
+            if req.is_active is True:
+                from sqlalchemy import update as sa_update
+
+                await session.execute(
+                    sa_update(OrgMembership)
+                    .where(
+                        OrgMembership.account_id == user_id,
+                        OrgMembership.organisation_id == current_user.organisation_id,
+                    )
+                    .values(deactivated_at=None)
+                )
             if req.org_role is not None:
                 from sqlalchemy import update as sa_update
 

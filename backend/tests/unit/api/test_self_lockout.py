@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Update
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -324,3 +325,85 @@ class TestSelfLockoutEndpoint:
             )
         assert resp.status_code == 422
         assert "break-glass" in resp.json()["detail"].lower()
+
+    def test_profile_only_update_of_sole_admin_returns_200(self, client: TestClient) -> None:
+        """Profile-only updates (no org_role/is_active) must NOT 422 on the sole admin.
+
+        Regression test for the false-positive 422: when a request changes only
+        profile fields, req.org_role is None, and the last-admin guard must
+        receive the target's CURRENT role rather than interpreting None as a
+        demotion.
+        """
+        mock_account = self._make_mock_account(_USER_ID)
+        mock_membership = MagicMock()
+        mock_membership.role = "admin"
+
+        guard_kwargs: dict[str, object] = {}
+
+        async def _recording_guard(*_args: object, **kwargs: object) -> None:
+            guard_kwargs.update(kwargs)
+
+        with (
+            patch(
+                "modulo.api.routes.admin.assert_not_last_admin",
+                new=_recording_guard,
+            ),
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                return_value=mock_membership,
+            ),
+        ):
+            resp = client.put(
+                self.URL.format(user_id=_USER_ID),
+                json={"display_name": "Renamed User"},
+            )
+        assert resp.status_code == 200
+        assert guard_kwargs.get("target_role_after") == "admin"
+        assert guard_kwargs.get("target_active_after") is None
+
+    def test_reactivate_via_put_clears_membership_tombstone(self, client: TestClient) -> None:
+        """PUT /users/{id} with is_active=true must clear the deactivated_at tombstone.
+
+        A user deactivated via the SECURITY DEFINER path is tombstoned on the
+        membership (deactivated_at set). Reactivating via the admin update route
+        must clear that tombstone so the user regains their org role.
+        """
+        mock_session = _make_mock_session()
+        mock_account = self._make_mock_account(_USER_ID)
+        mock_account.active = False
+        mock_membership = MagicMock()
+        mock_membership.role = "admin"
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+
+        with (
+            _patch_guard(),
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                return_value=mock_membership,
+            ),
+        ):
+            resp = client.put(
+                self.URL.format(user_id=_USER_ID),
+                json={"is_active": True},
+            )
+        app.dependency_overrides[get_db_session] = None
+
+        assert resp.status_code == 200
+        assert resp.json()["is_active"] is True
+
+        update_statements = [
+            call.args[0] for call in mock_session.execute.call_args_list if isinstance(call.args[0], Update)
+        ]
+        assert update_statements, "expected an UPDATE against org_memberships"
+        assert any(
+            "deactivated_at" in str(stmt) and stmt.compile().params.get("deactivated_at") is None
+            for stmt in update_statements
+        ), "reactivation must clear the membership deactivated_at tombstone"
