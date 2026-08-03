@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: deploy-pipeline-${{ github.event.workflow_run.head_branch || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
 
@@ -34,9 +34,45 @@ jobs:
           fi
           echo "SAQ hold not blocking (SAQ_HOLD=${SAQ_HOLD:-unset}, event=${EVENT_NAME})"
 
+  deploy-throttle:
+    name: Deploy throttle (batch deploys)
+    runs-on: ubicloud-standard-2
+    outputs:
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+    steps:
+      - name: Check last successful deploy time
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          INTERVAL_HOURS: ${{ vars.DEPLOY_INTERVAL_HOURS || 3 }}
+        run: |
+          LAST=$(gh run list --repo "${{ github.repository }}" \
+            --workflow "Deploy: Staging + Prod" \
+            --status success --limit 1 \
+            --json createdAt --jq '.[0].createdAt' 2>/dev/null || echo "")
+          echo "last_successful_deploy=${LAST:-none}"
+          if [ -z "$LAST" ]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "No previous successful deploy - deploying."
+          else
+            LAST_TS=$(date -u -d "$LAST" +%s)
+            NOW_TS=$(date -u +%s)
+            DIFF_H=$(( (NOW_TS - LAST_TS) / 3600 ))
+            echo "hours_since_deploy=${DIFF_H}"
+            if [ "$DIFF_H" -lt "$INTERVAL_HOURS" ]; then
+              echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::Deployed ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. Use workflow_dispatch to force."
+            else
+              echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+              echo "Deploying (${DIFF_H}h since last deploy)."
+            fi
+          fi
+
   pre-deploy-tests:
     name: Pre-deploy tests (fast + expensive)
-    needs: [hold-check]
+    needs: [hold-check, deploy-throttle]
+    if: needs.deploy-throttle.outputs.should_deploy == 'true'
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
