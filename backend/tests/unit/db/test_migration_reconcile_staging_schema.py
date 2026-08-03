@@ -1,6 +1,6 @@
-"""Idempotency tests for the 0037 staging schema-drift reconciliation migration.
+"""Idempotency tests for the 0064 staging schema-drift reconciliation migration.
 
-0037 must be a no-op on a healthy schema (all three tables present in their
+0064 must be a no-op on a healthy schema (all three tables present in their
 current shape) and must repair a drifted pre-squash schema (missing
 ``mcp_setup_tokens`` / ``lifecycle_maps``, legacy ``scheduled_reports``). These
 tests exercise ``upgrade()`` against a mocked inspect/op surface to assert both
@@ -41,7 +41,7 @@ class _FakeInspector:
 
 @pytest.fixture(scope="module")
 def reconcile_migration() -> ModuleType:
-    return _load_migration("0037_reconcile_staging_schema.py", "migration_0037_reconcile")
+    return _load_migration("0064_reconcile_staging_schema.py", "migration_0064_reconcile")
 
 
 def _run_upgrade(
@@ -142,6 +142,6 @@ class TestReconcileDriftedSchema:
 
 class TestReconcileMigrationMetadata:
     def test_down_revision_is_current_head(self) -> None:
-        migration = _load_migration("0037_reconcile_staging_schema.py", "migration_0037_meta")
-        assert migration.revision == "0037_reconcile_staging_schema"
-        assert migration.down_revision == "0036_break_glass_columns"
+        migration = _load_migration("0064_reconcile_staging_schema.py", "migration_0064_meta")
+        assert migration.revision == "0064_reconcile_staging_schema"
+        assert migration.down_revision == "0037_break_glass_enforcement"

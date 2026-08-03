@@ -15,7 +15,7 @@ and its columns. Pre-squash staging databases lack several 0005 tables
 (``mcp_setup_tokens``, ``lifecycle_maps``) or carry a legacy
 ``scheduled_reports`` shape, which used to hard-fail ``alembic upgrade heads``
 and block every deploy. Missing targets are now skipped with a printed warning
-and repaired by ``0037_reconcile_staging_schema``. On a healthy schema every
+and repaired by ``0064_reconcile_staging_schema``. On a healthy schema every
 guard passes, so behaviour is unchanged.
 
 Revision ID: 0011_database_review_fixes
@@ -72,7 +72,7 @@ def _create_index_if_present(bind: Any, index_name: str, table: str, columns: li
     (``mcp_setup_tokens``, ``lifecycle_maps``) or carry a legacy
     ``scheduled_reports`` shape without ``created_by``. Rather than hard-fail
     ``alembic upgrade heads`` and block deploys, skip with a printed warning;
-    ``0037_reconcile_staging_schema`` repairs the drift afterwards.
+    ``0064_reconcile_staging_schema`` repairs the drift afterwards.
     """
     if not _table_exists(bind, table):
         _warn(f"SKIP index {index_name} on {table}: table missing (drift-tolerant)")

@@ -1,7 +1,7 @@
 """Reconcile pre-squash staging schema drift that blocks ``alembic upgrade heads``.
 
-Revision ID: 0037_reconcile_staging_schema
-Revises: 0036_break_glass_columns
+Revision ID: 0064_reconcile_staging_schema
+Revises: 0037_break_glass_enforcement
 Create Date: 2026-08-03
 
 The staging database (``staging-modulo`` on Fly) is a pre-squash schema stamped
@@ -43,8 +43,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0037_reconcile_staging_schema"
-down_revision: str | Sequence[str] | None = "0036_break_glass_columns"
+revision: str = "0064_reconcile_staging_schema"
+down_revision: str | Sequence[str] | None = "0037_break_glass_enforcement"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
