@@ -31,6 +31,7 @@ unit-tests:
   - backend/tests/unit/api/test_connectors_endpoint.py
   - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/connector_hub/test_advisory_lock.py
+  - backend/tests/unit/mcp/test_mcp_connector_tools.py
 code:
   - backend/src/modulo/core/connector_hub/
   - backend/src/modulo/connectors/

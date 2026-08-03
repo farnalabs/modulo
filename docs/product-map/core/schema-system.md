@@ -16,6 +16,7 @@ unit-tests:
   - backend/tests/unit/core/test_schema_validation.py
   - backend/tests/unit/core/test_schema_migration.py
   - backend/tests/unit/db/test_schema.py
+  - backend/tests/unit/mcp/test_mcp_schema_tools.py
   - backend/tests/unit/mcp/test_schema_version_resource.py
   - backend/tests/unit/library/test_schema_seeds.py
   - backend/tests/unit/core/composite_engine/test_schema_mapping.py

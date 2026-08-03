@@ -5,7 +5,7 @@ delivery-tasks: [task-nv24-sse-event-bus]
 bdd:
   - backend/tests/bdd/features/events/sse_event_bus.feature
 unit-tests:
-  - backend/tests/unit/core/test_event_bus.py
+  - backend/tests/unit/events/test_event_bus.py
   - backend/tests/unit/api/test_events.py
   - frontend/src/__tests__/useEventStream.test.ts
   - frontend/src/__tests__/syncRegistry.test.ts

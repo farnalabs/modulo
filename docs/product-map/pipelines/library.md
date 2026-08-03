@@ -25,6 +25,7 @@ unit-tests:
   - backend/tests/unit/mcp/test_library_list_resource.py
   - backend/tests/unit/mcp/test_library_detail_resource.py
   - backend/tests/unit/mcp/test_browse_library.py
+  - backend/tests/unit/mcp/test_mcp_runtime_tools.py
 depends-on:
   - feat-core-registry-protocol-v2
   - feat-core-verified-publishers

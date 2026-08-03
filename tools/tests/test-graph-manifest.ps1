@@ -10,7 +10,7 @@ BeforeAll {
     $script:ManifestValidatorPath = Join-Path $toolsDir "validate-manifest.ps1"
     $script:RepoRoot = Resolve-Path (Join-Path $toolsDir "..")
 
-    $script:TestDir = Join-Path $env:TEMP "modulo-graph-manifest-test-$(Get-Random)"
+    $script:TestDir = Join-Path ([IO.Path]::GetTempPath()) "modulo-graph-manifest-test-$(Get-Random)"
     New-Item -ItemType Directory -Path $TestDir -Force | Out-Null
 
     # Create a minimal router file
@@ -272,6 +272,67 @@ Describe "Code path validation in product map entries" {
             $result.Output | Select-String -SimpleMatch "missing_inline_route.py" | Should -Not -Be $null
         } finally {
             Remove-Item -LiteralPath $inlineBrokenPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe "Unit-test path validation in product map entries" {
+
+    It "fails when a unit-tests: ref points to a missing file" {
+        $badEntry = "---`nid: feat-utest-broken`nprd: N/A`nstatus: partial`nunit-tests:`n  - backend/tests/unit/core/missing_test.py`n---"
+        $badPath = Join-Path (Join-Path (Join-Path $TestDir "docs") "product-map") "feat-utest-broken.md"
+        Set-Content -Path $badPath -Value $badEntry
+        try {
+            $result = Invoke-GraphValidator $WellFormedManifest
+            $result.ExitCode | Should -Be 1
+            $result.Output | Select-String -SimpleMatch "missing_test.py" | Should -Not -Be $null
+        } finally {
+            Remove-Item -LiteralPath $badPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "passes when all unit-tests: refs exist" {
+        $utestPath = Join-Path (Join-Path (Join-Path (Join-Path $TestDir "backend") "tests") "unit") "existing_test.py"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $utestPath) -Force | Out-Null
+        Set-Content -Path $utestPath -Value "def test_ok(): pass`n"
+        $goodEntry = "---`nid: feat-utest-ok`nprd: N/A`nstatus: partial`ncode:`n  - backend/src/modulo/api/routes/existing_route.py`nunit-tests:`n  - backend/tests/unit/existing_test.py`n---"
+        $goodPath = Join-Path (Join-Path (Join-Path $TestDir "docs") "product-map") "feat-utest-ok.md"
+        Set-Content -Path $goodPath -Value $goodEntry
+        try {
+            $result = Invoke-GraphValidator $WellFormedManifest
+            $result.ExitCode | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath $goodPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "passes when a unit-tests: entry carries a trailing inline annotation" {
+        $utestPath = Join-Path (Join-Path (Join-Path (Join-Path $TestDir "frontend") "tests") "e2e") "setup" "fixtures.ts"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $utestPath) -Force | Out-Null
+        Set-Content -Path $utestPath -Value "export const fixtures = {};`n"
+        $goodEntry = "---`nid: feat-utest-annotated`nprd: N/A`nstatus: partial`ncode:`n  - backend/src/modulo/api/routes/existing_route.py`nunit-tests:`n  - frontend/tests/e2e/setup/fixtures.ts (loginAsAdmin real auth on staging)`n---"
+        $goodPath = Join-Path (Join-Path (Join-Path $TestDir "docs") "product-map") "feat-utest-annotated.md"
+        Set-Content -Path $goodPath -Value $goodEntry
+        try {
+            $result = Invoke-GraphValidator $WellFormedManifest
+            $result.ExitCode | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath $goodPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "passes when an inline-array unit-tests: entry carries a trailing annotation" {
+        $utestPath = Join-Path (Join-Path (Join-Path (Join-Path $TestDir "backend") "tests") "unit") "inline_annotated_test.py"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $utestPath) -Force | Out-Null
+        Set-Content -Path $utestPath -Value "def test_ok(): pass`n"
+        $goodEntry = "---`nid: feat-utest-inline-annotated`nprd: N/A`nstatus: partial`ncode:`n  - backend/src/modulo/api/routes/existing_route.py`nunit-tests: [backend/tests/unit/inline_annotated_test.py (inline annotation with spaces)]`n---"
+        $goodPath = Join-Path (Join-Path (Join-Path $TestDir "docs") "product-map") "feat-utest-inline-annotated.md"
+        Set-Content -Path $goodPath -Value $goodEntry
+        try {
+            $result = Invoke-GraphValidator $WellFormedManifest
+            $result.ExitCode | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath $goodPath -Force -ErrorAction SilentlyContinue
         }
     }
 }

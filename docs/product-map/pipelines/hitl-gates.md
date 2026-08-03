@@ -29,6 +29,7 @@ unit-tests:
   - backend/tests/unit/pipeline_engine/test_graph_cache_hitl.py
   - backend/tests/unit/pipeline_engine/test_conditional_transitions.py
   - backend/tests/unit/graph_validator/test_graph_validator.py
+  - backend/tests/unit/mcp/test_mcp_runtime_tools.py
 depends-on: [feat-pipelines-core, feat-evals-eval-engine]
 status: partial
 ---
