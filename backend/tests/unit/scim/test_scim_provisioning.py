@@ -12,7 +12,7 @@ from modulo.api.main import app
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
 from modulo.core.feature_flags import CommunityTier, DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
-from tests.unit.scim.conftest import (
+from tests.unit.scim.helpers import (
     NOW,
     ORG_ID,
     SCIM_TOKEN,

@@ -17,7 +17,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
 from modulo.settings import Settings, get_settings
-from tests.unit.scim.conftest import (
+from tests.unit.scim.helpers import (
     NOW,
     ORG_ID,
     SCIM_TOKEN,
