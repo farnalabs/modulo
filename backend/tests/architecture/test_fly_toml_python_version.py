@@ -1,7 +1,9 @@
 """Architecture test: deployment Python image satisfies pyproject.toml's requires-python.
 
 The backend Docker images pin an explicit ``FROM python:X.Y`` base. When the
-project upgrades Python, the images and ``requires-python`` must agree.
+project upgrades Python, the images and ``requires-python`` must agree. The
+mutation-testing image and the all-in-one production image pin the same base,
+so they are checked too.
 """
 
 import re
@@ -11,10 +13,15 @@ import pytest
 
 PRODUCT = Path(__file__).resolve().parent.parent.parent.parent  # Product/
 PYPROJECT_TOML = PRODUCT / "backend" / "pyproject.toml"
-DOCKERFILES = (PRODUCT / "backend" / "Dockerfile", PRODUCT / "backend" / "Dockerfile.fly")
+DOCKERFILES = (
+    PRODUCT / "backend" / "Dockerfile",
+    PRODUCT / "backend" / "Dockerfile.fly",
+    PRODUCT / "backend" / "Dockerfile.mutation",
+    PRODUCT / "Dockerfile.all-in-one",
+)
 
 REQUIRES_PYTHON = re.compile(r'requires-python\s*=\s*">=(3)\.(\d+)(?:,<3\.(\d+))?"')
-PYTHON_IMAGE = re.compile(r"^FROM\s+python:3\.(\d+)(?:-.*)?$", re.MULTILINE)
+PYTHON_IMAGE = re.compile(r"^FROM\s+python:3\.(\d+)(?:-.*)?(?:\s+AS\s+[\w.-]+)?$", re.MULTILINE)
 
 
 def test_dockerfile_python_version_satisfies_pyproject():
