@@ -14,7 +14,7 @@ primary_region = 'lhr'
 # control (plan F8): no auto-restart here; a crash-looping SAQ worker fails the
 # container and the LB moves traffic decisively.
 [[restart]]
-  policy = "always"
+  policy = "never"
 
 [http_service]
   internal_port = 8080  # nginx serves SPA; proxies API/WS/MCP to uvicorn
