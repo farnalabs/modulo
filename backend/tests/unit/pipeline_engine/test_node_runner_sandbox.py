@@ -105,6 +105,8 @@ def test_compute_sandbox_cost_merges_agent_reported():
     assert _compute_sandbox_cost(0.0, {"cost_estimate_usd": "n/a"}) == 0.0
     assert _compute_sandbox_cost(0.0, {"summary": "no cost field"}) == 0.0
     assert _compute_sandbox_cost(0.0, None) == 0.0
+    # bool is an int subclass; `cost_estimate_usd: true` must not count as $1.
+    assert _compute_sandbox_cost(0.0, {"cost_estimate_usd": True}) == 0.0
     # Non-finite values (NaN/inf) must not corrupt the estimate.
     assert _compute_sandbox_cost(0.0, {"cost_estimate_usd": "nan"}) == 0.0
     assert _compute_sandbox_cost(0.0, {"cost_estimate_usd": "inf"}) == 0.0
