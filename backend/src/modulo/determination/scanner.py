@@ -65,7 +65,10 @@ def _add(
 
 
 async def _query_with_timeout(connector: ConnectorBase, query: ConnectorQuery) -> Any:
-    return await asyncio.wait_for(connector.query(query), timeout=_QUERY_TIMEOUT)
+    try:
+        return await asyncio.wait_for(connector.query(query), timeout=_QUERY_TIMEOUT)
+    except TimeoutError:
+        raise TimeoutError(f"connector query '{query.resource}' timed out after {_QUERY_TIMEOUT}s") from None
 
 
 async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -> list[ScanSample]:
