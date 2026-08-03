@@ -617,9 +617,9 @@ def test_entry_point_error_cleared_on_successful_reload():
 
         registry.discover_plugins()
 
-    assert registry.entry_point_errors == {}
-    assert registry.health_check("pkg-retry")["pkg-retry"].ok is True
-    assert registry.has_connector_type("c1")
+        assert registry.entry_point_errors == {}
+        assert registry.health_check("pkg-retry")["pkg-retry"].ok is True
+        assert registry.has_connector_type("c1")
 
 
 def test_discover_plugins_propagates_cancelled_error():
