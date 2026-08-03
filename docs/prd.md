@@ -3572,15 +3572,17 @@ CompositeTemplates are versioned independently (same semver model as schemas). W
 
 ##### Graph Expansion
 
-When a run reaches a composite node, the executor **expands** the composite in-line into the parent LangGraph StateGraph — it does not run the sub-pipeline as a separate thread/run. This means:
+Composite nodes are expanded at **snapshot creation** time, inside `create_snapshot_from_live_graph` (`modulo/db/crud/pipeline_snapshot.py`): the composite's `sub_pipeline_graph_json` is flattened into the parent graph before the snapshot is stored, and the composite node itself is removed. The compiled LangGraph StateGraph therefore contains the composite's internal nodes directly — expansion is in-line, never a separate thread/run. This means:
 
 - The composite's internal nodes execute within the same run, same thread ID, same checkpoint scope
+- Sub-node IDs are reassigned to fresh UUIDs; parent edges targeting the composite are rewired to its entry sub-nodes, and edges sourced from the composite are rewired to its exit sub-nodes
+- Nested composites are expanded recursively (depth-limited to 5)
 - The parent artifact is transformed through `input_mapping` before entering the first composite node
 - The composite's output is transformed through `output_mapping` before being presented as the composite node's output
 - HITL gates inside the composite appear in the parent run's HITL queue normally
 - All internal nodes appear in run inspection at the same level as parent nodes (no separate drill-down in alpha — the phantom flow approach from the run state modelling)
 
-This is the same approach as LangGraph's sub-graph support (a LangGraph node returning a `Command` with a sub-graph). The parameter values are injected into the sub-graph's state as `run_context.composite_parameters`.
+The composite node's `output_schema_json` is propagated to its exit sub-node(s) so output validation fires at runtime. Each expanded composite records a binding in the snapshot's `composite_bindings_json` (template id, version, parameter values, input/output mapping); a long-running composite that pauses at an internal HITL gate resumes with the same pinned values even if the author edits the pipeline.
 
 ##### Schema Mapping
 
@@ -3599,12 +3601,10 @@ Passthrough (no field_map, compatible schemas): entire payload passes through un
 
 ##### Parameter Injection at Runtime
 
-At graph expansion time, the executor:
+At expansion time, the expander (`modulo/core/composite_engine/expander.py`):
 
 1. Reads `composite_parameter_values` from the PipelineGraphNode
-2. For each parameter port with a `target_injection` specifying a node and `prompt_replace`/`prompt_append` mode: re-renders the target node's prompt template with the port value injected
-3. For `run_context_key` mode: writes the parameter into `run_context` before the sub-pipeline executes (readable by all internal nodes via `{{ run_context.parameter.<name> }}`)
-4. For `node_field` mode: directly sets a field on the target node's config (e.g. `model_backend_id`, `temperature`)
+2. Replaces `{{parameter.<name>}}` placeholders in each sub-node's prompt fields (`prompt`, `prompt_template`, `agent_prompt`) with the port's value — the `prompt_replace` mode, which is the alpha scope. `prompt_append`, `run_context_key`, and `node_field` injection modes are v1 scope.
 
 Parameters are snapshot-pinned: the parameter values at run-start are captured in the PipelineSnapshot's `composite_bindings_json`. A long-running composite that pauses at an internal HITL gate resumes with the same parameter values, even if the parent pipeline author changes them in the editor.
 
@@ -3793,7 +3793,6 @@ The PipelineSnapshot entity gains:
 {
   "composite_bindings_json": [
     {
-      "node_id": "uuid",
       "composite_template_id": "uuid",
       "composite_version": "1.2.0",
       "parameter_values": {...},
@@ -3812,7 +3811,7 @@ Existing snapshots without `composite_bindings_json` are handled by backward-com
 
 **V1 Extended scope**: Full schema mapping UI (field-pairing drag-and-drop), `model_backend_ref` and `schema_ref` port types, `run_context_key` and `node_field` injection modes, test-run flow for composite templates, auto-detect parameter placeholders on "Save as composite", version diff panel, update-available indicator. Composite output validation with evals at the composite boundary and configurable retry (§8.24 Composite Output Validation and Retry).
 
-**V2 scope**: Community registry for composites, nested composites (composite containing composites), output-only composites (no input mapping — self-contained generators).
+**V2 scope**: Community registry for composites, output-only composites (no input mapping — self-contained generators).
 
 #### Delivery Tasks
 

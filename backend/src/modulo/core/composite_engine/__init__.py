@@ -5,7 +5,7 @@ from modulo.core.composite_engine.composite_binding import (
     OutputValidation,
     ValidationResult,
 )
-from modulo.core.composite_engine.expander import expand_composite_node
+from modulo.core.composite_engine.expander import expand_composite_node, expand_composites_in_graph
 from modulo.core.composite_engine.schema_mapping import apply_field_mapping
 
 __all__ = [
@@ -16,4 +16,5 @@ __all__ = [
     "ValidationResult",
     "apply_field_mapping",
     "expand_composite_node",
+    "expand_composites_in_graph",
 ]
