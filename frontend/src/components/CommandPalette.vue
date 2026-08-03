@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div v-if="isOpen" class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]">
-      <div class="fixed inset-0 bg-black/50" @click="close" />
+      <div class="fixed inset-0 bg-black/50" @click="close" aria-hidden="true" />
       <div
         class="relative z-10 w-full max-w-lg rounded-lg border bg-background shadow-xl"
         role="dialog"
@@ -36,6 +36,7 @@
             ]"
             @click="goTo(item.path)"
             @mouseenter="selectedIndex = idx"
+            @focus="selectedIndex = idx"
           >
             <SvgIcon :name="item.icon" class="h-4 w-4 shrink-0 text-muted-foreground" />
             <span class="flex-1 truncate">{{ item.label }}</span>
