@@ -1,6 +1,5 @@
 """Tests for create_secrets_backend factory."""
 
-import os
 from unittest.mock import patch
 
 import pytest
@@ -23,34 +22,30 @@ def test_fernet_backend_created_by_name():
     assert isinstance(backend, FernetSecretsBackend)
 
 
-def test_vault_backend_created_by_name():
+def test_vault_backend_created_by_name(monkeypatch: pytest.MonkeyPatch):
     from modulo.core.secrets_backend.vault import VaultSecretsBackend
 
+    monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
+    monkeypatch.setenv("VAULT_TOKEN", "x")
     with (
         patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
         patch("modulo.core.secrets_backend.vault._hvac"),
-        patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}),
     ):
         backend = create_secrets_backend(fernet_key=_KEY, backend_name="vault")
         assert isinstance(backend, VaultSecretsBackend)
 
 
-def test_aws_backend_created_by_name():
+def test_aws_backend_created_by_name(monkeypatch: pytest.MonkeyPatch):
     from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
 
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "x")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "y")
     with (
         patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
         patch("modulo.core.secrets_backend.aws._boto3"),
-        patch.dict(
-            os.environ,
-            {
-                "AWS_REGION": "us-east-1",
-                "AWS_ACCESS_KEY_ID": "x",
-                "AWS_SECRET_ACCESS_KEY": "y",
-            },
-        ),
     ):
         backend = create_secrets_backend(fernet_key=_KEY, backend_name="aws")
         assert isinstance(backend, AWSSecretsManagerBackend)
@@ -89,48 +84,55 @@ def _team_license() -> LicenseData:
     )
 
 
-def test_external_secrets_licensed_when_license_file_present():
+def test_external_secrets_licensed_when_license_file_present(monkeypatch: pytest.MonkeyPatch):
     """A stored team-tier license unlocks the external_secrets flag."""
-    with (
-        patch("modulo.core.license.get_license", return_value=_team_license()),
-        patch.dict(os.environ, {"MODULO_LICENSE_KEY": ""}, clear=False),
-    ):
+    monkeypatch.delenv("MODULO_LICENSE_KEY", raising=False)
+    with patch("modulo.core.license.get_license", return_value=_team_license()):
         assert _check_external_secrets_licensed() is True
 
 
-def test_external_secrets_not_licensed_when_community():
-    with (
-        patch("modulo.core.license.get_license", return_value=None),
-        patch.dict(os.environ, {"MODULO_LICENSE_KEY": ""}),
-    ):
+def test_external_secrets_not_licensed_when_community(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("MODULO_LICENSE_KEY", raising=False)
+    with patch("modulo.core.license.get_license", return_value=None):
         assert _check_external_secrets_licensed() is False
 
 
-def test_external_secrets_licensed_via_env_key():
+def test_external_secrets_licensed_via_env_key(monkeypatch: pytest.MonkeyPatch):
     """With no stored license, a valid MODULO_LICENSE_KEY enables the flag."""
     validation = LicenseValidation(valid=True, license_data=_team_license())
+    monkeypatch.setenv("MODULO_LICENSE_KEY", "some-key")
     with (
         patch("modulo.core.license.get_license", return_value=None),
         patch("modulo.core.license.parse_and_verify", return_value=validation),
-        patch.dict(os.environ, {"MODULO_LICENSE_KEY": "some-key"}),
     ):
         assert _check_external_secrets_licensed() is True
 
 
-def test_external_secrets_not_licensed_with_invalid_env_key():
+def test_external_secrets_not_licensed_with_invalid_env_key(monkeypatch: pytest.MonkeyPatch):
     invalid = LicenseValidation(valid=False, error="Signature verification failed")
+    monkeypatch.setenv("MODULO_LICENSE_KEY", "bad-key")
     with (
         patch("modulo.core.license.get_license", return_value=None),
         patch("modulo.core.license.parse_and_verify", return_value=invalid),
-        patch.dict(os.environ, {"MODULO_LICENSE_KEY": "bad-key"}),
     ):
         assert _check_external_secrets_licensed() is False
 
 
-def test_env_var_used_when_no_backend_name():
-    with patch.dict(os.environ, {"MODULO_SECRETS_BACKEND": "fernet"}):
-        backend = create_secrets_backend(fernet_key=_KEY)
-        assert isinstance(backend, FernetSecretsBackend)
+def test_external_secrets_license_valid_without_data_is_not_enabled(monkeypatch: pytest.MonkeyPatch):
+    """A valid signature that carries no license_data must NOT unlock external secrets."""
+    validation = LicenseValidation(valid=True, license_data=None)
+    monkeypatch.setenv("MODULO_LICENSE_KEY", "some-key")
+    with (
+        patch("modulo.core.license.get_license", return_value=None),
+        patch("modulo.core.license.parse_and_verify", return_value=validation),
+    ):
+        assert _check_external_secrets_licensed() is False
+
+
+def test_env_var_used_when_no_backend_name(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MODULO_SECRETS_BACKEND", "fernet")
+    backend = create_secrets_backend(fernet_key=_KEY)
+    assert isinstance(backend, FernetSecretsBackend)
 
 
 @pytest.mark.parametrize(
@@ -152,31 +154,35 @@ def test_env_var_used_when_no_backend_name():
         ),
     ],
 )
-def test_fernet_key_optional_for_external_backend(backend_name, env_vars, module_patch, lib_patch):
+def test_fernet_key_optional_for_external_backend(
+    monkeypatch: pytest.MonkeyPatch, backend_name, env_vars, module_patch, lib_patch
+):
     if backend_name == "vault":
         from modulo.core.secrets_backend.vault import VaultSecretsBackend as expected_cls  # noqa: N813
     else:
         from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend as expected_cls  # noqa: N813
+    for k, v in env_vars.items():
+        monkeypatch.setenv(k, v)
     with (
         patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch(f"{module_patch}._MODULE_AVAILABLE", True),
         patch(lib_patch),
-        patch.dict(os.environ, env_vars),
     ):
         backend = create_secrets_backend(fernet_key=None, backend_name=backend_name)
         assert isinstance(backend, expected_cls)
 
 
 @pytest.mark.parametrize("name", ["  Vault  ", "  vault  "])
-def test_backend_name_normalized(name):
+def test_backend_name_normalized(monkeypatch: pytest.MonkeyPatch, name):
     """Factory lowercases and strips backend_name before matching."""
     from modulo.core.secrets_backend.vault import VaultSecretsBackend
 
+    monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
+    monkeypatch.setenv("VAULT_TOKEN", "x")
     with (
         patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
         patch("modulo.core.secrets_backend.vault._hvac"),
-        patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}),
     ):
         backend = create_secrets_backend(fernet_key=None, backend_name=name)
         assert isinstance(backend, VaultSecretsBackend), f"Expected VaultSecretsBackend for name={name!r}"
