@@ -4,6 +4,8 @@ The ``fs_connector`` fixture is defined in ``conftest.py`` and registered
 for the auto-parametrised conformance tests automatically.
 """
 
+from pathlib import Path
+
 import pytest
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
@@ -16,7 +18,7 @@ class TestFilesystemConnector:
         result = await fs_connector.health_check()
         assert result.ok is True
 
-    async def test_health_check_fails_on_missing_base(self, tmp_path) -> None:
+    async def test_health_check_fails_on_missing_base(self, tmp_path: Path) -> None:
         c = FilesystemConnector(base_path=str(tmp_path / "missing"))
         result = await c.health_check()
         assert result.ok is False
@@ -27,16 +29,17 @@ class TestFilesystemConnector:
         assert_result_shape(result)
 
     async def test_read_write_file(self, fs_connector: FilesystemConnector) -> None:
+        content = "world"
         write_result = await fs_connector.write(
-            ConnectorPayload(resource="file", data={"path": "hello.txt", "content": "world"})
+            ConnectorPayload(resource="file", data={"path": "hello.txt", "content": content})
         )
         assert isinstance(write_result, dict)
-        assert write_result.get("bytes_written") == 5
+        assert write_result.get("bytes_written") == len(content)
 
         read_result = await fs_connector.query(ConnectorQuery(resource="file", filters={"path": "hello.txt"}))
         assert_result_shape(read_result)
         assert len(read_result.records) == 1
-        assert read_result.records[0]["content"] == "world"
+        assert read_result.records[0]["content"] == content
 
     async def test_read_missing_file(self, fs_connector: FilesystemConnector) -> None:
         with pytest.raises(ValueError, match="File not found"):
@@ -51,12 +54,13 @@ class TestFilesystemConnector:
             await fs_connector.query(ConnectorQuery(resource="file", filters={"path": ""}))
 
     async def test_write_to_nested_path_creates_intermediate_dirs(self, fs_connector: FilesystemConnector) -> None:
+        content = "nested"
         result = await fs_connector.write(
-            ConnectorPayload(resource="file", data={"path": "a/b/c/nested.txt", "content": "nested"})
+            ConnectorPayload(resource="file", data={"path": "a/b/c/nested.txt", "content": content})
         )
-        assert result.get("bytes_written") == 6
+        assert result.get("bytes_written") == len(content)
         read_result = await fs_connector.query(ConnectorQuery(resource="file", filters={"path": "a/b/c/nested.txt"}))
-        assert read_result.records[0]["content"] == "nested"
+        assert read_result.records[0]["content"] == content
 
     async def test_browse_directory_returns_children(self, fs_connector: FilesystemConnector) -> None:
         await fs_connector.write(ConnectorPayload(resource="file", data={"path": "f1.txt", "content": "one"}))
