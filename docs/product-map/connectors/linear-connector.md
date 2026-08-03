@@ -17,7 +17,7 @@ status: partial
 
 # Linear Connector
 
-Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 18 scenarios (15 happy-path + 3 error-path) with step definitions in `backend/tests/bdd/features/connectors/linear_connector.feature` and `backend/tests/bdd/steps/test_connectors.py`. Provides read/write access to Linear issues for agent pipelines. Authenticated via Linear API key. Belongs to the `issue-tracker` connector type family alongside `JiraConnector`.
+Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 24 scenarios (21 happy-path + 3 error-path) with step definitions in `backend/tests/bdd/features/connectors/linear_connector.feature` and `backend/tests/bdd/steps/test_connectors.py`. Provides read/write access to Linear issues for agent pipelines. Authenticated via Linear API key. Belongs to the `issue-tracker` connector type family alongside `JiraConnector`.
 
 ## Behaviours
 
@@ -65,9 +65,10 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 1
 - [x] **Cycle assignment by name** — `write("issue_cycle")` accepts `{"id", "cycle": "<name>", "teamId"}` and resolves the cycle name to an ID via the team's cycles before applying `issueUpdate`
 - [x] **Cycle assignment by raw cycle ID** — `write("issue_cycle")` accepts `{"id", "cycleId"}` to set the cycle ID directly
 - [x] **Cycle removal** — `write("issue_cycle")` accepts `{"id", "cycleId": null}` to unassign an issue from its cycle
-- [ ] Assign/unassign issue — only available via `issue_update`
-- [ ] Archive issue — not implemented
-- [ ] Delete issue — not implemented
+- [x] **Label assignment (add/remove)** — `write("issue_label")` accepts `{"id", "addLabelIds": [...]}` and/or `{"id", "removeLabelIds": [...]}` (at least one required); current label IDs are fetched first and the target set computed so it is a true add/remove, applied via a single `issueUpdate`
+- [x] **Cycle read-back on issues** — `_ISSUE_FIELDS` returns `cycle { id name }` on issue reads and writes
+- [x] **Archive issue** — `write("issue_archive")` with `{"id"}` (optional `{"trash": bool}`) via `issueArchive`, returns `{"id", "archived": True, "trash": ...}`
+- [x] **Delete issue** — `write("issue_delete")` with `{"id"}` via `issueDelete`, returns `{"id", "deleted": True}`
 
 ### Team and Project Operations
 
@@ -118,12 +119,20 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 1
 
 ## Known Gaps
 
-- [ ] **No label assignment on issues**: labels can be created/renamed/deleted, and an issue can carry labels via `issue_update`'s `labelIds`, but no dedicated `issue_label` write resource exists for add/remove-without-full-update
-- [ ] **No cycle/sprint read-back on issues**: an issue can be assigned to a cycle via `issue_cycle`, but the `_ISSUE_FIELDS` fragment doesn't return the issue's current cycle
-- [ ] **No issue archive/delete**: `issueArchive`/`issueDelete` mutations not exposed
+- [ ] **Assign/unassign issue**: no dedicated `issue_assign`/`issue_unassign` write resources — assignment is only available via `issue_update` (which can set `assigneeId` directly)
 - [ ] **State/cycle name resolution is case-insensitive exact-match only**: no fuzzy matching or duplicate-name disambiguation when two workflow states or cycles share a name
 
 ## QA History
+
+### 2026-08-03 — improve-architecture: 3 known gaps RESOLVED (issue_label add/remove, cycle read-back, issue archive/delete)
+
+**RESOLVED known gaps** "No label assignment on issues", "No cycle/sprint read-back on issues", "No issue archive/delete". Added to `connectors/linear/__init__.py`:
+- `write("issue_label")` — add/remove labels on an issue via `{"id", "addLabelIds": [...]}` and/or `{"id", "removeLabelIds": [...]}`. Because Linear's `issueUpdate.labelIds` is a *set* (replaces the full list), the current label IDs are fetched first via a new `_ISSUE_LABEL_IDS_QUERY` and the target set computed in `_update_issue_labels()` so the operation is a true add/remove applied atomically in a single `issueUpdate` (not a blind replace). Missing issue → `ValueError`, missing both add/remove → `ValueError`.
+- **Cycle read-back** — `cycle { id name }` added to the shared `_ISSUE_FIELDS` fragment, so every issue read/search/write now returns the issue's current cycle.
+- `write("issue_archive")` — archives an issue via `issueArchive(id, trash)`, optional `{"trash": bool}`, returns `{"id", "archived", "trash"}`; success-flag check.
+- `write("issue_delete")` — permanently deletes an issue via `issueDelete(id)`, returns `{"id", "deleted"}`; success-flag check.
+
+Added 14 unit tests (`test_linear.py`: issue cycle read-back, issue_label add/remove/add+remove/missing-fields/issue-not-found/update-failure, issue_archive default/trash/missing-id/failure, issue_delete/missing-id/failure) + 6 BDD scenarios in `linear_connector.feature` (add label, remove label, no-label-ids error, archive, archive-to-trash, delete) with 7 new step definitions in `test_connectors.py` and the mock connector extended to mirror the new resources. Updated product map (5 behaviours `[ ]`→`[x]`, Known Gaps 4→2, BDD count 18→24, QA History). 78/78 `test_linear.py` + `test_linear_resilience.py` unit tests + 6/6 new linear BDD scenarios pass (pre-existing 19 connector-suite BDD failures unchanged), ruff clean. Status: partial (issue assign/unassign helper + fuzzy state/cycle name matching remain).
 
 ### 2026-08-03 — improve-architecture: review-fix hardening (PR #565)
 
