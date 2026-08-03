@@ -1,7 +1,7 @@
 """Break-glass columns + caller-bound deactivate_break_glass SECURITY DEFINER (deliverable A).
 
-Revision ID: 0036_break_glass_columns
-Revises: merge_break_glass_heads
+Revision ID: 0037_break_glass_columns
+Revises: 0036_merge_heads
 Create Date: 2026-08-02
 
 Per docs/break-glass-admin-recovery-plan.md v17 (deliverable A):
@@ -33,8 +33,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0036_break_glass_columns"
-down_revision: str | Sequence[str] | None = "merge_break_glass_heads"
+revision: str = "0037_break_glass_columns"
+down_revision: str | Sequence[str] | None = "0036_merge_heads"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

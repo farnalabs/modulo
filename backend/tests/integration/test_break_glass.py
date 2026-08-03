@@ -18,6 +18,7 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import event, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -163,7 +164,7 @@ async def test_break_glass_columns_not_writable_by_modulo_app(
     account_id = await _create_account(db_engine, is_break_glass=False)
 
     async with modulo_app_engine.begin() as conn:
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(DBAPIError) as exc_info:
             await conn.execute(
                 text("UPDATE accounts SET is_break_glass = true WHERE id = :id"),
                 {"id": str(account_id)},
@@ -187,7 +188,7 @@ async def test_caller_with_no_shared_org_is_rejected_m2010(
     target = await _create_account(db_engine)
     await _create_membership(db_engine, org_id=bg_org, account_id=target, role="admin")
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBAPIError) as exc_info:
         await _call_deactivate(modulo_app_engine, caller, target)
     assert _pgcode_of(exc_info.value) == "M2010"
 
@@ -203,7 +204,7 @@ async def test_last_admin_m2020(modulo_app_engine: AsyncEngine, db_engine: Async
     await _create_membership(db_engine, org_id=other_org, account_id=target, role="admin")
 
     # Deactivating the target would orphan other_org (its last admin) -> M2020.
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBAPIError) as exc_info:
         await _call_deactivate(modulo_app_engine, caller, target)
     assert _pgcode_of(exc_info.value) == "M2020"
 
@@ -263,7 +264,7 @@ async def test_target_missing_m2040(breakglass_engine: AsyncEngine, db_engine: A
     # check (GET DIAGNOSTICS / FOUND after the UPDATE).
     operator = await _create_account(db_engine)
     missing = uuid.uuid4()
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBAPIError) as exc_info:
         await _call_deactivate(breakglass_engine, operator, missing)
     assert _pgcode_of(exc_info.value) == "M2040"
 
@@ -283,7 +284,7 @@ async def test_force_requires_operator_and_set_role_does_not_qualify(
     await _create_membership(db_engine, org_id=bg_org, account_id=target, role="admin")
 
     # modulo_app (non-operator) force=true -> M2010
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBAPIError) as exc_info:
         await _call_deactivate(modulo_app_engine, caller, target, force=True)
     assert _pgcode_of(exc_info.value) == "M2010"
 
@@ -300,7 +301,7 @@ async def test_force_requires_operator_and_set_role_does_not_qualify(
             cursor.close()
 
     try:
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(DBAPIError) as exc_info:
             await _call_deactivate(set_role_engine, caller, target, force=True)
         assert _pgcode_of(exc_info.value) == "M2010"
     finally:
@@ -343,7 +344,7 @@ async def test_operator_force_refused_without_force_last_admin(
     await _create_membership(db_engine, org_id=bg_org, account_id=target, role="admin")
     operator = await _create_account(db_engine)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(DBAPIError) as exc_info:
         await _call_deactivate(breakglass_engine, operator, target, force=False)
     assert _pgcode_of(exc_info.value) == "M2020"
 
@@ -504,7 +505,7 @@ async def test_migration_downgrade_round_trip(migrated_db_url: str) -> None:
     are restored to the captured baseline, then re-applies cleanly.
     """
     config = _make_alembic_config()
-    await asyncio.to_thread(command.downgrade, config, "merge_break_glass_heads")
+    await asyncio.to_thread(command.downgrade, config, "0036_merge_heads")
 
     engine = create_async_engine(migrated_db_url, poolclass=NullPool)
     try:

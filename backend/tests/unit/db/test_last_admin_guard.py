@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 
 from modulo.api.routes.admin import _extract_bg_pgcode, _raise_bg_pgcode
 from modulo.db.crud.last_admin_guard import (
@@ -171,7 +172,7 @@ class TestPgcodeMapping:
         assert _extract_bg_pgcode(Exception("no pgcode")) is None
 
     def test_rest_mapping(self) -> None:
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             _raise_bg_pgcode(
                 self._exc_with_pgcode("M2010"),
                 unauthorized_status=403,
@@ -180,7 +181,7 @@ class TestPgcodeMapping:
             )
         assert exc_info.value.status_code == 403
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             _raise_bg_pgcode(
                 self._exc_with_pgcode("M2020"),
                 unauthorized_status=403,
@@ -189,7 +190,7 @@ class TestPgcodeMapping:
             )
         assert exc_info.value.status_code == 422
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             _raise_bg_pgcode(
                 self._exc_with_pgcode("M2040"),
                 unauthorized_status=403,
@@ -199,7 +200,7 @@ class TestPgcodeMapping:
         assert exc_info.value.status_code == 404
 
     def test_scim_mapping(self) -> None:
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             _raise_bg_pgcode(
                 self._exc_with_pgcode("M2020"),
                 unauthorized_status=409,

@@ -1,6 +1,6 @@
 """Schema-less merge of the seven concurrent migration heads.
 
-Revision ID: merge_break_glass_heads
+Revision ID: 0036_merge_heads
 Revises: (seven heads)
 Create Date: 2026-08-02
 
@@ -20,7 +20,7 @@ report exactly one head after this migration lands (deploy gate).
 
 from collections.abc import Sequence
 
-revision: str = "merge_break_glass_heads"
+revision: str = "0036_merge_heads"
 down_revision: str | Sequence[str] | None = (
     "0023_add_error_forwarder_configs_deleted_at",
     "0023_add_triggers_deleted_at",
