@@ -245,11 +245,15 @@ class TestCreateTriggerSuccess(_AuthContext):
         )
 
         assert result.get("error") is None
+        assert result["id"] == str(uuid.UUID(result["id"]))
+        assert result["pipeline_id"] == str(uuid.UUID(result["pipeline_id"]))
         assert result["trigger_type"] == "cron"
         assert result["active"] is False
         assert result["max_concurrent_runs"] == 3
         assert result["daily_spend_limit"] == 12.5
         assert result["cron_expression"] is None
+        mock_sesh.add.assert_called_once()
+        mock_sesh.flush.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
