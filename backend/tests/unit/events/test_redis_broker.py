@@ -40,6 +40,11 @@ def test_redact_url_masks_password() -> None:
     assert broker._redact_url("redis://:secret@localhost:6379/0") == "redis://:****@localhost:6379/0"
 
 
+def test_redact_url_masks_password_with_username() -> None:
+    broker = RedisEventBroker("redis://localhost:6379/0")
+    assert broker._redact_url("redis://user:secret@localhost:6379/0") == "redis://user:****@localhost:6379/0"
+
+
 def test_redact_url_without_password_is_unchanged() -> None:
     broker = RedisEventBroker("redis://localhost:6379/0")
     assert broker._redact_url("redis://localhost:6379/0") == "redis://localhost:6379/0"

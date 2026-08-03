@@ -1,5 +1,6 @@
 """Unit tests for DeterminationScanner — uses mocked connectors."""
 
+import asyncio
 import contextlib
 import json
 import uuid
@@ -14,7 +15,7 @@ from cryptography.fernet import Fernet
 from modulo.connectors.base import ConnectorQuery, ConnectorType
 from modulo.core.connector_hub import ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
-from modulo.determination.scanner import run_scan
+from modulo.determination.scanner import _repo_name, run_scan
 
 _KEY = Fernet.generate_key().decode()
 
@@ -59,7 +60,7 @@ async def _hub(ci: object) -> AsyncGenerator[ConnectorHub, None]:
 _GITHUB_API = "https://api.github.com"
 _GITLAB_API = "https://gitlab.com/api/v4"
 _JIRA_BASE = "https://test-domain.atlassian.net/rest/api/3"
-_LINEAR_API = "https://api.linear.app/graphql"
+_LINEAR_API = "https://api.linear.app"
 
 
 @respx.mock
@@ -336,3 +337,89 @@ async def test_connector_whose_health_check_raises_is_skipped() -> None:
     assert samples[0].connector_id == healthy_id
     assert samples[0].resource == "repos"
     assert samples[0].error is None
+
+
+# ---------------------------------------------------------------------------
+# _repo_name
+# ---------------------------------------------------------------------------
+
+
+def test_repo_name_prefers_full_name_over_name() -> None:
+    assert _repo_name({"full_name": "owner/repo", "name": "repo"}) == "owner/repo"
+
+
+def test_repo_name_gitlab_path_with_namespace() -> None:
+    assert _repo_name({"path_with_namespace": "group/proj", "name": "proj"}) == "group/proj"
+
+
+def test_repo_name_falls_back_to_plain_name() -> None:
+    assert _repo_name({"name": "repo-a"}) == "repo-a"
+
+
+def test_repo_name_ignores_non_string_values() -> None:
+    assert _repo_name({"name": 123}) == ""
+    assert _repo_name({}) == ""
+
+
+# ---------------------------------------------------------------------------
+# Query timeout / limit edge cases
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_connector_query_timeout_produces_error_sample() -> None:
+    """A connector whose query hangs must be cut off and surfaced as an error sample."""
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
+    cid = uuid.uuid4()
+
+    class _SlowConnector:
+        connector_type = ConnectorType.GITHUB
+
+        async def health_check(self) -> None:
+            return None
+
+        async def query(self, query: ConnectorQuery) -> SimpleNamespace:  # pragma: no cover - never returns
+            await asyncio.sleep(60)
+            raise AssertionError("query should be interrupted by the timeout")
+
+    hub._connectors = {cid: _SlowConnector()}
+    hub._initialised = True
+
+    with patch("modulo.determination.scanner._QUERY_TIMEOUT", 0.05):
+        samples = await run_scan(hub)
+
+    assert len(samples) == 1
+    assert samples[0].connector_id == cid
+    assert samples[0].resource == "repos"
+    assert samples[0].records == []
+    assert samples[0].error is not None
+    assert "timed out" in samples[0].error
+
+
+@respx.mock
+async def test_linear_results_truncated_to_sample_limit() -> None:
+    """Linear results must be capped at _SAMPLE_LIMIT records and sample_count."""
+    ci = _fake_ci("linear", creds={"api_key": "lin_key"})
+    async with _hub(ci) as hub:
+        await hub.initialise([ci])
+
+        many = [
+            {"id": f"i{i}", "identifier": f"T-{i}", "title": f"task {i}", "state": {"name": "Todo"}} for i in range(40)
+        ]
+        respx.post(f"{_LINEAR_API}/graphql").side_effect = [
+            httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "viewer": {"id": "u1", "name": "User", "email": "u@test.com"},
+                    }
+                },
+            ),
+            httpx.Response(200, json={"data": {"searchIssues": {"nodes": many}}}),
+        ]
+
+        samples = await run_scan(hub)
+    issues = next((s for s in samples if s.resource == "issues"), None)
+    assert issues is not None
+    assert len(issues.records) == 25
+    assert issues.sample_count == 25
