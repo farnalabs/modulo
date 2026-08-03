@@ -418,7 +418,8 @@ class GitLabConnector(ConnectorBase):
                         version_r = await client.get("/version")
                         if version_r.is_success:
                             version_info = _safe_json(version_r)
-                            version = version_info.get("version")
+                            if isinstance(version_info, dict):
+                                version = version_info.get("version")
                     except (httpx.RequestError, ValueError):
                         version = None
 

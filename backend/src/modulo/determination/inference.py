@@ -42,14 +42,20 @@ _CI_FILES = {
 
 
 def _age_days(value: Any) -> float | None:
-    """Parse ISO datetime string and return days since then."""
+    """Parse ISO datetime string and return days since then.
+
+    Naive timestamps (no timezone suffix) are interpreted as UTC so that
+    connectors returning timezone-less ISO strings cannot crash inference.
+    """
     if not isinstance(value, str):
         return None
     try:
         dt = datetime.fromisoformat(value)
-        return (datetime.now(UTC) - dt).total_seconds() / 86400
     except ValueError:
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - dt).total_seconds() / 86400
 
 
 def infer(samples: list[ScanSample]) -> list[Finding]:
