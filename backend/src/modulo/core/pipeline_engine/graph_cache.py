@@ -315,6 +315,7 @@ def build_graph_from_json(
                 make_sandbox_agent_fn(
                     node_def,
                     timeout=timeout,
+                    session_factory=session_factory,
                 ),
             )
         elif node_type == "agent" and node_def.get("agent_id"):

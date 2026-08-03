@@ -654,6 +654,10 @@ Wall-clock time and exit code are captured on every dispatch natively by the `sa
 
 The agent's output is evaluated by a separate Modulo pipeline (code review, test coverage check, security scan). This keeps evaluation separate from execution and allows different evaluators to be composed independently.
 
+#### env_vars secret references
+
+`sandbox_agent` nodes may reference org secrets in their `env_vars` using `{{ secrets.KEY }}` syntax. These references are resolved at node run time — on every execution, not at graph compile time — so secret rotation takes effect on the next run and secrets never enter the compiled graph cache or checkpoint state. Resolution order: the org vault (per-org encrypted `secrets` table) is consulted first; if the key is not in the vault, the value falls back to the worker process environment. A reference that resolves to neither becomes an empty string (with a warning) so a missing secret never crashes a run.
+
 ---
 
 ## 7. Security

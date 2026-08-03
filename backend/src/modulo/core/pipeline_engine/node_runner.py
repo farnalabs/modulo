@@ -49,7 +49,7 @@ import os
 import re as _re
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from typing import Any
 
@@ -627,10 +627,40 @@ def make_connector_fn(
     return _connector_node
 
 
+_secret_ref_re = _re.compile(r"^\{\{\s*secrets\.(\w+)\s*\}\}$")
+
+
+async def resolve_env_var_refs(
+    env_vars: dict[str, Any],
+    resolver: Callable[[str], Awaitable[str | None]],
+) -> dict[str, str]:
+    """Resolve ``{{ secrets.KEY }}`` references in env var values.
+
+    Non-reference values pass through unchanged. ``{{ secrets.KEY }}`` values
+    are resolved via *resolver*; a missing secret resolves to ``""`` and logs a
+    warning (legacy behaviour), never raising.
+    """
+    resolved: dict[str, str] = {}
+    for key, value in env_vars.items():
+        m = _secret_ref_re.fullmatch(str(value))
+        if m:
+            secret_key = m.group(1)
+            resolved_value = await resolver(secret_key)
+            if resolved_value is None:
+                _log.warning("env_var.secret_ref_not_found", extra={"key": key, "secret_key": secret_key})
+                resolved[key] = ""
+            else:
+                resolved[key] = resolved_value
+        else:
+            resolved[key] = value
+    return resolved
+
+
 def make_sandbox_agent_fn(
     node_def: dict[str, Any],
     *,
     timeout: float | None = None,
+    session_factory: Callable[..., Any] | None = None,
 ) -> Any:
     """Return a decorated async node function that dispatches work to an external
     agent runtime in an E2B sandbox.
@@ -649,31 +679,16 @@ def make_sandbox_agent_fn(
     runs the external agent, reads structured output from /home/user/output.json,
     and tears down the sandbox. Wall-clock time and exit code are captured
     natively —  even on failure.
+
+    env_vars values may reference secrets with ``{{ secrets.KEY }}``. These are
+    resolved at run time from the org vault (when a ``session_factory`` is
+    provided) and fall back to the process environment, so secret rotation
+    takes effect on the next run and secrets never enter the compiled graph.
     """
-
-    _secret_ref_re = _re.compile(r"^\{\{\s*secrets\.(\w+)\s*\}\}$")
-
-    def _resolve_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
-        """Resolve {{ secrets.KEY }} references in env var values."""
-        resolved: dict[str, str] = {}
-        for key, value in env_vars.items():
-            m = _secret_ref_re.match(str(value))
-            if m:
-                secret_key = m.group(1)
-                resolved_value = os.environ.get(secret_key)
-                if resolved_value is None:
-                    _log.warning("env_var.secret_ref_not_found", extra={"key": key, "secret_key": secret_key})
-                    resolved[key] = ""
-                else:
-                    resolved[key] = resolved_value
-            else:
-                resolved[key] = value
-        return resolved
 
     node_id: str = str(node_def["id"])
     agent_prompt_template: str = node_def.get("agent_prompt") or ""
     template_id: str = node_def.get("template_id", "opencode")
-    env_vars_extra: dict[str, str] = _resolve_env_vars(node_def.get("env_vars") or {})
     commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
     agent_commands_raw: list[str] | None = node_def.get("agent_commands")
     agent_command_raw: str | None = node_def.get("agent_command")
@@ -717,6 +732,39 @@ def make_sandbox_agent_fn(
         pipeline_id: str = str(state.get("_pipeline_id", ""))
         org_id: str = str(state.get("_org_id", ""))
 
+        async def _resolve_secret_ref(secret_key: str) -> str | None:
+            """Resolve a ``{{ secrets.KEY }}`` reference to a string value.
+
+            The org vault (per-org encrypted secrets table) is consulted first
+            so pipelines resolve against the tenant's stored secrets and honour
+            rotation on every run. Falls back to the process environment when
+            the key is not in the vault.
+            """
+            if session_factory is not None:
+                org_uuid: uuid.UUID | None = None
+                org_id_raw = state.get("_org_id")
+                if org_id_raw:
+                    try:
+                        org_uuid = uuid.UUID(str(org_id_raw))
+                    except (TypeError, ValueError):
+                        org_uuid = None
+                if org_uuid is not None:
+                    from modulo.core.secrets_backend import create_secrets_backend
+                    from modulo.db.rls import set_rls_org
+                    from modulo.settings import get_settings
+
+                    try:
+                        async with session_factory() as session, session.begin():
+                            await set_rls_org(session, org_uuid)
+                            backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
+                            return await backend.get_secret(secret_key)
+                    except KeyError:
+                        pass  # not in vault -> fall back
+                    except Exception:
+                        _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
+            # Fall back to process environment.
+            return os.environ.get(secret_key)
+
         try:
             rendered_prompt = template.render(**template_vars)
         except jinja2.UndefinedError as e:
@@ -757,6 +805,11 @@ def make_sandbox_agent_fn(
                 _input_json = json.dumps(
                     {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
                 )
+
+            env_vars_extra: dict[str, str] = await resolve_env_var_refs(
+                node_def.get("env_vars") or {},
+                _resolve_secret_ref,
+            )
 
             try:
                 cmd_result = await asyncio.wait_for(
