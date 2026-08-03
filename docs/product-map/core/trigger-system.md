@@ -60,6 +60,7 @@ concurrency management via `max_concurrent_runs`.
 - [x] Delete trigger cascades to TriggerEvent rows
 - [x] `daily_spend_limit` accepted on `TriggerCreate`/`TriggerUpdate` (validated `ge=0`; explicit `null` clears it) and echoed on every trigger response (`list_triggers`, `create_trigger`, `update_trigger`, `restore_trigger`, `list_pipeline_triggers`)
 - [x] MCP `create_trigger` tool accepts `max_concurrent_runs` and `daily_spend_limit` (validated) and echoes both in the response
+- [x] MCP trigger CRUD: `get_trigger` (read by ID), `update_trigger` (active, max_concurrent_runs, cron config for cron triggers only, daily_spend_limit set/clear, config_json), and `delete_trigger` (soft-delete) mirror the REST `/api/v1/triggers/{id}` endpoints
 
 ### Manual Trigger
 
