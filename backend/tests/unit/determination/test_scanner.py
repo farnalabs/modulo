@@ -60,7 +60,7 @@ async def _hub(ci: object) -> AsyncGenerator[ConnectorHub, None]:
 _GITHUB_API = "https://api.github.com"
 _GITLAB_API = "https://gitlab.com/api/v4"
 _JIRA_BASE = "https://test-domain.atlassian.net/rest/api/3"
-_LINEAR_API = "https://api.linear.app/graphql"
+_LINEAR_API = "https://api.linear.app"
 
 
 @respx.mock
