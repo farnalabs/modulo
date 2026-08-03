@@ -25,6 +25,10 @@ def main() -> int:
         )
         return 0
 
+    # pre-commit runs hooks from the repo root, so relative paths below resolve
+    # correctly; the outer `uv run` in .pre-commit-config.yaml plus this inner
+    # `uv run` is a redundant but harmless double hop that guarantees semgrep
+    # executes with the locked backend environment.
     cmd = [
         "uv",
         "run",

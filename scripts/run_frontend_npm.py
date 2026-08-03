@@ -59,7 +59,13 @@ def main() -> int:
         print(f"{os.path.basename(__file__)}: npm not found on PATH", file=sys.stderr)
         return 1
 
-    result = subprocess.run([npm, "run", script], cwd=FRONTEND_DIR)
+    if sys.platform == "win32":
+        # CreateProcess cannot execute .cmd/.bat shims directly (WinError 193);
+        # they must be launched through the Windows command interpreter.
+        cmd = ["cmd.exe", "/c", npm, "run", script]
+    else:
+        cmd = [npm, "run", script]
+    result = subprocess.run(cmd, cwd=FRONTEND_DIR)
     return result.returncode
 
 
