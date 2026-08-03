@@ -26,8 +26,15 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _has_column(bind, table: str, column: str) -> bool:
+    """Return True if ``table.column`` exists in the connected DB."""
+    insp = sa.inspect(bind)
+    return column in {c["name"] for c in insp.get_columns(table)}
+
+
 def upgrade() -> None:
-    _add_missing_indexes()
+    bind = op.get_bind()
+    _add_missing_indexes(bind)
     _add_missing_foreign_keys()
     _fix_column_types()
     _add_trigger_based_fk_checks()
@@ -40,7 +47,7 @@ def downgrade() -> None:
     _remove_missing_indexes()
 
 
-def _add_missing_indexes() -> None:
+def _add_missing_indexes(bind) -> None:
     op.create_index(
         op.f("ix_notifications_target_user_id"),
         "notifications",
@@ -48,13 +55,17 @@ def _add_missing_indexes() -> None:
         unique=False,
         postgresql_where=sa.text("target_user_id IS NOT NULL"),
     )
-    op.create_index(
-        op.f("ix_scheduled_reports_created_by"),
-        "scheduled_reports",
-        ["created_by"],
-        unique=False,
-        postgresql_where=sa.text("created_by IS NOT NULL"),
-    )
+    # scheduled_reports.created_by may not exist on DBs that ran an older
+    # 0005 (pre-created_by). Skip the index here; 0037_add_scheduled_reports_created_by
+    # adds the column + index idempotently later in the chain.
+    if _has_column(bind, "scheduled_reports", "created_by"):
+        op.create_index(
+            op.f("ix_scheduled_reports_created_by"),
+            "scheduled_reports",
+            ["created_by"],
+            unique=False,
+            postgresql_where=sa.text("created_by IS NOT NULL"),
+        )
     op.create_index(
         op.f("ix_connector_instances_account_id"),
         "connector_instances",
