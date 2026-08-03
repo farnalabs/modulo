@@ -18,6 +18,10 @@ code:
   - backend/src/modulo/db/models/library_primitive.py
   - backend/src/modulo/db/models/primitive_rating.py
 unit-tests:
+  - backend/tests/unit/library/test_agents.py
+  - backend/tests/unit/library/test_integrations.py
+  - backend/tests/unit/library/test_workflows.py
+  - backend/tests/unit/library/test_dogfooding.py
   - backend/tests/unit/library_service/test_library_service.py
   - backend/tests/unit/library_service/test_composite_library.py
   - backend/tests/unit/api/test_library_endpoint.py
