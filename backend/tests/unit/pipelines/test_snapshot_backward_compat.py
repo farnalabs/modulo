@@ -82,11 +82,30 @@ def test_old_snapshot_with_hitl_gate_compiles():
     assert compiled is not None
 
 
-async def test_old_snapshot_with_hitl_gate_executes():
-    """Old-format snapshots with HITL gates should compile successfully."""
+async def test_old_snapshot_with_hitl_gate_executes_and_interrupts():
+    """Old-format snapshots with HITL gates must pause at the gate at runtime.
+
+    The gate node is wired between the source and target nodes; invoking the
+    graph must execute the source node and then interrupt for human review
+    instead of silently flowing past the gate.
+    """
     compiled = build_graph_from_json(_OLD_FORMAT_WITH_GATES)
-    assert compiled is not None
-    # Compilation is the key backward-compatibility check for HITL gates
+
+    graph = compiled.get_graph()
+    gate_node_ids = {node for node in graph.nodes if node.startswith("hitl_gate_")}
+    assert gate_node_ids == {"hitl_gate_start_end"}
+
+    initial_state: dict[str, Any] = {
+        "run_context": {"cancelled": False, "input": {}},
+        "artifacts": [],
+    }
+    config = {"configurable": {"thread_id": "test-old-gate"}}
+    result = await compiled.ainvoke(initial_state, config)
+
+    assert [a["node_id"] for a in result["artifacts"]] == ["start"]
+    interrupts = result.get("__interrupt__")
+    assert interrupts, "graph should interrupt at the HITL gate"
+    assert interrupts[0].value["gate_id"] == "hitl_gate_start_end"
 
 
 # ---------------------------------------------------------------------------
