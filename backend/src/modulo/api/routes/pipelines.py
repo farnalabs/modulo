@@ -670,7 +670,7 @@ async def _resolve_graph_references(
     return schema_pins, model_backend_pins
 
 
-@router.get("", response_model=PipelineListResponse)
+@router.get("", response_model=PipelineListResponse, responses={401: {"description": "Unauthorized"}})
 @handle_db_errors("pipelines.list")
 async def list_pipelines_endpoint(
     page: int = Query(default=1, ge=1),
