@@ -299,7 +299,7 @@ async def _assert_no_owner_rows(settings: Settings) -> None:
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         result = await session.execute(select(OrgMembership).where(OrgMembership.role == _OWNER_ROLE_LEGACY))
         owners = list(result.scalars().all())
 
