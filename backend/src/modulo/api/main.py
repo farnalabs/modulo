@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
@@ -218,6 +219,26 @@ async def _migration_advisory_lock(settings: Settings) -> AsyncIterator[bool]:
                 )
 
 
+async def _run_bootstrap(settings: Settings) -> None:
+    """Run bootstrap_role (roles + allow-list + break-glass grants) idempotently.
+
+    The entrypoint already runs bootstrap before alembic; the lifespan path runs
+    it BEFORE and AFTER alembic so the boundary survives every boot and is
+    re-applied after the migration's grants land (ADR-017/018 amendment). The
+    admin URL falls back to the app URL when DATABASE_ADMIN_URL is unset (like
+    env.py). Failure is logged and non-fatal in deliverable (A) — there is no
+    MODULO_BREAK_GLASS_ENABLED gate yet; the entrypoint mirrors this with a
+    warning on bootstrap failure.
+    """
+    from modulo.db.bootstrap_role import bootstrap_roles
+
+    admin_url = os.environ.get("DATABASE_ADMIN_URL") or settings.database_url
+    try:
+        await bootstrap_roles(admin_url, settings.database_url)
+    except Exception:
+        logger.warning("startup.role_bootstrap_failed", exc_info=True)
+
+
 async def _run_migrations(settings: Settings) -> None:
     """Run Alembic migrations to head, with a bounded retry loop and FATAL exhaustion.
 
@@ -236,6 +257,9 @@ async def _run_migrations(settings: Settings) -> None:
     alembic_ini = _resolve_alembic_ini()
     last_error: Exception | None = None
 
+    # Bootstrap BEFORE migrations so the roles 0036 re-owns to / grants on exist.
+    await _run_bootstrap(settings)
+
     for attempt in range(1, _MIGRATION_MAX_ATTEMPTS + 1):
         try:
             async with _migration_advisory_lock(settings) as acquired:
@@ -252,7 +276,7 @@ async def _run_migrations(settings: Settings) -> None:
                 config.set_main_option("sqlalchemy.url", _to_sync_url(settings.database_url))
                 await asyncio.to_thread(command.upgrade, config, "heads")
             logger.info("startup.migrations_complete")
-            return
+            break
         except asyncio.CancelledError:
             raise
         except (SQLAlchemyError, _MigrationLockTimeoutError) as exc:
@@ -272,6 +296,11 @@ async def _run_migrations(settings: Settings) -> None:
             )
             last_error = exc
             break
+
+    if last_error is None:
+        # Re-apply the allow-list + grants AFTER alembic on the same boot.
+        await _run_bootstrap(settings)
+        return
 
     logger.error(
         "infra_blocked=migration_failed",
