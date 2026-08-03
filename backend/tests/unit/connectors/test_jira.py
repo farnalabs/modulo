@@ -586,6 +586,39 @@ async def test_write_issue_label_missing_key(connector):
 
 
 @respx.mock
+async def test_write_issue_label_add_not_a_list(connector):
+    with pytest.raises(ValueError, match="add must be a list of strings"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_label",
+                data={"issue_key": "PROJ-123", "add": "bug"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_label_remove_not_a_list(connector):
+    with pytest.raises(ValueError, match="remove must be a list of strings"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_label",
+                data={"issue_key": "PROJ-123", "remove": "stale"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_label_non_string_item(connector):
+    with pytest.raises(ValueError, match="add must contain only strings"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_label",
+                data={"issue_key": "PROJ-123", "add": ["bug", 123]},
+            )
+        )
+
+
+@respx.mock
 async def test_write_issue_delete(connector):
     respx.delete(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(204))
     result = await connector.write(
