@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, update_api_key
 from modulo.auth.dependencies import get_current_tenant_user, resolve_role_from_membership
 from modulo.auth.jwt import TenantPrincipal
@@ -132,7 +132,12 @@ async def _enforce_mint_cap(session: AsyncSession, principal: TenantPrincipal, r
 
 
 @handle_db_errors("api_keys.create_api_key_endpoint")
-@router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ApiKeyCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def create_api_key_endpoint(
     req: ApiKeyCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -239,7 +244,7 @@ async def list_api_keys_endpoint(
 
 
 @handle_db_errors("api_keys.update_api_key_endpoint")
-@router.put("/{key_id}")
+@router.put("/{key_id}", dependencies=[Depends(deny_break_glass_mint)])
 async def update_api_key_endpoint(
     key_id: uuid.UUID,
     req: ApiKeyUpdate,
@@ -317,7 +322,7 @@ async def update_api_key_endpoint(
 
 
 @handle_db_errors("api_keys.revoke_api_key_endpoint")
-@router.delete("/{key_id}", response_model=ApiKeyRevokeResponse)
+@router.delete("/{key_id}", response_model=ApiKeyRevokeResponse, dependencies=[Depends(deny_break_glass_mint)])
 async def revoke_api_key_endpoint(
     key_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

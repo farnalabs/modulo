@@ -18,7 +18,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -113,7 +113,12 @@ async def list_endpoints(
 
 
 @handle_db_errors("notifications.create_endpoint")
-@router.post("", response_model=NotificationEndpointResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=NotificationEndpointResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def create_endpoint(
     req: NotificationEndpointCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -222,7 +227,9 @@ async def get_endpoint(
 
 
 @handle_db_errors("notifications.update_endpoint")
-@router.put("/{endpoint_id}", response_model=NotificationEndpointResponse)
+@router.put(
+    "/{endpoint_id}", response_model=NotificationEndpointResponse, dependencies=[Depends(deny_break_glass_mint)]
+)
 async def update_endpoint(
     endpoint_id: uuid.UUID,
     req: NotificationEndpointUpdate,
@@ -291,7 +298,7 @@ async def update_endpoint(
 
 
 @handle_db_errors("notifications.delete_endpoint")
-@router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -337,7 +344,9 @@ async def delete_endpoint(
 
 
 @handle_db_errors("notifications.restore_endpoint")
-@router.post("/{endpoint_id}/restore", response_model=NotificationEndpointResponse)
+@router.post(
+    "/{endpoint_id}/restore", response_model=NotificationEndpointResponse, dependencies=[Depends(deny_break_glass_mint)]
+)
 async def restore_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

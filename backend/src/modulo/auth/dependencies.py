@@ -72,30 +72,6 @@ class SystemAdminRequired(HTTPException):
         )
 
 
-async def get_current_tenant_user_optional(
-    credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
-    settings: Settings = Depends(get_settings),
-) -> TenantPrincipal | None:
-    """Like get_current_tenant_user but returns None instead of 401 when no credentials."""
-    if credentials is None:
-        return None
-    try:
-        from modulo.auth.jwt import decode_principal
-
-        principal = decode_principal(credentials.credentials, settings.secret_key)
-        if principal.organisation_id is None or principal.org_role is None:
-            return None
-        return TenantPrincipal(
-            username=principal.username,
-            organisation_id=principal.organisation_id,
-            account_id=principal.account_id,
-            org_role=principal.org_role,
-            is_system_admin=principal.is_system_admin,
-        )
-    except JWTError:
-        return None
-
-
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
     settings: Settings = Depends(get_settings),
@@ -363,3 +339,20 @@ async def require_system_admin(
     if not current_user.is_system_admin:
         raise SystemAdminRequired()
     return current_user
+
+
+def __getattr__(name: str) -> object:
+    """Lazily re-export ``get_current_tenant_user_optional`` from ``api.dependencies``.
+
+    The fail-closed (break-glass) variant lives in ``modulo.api.dependencies``
+    (where ``get_db_session`` is defined) to avoid a module-import cycle:
+    ``api.dependencies`` imports names from this module at its top, so this
+    module must not import ``api.dependencies`` at module load. Existing
+    callers keep ``from modulo.auth.dependencies import get_current_tenant_user_optional``
+    unchanged via PEP 562 lazy attribute resolution.
+    """
+    if name == "get_current_tenant_user_optional":
+        from modulo.api.dependencies import get_current_tenant_user_optional as _optional
+
+        return _optional
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
