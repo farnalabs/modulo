@@ -385,7 +385,8 @@ class LinearConnector(ConnectorBase):
       "issue_assign"    — assign/reassign an issue; data: {"id", "assigneeId": "<id>"} (direct),
                           {"id", "email": "..."} or {"id", "name": "..."} (resolved via Linear user
                           search), or {"id", "assigneeId": null} / {"id", "unassign": true} to clear
-                          the assignee
+                          the assignee; when both "assigneeId" and "unassign": true are supplied,
+                          "assigneeId" wins (checked first, including an explicit null)
       "issue_unassign"  — clear the assignee on an issue; data: {"id": "..."}
       "issue_label"     — add/remove labels on an issue; data: {"id": "...",
                           "addLabelIds": ["<label-id>", ...]} and/or {"id": "...",
@@ -549,7 +550,13 @@ class LinearConnector(ConnectorBase):
         return self._resolve_entity_by_name(cycles, cycle_name, "cycle", team_id)
 
     async def _resolve_user_id(self, *, email: str | None = None, name: str | None = None) -> str:
-        """Resolve a Linear user to an ID by email or display name."""
+        """Resolve a Linear user to an ID by email or display name.
+
+        Uses Linear's server-side exact ``eq`` filter (``users(first: 1)``) rather than the
+        client-side exact-then-fuzzy/ambiguity resolution used for states and cycles; a name
+        matching multiple users returns the first hit without raising (asymmetry with
+        ``_resolve_entity_by_name``, acceptable because the server limits to one result).
+        """
         if email:
             user_filter: dict[str, Any] = {"email": {"eq": email}}
             label = f"user with email {email!r}"
