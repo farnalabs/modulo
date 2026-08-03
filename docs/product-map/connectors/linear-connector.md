@@ -17,7 +17,7 @@ status: partial
 
 # Linear Connector
 
-Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8 scenarios (5 happy-path + 3 error-path) with step definitions in `backend/tests/bdd/features/connectors/linear_connector.feature` and `backend/tests/bdd/steps/test_connectors.py`. Provides read/write access to Linear issues for agent pipelines. Authenticated via Linear API key. Belongs to the `issue-tracker` connector type family alongside `JiraConnector`.
+Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 18 scenarios (15 happy-path + 3 error-path) with step definitions in `backend/tests/bdd/features/connectors/linear_connector.feature` and `backend/tests/bdd/steps/test_connectors.py`. Provides read/write access to Linear issues for agent pipelines. Authenticated via Linear API key. Belongs to the `issue-tracker` connector type family alongside `JiraConnector`.
 
 ## Behaviours
 
@@ -57,8 +57,14 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [x] Read issue comments via `query("issue_comments")` with `issueId` filter
 - [x] Create issue comments via `write("issue_comment")` with `issueId` and `body`
 - [x] Support cursor-based pagination for `query("search")` — `next_cursor` populated from `pageInfo`
-- [ ] Add/remove issue labels — only available via full `issue_update`
-- [ ] Change issue state/status — only available via `issue_update` with `stateId`
+- [x] **State transition by name** — `write("issue_state")` accepts `{"id", "state": "<name>", "teamId"}` and resolves the workflow state name to an ID via the team's states before applying `issueUpdate`
+- [x] **State transition by raw state ID** — `write("issue_state")` accepts `{"id", "stateId"}` to set a workflow state ID directly without resolution
+- [x] **Label creation** — `write("label")` creates a label via `labelCreate` with `name`, `teamId`, optional `color`/`description`
+- [x] **Label update/rename** — `write("label_update")` renames/recolors a label via `labelUpdate` with `id` and optional `name`/`color`/`description`
+- [x] **Label deletion** — `write("label_delete")` deletes a label via `labelDelete` with `id`
+- [x] **Cycle assignment by name** — `write("issue_cycle")` accepts `{"id", "cycle": "<name>", "teamId"}` and resolves the cycle name to an ID via the team's cycles before applying `issueUpdate`
+- [x] **Cycle assignment by raw cycle ID** — `write("issue_cycle")` accepts `{"id", "cycleId"}` to set the cycle ID directly
+- [x] **Cycle removal** — `write("issue_cycle")` accepts `{"id", "cycleId": null}` to unassign an issue from its cycle
 - [ ] Assign/unassign issue — only available via `issue_update`
 - [ ] Archive issue — not implemented
 - [ ] Delete issue — not implemented
@@ -112,12 +118,23 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 
 ## Known Gaps
 
-- [ ] **State transitions require raw stateId**: no helper to map workflow state names to IDs
-- [ ] **No label management**: cannot create, rename, or delete labels
-- [ ] **No cycle/sprint assignment**: can read cycles but cannot assign an issue to a cycle
+- [ ] **No label assignment on issues**: labels can be created/renamed/deleted, and an issue can carry labels via `issue_update`'s `labelIds`, but no dedicated `issue_label` write resource exists for add/remove-without-full-update
+- [ ] **No cycle/sprint read-back on issues**: an issue can be assigned to a cycle via `issue_cycle`, but the `_ISSUE_FIELDS` fragment doesn't return the issue's current cycle
+- [ ] **No issue archive/delete**: `issueArchive`/`issueDelete` mutations not exposed
+- [ ] **State/cycle name resolution is case-insensitive exact-match only**: no fuzzy matching or duplicate-name disambiguation when two workflow states or cycles share a name
 
 ## QA History
-- 2026-07-07: Cross-cutting QA (index 318). Added `labels` field to `_ISSUE_FIELDS` GraphQL fragment. Added `httpx.ProtocolError` retry/backoff handling to `_graphql` (previously unhandled — raised raw exception). Added 2 new resilience tests (protocol error failure + protocol error retry-then-success). Updated test mocks to verify label data in issue responses. Fixed stale checkbox in connector-hub.md (BDD scenarios exist since July 1). Status: partial.
+
+### 2026-08-03 — improve-architecture: 3 known gaps RESOLVED (state transition by name, label management, cycle assignment)
+
+**RESOLVED known gaps** "State transitions require raw stateId", "No label management", "No cycle/sprint assignment". Added 3 new write resources to `connectors/linear/__init__.py`:
+- `write("issue_state")` — transitions an issue's workflow state. Accepts either `{"id", "stateId"}` (raw ID) or `{"id", "state": "<name>", "teamId"}` which resolves the state name to an ID via the team's states (`_resolve_state_id()`, case-insensitive, error if not found). Applies via the shared `_update_issue()` (`issueUpdate`).
+- `write("issue_cycle")` — assigns/unassigns an issue's cycle. Accepts `{"id", "cycleId"}` (direct, including `null` to remove) or `{"id", "cycle": "<name>", "teamId"}` which resolves the cycle name to an ID via the team's cycles (`_resolve_cycle_id()`, case-insensitive).
+- `write("label")` / `write("label_update")` / `write("label_delete")` — full label CRUD via `labelCreate`/`labelUpdate`/`labelDelete` GraphQL mutations, with required-field validation and success-flag checks.
+
+Added 15 unit tests (`test_linear.py`: issue_state by name/by ID/missing-fields/not-found, issue_cycle by name/by ID/remove/missing-fields, label create/update/delete + missing-field + failure paths) and 10 BDD scenarios in `linear_connector.feature` (state by name + raw ID + missing team error, cycle assign by name + raw ID + remove, label create/rename/delete) with 10 new step definitions in `test_connectors.py` and the mock connector extended to mirror the new resources. Updated product map (9 behaviours `[ ]`→`[x]`, 3 Known Gaps → RESOLVED + 4 new documented, QA History). 52/52 `test_linear.py` unit tests + 10/10 new linear BDD scenarios pass (pre-existing 19 connector-suite BDD failures unchanged), ruff clean. Status: partial (issue archive/delete, label assignment helper, cycle read-back, fuzzy name matching remain).
+
+### 2026-07-07: Cross-cutting QA (index 318). Added `labels` field to `_ISSUE_FIELDS` GraphQL fragment. Added `httpx.ProtocolError` retry/backoff handling to `_graphql` (previously unhandled — raised raw exception). Added 2 new resilience tests (protocol error failure + protocol error retry-then-success). Updated test mocks to verify label data in issue responses. Fixed stale checkbox in connector-hub.md (BDD scenarios exist since July 1). Status: partial.
 - 2026-07-05: Cross-cutting QA (improve-architecture): Added retry/backoff to `_graphql` (429/502/503/504 + TimeoutException + ConnectError) matching GitHub/Jira/Slack patterns. Simplified `health_check` (removed dead `httpx.HTTPStatusError` catch). Added cursor-based pagination for `query("search")`. Added comment operations (`issue_comments` read, `issue_comment` write). Added team/project discovery (teams, projects, states, labels, cycles). Added 15 new unit tests covering all new code paths (37 total). Updated product map with new sections. Status: partial (cycle assignment, label management, state helper still gaps).
 - 2026-07-03: Cross-cutting QA (index 110): Fixed HTTP/JSON error handling in `_graphql` (wraps HTTPStatusError, TimeoutException, ConnectError, JSONDecodeError as ValueError). Added 5 resilience unit tests (test_linear_resilience.py). Fixed stale checkbox: timeout confirmed configured (30s). Fixed search default limit (50→100). Added Error Handling section (12 behaviour checkboxes). Status: partial (known gaps unchanged).
 - 2026-07-01: Cross-cutting QA: fixed frontmatter (added unit-tests), removed outdated known gaps #7 (BDD placeholder → 5 real scenarios) and #8 (unit tests exist), added 3 BDD error-path scenarios + step definitions, added 4 unit tests (missing id, update failure, GraphQL error), fixed search to respect `q.limit` via `first:$limit`, consolidated gaps from 9→7

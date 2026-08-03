@@ -1,5 +1,7 @@
 """Unit tests for LinearConnector — HTTP responses are mocked via httpx."""
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -555,3 +557,232 @@ async def test_query_team_labels_missing_team_id(connector):
 async def test_query_team_cycles_missing_team_id(connector):
     with pytest.raises(ValueError, match="requires 'teamId' filter"):
         await connector.query(ConnectorQuery(resource="team_cycles", filters={}))
+
+
+_UPDATE_ISSUE_RESPONSE = _mock_response(
+    {
+        "data": {
+            "issueUpdate": {
+                "success": True,
+                "issue": {
+                    "id": "issue-1",
+                    "identifier": "PROJ-123",
+                    "title": "Fix login bug",
+                    "description": "Users cannot log in",
+                    "priority": 2,
+                    "state": {"id": "state-1", "name": "In Progress"},
+                    "assignee": None,
+                    "team": {"id": "team-1", "name": "Engineering", "key": "PROJ"},
+                    "labels": {"nodes": []},
+                    "createdAt": "2024-01-01T00:00:00Z",
+                    "updatedAt": "2024-01-05T00:00:00Z",
+                    "url": "https://linear.app/team/issue/PROJ-123",
+                },
+            }
+        }
+    }
+)
+
+_STATES_RESPONSE = _mock_response(
+    {
+        "data": {
+            "team": {
+                "states": {
+                    "nodes": [
+                        {"id": "st-done", "name": "Done", "type": "completed", "position": 4},
+                        {"id": "st-progress", "name": "In Progress", "type": "started", "position": 2},
+                    ]
+                }
+            }
+        }
+    }
+)
+
+
+@respx.mock
+async def test_write_issue_state_by_name(connector):
+    respx.post(_GRAPHQL, content__contains="states").mock(return_value=_STATES_RESPONSE)
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_state", data={"id": "issue-1", "state": "in progress", "teamId": "team-1"})
+    )
+    assert result["title"] == "Fix login bug"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["stateId"] == "st-progress"
+
+
+@respx.mock
+async def test_write_issue_state_by_id(connector):
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_state", data={"id": "issue-1", "stateId": "st-progress"})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["stateId"] == "st-progress"
+
+
+@respx.mock
+async def test_write_issue_state_missing_fields(connector):
+    with pytest.raises(ValueError, match="requires 'stateId' or both 'state'"):
+        await connector.write(ConnectorPayload(resource="issue_state", data={"id": "issue-1"}))
+    with pytest.raises(ValueError, match="Missing 'id' in issue_state payload"):
+        await connector.write(ConnectorPayload(resource="issue_state", data={"state": "Done", "teamId": "team-1"}))
+    with pytest.raises(ValueError, match="Missing 'id' in issue_state payload"):
+        await connector.write(ConnectorPayload(resource="issue_state", data={}))
+
+
+@respx.mock
+async def test_write_issue_state_state_not_found(connector):
+    respx.post(_GRAPHQL).mock(return_value=_STATES_RESPONSE)
+    with pytest.raises(ValueError, match="workflow state 'Canceled' not found"):
+        await connector.write(
+            ConnectorPayload(resource="issue_state", data={"id": "issue-1", "state": "Canceled", "teamId": "team-1"})
+        )
+
+
+_CYCLES_RESPONSE = _mock_response(
+    {
+        "data": {
+            "team": {
+                "cycles": {
+                    "nodes": [
+                        {"id": "cy-24", "name": "Sprint 24"},
+                        {"id": "cy-25", "name": "Sprint 25"},
+                    ]
+                }
+            }
+        }
+    }
+)
+
+
+@respx.mock
+async def test_write_issue_cycle_by_name(connector):
+    respx.post(_GRAPHQL, content__contains="cycles").mock(return_value=_CYCLES_RESPONSE)
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(resource="issue_cycle", data={"id": "issue-1", "cycle": "sprint 25", "teamId": "team-1"})
+    )
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["cycleId"] == "cy-25"
+
+
+@respx.mock
+async def test_write_issue_cycle_by_id(connector):
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(ConnectorPayload(resource="issue_cycle", data={"id": "issue-1", "cycleId": "cy-24"}))
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["cycleId"] == "cy-24"
+
+
+@respx.mock
+async def test_write_issue_cycle_remove(connector):
+    respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
+    result = await connector.write(ConnectorPayload(resource="issue_cycle", data={"id": "issue-1", "cycleId": None}))
+    assert result["id"] == "issue-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert "cycleId" in body["variables"]["input"]
+    assert body["variables"]["input"]["cycleId"] is None
+
+
+@respx.mock
+async def test_write_issue_cycle_missing_fields(connector):
+    with pytest.raises(ValueError, match="requires 'cycleId' or both 'cycle'"):
+        await connector.write(ConnectorPayload(resource="issue_cycle", data={"id": "issue-1"}))
+    with pytest.raises(ValueError, match="Missing 'id' in issue_cycle payload"):
+        await connector.write(ConnectorPayload(resource="issue_cycle", data={}))
+
+
+_LABEL_RESPONSE = _mock_response(
+    {
+        "data": {
+            "labelCreate": {
+                "success": True,
+                "label": {"id": "lb-1", "name": "bug", "color": "#ff0000", "description": "Bugs"},
+            }
+        }
+    }
+)
+
+
+@respx.mock
+async def test_write_label_create(connector):
+    respx.post(_GRAPHQL).mock(return_value=_LABEL_RESPONSE)
+    result = await connector.write(
+        ConnectorPayload(
+            resource="label",
+            data={"name": "bug", "teamId": "team-1", "color": "#ff0000", "description": "Bugs"},
+        )
+    )
+    assert result["id"] == "lb-1"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["name"] == "bug"
+    assert body["variables"]["input"]["teamId"] == "team-1"
+
+
+@respx.mock
+async def test_write_label_create_missing_fields(connector):
+    with pytest.raises(ValueError, match="requires 'name' and 'teamId'"):
+        await connector.write(ConnectorPayload(resource="label", data={"name": "bug"}))
+    with pytest.raises(ValueError, match="requires 'name' and 'teamId'"):
+        await connector.write(ConnectorPayload(resource="label", data={"teamId": "team-1"}))
+
+
+@respx.mock
+async def test_write_label_create_failure(connector):
+    respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"labelCreate": {"success": False, "label": None}}}))
+    with pytest.raises(ValueError, match="Failed to create Linear label"):
+        await connector.write(ConnectorPayload(resource="label", data={"name": "bug", "teamId": "team-1"}))
+
+
+@respx.mock
+async def test_write_label_update(connector):
+    respx.post(_GRAPHQL).mock(
+        return_value=_mock_response(
+            {
+                "data": {
+                    "labelUpdate": {
+                        "success": True,
+                        "label": {"id": "lb-1", "name": "critical", "color": "#ff0000", "description": None},
+                    }
+                }
+            }
+        )
+    )
+    result = await connector.write(ConnectorPayload(resource="label_update", data={"id": "lb-1", "name": "critical"}))
+    assert result["name"] == "critical"
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["input"]["name"] == "critical"
+    assert "id" not in body["variables"]["input"]
+
+
+@respx.mock
+async def test_write_label_update_missing_id(connector):
+    with pytest.raises(ValueError, match="Missing 'id' in label_update payload"):
+        await connector.write(ConnectorPayload(resource="label_update", data={"name": "critical"}))
+
+
+@respx.mock
+async def test_write_label_delete(connector):
+    respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"labelDelete": {"success": True}}}))
+    result = await connector.write(ConnectorPayload(resource="label_delete", data={"id": "lb-1"}))
+    assert result == {"id": "lb-1", "deleted": True}
+    sent = respx.calls.last.request
+    body = json.loads(sent.content)
+    assert body["variables"]["id"] == "lb-1"
+
+
+@respx.mock
+async def test_write_label_delete_missing_id(connector):
+    with pytest.raises(ValueError, match="Missing 'id' in label_delete payload"):
+        await connector.write(ConnectorPayload(resource="label_delete", data={}))
