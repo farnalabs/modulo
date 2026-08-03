@@ -295,6 +295,15 @@ def test_trigger_run_unauthenticated_returns_4xx(unauth_client: TestClient) -> N
     assert resp.status_code in (401, 403)
 
 
+def test_trigger_run_rejects_unknown_fields_returns_422(client: TestClient) -> None:
+    """Extra body fields (e.g. the old editor-view 'prompt'/'payload') must 422, not be silently dropped."""
+    resp = client.post(
+        "/api/v1/runs",
+        json={"pipeline_id": str(_PIPELINE_ID), "prompt": "add a health endpoint", "payload": {}},
+    )
+    assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/runs/{run_id} — success
 # ---------------------------------------------------------------------------
