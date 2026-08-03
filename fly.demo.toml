@@ -6,7 +6,8 @@ primary_region = 'lhr'
 
 # Restart policy — crash-loop guard + max-restart in the entrypoint is the
 # control (plan F8); no auto-restart here.
-restart = []
+[[restart]]
+  policy = "never"
 
 [http_service]
   internal_port = 8080
