@@ -82,6 +82,36 @@ _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after comm
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 
+# Per-run agent runtime cost: E2B sandbox hourly rate (USD) used to estimate
+# sandbox_agent node cost from wall-clock time. E2B bills per-second sandbox
+# uptime, so (elapsed_seconds / 3600) x rate is a faithful cost estimate.
+# Operators can override via E2B_SANDBOX_USD_PER_HOUR.
+_E2B_SANDBOX_USD_PER_HOUR = 0.5
+try:
+    from modulo.settings import get_settings
+
+    _E2B_SANDBOX_USD_PER_HOUR = float(get_settings().e2b_sandbox_usd_per_hour)
+except Exception:
+    _log.debug("sandbox_cost.e2b_rate_lookup_failed; using default", exc_info=True)
+
+
+def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
+    """Estimate the USD cost of a sandbox_agent dispatch.
+
+    Combines Modulo's own sandbox uptime estimate (wall-clock seconds at the
+    configured E2B hourly rate) with the agent's self-reported cost estimate
+    (``cost_estimate_usd`` in its structured output contract, written by the
+    agent to /home/user/output.json). Returns a plain JSON-serialisable float.
+    """
+    sandbox_cost = round((elapsed_seconds / 3600.0) * _E2B_SANDBOX_USD_PER_HOUR, 6)
+    agent_reported_cost = 0.0
+    if isinstance(output_json, dict):
+        try:
+            agent_reported_cost = float(output_json.get("cost_estimate_usd") or 0)
+        except (TypeError, ValueError):
+            agent_reported_cost = 0.0
+    return round(sandbox_cost + agent_reported_cost, 6)
+
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
     """Evaluate an eval-reference condition using the given operator.
@@ -814,6 +844,7 @@ def make_sandbox_agent_fn(
                         extra={"node_id": node_id},
                     )
                     elapsed = time.monotonic() - start_time
+                    _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
                     return {
                         "artifacts": [
                             {
@@ -824,6 +855,7 @@ def make_sandbox_agent_fn(
                                     "summary": "Output failed schema validation",
                                     "exit_code": exit_code,
                                     "wall_clock_time_ms": int(elapsed * 1000),
+                                    "cost_estimate_usd": _cost_estimate_usd,
                                     "output_json": output_json,
                                     "agent_stdout": agent_stdout,
                                     "agent_stderr": agent_stderr,
@@ -834,6 +866,7 @@ def make_sandbox_agent_fn(
                             "status": "failed",
                             "summary": "Output failed schema validation",
                             "wall_clock_time_ms": int(elapsed * 1000),
+                            "cost_estimate_usd": _cost_estimate_usd,
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
                         },
@@ -849,6 +882,8 @@ def make_sandbox_agent_fn(
                 changed_files = output_json.get("changed_files", [])
                 pr_url = output_json.get("pr_url", "")
 
+            _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
+
             return {
                 "artifacts": [
                     {
@@ -861,6 +896,7 @@ def make_sandbox_agent_fn(
                             "pr_url": pr_url,
                             "exit_code": exit_code,
                             "wall_clock_time_ms": int(elapsed * 1000),
+                            "cost_estimate_usd": _cost_estimate_usd,
                             "output_json": output_json,
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
@@ -871,6 +907,7 @@ def make_sandbox_agent_fn(
                     "status": status,
                     "summary": result_summary,
                     "wall_clock_time_ms": int(elapsed * 1000),
+                    "cost_estimate_usd": _cost_estimate_usd,
                     "agent_stdout": agent_stdout,
                     "agent_stderr": agent_stderr,
                 },
@@ -907,6 +944,8 @@ def make_sandbox_agent_fn(
                 )
             _exc_stdout = locals().get("agent_stdout", "")
             _exc_stderr = locals().get("agent_stderr", "")
+            _exc_output_json = locals().get("output_json")
+            _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
             return {
                 "artifacts": [
                     {
@@ -919,6 +958,7 @@ def make_sandbox_agent_fn(
                             "error_message": _exc_msg,
                             "exit_code": -1,
                             "wall_clock_time_ms": int(elapsed * 1000),
+                            "cost_estimate_usd": _cost_estimate_usd,
                             "agent_stdout": _exc_stdout,
                             "agent_stderr": _exc_stderr,
                         },
@@ -928,6 +968,7 @@ def make_sandbox_agent_fn(
                     "status": "failed",
                     "summary": "Sandbox agent execution failed",
                     "wall_clock_time_ms": int(elapsed * 1000),
+                    "cost_estimate_usd": _cost_estimate_usd,
                     "agent_stdout": _exc_stdout,
                     "agent_stderr": _exc_stderr,
                 },

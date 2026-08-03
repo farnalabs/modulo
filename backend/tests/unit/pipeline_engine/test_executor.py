@@ -60,6 +60,65 @@ def test_compute_token_costs_treats_null_counters_as_zero():
     }
 
 
+def test_aggregate_sandbox_cost_sums_positive_estimates():
+    """Only positive numeric cost_estimate_usd values inside node output dicts count."""
+    completed_node_outputs: dict[str, Any] = {
+        "node-a": {
+            "output": {
+                "status": "completed",
+                "cost_estimate_usd": 0.5,
+            }
+        },
+        "node-b": {
+            "output": {
+                "status": "completed",
+                "cost_estimate_usd": 0.25,
+            }
+        },
+        # No cost_estimate_usd key at all → contributes 0.
+        "node-c": {
+            "output": {
+                "status": "completed",
+                "summary": "no cost reported",
+            }
+        },
+        # Zero and negative estimates must not count toward the run cost.
+        "node-d": {
+            "output": {
+                "status": "failed",
+                "cost_estimate_usd": 0,
+            }
+        },
+        "node-e": {
+            "output": {
+                "status": "failed",
+                "cost_estimate_usd": -1.0,
+            }
+        },
+    }
+
+    total = PipelineExecutor._aggregate_sandbox_cost(completed_node_outputs)
+
+    assert total == Decimal("0.75")
+
+
+def test_aggregate_sandbox_cost_ignores_non_dict():
+    """Garbage entries (None, strings, missing 'output') don't crash and contribute 0."""
+    completed_node_outputs: dict[str, Any] = {
+        "node-a": None,
+        "node-b": "some-string",
+        "node-c": 42,
+        "node-d": {"output": None},
+        "node-e": {"output": "not-a-dict"},
+        "node-f": {"output": {"cost_estimate_usd": "not-a-number"}},
+        "node-g": {"output": {"cost_estimate_usd": None}},
+    }
+
+    assert PipelineExecutor._aggregate_sandbox_cost(completed_node_outputs) == Decimal(0)
+    assert PipelineExecutor._aggregate_sandbox_cost(None) == Decimal(0)
+    assert PipelineExecutor._aggregate_sandbox_cost({}) == Decimal(0)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     saq_worker_db_pool_size: int = Field(default=10, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
     # SAQ Redis client pool size (Upstash connection budget — F2).
     saq_redis_pool_size: int = Field(default=5, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
+    # Per-run agent runtime cost: E2B sandbox hourly rate used to estimate
+    # sandbox_agent node cost from wall-clock time (E2B bills per-second
+    # sandbox uptime). Operators should set this to their E2B sandbox rate.
+    e2b_sandbox_usd_per_hour: float = Field(default=0.5, alias="E2B_SANDBOX_USD_PER_HOUR", ge=0)
 
     # ------------------------------------------------------------------
     # Health check timeouts (seconds) — configurable per-check limits for

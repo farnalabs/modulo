@@ -772,6 +772,32 @@ class PipelineExecutor:
 
         return total_tokens, total_cost, result_usage
 
+    @staticmethod
+    def _aggregate_sandbox_cost(completed_node_outputs: dict[str, Any] | None) -> Decimal:
+        """Sum per-node sandbox-agent cost estimates into a single Decimal.
+
+        Each completed node's captured output is ``{"artifacts": [...],
+        "output": {...}}``; the inner ``output`` dict carries the numeric
+        ``cost_estimate_usd`` attached by
+        :func:`modulo.core.pipeline_engine.node_runner._compute_sandbox_cost`.
+        Non-dict outputs, missing estimates, and non-positive values contribute
+        zero. Kept as a small pure helper so cost parity is testable and shared
+        between :meth:`execute` and :meth:`resume`.
+        """
+        if not completed_node_outputs:
+            return Decimal(0)
+        sandbox_cost = Decimal(0)
+        for node_output in completed_node_outputs.values():
+            if not isinstance(node_output, dict):
+                continue
+            out = node_output.get("output")
+            if not isinstance(out, dict):
+                continue
+            est = out.get("cost_estimate_usd")
+            if isinstance(est, (int, float)) and est > 0:
+                sandbox_cost += Decimal(str(est))
+        return sandbox_cost
+
     async def resume(
         self,
         *,
@@ -852,6 +878,7 @@ class PipelineExecutor:
         error_code: str | None = None
         error_detail: str | None = None
         node_token_usage: dict[str, Any] | None = None
+        completed_node_outputs: dict[str, Any] = {}
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
         self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
@@ -879,6 +906,7 @@ class PipelineExecutor:
                     run_id,
                     pipeline_id=pipeline_id,
                     org_id=org_id,
+                    completed_node_outputs=completed_node_outputs,
                     guard=guard,
                     node_token_budgets=node_token_budgets,
                 )
@@ -929,6 +957,12 @@ class PipelineExecutor:
             self._INPUT_TOKEN_RATE,
             self._OUTPUT_TOKEN_RATE,
         )
+
+        # Add sandbox-agent runtime cost from the nodes completed during resume,
+        # mirroring execute() so cost parity holds for resumed HITL runs.
+        _sandbox_cost = self._aggregate_sandbox_cost(completed_node_outputs)
+        if _sandbox_cost > 0:
+            total_cost_usd_val = (total_cost_usd_val or Decimal(0)) + _sandbox_cost
 
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
@@ -1232,6 +1266,13 @@ class PipelineExecutor:
             self._INPUT_TOKEN_RATE,
             self._OUTPUT_TOKEN_RATE,
         )
+
+        # Add sandbox-agent runtime cost (wall-clock x E2B rate + agent-reported)
+        # from the completed nodes' outputs, so Run.total_cost_usd covers every
+        # cost class attributable to the run.
+        _sandbox_cost = self._aggregate_sandbox_cost(completed_node_outputs)
+        if _sandbox_cost > 0:
+            total_cost_usd_val = (total_cost_usd_val or Decimal(0)) + _sandbox_cost
 
         # Mark complete/failed/cancelled/awaiting_human.
         async with self._session_factory() as session, session.begin():
