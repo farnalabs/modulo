@@ -8,6 +8,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.models.account import Account
 from modulo.db.models.org_membership import OrgMembership
 
 
@@ -89,16 +90,22 @@ async def resolve_role_from_membership(session: AsyncSession, account_id: str, o
     """Return the LIVE org role for the account in the org, or None if no active membership.
 
     Filters ``deactivated_at IS NULL`` — a soft-deactivated membership must not
-    resolve a role (ADR 017). Lives in the db layer (pure ORM query) so the
-    service-layer backstop (db.crud.hitl_gate_guard) can reuse it without
-    importing ``auth.dependencies`` (which would transitively reach the api
-    layer, violating the import-linter contracts).
+    resolve a role (ADR 017). The INNER JOIN on ``accounts`` additionally
+    requires ``accounts.active IS TRUE`` (deliverable A of the break-glass plan):
+    an account deactivated globally resolves to None in every org, closing the
+    account-global-deactivation latent bug. Lives in the db layer (pure ORM
+    query) so the service-layer backstop (db.crud.hitl_gate_guard) can reuse it
+    without importing ``auth.dependencies`` (which would transitively reach the
+    api layer, violating the import-linter contracts).
     """
     result = await session.execute(
-        select(OrgMembership.role).where(
+        select(OrgMembership.role)
+        .join(Account, Account.id == OrgMembership.account_id)
+        .where(
             OrgMembership.account_id == account_id,
             OrgMembership.organisation_id == organisation_id,
             OrgMembership.deactivated_at.is_(None),
+            Account.active.is_(True),
         )
     )
     return result.scalar_one_or_none()
