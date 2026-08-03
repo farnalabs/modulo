@@ -106,6 +106,7 @@ BugTracker = "https://github.com/farnalabs/modulo/issues"
 [project.scripts]
 modulo = "modulo.cli.backup:cli"
 modulo-migrate = "modulo.cli.migrate:cli"
+modulo-break-glass = "modulo.cli.break_glass:cli"
 
 [project.optional-dependencies]
 dev = [

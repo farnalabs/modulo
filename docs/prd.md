@@ -27,6 +27,7 @@
 - v0.8 — Team entity and team-scoped RBAC; pipeline ownership (team vs org visibility); team-scoped HITL gates; team-scoped connector and model backend access; multi-workspace pattern via teams
 - v0.9 — Ownership picker on all resource creation; team deletion policy; privilege cap on team operators; JWT stale membership documented + immediate revocation path; DB-live check for required_team_id HITL; view_as_team server-enforced (IDOR fix); human_only + required_team_id additive; Stage spec team ownership; post-snapshot ownership change rules; team notification endpoints; team audit events; owner_team_id stripped on bundle export; copy-to-adapt ownership picker; library primitive visibility; alpha schema includes team columns; team cost attribution moved to v1
 - v0.10 — Credential-in-state rule; webhook timestamp in HMAC; FilesystemConnector base_path chroot; schema validation ≠ sanitisation documented; eval injection surface documented; §6.18 API rate limiting; Ed25519 key rotation mechanism; checkpoint blob self-hosted gap documented; JWT algorithm pinning + SECRET_KEY entropy; ConnectorInstance visibility vocabulary unified (private/team-shared → org/team); §7.16 Eval System (new); Error UX spec; stage board search/filter; agent picker + schema picker; run inspection UI; bundle import schema conflict resolution; community library trust tiers; plugin installation mechanism clarified; org/team-level admin spend limits
+- v0.20 — §7.19 Break-glass Admin Recovery (new): operator CLI `modulo-break-glass` (activate/deactivate/status/force-last-admin/smoke), dedicated `modulo_breakglass` role + `MODULO_BREAK_GLASS_DATABASE_URL`, operator-secret auth, exit-code table 0-9, startup-validated settings, boot-time watchdog + advisory /healthz exposure
 - v0.11 — StateGraph compile caching; WebSocket fan-out broker; LangGraph generic dict state (no dynamic TypedDict); ConnectorHub one-decrypt-per-run; StubModelBackend BaseChatModel interface; Alembic+LangGraph startup order; webhook flood protection Postgres-backed; pipeline edge data model; OTel bridge elevated as blocking dependency; AsyncPostgresSaver mandate; claim_token alpha = opaque token; teams/ tests moved to v1; alpha rating system moved to v1; MODULO_DEMO_MODE; alpha exit criteria; V1 split into V1 Core + V1 Extended; alpha documentation requirements; API key item moved to Infrastructure; eval JSON column in alpha schema; stage board alpha filter-by-status only
 - v0.12 — Organisation entity fields; PlanContext interface fully specified; Run entity fields; Trigger entity fields; PipelineSnapshot fields; YAML bundle edges block; token counting mechanism; cancelled state mechanics; ConnectorType registration (in-memory entry_points); local vs community library data model discriminator; claim_token inconsistency fixed in Glossary and §5.4; WebSocket reconnection + event replay spec; Pinia store hydration path; HITL claim failure UX; Vue Flow canvas serialisation note; MCP server URL via MODULO_PUBLIC_URL; Playwright agent theme test strategy; agent output sensitive data caveat; copy-to-adapt ownership picker cross-reference fixed
 - v0.13 — WebSocket event typed patch payloads (hitl_claimed/hitl_reviewed added; Pinia patch strategy); CSS custom property theme mechanism (semantic tokens only; [data-theme] layers); focus ring CSS custom properties (--focus-ring-width/color; never suppressed; agent theme high-visibility); Playwright data-loading attribute convention; modulo-state script block removed (replaced by GET /api/v1/viewmodel/current); CopyToAdaptWizard component spec (multi-step modal with configurable steps); canvas viewport state preserved per drill-down level via Vue Router state
@@ -797,6 +798,33 @@ Auth rate limiting (§6.10) covers login attempts only. Additional rate limits a
 | Any MCP tool call | 200 requests/min | Per MCP client ID | 429 |
 
 Implementation: Redis-backed token bucket via FastAPI middleware. Redis is an optional dependency in alpha (in-memory fallback with a startup warning: "Rate limiting is in-memory only — not suitable for multi-process deployments"). Required for v1 multi-worker deployments.
+
+### 7.19 Break-glass Admin Recovery
+
+An org can permanently lose access when its only admin cannot authenticate (forgotten password, SCIM deactivation/demotion of the last admin, lost env secrets). Break-glass recovery lets a **Modulo operator** synthesize a time-boxed, single-use admin credential for any org — without weakening the last-admin invariants (prevention stays active; break-glass never bypasses it).
+
+#### Operator CLI (`modulo-break-glass`)
+The `modulo.cli.break_glass` CLI (registered as `modulo-break-glass`) connects as the dedicated `modulo_breakglass` DB role via `MODULO_BREAK_GLASS_DATABASE_URL` — a dedicated lazy engine, never the app `database_url`. Commands:
+
+| Command | Purpose |
+|---|---|
+| `activate <org-id\|org-slug> --reason TEXT [--ttl-minutes N] [--dry-run] [--yes]` | Synthesize a fresh `is_break_glass` admin account, membership, `break_glass_activated` audit, and a single-use credential in ONE transaction. DB-clock expiry. Refuses without `--yes` in non-interactive shells; warns when a live activation already exists for the org. |
+| `deactivate <org-id\|org-slug> --reason TEXT [--force] [--account-id UUID]` | Tombstone break-glass account(s) via the caller-bound `deactivate_break_glass` SECURITY DEFINER, with a `break_glass_deactivated` audit in the same transaction. Without `--account-id`, targets ALL undeactivated rows for the org. Refuses while a live activation exists unless `--force`. |
+| `status [org-id\|org-slug] [--all] [--json]` | List break-glass rows (live by default; all states with `--all`). `status --all --json` is the daily-sweep form: exits non-zero (5) when any live row exists so the sweep can alert. |
+| `force-last-admin <org-id\|org-slug> --reason TEXT` | The ONLY path that removes the org's last live non-break-glass admin. Refuses (exit 5) in a break-glass-only org, when the only live admins are break-glass accounts, or when multiple non-bg admins exist. Writes `last_admin_forcibly_removed` audit in the same transaction. |
+| `smoke` | Connectivity probe (`SELECT 1`) + posture assertions (`session_user = modulo_breakglass`, `deactivate_break_glass` exists). Non-zero exit (7) on failure. |
+
+**Operator authentication:** `--secret` or `MODULO_BREAK_GLASS_OPERATOR_SECRET`, checked with `hmac.compare_digest` against the configured primary/standby secrets. The actor written to audit payloads is derived from which secret matched (`operator` / `operator-standby`).
+
+**Credential delivery:** interactive (TTY confirmation) or `--yes` + stdout. Printed ONLY after the activation transaction commits; exit 9 if the print fails after commit. Each credential is single-use (consumed by the login-hook compare-and-swap) and TTL-bounded.
+
+**Exit codes (0-9):** 0 success · 1 unexpected · 2 usage (missing/empty `--reason`, bad `--account-id`) · 3 org-not-found (incl. deactivate M2040 target-does-not-exist) · 4 activation-transaction failure · 5 preconditions (force refusals, TTL out of range, the status-sweep live-row exit, operator-auth failure) · 6 deactivate-refused (live activation without `--force`, M2010/M2020) · 7 smoke failure · 8 deactivate atomicity failure · 9 credential-print failure.
+
+#### Config (startup-validated)
+`MODULO_BREAK_GLASS_ENABLED` (independently settable, defaults from primary OR standby secret presence), `MODULO_BREAK_GLASS_SECRET` + `_STANDBY_SECRET` (must differ, minimum length; ENABLED + both empty is a blocking boot finding in fail-mode), `MODULO_BREAK_GLASS_TTL_MINUTES` (default 1440, min 1, `<= MAX_TTL_MINUTES`, also enforced at CLI invocation), `MODULO_BREAK_GLASS_MAX_TTL_MINUTES` (cap 4320), `MODULO_BREAK_GLASS_DATABASE_URL` (blocking when ENABLED, non-blocking warn otherwise), `MODULO_BREAK_GLASS_BOOT_FAILURE_MODE` (`warn`|`fail`).
+
+#### Watchdog
+Boot-time config assertions (allow-list set-equality, `rolsuper=false`, no privileged-role membership — FATAL in both modes) plus URL/secret-presence checks that honour `warn`/`fail`. Exposed on `/healthz` as ADVISORY only (never flips readiness). Deactivation/force/status remain operable while secrets + URL are present even when ENABLED=false.
 
 ---
 
