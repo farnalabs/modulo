@@ -74,6 +74,9 @@ jobs:
     needs: [hold-check, deploy-throttle]
     if: needs.deploy-throttle.outputs.should_deploy == 'true'
     runs-on: ubicloud-standard-2
+    # Explicit budget: this job runs the full unit + integration suites.
+    # Without a timeout the ephemeral runner can recycle mid-run.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -148,15 +151,6 @@ jobs:
         run: uv run --no-sync pytest tests/integration/ -m integration -n 2 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
-          TESTCONTAINERS_RYUK_DISABLED: "true"
-
-      - name: Schemathesis API fuzz testing
-        working-directory: backend
-        shell: bash
-        run: uv run --no-sync pytest tests/integration/test_schemathesis.py -x --timeout=600
-        env:
-          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
-          REDIS_URL: "redis://localhost:6379/0"
           TESTCONTAINERS_RYUK_DISABLED: "true"
 
       - name: Security audit

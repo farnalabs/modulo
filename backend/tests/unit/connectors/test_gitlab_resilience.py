@@ -344,3 +344,121 @@ def test_has_server_delay_retry_after_any_status():
     """Retry-After is an explicit server wait and counts on any status."""
     response = httpx.Response(503, headers={"Retry-After": "5"})
     assert GitLabConnector._has_server_delay(response) is True
+
+
+@respx.mock
+async def test_query_error_surfaces_request_id(connector):
+    """API errors should surface GitLab's X-Request-Id header for support debugging."""
+    respx.get(f"{_API}/projects/group%2Fproject/issues").mock(
+        return_value=httpx.Response(
+            500,
+            text="Internal Server Error",
+            headers={"X-Request-Id": "req_abc123"},
+        )
+    )
+    with pytest.raises(ValueError, match="GitLab API HTTP 500") as excinfo:
+        await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
+    assert "req_abc123" in str(excinfo.value)
+
+
+@respx.mock
+async def test_query_429_exhausted_surfaces_request_id(connector):
+    """The final exhausted-429 error should carry the request id for escalation."""
+    route = respx.get(f"{_API}/projects/group%2Fproject/issues")
+    route.mock(
+        side_effect=[
+            httpx.Response(
+                429,
+                text="Rate limit",
+                headers={"X-Request-Id": "req_rate_1"},
+            )
+            for _ in range(4)
+        ],
+    )
+    with pytest.raises(ValueError, match="GitLab API HTTP 429") as excinfo:
+        await connector.query(ConnectorQuery(resource="issues", filters={"project": "group/project"}))
+    assert route.call_count == 4
+    assert "req_rate_1" in str(excinfo.value)
+
+
+@respx.mock
+async def test_health_check_401_surfaces_request_id(connector):
+    """Health-check failures should include the request id when GitLab reports one."""
+    respx.get(f"{_API}/user").mock(
+        return_value=httpx.Response(401, text="unauthorized", headers={"X-Request-Id": "req_401"})
+    )
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "req_401" in result.detail
+
+
+@respx.mock
+async def test_self_hosted_health_check_reports_version(connector):
+    """Self-hosted health checks report the instance version for diagnostics."""
+    custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
+    respx.get("https://gitlab.example.com/api/v4/user").mock(
+        return_value=httpx.Response(200, json={"username": "myuser"})
+    )
+    respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get("https://gitlab.example.com/api/v4/version").mock(
+        return_value=httpx.Response(200, json={"version": "16.9.2-ee", "revision": "deadbeef"})
+    )
+    result = await custom.health_check()
+    assert result.ok is True
+    assert result.detail == "myuser (GitLab 16.9.2-ee)"
+
+
+@respx.mock
+async def test_self_hosted_health_check_version_probe_failure_non_fatal(connector):
+    """A failing /version probe must not fail the health check (diagnostic only)."""
+    custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
+    respx.get("https://gitlab.example.com/api/v4/user").mock(
+        return_value=httpx.Response(200, json={"username": "myuser"})
+    )
+    respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get("https://gitlab.example.com/api/v4/version").mock(
+        return_value=httpx.Response(403, json={"error": "forbidden"})
+    )
+    result = await custom.health_check()
+    assert result.ok is True
+    assert result.detail == "myuser"
+
+
+@respx.mock
+async def test_self_hosted_health_check_version_probe_network_error_non_fatal(connector):
+    """A network error on the version probe must not fail the health check."""
+    custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
+    respx.get("https://gitlab.example.com/api/v4/user").mock(
+        return_value=httpx.Response(200, json={"username": "myuser"})
+    )
+    respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get("https://gitlab.example.com/api/v4/version").mock(side_effect=httpx.ConnectError("Connection refused"))
+    result = await custom.health_check()
+    assert result.ok is True
+    assert result.detail == "myuser"
+
+
+@respx.mock
+async def test_hosted_health_check_does_not_probe_version(connector):
+    """The hosted gitlab.com endpoint is not probed for /version."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    result = await connector.health_check()
+    assert result.ok is True
+    assert result.detail == "myuser"
+
+
+def test_validate_path_helpers():
+    """Module-level path validation rejects traversal and absolute paths."""
+    from modulo.connectors.gitlab import _validate_path
+
+    _validate_path("src/main.py", "file")
+    _validate_path("a/b/c.txt", "file")
+    for bad in ("../x", "a/../x", "..", "../../etc/passwd", "a\\..\\b", "/abs/path", "\\abs"):
+        try:
+            _validate_path(bad, "file")
+        except ValueError:
+            continue
+        raise AssertionError(f"path {bad!r} was not rejected")
+    with pytest.raises(ValueError):
+        _validate_path("", "file")

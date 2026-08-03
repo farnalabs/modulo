@@ -14,8 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-pytestmark = pytest.mark.asyncio(loop_scope="module")
-
 from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
     check_tool_scope,

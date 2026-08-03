@@ -12,6 +12,7 @@ bdd:
 unit-tests:
   - backend/tests/unit/api/test_admin_system_config.py
   - backend/tests/unit/db/test_system_config.py
+  - backend/tests/unit/mcp/test_mcp_config_tools.py
 depends-on: []
 status: partial
 ---
