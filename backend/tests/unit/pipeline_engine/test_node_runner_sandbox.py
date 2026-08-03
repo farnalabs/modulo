@@ -66,7 +66,7 @@ async def test_with_agent_commands_returns_callable():
 def test_compute_sandbox_cost_hour_at_configured_rate():
     """3600s of sandbox uptime at the configured rate equals the rate itself.
 
-    Default rate is 0.5 USD/hr, so one full hour of uptime estimates 0.5 USD.
+    Default rate is 0.13 USD/hr, so one full hour of uptime estimates 0.13 USD.
     """
     expected = round(_E2B_SANDBOX_USD_PER_HOUR, 6)
     assert _compute_sandbox_cost(3600.0, None) == expected

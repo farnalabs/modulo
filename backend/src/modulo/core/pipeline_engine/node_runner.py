@@ -86,8 +86,12 @@ _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 # Per-run agent runtime cost: E2B sandbox hourly rate (USD) used to estimate
 # sandbox_agent node cost from wall-clock time. E2B bills per-second sandbox
 # uptime, so (elapsed_seconds / 3600) x rate is a faithful cost estimate.
-# Operators can override via E2B_SANDBOX_USD_PER_HOUR.
-_E2B_SANDBOX_USD_PER_HOUR = 0.5
+# Default reflects the dashboard-confirmed opencode template = 2 vCPU / 2 GiB
+# at E2B per-second rates (~$0.133/hr). Operators can override via
+# E2B_SANDBOX_USD_PER_HOUR. NOTE: this fallback only applies when settings
+# cannot be imported; keep it in sync with settings.py's
+# `e2b_sandbox_usd_per_hour` default.
+_E2B_SANDBOX_USD_PER_HOUR = 0.13
 try:
     from modulo.settings import get_settings
 
