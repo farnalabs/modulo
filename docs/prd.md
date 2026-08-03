@@ -654,6 +654,10 @@ Wall-clock time and exit code are captured on every dispatch natively by the `sa
 
 The agent's output is evaluated by a separate Modulo pipeline (code review, test coverage check, security scan). This keeps evaluation separate from execution and allows different evaluators to be composed independently.
 
+#### env_vars secret references
+
+`sandbox_agent` nodes may reference org secrets in their `env_vars` using `{{ secrets.KEY }}` syntax. These references are resolved at node run time — on every execution, not at graph compile time — so secret rotation takes effect on the next run and secrets never enter the compiled graph cache or checkpoint state. Resolution order: the org vault (per-org encrypted `secrets` table) is consulted first; if the key is not in the vault, the value falls back to the worker process environment. A reference that resolves to neither becomes an empty string (with a warning) so a missing secret never crashes a run.
+
 ---
 
 ## 7. Security
@@ -1206,7 +1210,7 @@ cost_estimate_usd = (wall_clock_seconds / 3600 × E2B_SANDBOX_USD_PER_HOUR)
                     + agent_reported cost_estimate_usd (when present in the agent's output contract)
 ```
 
-`E2B_SANDBOX_USD_PER_HOUR` (default `0.5` USD/hr) is operator-configurable and reflects the hourly E2B sandbox rate; E2B bills per-second sandbox uptime, so wall-clock time is a faithful cost basis. The agent's own `cost_estimate_usd` field (written to `/home/user/output.json` by dogfood agents) is merged in when present and numeric. The estimate is attached to both the node's artifact output and the run's `output`, and `Run.total_cost_usd` aggregates token cost + sandbox cost across all completed nodes (`execute` and HITL `resume` paths equally).
+`E2B_SANDBOX_USD_PER_HOUR` (default `0.13` USD/hr) is operator-configurable and reflects the hourly E2B sandbox rate; the default is based on the opencode template = 2 vCPU / 2 GiB at E2B per-second rates (~$0.1332/hr rounded to 0.13), and 0.5 was a conservative placeholder. E2B bills per-second sandbox uptime, so wall-clock time is a faithful cost basis. The agent's own `cost_estimate_usd` field (written to `/home/user/output.json` by dogfood agents) is merged in when present and numeric. The estimate is attached to both the node's artifact output and the run's `output`, and `Run.total_cost_usd` aggregates token cost + sandbox cost across all completed nodes (`execute` and HITL `resume` paths equally).
 
 **Attributability boundary**: GitHub Actions billing is unavailable on the free tier and is not tracked. Fly costs are infrastructure-level (the platform hosting Modulo itself) and are NOT attributed per-run. Only E2B sandbox usage is per-run attributable; sandbox cost is an estimate, not an invoice.
 

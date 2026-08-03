@@ -1,5 +1,6 @@
 """Unit tests for TriggerEngine and helpers using mocked AsyncSession."""
 
+import asyncio
 import datetime
 import hashlib
 import hmac
@@ -287,6 +288,11 @@ def test_sha256_hex_is_deterministic() -> None:
     assert _sha256_hex(b"x") == _sha256_hex(b"x")
 
 
+@pytest.mark.parametrize("raw", [None, "not-bytes", 42, ["bytes"]])
+def test_sha256_hex_returns_empty_for_non_bytes(raw: object) -> None:
+    assert _sha256_hex(raw) == ""
+
+
 class TestVerifyTimestamp:
     @pytest.mark.parametrize(
         "timestamp_input,expect_raises",
@@ -424,6 +430,190 @@ class TestComputeRateLimitKey:
 
     def test_no_key_fields_is_empty_object(self) -> None:
         assert TriggerEngine._compute_rate_limit_key({"a": 1}, {}) == "{}"
+
+
+# ---------------------------------------------------------------------------
+# TriggerEngine._try_insert_dedup
+# ---------------------------------------------------------------------------
+
+
+class TestTryInsertDedup:
+    def _session(self, flush_side_effect: Any = None) -> AsyncMock:
+        """Session where the dedup SELECT finds nothing and the flush raises as configured."""
+        session = AsyncMock()
+        existing = MagicMock()
+        existing.scalar_one_or_none.return_value = None
+        delete_result = MagicMock()
+        nested = AsyncMock()
+        nested.__aenter__ = AsyncMock(return_value=None)
+        nested.__aexit__ = AsyncMock(return_value=False)
+        session.begin_nested = MagicMock(return_value=nested)
+        session.flush = AsyncMock(side_effect=flush_side_effect)
+
+        call_count = 0
+
+        async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return existing
+            return delete_result
+
+        session.execute = _execute
+        session.add = MagicMock()
+        return session
+
+    async def test_insert_succeeds_returns_true(self) -> None:
+        engine = TriggerEngine()
+        session = self._session()
+        result = await engine._try_insert_dedup(session, uuid.uuid4(), uuid.uuid4(), "hash-1")
+        assert result is True
+        session.add.assert_called_once()
+
+    async def test_duplicate_hash_returns_false(self) -> None:
+        engine = TriggerEngine()
+        session = AsyncMock()
+        existing = MagicMock()
+        existing.scalar_one_or_none.return_value = MagicMock()
+        session.execute = AsyncMock(return_value=existing)
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+
+        result = await engine._try_insert_dedup(session, uuid.uuid4(), uuid.uuid4(), "hash-1")
+
+        assert result is False
+        session.add.assert_not_called()
+
+    async def test_unique_violation_returns_false(self) -> None:
+        class _PgError(Exception):
+            pgcode = "23505"
+
+        engine = TriggerEngine()
+        session = self._session(IntegrityError("INSERT", {}, _PgError()))
+        result = await engine._try_insert_dedup(session, uuid.uuid4(), uuid.uuid4(), "hash-1")
+        assert result is False
+
+    async def test_non_unique_integrity_error_propagates(self) -> None:
+        class _PgError(Exception):
+            pgcode = "23503"  # FK violation — not a duplicate
+
+        engine = TriggerEngine()
+        session = self._session(IntegrityError("INSERT", {}, _PgError()))
+        with pytest.raises(IntegrityError):
+            await engine._try_insert_dedup(session, uuid.uuid4(), uuid.uuid4(), "hash-1")
+
+
+# ---------------------------------------------------------------------------
+# TriggerEngine.evaluate_condition — sync-friendly one-off evaluation
+# ---------------------------------------------------------------------------
+
+
+class TestTriggerEngineEvaluateCondition:
+    """Tests for the static ``TriggerEngine.evaluate_condition`` helper."""
+
+    @pytest.fixture(autouse=True)
+    def _polling_env(self):
+        settings = MagicMock()
+        settings.fernet_key = _VALID_32
+        with (
+            patch("modulo.settings.get_settings", return_value=settings),
+            patch("modulo.core.trigger_engine.create_secrets_backend") as mock_sb,
+            patch("modulo.core.trigger_engine.polling._build_polling_connector") as mock_build,
+            patch("modulo.core.trigger_engine.polling.evaluate_condition") as mock_eval,
+        ):
+            backend = AsyncMock()
+            backend.get_secret.return_value = '{"token": "test-token"}'
+            mock_sb.return_value = backend
+
+            connector = AsyncMock()
+            query_result = MagicMock()
+            query_result.records = [{"number": 1}]
+            query_result.total = 1
+            connector.query.return_value = query_result
+            mock_build.return_value = connector
+
+            mock_eval.return_value = True
+            yield mock_sb, mock_build, mock_eval, connector
+
+    @staticmethod
+    def _session(instance: Any) -> AsyncMock:
+        session = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = instance
+        session.execute = AsyncMock(return_value=conn_result)
+        return session
+
+    @staticmethod
+    async def _run(session: AsyncMock, instance_id: uuid.UUID) -> dict[str, Any]:
+        return await TriggerEngine.evaluate_condition(
+            session,
+            trigger=MagicMock(),
+            org_id=uuid.uuid4(),
+            connector_instance_id=instance_id,
+            poll_query="issues",
+            condition_expression=None,
+        )
+
+    async def test_connector_instance_not_found_returns_error(self, _polling_env) -> None:
+        instance_id = uuid.uuid4()
+        result = await self._run(self._session(None), instance_id)
+
+        assert result == {"status": "error", "error": f"Connector instance {instance_id} not found"}
+
+    async def test_condition_met_returns_records(self, _polling_env) -> None:
+        result = await self._run(self._session(MagicMock()), uuid.uuid4())
+
+        assert result["status"] == "condition_met"
+        assert result["records"] == [{"number": 1}]
+        assert result["total"] == 1
+
+    async def test_no_match_returns_records(self, _polling_env) -> None:
+        _sb, _build, mock_eval, _connector = _polling_env
+        mock_eval.return_value = False
+        result = await self._run(self._session(MagicMock()), uuid.uuid4())
+
+        assert result["status"] == "no_match"
+        assert result["records"] == [{"number": 1}]
+
+    async def test_connector_init_failed_returns_error(self, _polling_env) -> None:
+        mock_sb, _build, _eval, _connector = _polling_env
+        mock_sb.side_effect = RuntimeError("fernet key invalid")
+        result = await self._run(self._session(MagicMock()), uuid.uuid4())
+
+        assert result["status"] == "error"
+        assert "Connector init failed" in result["error"]
+
+    async def test_query_failed_returns_error(self, _polling_env) -> None:
+        _sb, _build, _eval, connector = _polling_env
+        connector.query.side_effect = RuntimeError("upstream 500")
+        result = await self._run(self._session(MagicMock()), uuid.uuid4())
+
+        assert result["status"] == "error"
+        assert "Query failed" in result["error"]
+
+    async def test_condition_evaluation_failed_returns_error(self, _polling_env) -> None:
+        _sb, _build, mock_eval, _connector = _polling_env
+        mock_eval.side_effect = ValueError("Invalid JMESPath expression")
+        result = await self._run(self._session(MagicMock()), uuid.uuid4())
+
+        assert result["status"] == "error"
+        assert "Condition evaluation failed" in result["error"]
+
+    @pytest.mark.parametrize(
+        "stage",
+        ["connector_init", "query", "condition_eval"],
+    )
+    async def test_cancelled_error_propagates(self, _polling_env, stage: str) -> None:
+        mock_sb, _build, mock_eval, connector = _polling_env
+        if stage == "connector_init":
+            mock_sb.side_effect = asyncio.CancelledError()
+        elif stage == "query":
+            connector.query.side_effect = asyncio.CancelledError()
+        else:
+            mock_eval.side_effect = asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await self._run(self._session(MagicMock()), uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
@@ -1235,3 +1425,54 @@ async def test_cleanup_expired_dedup_hashes_lock_contention() -> None:
 
     count = await TriggerEngine.cleanup_expired_dedup_hashes(session)
     assert count == 0
+
+
+async def test_cleanup_expired_dedup_hashes_skips_lock_on_non_postgres() -> None:
+    """Non-Postgres backends skip the advisory lock and go straight to the select."""
+    session = _make_session(trigger=_make_trigger())
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "sqlite"
+    session.get_bind = MagicMock(return_value=bind_mock)
+
+    expired_result = MagicMock()
+    expired_result.scalars.return_value.all.return_value = [uuid.uuid4()]
+
+    executed: list[str] = []
+
+    async def _capture(stmt: Any, *args: Any, **kwargs: Any) -> Any:
+        executed.append(str(stmt).lower())
+        return expired_result
+
+    session.execute = _capture
+
+    count = await TriggerEngine.cleanup_expired_dedup_hashes(session)
+
+    assert count == 1
+    assert executed
+    assert all("pg_try_advisory_xact_lock" not in s for s in executed)
+
+
+async def test_cleanup_expired_dedup_hashes_none_expired() -> None:
+    """No expired hashes means the DELETE is skipped and 0 is returned."""
+    session = _make_session(trigger=_make_trigger())
+
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = True
+
+    empty_result = MagicMock()
+    empty_result.scalars.return_value.all.return_value = []
+
+    call_count = 0
+
+    async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return lock_result
+        return empty_result
+
+    session.execute = _execute
+
+    count = await TriggerEngine.cleanup_expired_dedup_hashes(session)
+    assert count == 0
+    assert call_count == 2  # lock + select, no delete

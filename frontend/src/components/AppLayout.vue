@@ -130,7 +130,6 @@
       ref="mobileSidebarRef"
       class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-transform overflow-y-auto"
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
-      @keydown.escape="mobileOpen = false"
     >
       <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
         <div class="avatar-ring">
@@ -189,7 +188,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import { getAccessToken, clearAccessToken } from "../lib/api/client";
 import { usePlanStore } from "../stores/planStore";
 import Badge from "./ui/badge/Badge.vue";
@@ -258,6 +257,12 @@ const jwtPayload = computed(() => {
   }
 });
 
+function handleMobileEscape(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    mobileOpen.value = false;
+  }
+}
+
 watch(mobileOpen, (open) => {
   nextTick(() => {
     if (open && mobileSidebarRef.value) {
@@ -265,10 +270,16 @@ watch(mobileOpen, (open) => {
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
       );
       firstFocusable?.focus();
+      document.addEventListener("keydown", handleMobileEscape);
     } else if (!open && mobileButtonRef.value) {
       mobileButtonRef.value.focus();
+      document.removeEventListener("keydown", handleMobileEscape);
     }
   });
+});
+
+onUnmounted(() => {
+  document.removeEventListener("keydown", handleMobileEscape);
 });
 
 const userEmail = computed(() => jwtPayload.value?.sub || "");

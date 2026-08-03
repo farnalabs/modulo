@@ -2,7 +2,12 @@
   <div v-if="store.isActive" class="onboarding-banner">
     <div
       class="flex items-center gap-3 px-6 py-4 cursor-pointer border-b border-l-4 border-l-primary bg-gradient-to-r from-primary/5 to-primary/10 bg-card hover:bg-accent/50 transition-colors"
+      role="button"
+      tabindex="0"
+      :aria-expanded="expanded"
       @click="expanded = !expanded"
+      @keydown.enter.prevent="expanded = !expanded"
+      @keydown.space.prevent="expanded = !expanded"
       data-testid="onboarding-banner-trigger"
     >
       <div class="relative h-10 w-10 shrink-0">
@@ -59,7 +64,11 @@
           :key="action.id"
           class="flex items-center gap-3 rounded-lg px-3 py-2 transition-colors"
           :class="action.completed || action.skipped ? 'opacity-50' : 'hover:bg-accent cursor-pointer'"
+          role="button"
+          tabindex="0"
           @click="handleActionClick(action)"
+          @keydown.enter.prevent="handleActionClick(action)"
+          @keydown.space.prevent="handleActionClick(action)"
           :data-testid="`onboarding-action-${action.id}`"
         >
           <div class="flex h-6 w-6 shrink-0 items-center justify-center">

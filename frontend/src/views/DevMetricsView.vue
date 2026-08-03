@@ -8,6 +8,7 @@
         <select
           v-model="selectedDays"
           class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+          aria-label="Metrics time range"
           @change="loadData"
         >
           <option :value="7">Last 7 days</option>
