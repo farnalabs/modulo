@@ -48,7 +48,7 @@ VALID_ROLES: set[str] = {
     "writer",
 }
 
-_PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
+_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _agent(name: str) -> dict[str, Any]:
