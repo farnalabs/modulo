@@ -243,17 +243,6 @@ BACKENDS = [
 ]
 
 
-def _unpack_params(params):
-    # Convert list of pytest.param objects to a list of tuples for parametrization
-    result = []
-    for p in params:
-        if isinstance(p, pytest.mark.structures.ParameterSet):
-            result.append(p)
-        else:
-            result.append(pytest.param(*p, id=p[4]))
-    return result
-
-
 class TestSharedBackendContracts:
     @pytest.mark.parametrize(
         "module_path,class_name,patch_target,kwargs,expected_id",

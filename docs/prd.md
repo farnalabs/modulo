@@ -530,23 +530,38 @@ This replaces the previous "LLM driveability" stretch goal with a standards-base
 | `cancel_run` | `POST /api/v1/runs/{id}/cancel` | Cancel a running or queued run |
 | `review_hitl` | `POST /runs/{id}/hitl/{gate_id}/review` | Unified HITL action: `action` = `claim` \| `approve` \| `reject` \| `deliver_manual`; `approve`/`reject` require `claim_token`; `reject` requires `reason`; marked `destructive: true` |
 | `list_pipelines` | `GET /api/v1/pipelines` | Summary by default; paginated |
+| `get_pipeline_graph` | `GET /api/v1/pipelines/{pipeline_id}/graph` | Read-only. Returns the full node/edge graph of a pipeline by ID. |
 | `list_pending_hitl` | `GET /api/v1/runs?status=awaiting_human` | All runs awaiting human action |
 | `search_library` | `GET /api/v1/library` | Search the library with type filter, text search, cursor pagination. |
 | `copy_library_primitive` | `POST /api/v1/library/{slug}/copy` | Community (unverified) primitives: returns 403 via MCP — MCP clients cannot copy community primitives at all; only verified primitives may be copied via MCP. Browser-only: requires explicit user acknowledgement in the CopyToAdaptWizard (not a `confirm: true` API parameter — a UI gate). This prevents an autonomous LLM client from self-supplying `confirm: true` to bypass the warning. |
 | `list_trigger_events` | `GET /api/v1/triggers/{id}/events` | View trigger event log |
 | `create_pipeline` | `POST /api/v1/pipelines` | Operator role required. Creates a new pipeline definition with name, description, visibility, and default config. |
+| `delete_pipeline` | `DELETE /api/v1/pipelines/{pipeline_id}` | Operator role required. Deletes a pipeline by ID. |
 | `update_pipeline_graph` | `PUT /api/v1/pipelines/{id}/graph` | Operator role required. Replaces the node/edge graph of a pipeline. |
+| `bind_connector_to_node` | MCP-only operation | Operator role required. Binds a connector instance to a pipeline node, updating the node's `connector_binding` in the pipeline graph. The connector must already exist in the organisation. |
 | `create_model_backend` | `POST /api/v1/model-backends` | Operator role required. Registers a new LLM provider. API key is provided via a one-time browser setup URL returned by the tool — the key never transits the LLM context. |
+| `create_agent` | `POST /api/v1/agents` | Operator role required. Creates a new agent with name, prompt_template, model_backend_id, and optional input/output schemas. |
+| `create_connector` | `POST /api/v1/connectors` | Operator role required. Creates a new connector instance (provider configuration); credentials encrypted at rest. |
+| `delete_connector` | `DELETE /api/v1/connectors/{connector_id}` | Operator role required. Deletes a connector instance by ID. |
 | `list_runs` | `GET /api/v1/runs` | List runs with cursor-based pagination, optional pipeline_id/status filters. |
 | `list_triggers` | `GET /api/v1/triggers` | List trigger configurations, optional pipeline_id filter. |
 | `get_trigger` | `GET /api/v1/triggers/{id}` | Read a single trigger by ID (runner role required). |
 | `update_trigger` | `PUT /api/v1/triggers/{id}` | Update a trigger's configuration — active, max_concurrent_runs, cron_expression/cron_timezone (cron triggers only), daily_spend_limit (clear via `clear_daily_spend_limit`), config_json. Operator role required. |
 | `delete_trigger` | `DELETE /api/v1/triggers/{id}` | Soft-delete a trigger by ID. Operator role required. |
+| `create_trigger` | `POST /api/v1/pipelines/{pipeline_id}/triggers` | Operator role required. Creates a new trigger for a pipeline (manual/webhook/cron/polling). |
+| `create_secret` | MCP-only operation | Operator role required. Creates or updates a secret in the org vault; encrypted at rest. |
+| `list_secrets` | MCP-only operation | Operator role required. Lists secret keys in the org vault — never exposes secret values. |
+| `delete_secret` | MCP-only operation | Operator role required. Deletes a secret from the org vault by key. |
 | `get_run_evals` | `GET /api/v1/runs/{id}/evals` | Get eval results for a completed run. |
 | `list_eval_definitions` | `GET /api/v1/eval-definitions` | List eval configurations, optional pipeline_id filter. |
+| `list_schemas` | `GET /api/v1/schemas` | Read-only. Lists registered schemas with cursor-based pagination. |
+| `infer_schema` | `POST /api/v1/schemas/infer` | Operator role required. AI-assisted schema inference from a sample JSON payload. |
+| `validate_payload` | `POST /api/v1/schemas/validate` | Read-only. Validates a payload against a registered schema by schema_id. |
 | `get_integration_status` | `GET /api/v1/integrations/status` | Health status of all connectors, model backends, and triggers. |
 | `get_org_config` | `GET /api/v1/admin/config` | Org-level configuration, filterable by section (remy, plan, rate_limits). |
 | `get_available_features` | `GET /api/v1/features` | List product features enabled on the current plan tier. |
+| `list_housekeeping` | `GET /api/v1/admin/housekeeping` | List housekeeping cleanup candidates for the org (runner role required). |
+| `perform_housekeeping` | `POST /api/v1/admin/housekeeping/cleanup` | Operator role required. Deletes housekeeping cleanup candidates, grouped by entity type with per-group savepoints. |
 
 **`review_hitl` detail**: the claim step returns a `claim_token` (alpha: cryptographically random opaque string with 15-min TTL; v1: short-lived JWT scoped to `run_id + gate_id + client_id`). Subsequent `approve` or `reject` calls must include this token. The `deliver_manual` action allows supplying an output dict directly — useful for MCP clients that want to provide human-authored content through a gate. The `reject` action accepts an optional `reason` string for audit trail purposes. This prevents replay across clients and enforces that the reviewing client inspected the gate context before acting.
 
