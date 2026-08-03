@@ -97,6 +97,19 @@ class TestRateLimitRule:
         assert rule.window_s == WINDOW_SECONDS
         assert rule.key_fn is None
 
+    def test_custom_window_and_key_fn(self):
+        def key_fn(request):
+            return f"tenant:{request.get('tenant_id')}"
+
+        rule = RateLimitRule(
+            path_prefix="/api/v1/runs",
+            max_requests=30,
+            window_s=15,
+            key_fn=key_fn,
+        )
+        assert rule.window_s == 15
+        assert rule.key_fn({"tenant_id": "acme"}) == "tenant:acme"
+
 
 class TestRateLimiterRegistry:
     @pytest.mark.parametrize(
