@@ -137,3 +137,23 @@ async def test_non_dict_sub_graph_skipped() -> None:
     result = await _run(graph, _session_with_templates([template]))
     assert result.is_valid
     assert not any(code.startswith("COMPOSITE_SUBGRAPH") for code in _codes(result))
+
+
+async def test_sub_edge_with_gate_config_is_error() -> None:
+    sub_graph = {
+        "nodes": [{"id": "a", "node_type": "agent"}, {"id": "b", "node_type": "agent"}],
+        "edges": [{"source": "a", "target": "b", "hitl_gate_config": {"mode": "manual"}}],
+    }
+    result = await _run_for_sub_graph(sub_graph)
+    assert "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED" in _codes(result)
+    assert not result.is_valid
+
+
+async def test_sub_edge_without_gate_config_is_valid() -> None:
+    sub_graph = {
+        "nodes": [{"id": "a", "node_type": "agent"}, {"id": "b", "node_type": "agent"}],
+        "edges": [{"source": "a", "target": "b"}],
+    }
+    result = await _run_for_sub_graph(sub_graph)
+    assert "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED" not in _codes(result)
+    assert result.is_valid

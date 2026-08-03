@@ -1367,6 +1367,13 @@ class GraphValidator:
                     node_id=node_id,
                 )
                 continue
+            if edge.get("hitl_gate_config"):
+                result.error(
+                    "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED",
+                    f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge carries a HITL gate "
+                    f"config which is not supported in composite sub-pipelines (no HITL write path exists)",
+                    node_id=node_id,
+                )
             src = str(edge.get("source"))
             tgt = str(edge.get("target"))
             if src not in sub_ids:
