@@ -210,6 +210,196 @@ class TestDiffSnapshots:
         assert result["edges_added"][0]["source"] == "b"
         assert result["edges_added"][0]["target"] == "c"
 
+    async def test_diff_removed_edge(self):
+        session = AsyncMock()
+        sid_a = uuid.uuid4()
+        sid_b = uuid.uuid4()
+        snap_a = _mock_snapshot(
+            sid_a,
+            1,
+            edges=[{"source": "a", "target": "b"}, {"source": "b", "target": "c"}],
+        )
+        snap_b = _mock_snapshot(
+            sid_b,
+            2,
+            edges=[{"source": "a", "target": "b"}],
+        )
+
+        call_count = 0
+
+        async def execute_side(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = snap_a
+            else:
+                result.scalar_one_or_none.return_value = snap_b
+            return result
+
+        session.execute = AsyncMock(side_effect=execute_side)
+
+        result = await diff_snapshots(session, sid_a, sid_b)
+        assert result is not None
+        assert len(result["edges_removed"]) == 1
+        assert result["edges_removed"][0]["source"] == "b"
+        assert result["edges_removed"][0]["target"] == "c"
+        assert len(result["edges_added"]) == 0
+        assert len(result["edges_modified"]) == 0
+
+    async def test_diff_modified_edge_type(self):
+        session = AsyncMock()
+        sid_a = uuid.uuid4()
+        sid_b = uuid.uuid4()
+        snap_a = _mock_snapshot(
+            sid_a,
+            1,
+            edges=[{"source": "a", "target": "b", "type": "normal"}],
+        )
+        snap_b = _mock_snapshot(
+            sid_b,
+            2,
+            edges=[{"source": "a", "target": "b", "type": "conditional"}],
+        )
+
+        call_count = 0
+
+        async def execute_side(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = snap_a
+            else:
+                result.scalar_one_or_none.return_value = snap_b
+            return result
+
+        session.execute = AsyncMock(side_effect=execute_side)
+
+        result = await diff_snapshots(session, sid_a, sid_b)
+        assert result is not None
+        assert len(result["edges_modified"]) == 1
+        modified = result["edges_modified"][0]
+        assert modified["edge"] == {"source": "a", "target": "b"}
+        assert modified["changes"]["edge_type"] == {"old": "normal", "new": "conditional"}
+        assert len(result["edges_added"]) == 0
+        assert len(result["edges_removed"]) == 0
+
+    async def test_diff_modified_edge_hitl_gate_config(self):
+        session = AsyncMock()
+        sid_a = uuid.uuid4()
+        sid_b = uuid.uuid4()
+        snap_a = _mock_snapshot(
+            sid_a,
+            1,
+            edges=[{"source": "a", "target": "b", "hitl_gate_config": {"human_only": True}}],
+        )
+        snap_b = _mock_snapshot(
+            sid_b,
+            2,
+            edges=[{"source": "a", "target": "b", "hitl_gate_config": {"human_only": False}}],
+        )
+
+        call_count = 0
+
+        async def execute_side(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = snap_a
+            else:
+                result.scalar_one_or_none.return_value = snap_b
+            return result
+
+        session.execute = AsyncMock(side_effect=execute_side)
+
+        result = await diff_snapshots(session, sid_a, sid_b)
+        assert result is not None
+        assert len(result["edges_modified"]) == 1
+        modified = result["edges_modified"][0]
+        assert modified["changes"]["hitl_gate_config"] == {
+            "old": {"human_only": True},
+            "new": {"human_only": False},
+        }
+        assert "edge_type" not in modified["changes"]
+
+    async def test_diff_node_connector_binding_change(self):
+        session = AsyncMock()
+        sid_a = uuid.uuid4()
+        sid_b = uuid.uuid4()
+        snap_a = _mock_snapshot(
+            sid_a,
+            1,
+            nodes=[{"id": "a", "agent_id": "ag1", "label": "A", "connector_binding": {"instance_id": "c1"}}],
+        )
+        snap_b = _mock_snapshot(
+            sid_b,
+            2,
+            nodes=[{"id": "a", "agent_id": "ag1", "label": "A", "connector_binding": {"instance_id": "c2"}}],
+        )
+
+        call_count = 0
+
+        async def execute_side(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = snap_a
+            else:
+                result.scalar_one_or_none.return_value = snap_b
+            return result
+
+        session.execute = AsyncMock(side_effect=execute_side)
+
+        result = await diff_snapshots(session, sid_a, sid_b)
+        assert result is not None
+        assert len(result["nodes_modified"]) == 1
+        modified = result["nodes_modified"][0]
+        assert modified["changes"]["connector_binding"] == {
+            "old": {"instance_id": "c1"},
+            "new": {"instance_id": "c2"},
+        }
+
+    async def test_diff_node_environment_binding_change(self):
+        session = AsyncMock()
+        sid_a = uuid.uuid4()
+        sid_b = uuid.uuid4()
+        snap_a = _mock_snapshot(
+            sid_a,
+            1,
+            nodes=[{"id": "a", "agent_id": "ag1", "label": "A", "environment_binding": {"environment_id": "e1"}}],
+        )
+        snap_b = _mock_snapshot(
+            sid_b,
+            2,
+            nodes=[{"id": "a", "agent_id": "ag1", "label": "A", "environment_binding": {"environment_id": "e2"}}],
+        )
+
+        call_count = 0
+
+        async def execute_side(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = snap_a
+            else:
+                result.scalar_one_or_none.return_value = snap_b
+            return result
+
+        session.execute = AsyncMock(side_effect=execute_side)
+
+        result = await diff_snapshots(session, sid_a, sid_b)
+        assert result is not None
+        assert len(result["nodes_modified"]) == 1
+        modified = result["nodes_modified"][0]
+        assert modified["changes"]["environment_binding"] == {
+            "old": {"environment_id": "e1"},
+            "new": {"environment_id": "e2"},
+        }
+
     async def test_diff_returns_full_graph(self):
         session = AsyncMock()
         sid_a = uuid.uuid4()
