@@ -144,8 +144,8 @@ async def _enforce_break_glass(
             )
     except asyncio.CancelledError:
         raise
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        raise exc
     except Exception:
         _log.exception("auth.break_glass_hook_error")
         if limiter is not None:
@@ -276,8 +276,8 @@ async def login(
         ) from None
     except asyncio.CancelledError:
         raise
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        raise exc
     except Exception:
         _log.exception("Unexpected error in login")
         raise HTTPException(
@@ -419,8 +419,8 @@ async def refresh(
         ) from None
     except asyncio.CancelledError:
         raise
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        raise exc
     except Exception:  # nosemgrep: bare-raise-in-except
         _log.exception("Unexpected error in refresh")
         raise HTTPException(
@@ -504,8 +504,8 @@ async def logout(
                 ) from None
             except asyncio.CancelledError:
                 raise
-            except HTTPException:
-                raise
+            except HTTPException as exc:
+                raise exc
             except Exception:
                 _log.exception("Unexpected error in logout (inner)")
                 raise HTTPException(
@@ -587,8 +587,8 @@ async def ws_token(
             await redis.aclose()
     except asyncio.CancelledError:
         raise
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        raise exc
     except Exception:
         _log.exception("Unexpected error in ws_token")
         raise HTTPException(
@@ -622,8 +622,8 @@ async def me(
         ) from None
     except asyncio.CancelledError:
         raise
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        raise exc
     except Exception:
         _log.exception("Unexpected error in me")
         raise HTTPException(
@@ -693,8 +693,8 @@ async def csrf_token(
         return response
     except asyncio.CancelledError:
         raise
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        raise exc
     except Exception:
         _log.exception("Unexpected error in csrf_token")
         raise HTTPException(
