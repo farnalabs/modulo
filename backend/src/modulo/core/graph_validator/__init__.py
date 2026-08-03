@@ -1217,6 +1217,9 @@ class GraphValidator:
            may be stored on the binding; for now we verify the template
            record itself exists (version validation is deferred to
            execution time).
+        4. Validate the template's sub-pipeline graph structure (unique
+           sub-node ids, valid sub-edge references, supported sub-node types,
+           sandbox sub-node config).
         """
         nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
         composite_nodes = [n for n in nodes if n.get("node_type") == "composite" or n.get("composite_ref") is not None]
@@ -1270,6 +1273,8 @@ class GraphValidator:
                 )
                 continue
 
+            self._check_composite_subgraph(template, node_id, result)
+
             parameter_ports: list[dict[str, Any]] = template.parameter_ports_json or []
             parameter_values: dict[str, Any] = node.get("composite_parameter_values") or {}
 
@@ -1284,6 +1289,98 @@ class GraphValidator:
             output_validation: dict[str, Any] = node.get("output_validation", {})
             if output_validation:
                 self._check_output_validation(node_id, output_validation, result)
+
+    def _check_composite_subgraph(
+        self,
+        template: CompositeTemplate,
+        node_id: str,
+        result: ValidationResult,
+    ) -> None:
+        """Validate a composite template's sub-pipeline graph structure.
+
+        Emits ``COMPOSITE_SUBGRAPH_*`` errors so malformed templates are caught
+        at save time rather than when a run tries to expand them. Only runs when
+        ``sub_pipeline_graph_json`` is a real dict (mocks and legacy rows that
+        lack it are skipped).
+        """
+        graph = template.sub_pipeline_graph_json
+        if not isinstance(graph, dict):
+            return
+        sub_nodes = graph.get("nodes")
+        if not isinstance(sub_nodes, list) or not sub_nodes:
+            result.error(
+                "COMPOSITE_SUBGRAPH_EMPTY",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' has no sub-pipeline nodes",
+                node_id=node_id,
+            )
+            return
+
+        sub_ids: set[str] = set()
+        for sub in sub_nodes:
+            if not isinstance(sub, dict):
+                result.error(
+                    "COMPOSITE_SUBGRAPH_INVALID_NODE",
+                    f"Node '{node_id}': CompositeTemplate '{template.id}' contains a non-dict sub-node",
+                    node_id=node_id,
+                )
+                continue
+            sid = _string_or_default(sub.get("id"))
+            if sid in sub_ids:
+                result.error(
+                    "COMPOSITE_SUBGRAPH_DUPLICATE_NODE_ID",
+                    f"Node '{node_id}': CompositeTemplate '{template.id}' has duplicate sub-node id '{sid}'",
+                    node_id=node_id,
+                )
+            sub_ids.add(sid)
+            node_type = sub.get("node_type", "agent")
+            if node_type not in ("agent", "manual", "composite", "sandbox_agent"):
+                result.error(
+                    "COMPOSITE_SUBGRAPH_INVALID_TYPE",
+                    f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has "
+                    f"invalid node_type '{node_type}'",
+                    node_id=node_id,
+                )
+            if node_type == "sandbox_agent":
+                cmd = sub.get("agent_command", "")
+                if not cmd or not str(cmd).strip():
+                    result.error(
+                        "COMPOSITE_SUBGRAPH_SANDBOX_MISSING_COMMAND",
+                        f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' "
+                        f"is missing required agent_command",
+                        node_id=node_id,
+                    )
+                if not sub.get("template_id"):
+                    result.error(
+                        "COMPOSITE_SUBGRAPH_SANDBOX_MISSING_TEMPLATE",
+                        f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has no template_id",
+                        node_id=node_id,
+                    )
+
+        sub_edges = graph.get("edges")
+        if not isinstance(sub_edges, list):
+            return
+        for edge in sub_edges:
+            if not isinstance(edge, dict):
+                result.error(
+                    "COMPOSITE_SUBGRAPH_INVALID_EDGE",
+                    f"Node '{node_id}': CompositeTemplate '{template.id}' contains a non-dict sub-edge",
+                    node_id=node_id,
+                )
+                continue
+            src = str(edge.get("source"))
+            tgt = str(edge.get("target"))
+            if src not in sub_ids:
+                result.error(
+                    "COMPOSITE_SUBGRAPH_EDGE_BAD_SOURCE",
+                    f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge references unknown source '{src}'",
+                    node_id=node_id,
+                )
+            if tgt not in sub_ids:
+                result.error(
+                    "COMPOSITE_SUBGRAPH_EDGE_BAD_TARGET",
+                    f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge references unknown target '{tgt}'",
+                    node_id=node_id,
+                )
 
     def _check_output_validation(
         self,

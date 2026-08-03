@@ -10,6 +10,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.composite_engine.expander import expand_composites_in_graph
 from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -70,6 +71,28 @@ async def create_snapshot_from_live_graph(
         )
         edges = list(edge_result.scalars())
         nodes = copy.deepcopy(list(pipeline.graph_nodes_json or []))
+
+        edge_dicts = [
+            {
+                "id": str(edge.id),
+                "source": str(edge.source_node_id),
+                "target": str(edge.target_node_id),
+                "type": edge.edge_type,
+                "hitl_gate_config": copy.deepcopy(edge.hitl_gate_config),
+            }
+            for edge in edges
+        ]
+
+        # Expand composite nodes into flat sub-pipeline nodes BEFORE agent
+        # materialization so sub-node agents get their prompt/model_backend
+        # embedded like top-level nodes. After this the snapshot graph contains
+        # only flat node types and the compiled runtime needs no changes.
+        nodes, edge_dicts, composite_bindings = await expand_composites_in_graph(
+            session,
+            org_id=pipeline.organisation_id,
+            nodes=nodes,
+            edges=edge_dicts,
+        )
 
         agent_ids = _ids(node.get("agent_id") for node in nodes)
         agents: list[Agent] = []
@@ -247,16 +270,7 @@ async def create_snapshot_from_live_graph(
 
         graph_json = {
             "nodes": nodes,
-            "edges": [
-                {
-                    "id": str(edge.id),
-                    "source": str(edge.source_node_id),
-                    "target": str(edge.target_node_id),
-                    "type": edge.edge_type,
-                    "hitl_gate_config": copy.deepcopy(edge.hitl_gate_config),
-                }
-                for edge in edges
-            ],
+            "edges": edge_dicts,
         }
         snapshot = PipelineSnapshot(
             organisation_id=pipeline.organisation_id,
@@ -268,6 +282,7 @@ async def create_snapshot_from_live_graph(
             schema_pins_json=schema_pins,
             prompt_pins_json=prompt_pins,
             model_backend_pins_json=model_backend_pins,
+            composite_bindings_json=composite_bindings or None,
             parameter_bindings_json=parameter_bindings or None,
             run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
         )
