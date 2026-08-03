@@ -414,8 +414,8 @@ def _rewire_edge_metadata(
 ) -> dict[str, Any]:
     """Copy an edge with remapped source/target, preserving all routing metadata.
 
-    ``type``, ``condition_expression``, ``max_iterations``, ``hitl_gate_config``
-    and other fields are preserved verbatim. ``default_target`` (used by loop
+    ``type``, ``condition_expression``, ``max_iterations`` and other edge
+    routing fields are preserved verbatim. ``default_target`` (used by loop
     edges) is remapped through the same id resolution so a default that points
     at a composite node lands on its first entry sub-node.
     """
