@@ -50,3 +50,24 @@ def test_admin_password_set_no_warning(caplog: pytest.LogCaptureFixture) -> None
     with caplog.at_level(logging.WARNING, logger="modulo.settings"):
         _make(modulo_admin_password="hunter2_but_longer_than_needed")
     assert not any("login is disabled" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Sandbox agent runtime cost rate
+# ---------------------------------------------------------------------------
+
+
+def test_e2b_sandbox_usd_per_hour_default() -> None:
+    """The E2B hourly rate defaults to 0.5 USD/hr when unset."""
+    assert _make().e2b_sandbox_usd_per_hour == 0.5
+
+
+def test_e2b_sandbox_usd_per_hour_env_override() -> None:
+    """The E2B hourly rate is configurable via E2B_SANDBOX_USD_PER_HOUR."""
+    assert _make(E2B_SANDBOX_USD_PER_HOUR="0.25").e2b_sandbox_usd_per_hour == 0.25
+
+
+def test_e2b_sandbox_usd_per_hour_rejects_negative() -> None:
+    """A negative hourly rate is invalid (ge=0)."""
+    with pytest.raises(ValidationError):
+        _make(E2B_SANDBOX_USD_PER_HOUR="-1")
