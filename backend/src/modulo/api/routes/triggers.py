@@ -23,7 +23,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
@@ -153,7 +153,11 @@ def _validated_next_fire(cron_expression: str | None, cron_timezone: str | None)
 
 
 @handle_db_errors("triggers.update_cron_config")
-@router.patch("/triggers/{trigger_id}/cron", status_code=status.HTTP_200_OK)
+@router.patch(
+    "/triggers/{trigger_id}/cron",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def update_cron_config(
     trigger_id: uuid.UUID,
     req: CronConfigUpdate,
@@ -326,7 +330,9 @@ class PollingConfigUpdate(BaseModel):
 
 
 @handle_db_errors("triggers.update_polling_config")
-@router.patch("/triggers/{trigger_id}/polling", status_code=status.HTTP_200_OK)
+@router.patch(
+    "/triggers/{trigger_id}/polling", status_code=status.HTTP_200_OK, dependencies=[Depends(deny_break_glass_mint)]
+)
 async def update_polling_config(
     trigger_id: uuid.UUID,
     req: PollingConfigUpdate,
@@ -512,7 +518,11 @@ class TriggerCreate(BaseModel):
 
 
 @handle_db_errors("triggers.create_trigger")
-@router.post("/pipelines/{pipeline_id}/triggers", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/pipelines/{pipeline_id}/triggers",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def create_trigger(
     pipeline_id: uuid.UUID,
     req: TriggerCreate,
@@ -595,7 +605,7 @@ class TriggerUpdate(BaseModel):
 
 
 @handle_db_errors("triggers.update_trigger")
-@router.put("/triggers/{trigger_id}", status_code=status.HTTP_200_OK)
+@router.put("/triggers/{trigger_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(deny_break_glass_mint)])
 async def update_trigger(
     trigger_id: uuid.UUID,
     req: TriggerUpdate,
@@ -683,7 +693,11 @@ async def update_trigger(
 
 
 @handle_db_errors("triggers.delete_trigger")
-@router.delete("/triggers/{trigger_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/triggers/{trigger_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def delete_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -721,7 +735,11 @@ async def delete_trigger(
 
 
 @handle_db_errors("triggers.restore_trigger")
-@router.post("/triggers/{trigger_id}/restore", status_code=status.HTTP_200_OK)
+@router.post(
+    "/triggers/{trigger_id}/restore",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def restore_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -773,7 +791,11 @@ async def restore_trigger(
 
 
 @handle_db_errors("triggers.toggle_trigger")
-@router.post("/triggers/{trigger_id}/toggle", status_code=status.HTTP_200_OK)
+@router.post(
+    "/triggers/{trigger_id}/toggle",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def toggle_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

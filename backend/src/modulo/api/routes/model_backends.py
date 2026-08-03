@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.db.crud.model_backend import (
@@ -234,7 +234,12 @@ def _validate_provider(provider: str) -> None:
 
 
 @handle_db_errors("model_backends.create_model_backend_endpoint")
-@router.post("", response_model=ModelBackendResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ModelBackendResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def create_model_backend_endpoint(
     req: ModelBackendCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -362,7 +367,7 @@ async def get_model_backend_endpoint(
 
 
 @handle_db_errors("model_backends.update_model_backend_endpoint")
-@router.patch("/{backend_id}", response_model=ModelBackendResponse)
+@router.patch("/{backend_id}", response_model=ModelBackendResponse, dependencies=[Depends(deny_break_glass_mint)])
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
     req: ModelBackendUpdate,
@@ -421,7 +426,7 @@ async def update_model_backend_endpoint(
 
 
 @handle_db_errors("model_backends.delete_model_backend_endpoint")
-@router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
 async def delete_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
