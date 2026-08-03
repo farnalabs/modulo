@@ -156,20 +156,52 @@ class TestGetSecret:
 
 class TestSetSecret:
     async def test_creates_new_row_via_upsert(self, mock_session):
+        """No existing row -> a new Secret is added with the encrypted value."""
         backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-        _set_org_id(mock_session)
+
+        async def mock_execute(stmt, *args, **kwargs):
+            result = MagicMock()
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = None
+            return result
+
+        mock_session.execute = AsyncMock(side_effect=mock_execute)
 
         await backend.set_secret("new-key", _SECRET_VALUE)
 
-        assert mock_session.flush.called, "Expected flush to be called after set_secret"
+        mock_session.flush.assert_called_once()
+        mock_session.add.assert_called_once()
+        added = mock_session.add.call_args[0][0]
+        assert added.key == "new-key"
+        assert added.organisation_id == _ORG_ID
+        assert backend._fernet.decrypt(added.encrypted_value).decode() == _SECRET_VALUE
 
     async def test_updates_existing_row_via_upsert(self, mock_session):
+        """An existing row is re-encrypted in place — no new row is added."""
         backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-        _set_org_id(mock_session)
+        existing = MagicMock(spec=Secret)
+        existing.key = "existing-key"
+        existing.organisation_id = _ORG_ID
+        existing.encrypted_value = b"stale-ciphertext"
+
+        async def mock_execute(stmt, *args, **kwargs):
+            result = MagicMock()
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = existing
+            return result
+
+        mock_session.execute = AsyncMock(side_effect=mock_execute)
 
         await backend.set_secret("existing-key", _SECRET_VALUE)
 
-        assert mock_session.flush.called, "Expected flush to be called after set_secret"
+        mock_session.flush.assert_called_once()
+        mock_session.add.assert_not_called()
+        assert existing.encrypted_value != b"stale-ciphertext"
+        assert backend._fernet.decrypt(existing.encrypted_value).decode() == _SECRET_VALUE
 
     async def test_no_session_raises_runtime_error(self):
         backend = FernetSecretsBackend(fernet_key=_KEY)
@@ -257,7 +289,7 @@ class TestSetSecretTOCTOU:
             if "current_setting" in str(stmt):
                 result.scalar.return_value = str(_ORG_ID)
             else:
-                result.scalar_one_or_none.return_value = MagicMock()
+                result.scalar_one_or_none.return_value = None
             return result
 
         session.execute = AsyncMock(side_effect=mock_execute)
@@ -265,7 +297,7 @@ class TestSetSecretTOCTOU:
         return session
 
     async def test_integrity_error_retries_then_succeeds(self):
-        """A concurrent insert racing this one is retried exactly once."""
+        """A concurrent INSERT racing this one is retried exactly once."""
         session = self._session_with_flush(
             AsyncMock(side_effect=[IntegrityError("stmt", {}, Exception("duplicate key")), None])
         )
@@ -274,6 +306,7 @@ class TestSetSecretTOCTOU:
         await backend.set_secret("new-key", _SECRET_VALUE)
 
         assert session.flush.call_count == 2, "Expected one retry after IntegrityError"
+        assert session.add.call_count == 2, "Expected the new row to be re-added on retry"
 
     async def test_integrity_error_exhausted_raises(self):
         session = self._session_with_flush(
@@ -440,3 +473,62 @@ class TestOrgIdCaching:
         assert mock_session.execute.call_count == call_count + 1, (
             f"Expected {call_count + 1} execute calls, got {mock_session.execute.call_count}"
         )
+
+
+class TestDBSessionTimeout:
+    """The _DB_TIMEOUT wait_for wrappers must surface TimeoutError.
+
+    Timeouts are intentionally NOT wrapped in RuntimeError: the DB is a core
+    dependency and a timeout is a real failure, not a degraded-mode fallback.
+    """
+
+    async def test_get_secret_timeout_propagates(self, mock_session):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+        mock_session.execute = AsyncMock(side_effect=TimeoutError())
+
+        with pytest.raises(TimeoutError):
+            await backend.get_secret("some-key")
+
+    async def test_set_secret_timeout_propagates(self, mock_session):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+        mock_session.execute = AsyncMock(side_effect=TimeoutError())
+
+        with pytest.raises(TimeoutError):
+            await backend.set_secret("some-key", "value")
+
+    async def test_delete_secret_timeout_propagates(self, mock_session):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+        mock_session.execute = AsyncMock(side_effect=TimeoutError())
+
+        with pytest.raises(TimeoutError):
+            await backend.delete_secret("some-key")
+
+
+class TestSetSessionResetsCache:
+    async def test_set_session_clears_cached_org_id(self, mock_session):
+        """set_session must drop the cached org id so it is re-read from the new session."""
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+        _set_org_id(mock_session)
+        await backend.set_secret("key1", "val1")
+        assert backend._org_id == _ORG_ID
+
+        new_session = MagicMock()
+        new_session.add = MagicMock()
+        new_session.flush = AsyncMock()
+
+        async def new_execute(stmt, *args, **kwargs):
+            result = MagicMock()
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                result.scalar_one_or_none.return_value = None
+            return result
+
+        new_session.execute = AsyncMock(side_effect=new_execute)
+
+        backend.set_session(new_session)
+        assert backend._session is new_session
+        assert backend._org_id is None, "set_session must reset the cached organisation id"
+
+        await backend.set_secret("key2", "val2")
+        assert backend._org_id == _ORG_ID
