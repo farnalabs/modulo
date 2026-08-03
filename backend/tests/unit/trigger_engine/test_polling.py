@@ -1,5 +1,6 @@
 """Unit tests for polling trigger — evaluate_condition, _fire_polling_trigger, scheduler."""
 
+import asyncio
 import datetime
 import hashlib
 import uuid
@@ -8,12 +9,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 
 from modulo.connectors.base import ConnectorResult
 from modulo.core.trigger_engine.polling import (
     _build_polling_connector,
     _fire_polling_trigger,
     _log_poll_event,
+    _set_rls_org,
     _update_next_fire,
     _update_next_fire_no_last,
     evaluate_condition,
@@ -67,6 +70,17 @@ class TestBuildPollingConnector:
         [
             ("filesystem", {"base_path": "/tmp"}, {}, "FilesystemConnector", None),
             ("github", {}, {"token": "ghp_xxx"}, "GitHubConnector", None),
+            ("gitlab", {}, {"token": "glpat_xxx"}, "GitLabConnector", None),
+            (
+                "gitlab",
+                {"base_url": "https://gitlab.example.com/api/v4"},
+                {"token": "glpat_xxx"},
+                "GitLabConnector",
+                None,
+            ),
+            ("linear", {}, {"api_key": "lin_xxx"}, "LinearConnector", None),
+            ("slack", {}, {"bot_token": "xoxb-xxx"}, "SlackConnector", None),
+            ("jira", {"instance": "https://acme.atlassian.net"}, {"token": "x"}, "JiraConnector", None),
             ("jira", {}, {"token": "x"}, None, "requires 'instance'"),
             ("filesystem", {}, {}, None, "requires 'base_path'"),
             ("unknown", {}, {}, None, "Unsupported connector type"),
@@ -87,8 +101,19 @@ class TestBuildPollingConnector:
             connector = _build_polling_connector(connector_type, config, credentials)
             from modulo.connectors.filesystem import FilesystemConnector
             from modulo.connectors.github import GitHubConnector
+            from modulo.connectors.gitlab import GitLabConnector
+            from modulo.connectors.jira import JiraConnector
+            from modulo.connectors.linear import LinearConnector
+            from modulo.connectors.slack import SlackConnector
 
-            cls = FilesystemConnector if expected_type == "FilesystemConnector" else GitHubConnector
+            cls = {
+                "FilesystemConnector": FilesystemConnector,
+                "GitHubConnector": GitHubConnector,
+                "GitLabConnector": GitLabConnector,
+                "LinearConnector": LinearConnector,
+                "SlackConnector": SlackConnector,
+                "JiraConnector": JiraConnector,
+            }[expected_type]
             assert isinstance(connector, cls)
 
 
@@ -203,19 +228,26 @@ def _setup_session_for_polling(
     connector_instance: MagicMock | None = None,
     active_run_count: int = 0,
     today_cost: Any = 0,
+    *,
+    lock_acquired: bool = True,
+    trigger_missing: bool = False,
 ) -> None:
     """Configure session.execute to handle all DB queries from _fire_polling_trigger.
 
     The function makes calls in this order:
       1. _set_rls_org → text(...)
-      2. select(Trigger).with_for_update()
-      3. _count_active_runs → select(func.count())
-      4. _daily_spend_limit_reached → select(coalesce(sum(Run.total_cost_usd), 0))
-      5. select(ConnectorInstance)
-      6. update(Trigger)  (in _update_next_fire)
+      2. pg_try_advisory_xact_lock (skip gate)
+      3. select(Trigger).with_for_update()
+      4. _count_active_runs → select(func.count())
+      5. _daily_spend_limit_reached → select(coalesce(sum(Run.total_cost_usd), 0))
+      6. select(ConnectorInstance)
+      7. update(Trigger)  (in _update_next_fire)
     """
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = lock_acquired
+
     trigger_result = MagicMock()
-    trigger_result.scalar_one_or_none.return_value = trigger
+    trigger_result.scalar_one_or_none.return_value = None if trigger_missing else trigger
 
     ci_result = MagicMock()
     ci_result.scalar_one_or_none.return_value = connector_instance
@@ -238,6 +270,8 @@ def _setup_session_for_polling(
         stmt_str = str(stmt).lower()
         if "set_config" in stmt_str:
             return rls_result
+        if "pg_try_advisory_xact_lock" in stmt_str:
+            return lock_result
         if "for update" in stmt_str or "from triggers" in stmt_str:
             return trigger_result
         if "connector_instance" in stmt_str:
@@ -579,3 +613,434 @@ class TestPollingLogging:
         expected_hash = hashlib.sha256(f"polling:{trigger.id}:condition_met".encode()).hexdigest()
         assert event.raw_payload_hash == expected_hash
         assert event.raw_payload_hash != hashlib.sha256(b"polling").hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# _fire_polling_trigger — skip paths
+# ---------------------------------------------------------------------------
+
+
+class TestFirePollingTriggerSkips:
+    async def test_lock_not_acquired_returns_trigger_busy(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        """When the advisory xact lock is not acquired, skip with trigger_busy."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, lock_acquired=False)
+
+        with patch("modulo.core.trigger_engine.polling.create_run") as mock_cr:
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="select * from issues",
+                condition_expression=None,
+            )
+
+        assert result == {"status": "skipped", "reason": "trigger_busy"}
+        mock_cr.assert_not_called()
+
+    async def test_trigger_missing_returns_trigger_inactive_or_missing(
+        self,
+        mock_db_components,
+    ) -> None:
+        """A missing trigger row must be skipped, not crash."""
+        session = mock_db_components
+        _setup_session_for_polling(
+            session,
+            _make_trigger(),
+            trigger_missing=True,
+        )
+
+        with patch("modulo.core.trigger_engine.polling.create_run") as mock_cr:
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+        assert result == {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+        mock_cr.assert_not_called()
+
+    async def test_inactive_trigger_returns_trigger_inactive_or_missing(
+        self,
+        mock_db_components,
+    ) -> None:
+        """An inactive trigger must be skipped before running any query."""
+        session = mock_db_components
+        trigger = _make_trigger(active=False, config={"poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger)
+
+        with patch("modulo.core.trigger_engine.polling.create_run") as mock_cr:
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+        assert result == {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+        mock_cr.assert_not_called()
+
+    async def test_already_fired_this_cycle_skips(
+        self,
+        mock_db_components,
+    ) -> None:
+        """A next_fire_at in the future means another worker already fired."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"poll_interval_seconds": 60})
+        trigger.next_fire_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+        _setup_session_for_polling(session, trigger)
+
+        with patch("modulo.core.trigger_engine.polling.create_run") as mock_cr:
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+        assert result == {"status": "skipped", "reason": "already_fired_this_cycle"}
+        mock_cr.assert_not_called()
+
+    async def test_concurrency_limit_reached_skips_with_event(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        """Active runs >= max_concurrent_runs must skip and log a poll event."""
+        session = mock_db_components
+        trigger = _make_trigger(
+            max_concurrent_runs=2,
+            config={"poll_interval_seconds": 60},
+        )
+        _setup_session_for_polling(session, trigger, active_run_count=2)
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log_poll_event") as mock_event,
+        ):
+            mock_event.return_value = MagicMock(id=uuid.uuid4())
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+        assert result == {
+            "status": "skipped",
+            "reason": "concurrency_limit",
+            "active_runs": 2,
+        }
+        mock_cr.assert_not_called()
+        mock_event.assert_called_once()
+        assert mock_event.call_args.kwargs["result"] == "concurrency_limit_reached"
+        assert mock_event.call_args.kwargs["error_detail"] == ("Active runs: 2, limit: 2")
+
+
+# ---------------------------------------------------------------------------
+# _fire_polling_trigger — error paths
+# ---------------------------------------------------------------------------
+
+
+class TestFirePollingTriggerErrorPaths:
+    async def test_connector_init_failed_returns_error(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        """A failure building the connector must return connector_init_failed."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, connector_instance=MagicMock())
+
+        build_mock, _ = mock_connector
+        build_mock.side_effect = ValueError("invalid credentials")
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log_poll_event") as mock_event,
+            patch("modulo.core.trigger_engine.polling._update_next_fire_no_last") as mock_advance,
+        ):
+            mock_event.return_value = MagicMock(id=uuid.uuid4())
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "connector_init_failed"
+        mock_cr.assert_not_called()
+        mock_event.assert_called_once()
+        assert mock_event.call_args.kwargs["result"] == "poll_error"
+        mock_advance.assert_awaited_once()
+
+    async def test_query_timeout_returns_error(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        """A query that exceeds the 60s timeout must be reported as query_timeout."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, connector_instance=MagicMock())
+
+        _, connector = mock_connector
+        connector.query.side_effect = SATimeoutError()
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log_poll_event") as mock_event,
+            patch("modulo.core.trigger_engine.polling._update_next_fire_no_last") as mock_advance,
+        ):
+            mock_event.return_value = MagicMock(id=uuid.uuid4())
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "query_timeout"
+        mock_cr.assert_not_called()
+        mock_event.assert_called_once()
+        assert mock_event.call_args.kwargs["error_detail"] == "Poll query timed out after 60s"
+        mock_advance.assert_awaited_once()
+
+    async def test_query_failed_returns_error(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        """A generic query failure must be reported as query_failed."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, connector_instance=MagicMock())
+
+        _, connector = mock_connector
+        connector.query.side_effect = RuntimeError("upstream 502")
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log_poll_event") as mock_event,
+            patch("modulo.core.trigger_engine.polling._update_next_fire_no_last") as mock_advance,
+        ):
+            mock_event.return_value = MagicMock(id=uuid.uuid4())
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "query_failed"
+        assert "upstream 502" in result["error"]
+        mock_cr.assert_not_called()
+        mock_event.assert_called_once()
+        mock_advance.assert_awaited_once()
+
+    async def test_condition_eval_failed_returns_error(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        """An invalid condition expression must be reported as condition_eval_failed."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, connector_instance=MagicMock())
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log_poll_event") as mock_event,
+            patch(
+                "modulo.core.trigger_engine.polling.evaluate_condition",
+                side_effect=ValueError("Invalid JMESPath expression"),
+            ),
+            patch("modulo.core.trigger_engine.polling._update_next_fire_no_last") as mock_advance,
+        ):
+            mock_event.return_value = MagicMock(id=uuid.uuid4())
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression="[bad",
+            )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "condition_eval_failed"
+        assert "Invalid JMESPath expression" in result["error"]
+        mock_cr.assert_not_called()
+        mock_event.assert_called_once()
+        mock_advance.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "stage",
+        [
+            "connector_init",
+            "query",
+            "condition_eval",
+        ],
+    )
+    async def test_cancelled_error_propagates(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+        stage: str,
+    ) -> None:
+        """asyncio.CancelledError must never be swallowed by error handling."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, connector_instance=MagicMock())
+
+        if stage == "connector_init":
+            build_mock, _ = mock_connector
+            build_mock.side_effect = asyncio.CancelledError()
+        elif stage == "query":
+            _, connector = mock_connector
+            connector.query.side_effect = asyncio.CancelledError()
+        else:
+            condition_patch = patch(
+                "modulo.core.trigger_engine.polling.evaluate_condition",
+                side_effect=asyncio.CancelledError(),
+            )
+            condition_patch.start()
+            try:
+                with pytest.raises(asyncio.CancelledError):
+                    await _fire_polling_trigger(
+                        trigger_id=_TRIGGER_ID,
+                        org_id=_ORG_ID,
+                        pipeline_id=_PIPELINE_ID,
+                        connector_instance_id=_CI_ID,
+                        poll_query="query",
+                        condition_expression=None,
+                    )
+            finally:
+                condition_patch.stop()
+            return
+
+        with pytest.raises(asyncio.CancelledError):
+            await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression=None,
+            )
+
+
+# ---------------------------------------------------------------------------
+# _fire_polling_trigger — no_match and fire paths
+# ---------------------------------------------------------------------------
+
+
+class TestFirePollingTriggerNoMatch:
+    async def test_condition_not_met_returns_no_match(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+    ) -> None:
+        """A false condition must log no_match and advance next_fire without firing."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, connector_instance=MagicMock())
+
+        with (
+            patch("modulo.core.trigger_engine.polling.create_run") as mock_cr,
+            patch("modulo.core.trigger_engine.polling._log_poll_event") as mock_event,
+            patch("modulo.core.trigger_engine.polling._update_next_fire_no_last") as mock_advance,
+        ):
+            mock_event.return_value = MagicMock(id=uuid.uuid4())
+            result = await _fire_polling_trigger(
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                connector_instance_id=_CI_ID,
+                poll_query="query",
+                condition_expression="[?status == 'open']",
+            )
+
+        assert result == {"status": "no_match"}
+        mock_cr.assert_not_called()
+        mock_event.assert_called_once()
+        assert mock_event.call_args.kwargs["result"] == "no_match"
+        mock_advance.assert_awaited_once()
+
+    async def test_missing_snapshot_id_falls_back_to_zero_uuid(
+        self,
+        mock_db_components,
+        mock_secrets_backend,
+        mock_connector,
+        mock_create_run,
+    ) -> None:
+        """A trigger with no snapshot_id in config must fire with the zero UUID."""
+        session = mock_db_components
+        trigger = _make_trigger(config={"poll_interval_seconds": 60})
+        _setup_session_for_polling(session, trigger, connector_instance=MagicMock())
+
+        result = await _fire_polling_trigger(
+            trigger_id=_TRIGGER_ID,
+            org_id=_ORG_ID,
+            pipeline_id=_PIPELINE_ID,
+            connector_instance_id=_CI_ID,
+            poll_query="query",
+            condition_expression=None,
+        )
+
+        assert result["status"] == "fired"
+        create_run_fn, _ = mock_create_run
+        create_run_fn.assert_awaited_once()
+        assert create_run_fn.call_args.kwargs["snapshot_id"] == uuid.UUID(int=0)
+
+
+# ---------------------------------------------------------------------------
+# _set_rls_org — non-Postgres dialect
+# ---------------------------------------------------------------------------
+
+
+class TestSetRlsOrg:
+    async def test_sqlite_dialect_sets_session_info(self, mock_db_components) -> None:
+        """On non-Postgres backends RLS context is stored in session.info."""
+        session = mock_db_components
+        session.info = {}
+        bind_mock = MagicMock()
+        bind_mock.dialect.name = "sqlite"
+        session.get_bind = MagicMock(return_value=bind_mock)
+
+        await _set_rls_org(session, _ORG_ID)
+
+        assert session.info["organisation_id"] == _ORG_ID
