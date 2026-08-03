@@ -1125,9 +1125,7 @@ async def test_write_issue_assign_by_name(connector):
 @respx.mock
 async def test_write_issue_assign_unassign_flag(connector):
     respx.post(_GRAPHQL).mock(return_value=_UPDATE_ISSUE_RESPONSE)
-    result = await connector.write(
-        ConnectorPayload(resource="issue_assign", data={"id": "issue-1", "unassign": True})
-    )
+    result = await connector.write(ConnectorPayload(resource="issue_assign", data={"id": "issue-1", "unassign": True}))
     assert result["id"] == "issue-1"
     sent = respx.calls.last.request
     body = json.loads(sent.content)
