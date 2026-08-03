@@ -1705,11 +1705,11 @@ async function triggerRun() {
       runError.value = `Failed to save graph: ${saveGraphError.value}`
       return
     }
+    const trimmedPrompt = runPrompt.value.trim()
     const { data } = await withTimeout((signal) => api.POST('/api/v1/runs', {
       body: {
         pipeline_id: pipelineId,
-        prompt: runPrompt.value.trim() || undefined,
-        payload: {},
+        input_payload: trimmedPrompt ? { prompt: trimmedPrompt } : {},
       },
       signal,
     }))
