@@ -70,7 +70,7 @@ def client() -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[MagicMock, None]:
         yield mock_session
 
-    app.dependency_overrides[get_settings] = make_settings
+    app.dependency_overrides[get_settings] = lambda: make_settings()
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=ORG_ID)

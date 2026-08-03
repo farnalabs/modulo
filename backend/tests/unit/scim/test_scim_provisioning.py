@@ -71,7 +71,7 @@ def client() -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[MagicMock, None]:
         yield mock_session
 
-    app.dependency_overrides[get_settings] = make_settings
+    app.dependency_overrides[get_settings] = lambda: make_settings()
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=ORG_ID)
@@ -81,7 +81,7 @@ def client() -> Generator[TestClient, None, None]:
 
 @pytest.fixture()
 def unauth_client() -> Generator[TestClient, None, None]:
-    app.dependency_overrides[get_settings] = make_settings
+    app.dependency_overrides[get_settings] = lambda: make_settings()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -138,7 +138,7 @@ class TestAuthEdgeCases:
         assert resp.status_code == 501
 
     def test_invalid_token_returns_401(self) -> None:
-        app.dependency_overrides[get_settings] = make_settings
+        app.dependency_overrides[get_settings] = lambda: make_settings()
         resp = TestClient(app).get(
             "/scim/v2/ServiceProviderConfig",
             headers={"Authorization": "Bearer wrong-token"},
@@ -176,7 +176,7 @@ class TestAuthEdgeCases:
         async def override_session() -> AsyncGenerator[MagicMock, None]:
             yield mock_session
 
-        app.dependency_overrides[get_settings] = make_settings
+        app.dependency_overrides[get_settings] = lambda: make_settings()
         app.dependency_overrides[get_db_session] = override_session
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         resp = TestClient(app).get(
