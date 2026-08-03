@@ -154,6 +154,7 @@ jobs:
         run: |
           merged_prs=""
           conflict_prs=""
+          noop_prs=""
 
           while IFS= read -r pr; do
             NUM=$(echo "$pr" | jq -r '.number')
@@ -233,7 +234,7 @@ jobs:
         run: |
           for NUM in $(cat /tmp/noop_prs.txt 2>/dev/null); do
             echo "  Closing duplicate PR #$NUM (changes already on main)..."
-            gh pr close "$NUM" --comment "Closing as duplicate: this PR's changes are already merged into main via another PR. Squash-merging it into the merge queue produced no commit, so it has nothing to merge." 2>/dev/null || true
+            gh pr close "$NUM" --comment "Auto-closed by the merge queue as a duplicate: this PR's changes are already on main (merged via another PR), so squash-merging it into the queue produced no commit. If this was a mistake, reopen the PR and re-request a review." 2>/dev/null || true
           done
 
       - name: Notify fixer of conflicts
