@@ -24,9 +24,12 @@ def _iter_py_files(root: Path):
         yield path
 
 
+# Only match a call to the *identifier* `text` — `(?<![A-Za-z0-9_])` prevents
+# matching the `text` substring inside `_text(`/`mytext(` aliases. Both quote
+# styles are covered; the f-string body must contain a placeholder.
 RAWSQL_CALLS = re.compile(
-    r'text\(\s*[fF]"'
-    r'[^"]*\{[^}]+}[^"]*"',
+    r'(?<![A-Za-z0-9_])text\(\s*[fF]["\']'
+    r'[^"\']*\{[^}]+}[^"\']*["\']',
 )
 
 
