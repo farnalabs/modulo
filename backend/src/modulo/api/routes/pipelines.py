@@ -78,7 +78,6 @@ from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
-_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 
@@ -519,7 +518,7 @@ def _graph_response(
             validation_issues=validation_issues or [],
         )
     except ValidationError as e:
-        _log.error("Pipeline graph data validation failed: %s", e.errors())
+        logger.error("Pipeline graph data validation failed: %s", e.errors())
         detail = "Pipeline graph contains invalid data. This may be caused by a schema migration."
         detail += f" Validation errors: {e.errors()}"
         raise HTTPException(
@@ -1193,10 +1192,15 @@ async def clone_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("pipeline.create"),
 ) -> PipelineResponse:
-    _log.info("Copy request: pipeline=%s org=%s user=%s", pipeline_id, principal.organisation_id, principal.account_id)
+    logger.info(
+        "Copy request: pipeline=%s org=%s user=%s",
+        pipeline_id,
+        principal.organisation_id,
+        principal.account_id,
+    )
 
     if principal.org_role == "viewer":
-        _log.warning(
+        logger.warning(
             "Copy denied: user %s has role '%s' (requires admin)",
             principal.account_id,
             principal.org_role,
@@ -1212,10 +1216,10 @@ async def clone_pipeline_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Step 1 -- validate source exists
-            _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
+            logger.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
             source = await get_pipeline(session, pipeline_id)
             if source is None:
-                _log.warning("Copy aborted: source pipeline %s not found", pipeline_id)
+                logger.warning("Copy aborted: source pipeline %s not found", pipeline_id)
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
@@ -1223,9 +1227,13 @@ async def clone_pipeline_endpoint(
 
             # Step 2 -- validate name availability
             target_name = req.name or f"Copy of {source.name}"
-            _log.info("Step 2/4: checking name '%s' is available", target_name)
+            logger.info("Step 2/4: checking name '%s' is available", target_name)
             if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
-                _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
+                logger.warning(
+                    "Copy aborted: name '%s' already exists in org %s",
+                    target_name,
+                    principal.organisation_id,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=(
@@ -1234,7 +1242,7 @@ async def clone_pipeline_endpoint(
                 )
 
             # Step 3 -- execute copy
-            _log.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
+            logger.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
             cloned = await clone_pipeline(
                 session,
                 org_id=principal.organisation_id,
@@ -1244,7 +1252,7 @@ async def clone_pipeline_endpoint(
                 new_name=req.name,
             )
             if cloned is None:
-                _log.warning("Step 3/4 failed: source pipeline %s disappeared during copy", pipeline_id)
+                logger.warning("Step 3/4 failed: source pipeline %s disappeared during copy", pipeline_id)
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=(
@@ -1253,7 +1261,7 @@ async def clone_pipeline_endpoint(
                 )
 
             # Step 4 -- audit event
-            _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
+            logger.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
             await append_audit_event(
                 session,
                 org_id=principal.organisation_id,
@@ -1274,7 +1282,7 @@ async def clone_pipeline_endpoint(
             detail="This feature is not available. Run database migrations to enable it.",
         ) from None
 
-    _log.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, target_name)
+    logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, target_name)
     return PipelineResponse.model_validate(cloned)
 
 

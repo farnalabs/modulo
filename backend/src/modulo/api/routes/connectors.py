@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
@@ -186,7 +186,12 @@ async def list_connectors_endpoint(
 
 
 @handle_db_errors("connectors.create_connector_endpoint")
-@router.post("", response_model=ConnectorResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ConnectorResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def create_connector_endpoint(
     req: ConnectorCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -306,7 +311,7 @@ async def get_connector_endpoint(
 
 
 @handle_db_errors("connectors.update_connector_endpoint")
-@router.patch("/{connector_id}", response_model=ConnectorResponse)
+@router.patch("/{connector_id}", response_model=ConnectorResponse, dependencies=[Depends(deny_break_glass_mint)])
 async def update_connector_endpoint(
     connector_id: uuid.UUID,
     req: ConnectorUpdate,
@@ -379,7 +384,7 @@ async def update_connector_endpoint(
 
 
 @handle_db_errors("connectors.delete_connector_endpoint")
-@router.delete("/{connector_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{connector_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
 async def delete_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

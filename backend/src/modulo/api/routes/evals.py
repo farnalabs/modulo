@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
@@ -116,7 +116,12 @@ class EvalDefinitionListResponse(BaseModel):
 
 
 @handle_db_errors("evals.create_eval_definition")
-@router.post("/evals", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/evals",
+    response_model=dict[str, Any],
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def create_eval_definition(
     req: CreateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -415,7 +420,7 @@ async def get_eval_definition(
 
 
 @handle_db_errors("evals.update_eval_definition")
-@router.put("/evals/{eval_id}", response_model=dict[str, Any])
+@router.put("/evals/{eval_id}", response_model=dict[str, Any], dependencies=[Depends(deny_break_glass_mint)])
 async def update_eval_definition(
     eval_id: uuid.UUID,
     req: UpdateEvalRequest,
@@ -476,7 +481,11 @@ async def update_eval_definition(
 
 
 @handle_db_errors("evals.delete_eval_definition")
-@router.delete("/evals/{eval_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/evals/{eval_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def delete_eval_definition(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -828,7 +837,11 @@ async def compare_evals(
 
 
 @handle_db_errors("evals.create_eval_from_run")
-@router.post("/evals/from-run", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/evals/from-run",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 async def create_eval_from_run(
     req: CreateEvalFromRunRequest,
     session: AsyncSession = Depends(get_db_session),
