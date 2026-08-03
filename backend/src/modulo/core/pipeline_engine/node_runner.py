@@ -88,7 +88,9 @@ _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 # uptime, so (elapsed_seconds / 3600) x rate is a faithful cost estimate.
 # Default reflects the dashboard-confirmed opencode template = 2 vCPU / 2 GiB
 # at E2B per-second rates (~$0.133/hr). Operators can override via
-# E2B_SANDBOX_USD_PER_HOUR.
+# E2B_SANDBOX_USD_PER_HOUR. NOTE: this fallback only applies when settings
+# cannot be imported; keep it in sync with settings.py's
+# `e2b_sandbox_usd_per_hour` default.
 _E2B_SANDBOX_USD_PER_HOUR = 0.13
 try:
     from modulo.settings import get_settings
