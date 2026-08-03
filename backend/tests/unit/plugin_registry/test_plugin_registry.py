@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.metadata as importlib_metadata
+import types
 from typing import Any
 from unittest.mock import patch
 
@@ -101,6 +102,22 @@ def test_register_and_build_connector():
     assert isinstance(connector, _StubPluginConnector)
 
 
+def test_build_connector_forwards_config_and_creds():
+    received: dict[str, Any] = {}
+
+    def _recording_builder(config: dict[str, Any], creds: dict[str, Any]) -> ConnectorBase:
+        received["config"] = config
+        received["creds"] = creds
+        return _StubPluginConnector()
+
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    registry.register_connector_type("t", _recording_builder, manifest)
+
+    registry.build_connector("t", {"url": "https://x"}, {"token": "secret"})
+    assert received == {"config": {"url": "https://x"}, "creds": {"token": "secret"}}
+
+
 def test_register_and_build_model_backend():
     registry = PluginRegistry()
     manifest = PluginManifest(
@@ -117,6 +134,28 @@ def test_register_and_build_model_backend():
     backend = registry.build_model_backend("stub_provider", "stub-model", "test-key")
     assert isinstance(backend, _StubPluginBackend)
     assert backend.backend_id == "stub/stub-model"
+
+
+def test_build_model_backend_forwards_default_params():
+    received: dict[str, Any] = {}
+
+    def _recording_builder(api_key: str, model_id: str, **kwargs: Any) -> ModelBackendBase:
+        received["api_key"] = api_key
+        received["model_id"] = model_id
+        received.update(kwargs)
+        return _StubPluginBackend(api_key=api_key, model_id=model_id)
+
+    registry = PluginRegistry()
+    manifest = PluginManifest(PLUGIN_ID="p", display_name="P", description="", version="1")
+    registry.register_model_backend("p", _recording_builder, manifest)
+
+    registry.build_model_backend("p", "stub-model", "test-key", temperature=0.2, top_p=0.9)
+    assert received == {
+        "api_key": "test-key",
+        "model_id": "stub-model",
+        "temperature": 0.2,
+        "top_p": 0.9,
+    }
 
 
 def test_build_unknown_connector_raises():
@@ -467,20 +506,18 @@ def _make_mock_entry_point(
     ep_name: str,
     dist_name: str = "pkg-demo",
     dist_version: str = "1.0.0",
-    load_result: object = None,
+    load_result: object | None = None,
     load_side_effect: type[Exception] | None = None,
+    metadata: dict[str, str] | None = None,
 ) -> object:
     """Build a minimal mock of importlib.metadata.EntryPoint."""
-    import types
-
-    dist = types.SimpleNamespace(
-        name=dist_name,
-        metadata={
+    if metadata is None:
+        metadata = {
             "Name": dist_name,
             "Summary": "A demo plugin",
             "Version": dist_version,
-        },
-    )
+        }
+    dist = types.SimpleNamespace(name=dist_name, metadata=metadata)
     loader = types.SimpleNamespace()
     if load_side_effect is not None:
 
@@ -494,23 +531,8 @@ def _make_mock_entry_point(
     return types.SimpleNamespace(name=ep_name, dist=dist, load=loader.load)
 
 
-class _DiscoveryStubConnector(ConnectorBase):
-    @property
-    def connector_type(self) -> ConnectorType:
-        return ConnectorType.CUSTOM
-
-    async def health_check(self) -> HealthResult:
-        return HealthResult(ok=True)
-
-    async def query(self, q: ConnectorQuery) -> ConnectorResult:
-        return ConnectorResult(records=[{"d": "c"}])
-
-    async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        return {"ok": True}
-
-
 def _discovery_stub_builder(config: dict, creds: dict) -> ConnectorBase:
-    return _DiscoveryStubConnector()
+    return _StubPluginConnector()
 
 
 def test_discover_plugins_no_plugins():
@@ -519,6 +541,85 @@ def test_discover_plugins_no_plugins():
         discovered = registry.discover_plugins()
     assert discovered == []
     assert registry.list_plugins() == {}
+
+
+def test_load_entry_point_uses_metadata_defaults():
+    """Missing dist metadata keys fall back to plugin_id / '' / '0.0.0'."""
+    registry = PluginRegistry()
+    bare_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "c1",
+        dist_name="pkg-bare",
+        metadata={},
+        load_result=_discovery_stub_builder,
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[bare_ep], []],
+    ):
+        discovered = registry.discover_plugins()
+
+    assert len(discovered) == 1
+    assert discovered[0].PLUGIN_ID == "pkg-bare"
+    assert discovered[0].display_name == "pkg-bare"
+    assert discovered[0].description == ""
+    assert discovered[0].version == "0.0.0"
+
+
+def test_discover_plugins_returns_deep_copies():
+    """Mutating the returned manifests must not corrupt the registry state."""
+    registry = PluginRegistry()
+    mock_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "c1",
+        dist_name="pkg-copy",
+        load_result=_discovery_stub_builder,
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[mock_ep], []],
+    ):
+        discovered = registry.discover_plugins()
+
+    discovered[0].display_name = "MUTATED"
+    discovered[0].capabilities.clear()
+
+    stored = registry.list_plugins()["pkg-copy"]
+    assert stored.display_name == "pkg-copy"
+    assert stored.capabilities == {"connector_type"}
+
+
+def test_entry_point_error_cleared_on_successful_reload():
+    """A prior load failure for a plugin_id is forgotten once a later load succeeds."""
+    registry = PluginRegistry()
+    fail_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "c1",
+        dist_name="pkg-retry",
+        load_side_effect=ImportError,
+    )
+    ok_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "c1",
+        dist_name="pkg-retry",
+        load_result=_discovery_stub_builder,
+    )
+    with (
+        patch(
+            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            side_effect=[[fail_ep], [], [ok_ep], []],
+        ),
+        patch("modulo.core.plugin_registry.importlib.metadata.metadata", return_value=object()),
+    ):
+        registry.discover_plugins()
+        assert "pkg-retry" in registry.entry_point_errors
+        assert registry.health_check("pkg-retry")["pkg-retry"].ok is False
+
+        registry.discover_plugins()
+
+    assert registry.entry_point_errors == {}
+    assert registry.health_check("pkg-retry")["pkg-retry"].ok is True
+    assert registry.has_connector_type("c1")
 
 
 def test_discover_plugins_propagates_cancelled_error():
@@ -579,7 +680,7 @@ def test_discover_plugins_connector_entry_point():
     assert "connector_type" in discovered[0].capabilities
     assert registry.has_connector_type("my_demo_connector")
     connector = registry.build_connector("my_demo_connector", {}, {})
-    assert isinstance(connector, _DiscoveryStubConnector)
+    assert isinstance(connector, _StubPluginConnector)
 
 
 def test_discover_plugins_backend_entry_point():
@@ -662,9 +763,10 @@ def test_discover_plugins_entry_point_load_failure():
         discovered = registry.discover_plugins()
     assert discovered == []
 
-    # The entry point failed to load → no manifest stored → known as "Unknown"
+    # The entry point failed to load → the cached error is definitive.
     health = registry.health_check("pkg-broken")
     assert health["pkg-broken"].ok is False
+    assert health["pkg-broken"].detail == "Failed to load entry point failing_con"
 
 
 # ---------------------------------------------------------------------------
