@@ -1,7 +1,6 @@
 """Unit tests for the get_org_config / get_available_features / get_integration_status /
 search_documentation / list_housekeeping / perform_housekeeping MCP tools."""
 
-import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,51 +18,7 @@ from modulo.core.documentation_indexer import DocEntry
 from modulo.core.feature_flags import FeatureFlag
 from modulo.core.housekeeping import Candidate, CategoryResult
 from modulo.db.models.secret import Secret
-
-_PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-_PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
-_API_KEY = "mk_testprefix_testsecretkey1234567890abc"
-
-
-def _make_session_context(session: AsyncMock) -> AsyncMock:
-    cm = AsyncMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return cm
-
-
-class _AuthContext:
-    """Set/teardown the MCP ContextVars so tool handlers reach the DB layer."""
-
-    def setup_method(self) -> None:
-        from modulo.api.mcp_server import (
-            _ctx_auth_token,
-            _ctx_auth_type,
-            _ctx_org_id,
-            _ctx_role,
-            _ctx_user_id,
-        )
-
-        _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
-        _ctx_role.set("operator")
-        _ctx_auth_token.set(_API_KEY)
-        _ctx_auth_type.set("api_key")
-        _ctx_user_id.set(_PLACEHOLDER_USER_ID)
-
-    def teardown_method(self) -> None:
-        from modulo.api.mcp_server import (
-            _ctx_auth_token,
-            _ctx_auth_type,
-            _ctx_org_id,
-            _ctx_role,
-            _ctx_user_id,
-        )
-
-        _ctx_org_id.set(None)
-        _ctx_role.set(None)
-        _ctx_auth_token.set(None)
-        _ctx_auth_type.set(None)
-        _ctx_user_id.set(None)
+from tests.unit.mcp.helpers import AuthContext, make_session_context
 
 
 def _make_config(*, key: str, value: object) -> MagicMock:
@@ -88,7 +43,7 @@ def _make_housekeeping_session() -> AsyncMock:
 # ---------------------------------------------------------------------------
 
 
-class TestGetOrgConfigErrors(_AuthContext):
+class TestGetOrgConfigErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await get_org_config()
@@ -101,7 +56,7 @@ class TestGetOrgConfigErrors(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await get_org_config(section="bogus")
 
@@ -117,14 +72,14 @@ class TestGetOrgConfigErrors(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_list_config.side_effect = ProgrammingError("SELECT 1", {}, Exception("no table"))
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await get_org_config()
 
         assert result["error"] == "migration_required"
 
 
-class TestGetOrgConfigSuccess(_AuthContext):
+class TestGetOrgConfigSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.system_config.list_config")
@@ -138,7 +93,7 @@ class TestGetOrgConfigSuccess(_AuthContext):
             _make_config(key="default_plan", value="team"),
             _make_config(key="feature_flags:parallel_branches", value={"enabled": True}),
         ]
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await get_org_config()
 
@@ -160,7 +115,7 @@ class TestGetOrgConfigSuccess(_AuthContext):
             _make_config(key="fernet_key", value="vK-xU7GqHLflg"),
             _make_config(key="app_name", value="modulo"),
         ]
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await get_org_config()
 
@@ -181,7 +136,7 @@ class TestGetOrgConfigSuccess(_AuthContext):
             _make_config(key="remy_config:enabled", value="true"),
             _make_config(key="default_plan", value="team"),
         ]
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await get_org_config(section="remy")
 
@@ -198,7 +153,7 @@ class TestGetOrgConfigSuccess(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await get_org_config()
 
@@ -211,7 +166,7 @@ class TestGetOrgConfigSuccess(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
-class TestGetAvailableFeaturesErrors(_AuthContext):
+class TestGetAvailableFeaturesErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await get_available_features()
@@ -232,14 +187,14 @@ class TestGetAvailableFeaturesErrors(_AuthContext):
     ) -> None:
         mock_get_settings.return_value = MagicMock()
         mock_resolve.side_effect = ProgrammingError("SELECT 1", {}, Exception("no table"))
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await get_available_features()
 
         assert result["error"] == "migration_required"
 
 
-class TestGetAvailableFeaturesSuccess(_AuthContext):
+class TestGetAvailableFeaturesSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.api.mcp_server.get_settings")
@@ -262,7 +217,7 @@ class TestGetAvailableFeaturesSuccess(_AuthContext):
             FeatureFlag(name="sso", description="SSO", tier="team", currently_active=False),
         ]
         mock_resolve.return_value = plan_ctx
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await get_available_features()
 
@@ -278,7 +233,7 @@ class TestGetAvailableFeaturesSuccess(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
-class TestGetIntegrationStatusErrors(_AuthContext):
+class TestGetIntegrationStatusErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await get_integration_status()
@@ -293,14 +248,14 @@ class TestGetIntegrationStatusErrors(_AuthContext):
     ) -> None:
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(side_effect=ProgrammingError("SELECT 1", {}, Exception("no table")))
-        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_session.return_value = make_session_context(mock_sesh)
 
         result = await get_integration_status()
 
         assert result["error"] == "migration_required"
 
 
-class TestGetIntegrationStatusSuccess(_AuthContext):
+class TestGetIntegrationStatusSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_returns_status_structure(
@@ -333,7 +288,7 @@ class TestGetIntegrationStatusSuccess(_AuthContext):
 
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(side_effect=[connector_result, backend_result, count_result])
-        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_session.return_value = make_session_context(mock_sesh)
 
         result = await get_integration_status()
 
@@ -366,7 +321,7 @@ class TestGetIntegrationStatusSuccess(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
-class TestSearchDocumentationErrors(_AuthContext):
+class TestSearchDocumentationErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await search_documentation(query="pipeline")
@@ -388,7 +343,7 @@ class TestSearchDocumentationErrors(_AuthContext):
         assert result["error"] == "internal_error"
 
 
-class TestSearchDocumentationSuccess(_AuthContext):
+class TestSearchDocumentationSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._get_doc_index")
     async def test_returns_formatted_results(
@@ -434,7 +389,7 @@ class TestSearchDocumentationSuccess(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
-class TestListHousekeepingErrors(_AuthContext):
+class TestListHousekeepingErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await list_housekeeping()
@@ -449,7 +404,7 @@ class TestListHousekeepingErrors(_AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -467,14 +422,14 @@ class TestListHousekeepingErrors(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_scan.side_effect = ProgrammingError("SELECT 1", {}, Exception("no table"))
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await list_housekeeping()
 
         assert result["error"] == "migration_required"
 
 
-class TestListHousekeepingSuccess(_AuthContext):
+class TestListHousekeepingSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.core.housekeeping.scan_all")
@@ -492,7 +447,7 @@ class TestListHousekeepingSuccess(_AuthContext):
             entity_type="secret",
         )
         mock_scan.return_value = [CategoryResult("orphan_secrets", [candidate])]
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await list_housekeeping(limit=100)
 
@@ -510,7 +465,7 @@ class TestListHousekeepingSuccess(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
-class TestPerformHousekeepingErrors(_AuthContext):
+class TestPerformHousekeepingErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await perform_housekeeping(items=[{"id": "x", "entity_type": "secret"}])
@@ -525,7 +480,7 @@ class TestPerformHousekeepingErrors(_AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -540,7 +495,7 @@ class TestPerformHousekeepingErrors(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await perform_housekeeping(items=[{"id": "abc123"}])
 
@@ -556,7 +511,7 @@ class TestPerformHousekeepingErrors(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await perform_housekeeping(items=[{"id": "abc123", "entity_type": "bogus_type"}])
 
@@ -564,7 +519,7 @@ class TestPerformHousekeepingErrors(_AuthContext):
         assert result["errors"] == [{"entity_type": "bogus_type", "error": "Unknown entity type: bogus_type"}]
 
 
-class TestPerformHousekeepingSuccess(_AuthContext):
+class TestPerformHousekeepingSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
@@ -577,7 +532,7 @@ class TestPerformHousekeepingSuccess(_AuthContext):
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = MagicMock()
         mock_sesh.execute = AsyncMock(return_value=mock_result)
-        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_session.return_value = make_session_context(mock_sesh)
 
         result = await perform_housekeeping(items=[{"id": "abc123", "entity_type": "secret"}])
 
@@ -597,7 +552,7 @@ class TestPerformHousekeepingSuccess(_AuthContext):
         mock_sesh.execute = AsyncMock(
             side_effect=IntegrityError("DELETE 1", {}, Exception("foreign key constraint violation"))
         )
-        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_session.return_value = make_session_context(mock_sesh)
 
         result = await perform_housekeeping(items=[{"id": "abc123", "entity_type": "secret"}])
 
@@ -620,7 +575,7 @@ class TestPerformHousekeepingSuccess(_AuthContext):
     ) -> None:
         mock_sesh = _make_housekeeping_session()
         mock_sesh.execute = AsyncMock(side_effect=ProgrammingError("SELECT 1", {}, Exception("no table")))
-        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_session.return_value = make_session_context(mock_sesh)
 
         result = await perform_housekeeping(items=[{"id": "abc123", "entity_type": "secret"}])
 

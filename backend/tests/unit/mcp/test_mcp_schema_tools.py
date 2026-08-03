@@ -9,59 +9,14 @@ from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.mcp_server import create_agent, create_model_backend, infer_schema, list_schemas, validate_payload
 from modulo.db.crud.base import PageResult
-
-_PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-_PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
-_API_KEY = "mk_testprefix_testsecretkey1234567890abc"
-_FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
-
-
-def _make_session_context(session: AsyncMock) -> AsyncMock:
-    cm = AsyncMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return cm
+from tests.unit.mcp.helpers import FERNET_KEY, ORG_ID, USER_ID, AuthContext, make_session_context
 
 
 def _make_settings(*, dev_mode: bool = True) -> MagicMock:
     settings = MagicMock()
-    settings.fernet_key = _FERNET_KEY
+    settings.fernet_key = FERNET_KEY
     settings.modulo_dev_mode = dev_mode
     return settings
-
-
-class _AuthContext:
-    """Set/teardown the MCP ContextVars so tool handlers reach the DB layer."""
-
-    def setup_method(self) -> None:
-        from modulo.api.mcp_server import (
-            _ctx_auth_token,
-            _ctx_auth_type,
-            _ctx_org_id,
-            _ctx_role,
-            _ctx_user_id,
-        )
-
-        _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
-        _ctx_role.set("operator")
-        _ctx_auth_token.set(_API_KEY)
-        _ctx_auth_type.set("api_key")
-        _ctx_user_id.set(_PLACEHOLDER_USER_ID)
-
-    def teardown_method(self) -> None:
-        from modulo.api.mcp_server import (
-            _ctx_auth_token,
-            _ctx_auth_type,
-            _ctx_org_id,
-            _ctx_role,
-            _ctx_user_id,
-        )
-
-        _ctx_org_id.set(None)
-        _ctx_role.set(None)
-        _ctx_auth_token.set(None)
-        _ctx_auth_type.set(None)
-        _ctx_user_id.set(None)
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +24,7 @@ class _AuthContext:
 # ---------------------------------------------------------------------------
 
 
-class TestCreateAgentErrors(_AuthContext):
+class TestCreateAgentErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await create_agent(name="qa", prompt_template="Review PRs")
@@ -84,7 +39,7 @@ class TestCreateAgentErrors(_AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -99,7 +54,7 @@ class TestCreateAgentErrors(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await create_agent(
             name="qa",
@@ -110,7 +65,7 @@ class TestCreateAgentErrors(_AuthContext):
         assert result["error"] == "internal_error"
 
 
-class TestCreateAgentSuccess(_AuthContext):
+class TestCreateAgentSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.agent.create_agent")
@@ -128,7 +83,7 @@ class TestCreateAgentSuccess(_AuthContext):
         agent.is_executable = True
         agent.created_at = created
         mock_create.return_value = agent
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await create_agent(
             name="qa-reviewer",
@@ -145,8 +100,8 @@ class TestCreateAgentSuccess(_AuthContext):
 
         mock_create.assert_awaited_once()
         call_kwargs = mock_create.call_args.kwargs
-        assert call_kwargs["org_id"] == _PLACEHOLDER_ORG_ID
-        assert call_kwargs["account_id"] == _PLACEHOLDER_USER_ID
+        assert call_kwargs["org_id"] == ORG_ID
+        assert call_kwargs["account_id"] == USER_ID
         assert call_kwargs["prompt_template"] == "Review PRs"
 
 
@@ -155,7 +110,7 @@ class TestCreateAgentSuccess(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
-class TestCreateModelBackendErrors(_AuthContext):
+class TestCreateModelBackendErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await create_model_backend(name="openai", display_name="OpenAI", provider="openai", model_id="gpt-4o")
@@ -170,7 +125,7 @@ class TestCreateModelBackendErrors(_AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -181,7 +136,7 @@ class TestCreateModelBackendErrors(_AuthContext):
         assert result["error"] == "insufficient_scope"
 
 
-class TestCreateModelBackendSuccess(_AuthContext):
+class TestCreateModelBackendSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.core.mcp_setup_handoff.create_handoff")
@@ -206,7 +161,7 @@ class TestCreateModelBackendSuccess(_AuthContext):
             "expires_at": "2026-01-01T12:15:00+00:00",
             "expires_in_minutes": 15,
         }
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await create_model_backend(
             name="openai-prod",
@@ -237,7 +192,7 @@ class TestCreateModelBackendSuccess(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
-class TestInferSchemaErrors(_AuthContext):
+class TestInferSchemaErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await infer_schema(input_sample={"name": "x"})
@@ -252,7 +207,7 @@ class TestInferSchemaErrors(_AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -270,7 +225,7 @@ class TestInferSchemaErrors(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_get_settings.return_value = _make_settings(dev_mode=False)
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await infer_schema(input_sample={"name": "x"})
 
@@ -290,7 +245,7 @@ class TestInferSchemaErrors(_AuthContext):
     ) -> None:
         mock_get_settings.return_value = _make_settings(dev_mode=True)
         mock_list_backends.return_value = PageResult(items=[], total=0, page=1, page_size=1)
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await infer_schema(input_sample={"name": "x"})
 
@@ -329,14 +284,14 @@ class TestInferSchemaErrors(_AuthContext):
         mock_hub_cls.return_value.__aenter__ = AsyncMock(return_value=hub)
         mock_hub_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await infer_schema(input_sample={"name": "x"})
 
         assert result["error"] == "inference_failed"
 
 
-class TestInferSchemaSuccess(_AuthContext):
+class TestInferSchemaSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.settings.get_settings")
@@ -369,7 +324,7 @@ class TestInferSchemaSuccess(_AuthContext):
         mock_hub_cls.return_value.__aenter__ = AsyncMock(return_value=hub)
         mock_hub_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await infer_schema(input_sample={"name": "x"})
 
@@ -392,7 +347,7 @@ def _make_schema(*, name: str, abstract_name: str) -> MagicMock:
     return sc
 
 
-class TestListSchemasErrors(_AuthContext):
+class TestListSchemasErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await list_schemas()
@@ -408,14 +363,14 @@ class TestListSchemasErrors(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_list.side_effect = ProgrammingError("SELECT 1", {}, Exception("no table"))
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await list_schemas()
 
         assert result["error"] == "migration_required"
 
 
-class TestListSchemasSuccess(_AuthContext):
+class TestListSchemasSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.api.mcp_server.db_list_schemas")
@@ -434,7 +389,7 @@ class TestListSchemasSuccess(_AuthContext):
             next_cursor="cursor-abc",
             has_more=True,
         )
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await list_schemas(cursor="cursor-abc", limit=20)
 
@@ -463,7 +418,7 @@ def _make_schema_version(definition: dict) -> MagicMock:
     return sv
 
 
-class TestValidatePayloadErrors(_AuthContext):
+class TestValidatePayloadErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await validate_payload(schema_id=str(uuid.uuid4()), payload={})
@@ -476,7 +431,7 @@ class TestValidatePayloadErrors(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await validate_payload(schema_id="not-a-uuid", payload={})
 
@@ -492,7 +447,7 @@ class TestValidatePayloadErrors(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(AsyncMock())
 
         result = await validate_payload(schema_id=str(uuid.uuid4()), payload={})
 
@@ -515,14 +470,14 @@ class TestValidatePayloadErrors(_AuthContext):
 
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(return_value=result_mock)
-        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_session.return_value = make_session_context(mock_sesh)
 
         result = await validate_payload(schema_id=str(uuid.uuid4()), payload={})
 
         assert result["error"] == "no_version"
 
 
-class TestValidatePayloadSuccess(_AuthContext):
+class TestValidatePayloadSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.api.mcp_server.get_schema")
@@ -541,7 +496,7 @@ class TestValidatePayloadSuccess(_AuthContext):
 
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(return_value=result_mock)
-        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_session.return_value = make_session_context(mock_sesh)
 
         result = await validate_payload(schema_id=str(uuid.uuid4()), payload={"name": "alice"})
 
@@ -565,7 +520,7 @@ class TestValidatePayloadSuccess(_AuthContext):
 
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(return_value=result_mock)
-        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_session.return_value = make_session_context(mock_sesh)
 
         result = await validate_payload(schema_id=str(uuid.uuid4()), payload={"name": 123})
 
@@ -592,7 +547,7 @@ class TestValidatePayloadSuccess(_AuthContext):
 
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(return_value=result_mock)
-        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_session.return_value = make_session_context(mock_sesh)
 
         result = await validate_payload(schema_id=str(uuid.uuid4()), payload={})
 
