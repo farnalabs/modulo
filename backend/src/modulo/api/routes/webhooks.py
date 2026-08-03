@@ -22,8 +22,12 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import _get_engine, get_db_session, require_permission
-from modulo.auth.dependencies import get_current_tenant_user_optional
+from modulo.api.dependencies import (
+    _get_engine,
+    get_current_tenant_user_optional,
+    get_db_session,
+    require_permission,
+)
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.core.dispatch import dispatch_run_sync
