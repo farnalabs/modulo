@@ -653,7 +653,7 @@ class TestFirePollingTriggerSkips:
         session = mock_db_components
         _setup_session_for_polling(
             session,
-            _make_trigger(),
+            MagicMock(),
             trigger_missing=True,
         )
 
@@ -932,23 +932,21 @@ class TestFirePollingTriggerErrorPaths:
             _, connector = mock_connector
             connector.query.side_effect = asyncio.CancelledError()
         else:
-            condition_patch = patch(
-                "modulo.core.trigger_engine.polling.evaluate_condition",
-                side_effect=asyncio.CancelledError(),
-            )
-            condition_patch.start()
-            try:
-                with pytest.raises(asyncio.CancelledError):
-                    await _fire_polling_trigger(
-                        trigger_id=_TRIGGER_ID,
-                        org_id=_ORG_ID,
-                        pipeline_id=_PIPELINE_ID,
-                        connector_instance_id=_CI_ID,
-                        poll_query="query",
-                        condition_expression=None,
-                    )
-            finally:
-                condition_patch.stop()
+            with (
+                patch(
+                    "modulo.core.trigger_engine.polling.evaluate_condition",
+                    side_effect=asyncio.CancelledError(),
+                ),
+                pytest.raises(asyncio.CancelledError),
+            ):
+                await _fire_polling_trigger(
+                    trigger_id=_TRIGGER_ID,
+                    org_id=_ORG_ID,
+                    pipeline_id=_PIPELINE_ID,
+                    connector_instance_id=_CI_ID,
+                    poll_query="query",
+                    condition_expression=None,
+                )
             return
 
         with pytest.raises(asyncio.CancelledError):
