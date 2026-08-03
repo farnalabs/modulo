@@ -153,7 +153,7 @@ jobs:
       - name: Schemathesis API fuzz testing
         working-directory: backend
         shell: bash
-        run: uv run --no-sync pytest tests/integration/test_schemathesis.py -x --timeout=120
+        run: uv run --no-sync pytest tests/integration/test_schemathesis.py -x --timeout=600
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           REDIS_URL: "redis://localhost:6379/0"

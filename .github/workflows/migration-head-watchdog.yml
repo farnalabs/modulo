@@ -1,0 +1,63 @@
+name: "Migration Head Watchdog"
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check-main-migration-heads:
+    name: Check migration heads on main
+    runs-on: ubicloud-standard-2
+    permissions:
+      actions: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Check migration heads
+        id: check
+        working-directory: backend
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        run: |
+          uv sync --frozen
+          uv run --no-sync python -m alembic heads 2>&1 | tee /tmp/alembic_heads.txt
+          HEAD_COUNT=$(grep -c "\(head\)\|\(effective head\)" /tmp/alembic_heads.txt || true)
+          echo "head_count=$HEAD_COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$HEAD_COUNT" -ne 1 ]; then
+            echo "::error::Alembic migration graph on main has $HEAD_COUNT heads (expected 1)."
+            echo "heads=$HEAD_COUNT" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "Migration heads OK"
+      - name: Trigger Branch Fixer on multi-head
+        if: failure() && steps.check.outputs.head_count != '1'
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          HEAD_COUNT: ${{ steps.check.outputs.head_count }}
+        run: |
+          # Reuse the existing branch-fixer.yml workflow_dispatch to create a
+          # migration-merge PR (pattern: 0036_merge_all_heads). The Branch Fixer
+          # needs a valid PR number; if none is open, file an issue instead.
+          PR_NUM=$(gh pr list --repo "${{ github.repository }}" --state open --limit 1 --json number --jq '.[0].number // "0"')
+          if [ "$PR_NUM" != "0" ]; then
+            gh workflow run "Fix: Modulo Branch Fixer" --repo "${{ github.repository }}" \
+              -f pr_number="$PR_NUM" \
+              -f branch="main" \
+              -f feedback="Alembic migration graph has $HEAD_COUNT heads on main. Create a merge migration (alembic merge -m 'merge heads') to join them into a single chain."
+          else
+            BODY="Alembic migration graph has $HEAD_COUNT heads (expected 1) on main. App startup (alembic upgrade head) is blocked. Create a merge migration and merge it (pattern: 0036_merge_all_heads):"
+            BODY+=$'\n\n'
+            BODY+="cd backend && uv run alembic merge -m 'merge heads'"
+            gh issue create --repo "${{ github.repository }}" \
+              --title "Alembic migration graph has $HEAD_COUNT heads on main" \
+              --body "$BODY"
+          fi

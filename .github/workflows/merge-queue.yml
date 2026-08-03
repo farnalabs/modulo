@@ -259,6 +259,24 @@ jobs:
         working-directory: backend
         run: uv sync --frozen
 
+      - name: Check migration heads (hard gate)
+        if: steps.merge.outputs.merged_count != '0'
+        working-directory: backend
+        shell: bash
+        run: |
+          # Migration heads must be exactly 1 on the combined branch. Parallel PRs
+          # can each add a migration off the same base, creating multiple heads that
+          # only appear when combined. A multi-head chain breaks app startup
+          # (alembic upgrade head fails) so this is a hard merge gate.
+          uv run --no-sync python -m alembic heads 2>&1 | tee /tmp/alembic_heads.txt
+          HEAD_COUNT=$(grep -c "\(head\)\|\(effective head\)" /tmp/alembic_heads.txt || true)
+          if [ "$HEAD_COUNT" -ne 1 ]; then
+            echo "::error::Alembic migration graph has $HEAD_COUNT heads (expected 1) on the merged branch. Parallel PRs added migrations off the same base without a merge point. Merge a migration-merge PR (like 0036_merge_all_heads) before proceeding."
+            echo "Migration heads check failed" >> /tmp/failure_description.txt
+            exit 1
+          fi
+          echo "Migration heads OK ($HEAD_COUNT head)"
+
       - name: Backend lint + tests (parallel)
         if: steps.merge.outputs.merged_count != '0'
         working-directory: backend
