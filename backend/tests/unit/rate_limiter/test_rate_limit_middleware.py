@@ -77,9 +77,17 @@ def rl_mod():
 
 @pytest.fixture(autouse=True)
 def _clean_redis_state(monkeypatch, rl_mod):
-    """Isolate the module-level `_redis_clients` set and `redis_available` flag."""
+    """Isolate module-level state between tests.
+
+    Resets the ``_redis_clients`` set and ``redis_available`` flag, snapshots the
+    class-level ``RateLimitMiddleware.RULES`` (so an early failure in a test that
+    mutates it cannot poison later tests), and resets the ``_auth_rate_limiter``
+    singleton (mirrors test_auth_rate_limiter.py).
+    """
     monkeypatch.setattr(rl_mod, "_redis_clients", set())
     monkeypatch.setattr(rl_mod, "redis_available", False)
+    monkeypatch.setattr(RateLimitMiddleware, "RULES", list(RateLimitMiddleware.RULES))
+    monkeypatch.setattr(rl_mod, "_auth_rate_limiter", None)
 
 
 def _mock_request(method="POST", path="/api/v1/runs", headers=None, scope=None, client=None):
