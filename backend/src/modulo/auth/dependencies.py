@@ -339,20 +339,3 @@ async def require_system_admin(
     if not current_user.is_system_admin:
         raise SystemAdminRequired()
     return current_user
-
-
-def __getattr__(name: str) -> object:
-    """Lazily re-export ``get_current_tenant_user_optional`` from ``api.dependencies``.
-
-    The fail-closed (break-glass) variant lives in ``modulo.api.dependencies``
-    (where ``get_db_session`` is defined) to avoid a module-import cycle:
-    ``api.dependencies`` imports names from this module at its top, so this
-    module must not import ``api.dependencies`` at module load. Existing
-    callers keep ``from modulo.auth.dependencies import get_current_tenant_user_optional``
-    unchanged via PEP 562 lazy attribute resolution.
-    """
-    if name == "get_current_tenant_user_optional":
-        from modulo.api.dependencies import get_current_tenant_user_optional as _optional
-
-        return _optional
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
