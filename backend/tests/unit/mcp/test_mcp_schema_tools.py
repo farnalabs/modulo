@@ -181,7 +181,7 @@ class TestCreateModelBackendSuccess(AuthContext):
         assert result["setup_url"].startswith("https://app.modulo.run/")
         assert result["expires_in_minutes"] == 15
 
-        # The API key is never sent through the tool â€” only a handoff is created.
+        # The API key is never sent through the tool - only a handoff is created.
         mock_create.assert_awaited_once()
         assert mock_create.call_args.kwargs["credentials_ciphertext"] == b""
         mock_handoff.assert_awaited_once()
