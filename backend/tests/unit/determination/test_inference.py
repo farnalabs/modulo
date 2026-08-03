@@ -1,19 +1,13 @@
 """Unit tests for the Determination Inference Engine."""
 
 import uuid
-from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from modulo.connectors.base import ConnectorType
 from modulo.determination.inference import Finding, infer
 
-from .helpers import make_sample
-
-
-def _iso(delta_days: float) -> str:
-    """Return an ISO-8601 timestamp that many days in the past (deterministic across run dates)."""
-    return (datetime.now(UTC) - timedelta(days=delta_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+from .helpers import iso_days_ago, make_sample
 
 
 def test_empty_samples_returns_findings() -> None:
@@ -50,7 +44,7 @@ def test_full_name_repo_records_detect_development_stage() -> None:
 
 
 def test_pull_requests_detect_code_review() -> None:
-    samples = [make_sample("pulls", [{"number": 1, "created_at": _iso(2)}])]
+    samples = [make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}])]
     findings = infer(samples)
     review = [f for f in findings if f.category == "stage" and "Code review" in f.finding]
     assert len(review) == 1
@@ -70,8 +64,8 @@ def test_stale_pr_bottleneck() -> None:
         make_sample(
             "pulls",
             [
-                {"number": 1, "created_at": _iso(10)},
-                {"number": 2, "created_at": _iso(2)},
+                {"number": 1, "created_at": iso_days_ago(10)},
+                {"number": 2, "created_at": iso_days_ago(2)},
             ],
         )
     ]
@@ -87,8 +81,8 @@ def test_no_stale_prs_when_all_recent() -> None:
         make_sample(
             "pulls",
             [
-                {"number": 1, "created_at": _iso(2)},
-                {"number": 2, "created_at": _iso(0.5)},
+                {"number": 1, "created_at": iso_days_ago(2)},
+                {"number": 2, "created_at": iso_days_ago(0.5)},
             ],
         )
     ]
@@ -104,6 +98,24 @@ def test_invalid_pr_date_ignored() -> None:
     findings = infer(samples)
     assert not any(f.category == "bottleneck" for f in findings)
     assert any(f.category == "stage" and "Code review" in f.finding for f in findings)
+
+
+def test_pr_camelcase_created_at_detects_stale_bottleneck() -> None:
+    """Inference must read the camelCase ``createdAt`` field when ``created_at`` is absent."""
+    samples = [make_sample("pulls", [{"number": 1, "createdAt": iso_days_ago(10)}])]
+    findings = infer(samples)
+    bottleneck = next((f for f in findings if f.category == "bottleneck"), None)
+    assert bottleneck is not None
+    assert "Potential review bottleneck: 1 PRs/MRs open for >5 days" in bottleneck.finding
+
+
+def test_pr_camelcase_created_at_recent_no_stale_bottleneck() -> None:
+    samples = [make_sample("pulls", [{"number": 1, "createdAt": iso_days_ago(1)}])]
+    findings = infer(samples)
+    stale = [f for f in findings if f.category == "bottleneck" and "Potential review bottleneck" in f.finding]
+    assert stale == []
+    no_stale = [f for f in findings if f.category == "bottleneck" and "No stale PRs" in f.finding]
+    assert len(no_stale) == 1
 
 
 def test_planning_stage_from_jira_issues() -> None:
@@ -193,7 +205,7 @@ def test_ci_detected_from_repo_name() -> None:
 def test_confidence_levels_present() -> None:
     samples = [
         make_sample("repos", [{"name": "repo"}]),
-        make_sample("pulls", [{"number": 1, "created_at": _iso(2)}]),
+        make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}]),
     ]
     findings = infer(samples)
     confidences = {f.confidence for f in findings}
