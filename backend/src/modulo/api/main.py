@@ -224,17 +224,47 @@ async def _run_bootstrap(settings: Settings) -> None:
     it BEFORE and AFTER alembic so the boundary survives every boot and is
     re-applied after the migration's grants land (ADR-017/018 amendment). The
     admin URL falls back to the app URL when DATABASE_ADMIN_URL is unset (like
-    env.py). Failure is logged and non-fatal in deliverable (A) — there is no
-    MODULO_BREAK_GLASS_ENABLED gate yet; the entrypoint mirrors this with a
-    warning on bootstrap failure.
+    env.py).
+
+    A failed allow-list / role-posture assertion (bootstrap's
+    ``_assert_role_posture``) is FATAL in BOTH warn and fail modes — the
+    boundary must survive every boot. Other bootstrap failures (e.g. a transient
+    DB blip while applying roles/grants) are logged and non-fatal: they are
+    re-attempted on the post-alembic run and on the next boot.
     """
     from modulo.db.bootstrap_role import bootstrap_roles
 
     admin_url = os.environ.get("DATABASE_ADMIN_URL") or settings.database_url
     try:
         await bootstrap_roles(admin_url, settings.database_url)
-    except Exception:
+    except Exception as exc:
+        if "Break-glass role posture assertion FAILED" in str(exc):
+            logger.error("infra_blocked=break_glass_role_posture_failed %s", exc)
+            raise RuntimeError(f"FATAL: break-glass role-posture assertion failed: {exc}") from exc
         logger.warning("startup.role_bootstrap_failed", exc_info=True)
+
+
+async def _run_break_glass_watchdog(settings: Settings) -> None:
+    """Boot-time break-glass watchdog (deliverable B).
+
+    The allow-list / role-posture assertions from ``bootstrap_role.py`` are
+    FATAL in both warn and fail modes — they run inside ``_run_bootstrap``
+    (before AND after alembic) and are re-raised there. This step runs the
+    URL/secret-presence config checks, honouring
+    ``MODULO_BREAK_GLASS_BOOT_FAILURE_MODE``, and publishes the advisory
+    /healthz exposure.
+    """
+    from modulo.api.routes.health import set_break_glass_watchdog
+    from modulo.settings import validate_break_glass_boot
+
+    try:
+        validate_break_glass_boot(settings)
+    except RuntimeError as exc:
+        set_break_glass_watchdog("failed", str(exc))
+        logger.error("infra_blocked=break_glass_config_failed %s", exc)
+        raise
+    set_break_glass_watchdog("ok", "break-glass boot config assertions passed")
+    logger.info("startup.break_glass_watchdog_ok")
 
 
 async def _run_migrations(settings: Settings) -> None:
@@ -870,6 +900,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Run Alembic migrations to bring the schema up to date.
     await _run_migrations(settings)
+
+    # Break-glass watchdog (deliverable B): the allow-list/role-posture
+    # assertions were already FATAL inside _run_bootstrap; the URL/secret-
+    # presence checks honour warn|fail mode.
+    await _run_break_glass_watchdog(settings)
 
     # Hard-fail guard: the 'owner' org role was dropped (ADR 017 A1a). The
     # migration converts owner -> admin transactionally, so owner rows must be
