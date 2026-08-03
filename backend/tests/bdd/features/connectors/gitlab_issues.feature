@@ -62,6 +62,11 @@ Feature: GitLab Issues Connector
     When I query GitLab resource "merge_request" with project "group/project" and iid "5"
     Then the result has records
 
+  Scenario: Query merge request changes
+    Given a GitLab connector with valid token
+    When I query GitLab resource "mr_changes" with project "group/project" and iid "5"
+    Then the result has records
+
   Scenario: Query branch by name
     Given a GitLab connector with valid token
     When I query GitLab resource "branch" with project "group/project" and name "main"
@@ -147,6 +152,16 @@ Feature: GitLab Issues Connector
     When I check the connector health
     Then the health result ok is false
     And the health result detail describes the error
+
+  Scenario: Health check reports the instance version
+    Given a GitLab connector with valid token
+    When I check the connector health
+    Then the health result reports the GitLab version
+
+  Scenario: Path traversal on file write is blocked
+    Given a GitLab connector with valid token
+    When I write GitLab file for project "group/project" and path "../evil.txt"
+    Then the result is an error
 
   Scenario: Health check with network error returns error
     Given a GitLab connector with valid token

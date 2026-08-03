@@ -2135,6 +2135,20 @@ def step_gitlab_connector(ctx):
                 return ConnectorResult(
                     records=[{"id": 1, "iid": int(q.filters.get("iid", 0)), "title": "Fix bug", "state": "opened"}]
                 )
+            case "mr_changes":
+                return ConnectorResult(
+                    records=[
+                        {
+                            "id": 1,
+                            "iid": int(q.filters.get("iid", 0)),
+                            "title": "Fix bug",
+                            "changes": [
+                                {"old_path": "src/old.py", "new_path": "src/new.py", "new_file": False},
+                                {"old_path": "README.md", "new_path": "README.md", "new_file": True},
+                            ],
+                        }
+                    ]
+                )
             case "branch":
                 return ConnectorResult(records=[{"name": q.filters.get("name", ""), "commit": {"id": "abc123"}}])
             case "branches":
@@ -2164,6 +2178,11 @@ def step_gitlab_connector(ctx):
         match payload.resource:
             case "issue":
                 return {"id": 100, "iid": 50, "title": payload.data.get("title", ""), "state": "opened"}
+            case "file":
+                path = payload.data.get("path", "")
+                if any(part == ".." for part in path.replace("\\", "/").split("/")):
+                    raise ValueError(f"GitLab resource 'file': path traversal blocked: {path!r}")
+                return {"file_path": path, "branch": payload.data.get("ref", "main")}
             case "issue_update":
                 return {"id": 100, "iid": int(payload.data.get("iid", 0)), "state": payload.data.get("state_event", "")}
             case "issue_note":
@@ -2192,7 +2211,7 @@ def step_gitlab_connector(ctx):
     async def mock_health_check():
         from modulo.connectors.base import HealthResult
 
-        return HealthResult(ok=True, detail="testuser")
+        return HealthResult(ok=True, detail="testuser (GitLab 17.5.0)")
 
     mock_connector.query = mock_query
     mock_connector.write = mock_write
@@ -2468,6 +2487,25 @@ def step_gitlab_write_file_delete(project, path, ctx):
         ctx["query_error"] = str(exc)
 
 
+@when(parsers.parse('I write GitLab file for project "{project}" and path "{path}"'))
+def step_gitlab_write_file(project, path, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="file",
+        data={"project": project, "path": path, "content": "print('hi')"},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
 @when(parsers.parse('I write GitLab mr_merge for project "{project}" and iid "{iid}"'))
 def step_gitlab_write_mr_merge(project, iid, ctx):
     from modulo.connectors.base import ConnectorPayload
@@ -2576,6 +2614,13 @@ def step_health_result_detail_describes_error(ctx):
     result = ctx.get("health_result")
     assert result is not None, "No health check result"
     assert result.detail, "Health result detail is empty"
+
+
+@then("the health result reports the GitLab version")
+def step_health_result_reports_version(ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert "GitLab" in result.detail, f"Expected instance version in detail but got: {result.detail}"
 
 
 @when("the GitLab API is unreachable")
