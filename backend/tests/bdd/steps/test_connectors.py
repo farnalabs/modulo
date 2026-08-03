@@ -741,7 +741,7 @@ def step_github_write_returns_error(status_code, reason, ctx):
 
 
 # ============================================================================
-# connectors/jira_connector.feature  —  7 scenarios
+# connectors/jira_connector.feature  —  13 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/jira_connector.feature")
@@ -780,6 +780,15 @@ def step_jira_connector(ctx):
                 return {"id": "30001", "key": "PROJ-124", "self": "https://jira/rest/api/3/issue/30001"}
             case "issue_update":
                 return {"issue_key": payload.data.get("issue_key"), "updated": True}
+            case "issue_assign":
+                return {"issue_key": payload.data.get("issue_key"), "assignee": payload.data.get("account_id")}
+            case "issue_label":
+                return {
+                    "issue_key": payload.data.get("issue_key"),
+                    "labels": payload.data.get("add", []) + payload.data.get("remove", []),
+                }
+            case "issue_delete":
+                return {"issue_key": payload.data.get("issue_key"), "deleted": True}
             case _:
                 raise ValueError(f"Unsupported Jira write: {payload.resource!r}")
 
@@ -996,6 +1005,112 @@ def step_jira_error_reports_quota(ctx):
     assert error is not None, "Expected an error but query succeeded"
     assert "quota" in error, f"Expected quota detail in error but got: {error}"
     assert "X-RateLimit-Remaining" in error, f"Expected X-RateLimit-Remaining in error: {error}"
+
+
+@when(parsers.parse('I assign issue "{key}" to account "{account_id}"'))
+def step_jira_assign_issue(key, account_id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="issue_assign",
+        data={"issue_key": key, "account_id": account_id},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I unassign issue "{key}"'))
+def step_jira_unassign_issue(key, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="issue_assign",
+        data={"issue_key": key, "account_id": None},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I update labels on issue "{key}" adding "{add}" and removing "{remove}"'))
+def step_jira_update_labels(key, add, remove, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="issue_label",
+        data={"issue_key": key, "add": [add], "remove": [remove]},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I delete issue "{key}"'))
+def step_jira_delete_issue(key, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="issue_delete",
+        data={"issue_key": key},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then(parsers.parse('the write returns assignee for issue "{key}"'))
+def step_jira_write_returns_assignee(key, ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert result.get("issue_key") == key, f"Expected issue_key {key} but got {result}"
+    assert result.get("assignee") is not None, f"Expected an assignee but got {result}"
+
+
+@then("the write returns no assignee")
+def step_jira_write_returns_no_assignee(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert result.get("assignee") is None, f"Expected no assignee but got {result}"
+
+
+@then("the write returns the updated labels")
+def step_jira_write_returns_labels(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert "labels" in result, f"Expected labels in result but got {result}"
+
+
+@then(parsers.parse('the write returns deletion confirmation for "{key}"'))
+def step_jira_write_returns_deletion(key, ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert result.get("issue_key") == key, f"Expected issue_key {key} but got {result}"
+    assert result.get("deleted") is True, f"Expected deleted confirmation but got {result}"
 
 
 # ============================================================================
