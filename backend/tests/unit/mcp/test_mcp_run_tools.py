@@ -55,7 +55,7 @@ def _make_mock_eval(
     passed: bool = True,
     score: float | None = None,
     detail: str | None = None,
-    evaluated_at: datetime | None | object = _UNSET,
+    evaluated_at: datetime | object | None = _UNSET,
 ) -> MagicMock:
     eval_result = MagicMock()
     eval_result.id = uuid.uuid4()

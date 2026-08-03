@@ -147,6 +147,34 @@ Feature: GitLab Issues Connector
     When I write GitLab pipeline_run with project "group/project" and ref "main"
     Then the write succeeds
 
+  Scenario: Query recursive tree listing
+    Given a GitLab connector with valid token
+    When I query GitLab tree for project "group/project" with path "src" and recursive
+    Then the result has records
+    And the tree result contains nested entries
+
+  Scenario: Write batch file operations in one commit
+    Given a GitLab connector with valid token
+    When I write GitLab files batch for project "group/project"
+    Then the write succeeds
+    And the batch write reports a commit id
+
+  Scenario: Batch file path traversal is blocked
+    Given a GitLab connector with valid token
+    When I write GitLab files batch for project "group/project" with traversal path "../evil.txt"
+    Then the result is an error
+
+  Scenario: Write requests MR approval from specific users
+    Given a GitLab connector with valid token
+    When I write GitLab mr_approval_request for project "group/project" and iid "7" for users "10,11"
+    Then the write succeeds
+    And the approval request reports the requested approvers
+
+  Scenario: MR approval request without users errors
+    Given a GitLab connector with valid token
+    When I write GitLab mr_approval_request for project "group/project" and iid "7" with no users
+    Then the approval request errors with a missing users message
+
   Scenario: Health check with invalid token returns error
     Given a GitLab connector with invalid token
     When I check the connector health

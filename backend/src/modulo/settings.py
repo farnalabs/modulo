@@ -7,6 +7,9 @@ from pydantic_settings import BaseSettings
 _log = logging.getLogger(__name__)
 
 _MIN_KEY_LEN = 32
+# Minimum length for each operator secret (MODULO_BREAK_GLASS_SECRET /
+# _STANDBY_SECRET). Validated unconditionally when set (break-glass plan §3).
+_MIN_BREAK_GLASS_SECRET_LEN = 24
 # Known placeholder values that operators paste from docs without changing.
 _BLOCKED_SECRET_KEYS = frozenset({"changeme", "secret", "your-secret-key", "development", "test", "insecure"})
 
@@ -51,6 +54,27 @@ class Settings(BaseSettings):
 
     # SSO defaults
     modulo_sso_default_role: str = Field("runner")
+
+    # ------------------------------------------------------------------
+    # Break-glass admin recovery (deliverable B) — operator CLI + watchdog
+    # ------------------------------------------------------------------
+    # Independently settable; defaults from primary OR standby secret presence.
+    modulo_break_glass_enabled: bool | None = Field(default=None)
+    # Operator secrets (primary + rotation standby). Must never equal each
+    # other and each must meet the minimum length when set.
+    modulo_break_glass_secret: str = Field(default="", repr=False)
+    modulo_break_glass_standby_secret: str = Field(default="", repr=False)
+    # TTL bounds — enforced at Settings construction (blocking regardless of
+    # ENABLED) AND re-enforced at CLI invocation time.
+    modulo_break_glass_ttl_minutes: int = Field(default=1440, ge=1)
+    modulo_break_glass_max_ttl_minutes: int = Field(default=4320, ge=1, le=4320)
+    # Dedicated modulo_breakglass LOGIN engine URL (the CLI connects as this
+    # role — never the app database_url).
+    modulo_break_glass_database_url: str = Field(default="")
+    # warn|fail — the URL/secret-presence boot checks are warn-in-warn-mode;
+    # the allow-list/role-posture assertions (bootstrap_role.py) are FATAL in
+    # both modes and are enforced separately at their call site.
+    modulo_break_glass_boot_failure_mode: str = Field(default="warn")
 
     # "postgres" (default), "sqlite", "mariadb", or "mysql" — sqlite disables RLS,
     # advisory locks, flood protection, and other Postgres-specific security features.
@@ -325,7 +349,130 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _finalize_break_glass_config(self) -> "Settings":
+        """Resolve ENABLED default + validate the break-glass config matrix.
+
+        Blocking (unconditional) checks, per the break-glass plan §3:
+        * ENABLED defaults from (primary OR standby) secret presence when the
+          env var was not explicitly provided.
+        * SECRET and STANDBY must differ when both are set (rotation path).
+        * each non-empty secret meets the minimum length.
+        * TTL_MINUTES < 1, MAX_TTL_MINUTES > 4320, or TTL > MAX all fail here
+          regardless of ENABLED.
+        * BOOT_FAILURE_MODE must be 'warn' or 'fail'.
+
+        The URL/secret-PRESENCE checks (ENABLED=true + empty secrets/URL, warn
+        if either empty otherwise) are NOT here — they are boot-time findings
+        that honour warn|fail mode via ``break_glass_boot_findings``.
+        """
+        if self.modulo_break_glass_enabled is None:
+            self.modulo_break_glass_enabled = bool(
+                self.modulo_break_glass_secret or self.modulo_break_glass_standby_secret
+            )
+
+        secret = self.modulo_break_glass_secret
+        standby = self.modulo_break_glass_standby_secret
+        if secret and standby and secret == standby:
+            raise ValueError(
+                "MODULO_BREAK_GLASS_SECRET and MODULO_BREAK_GLASS_STANDBY_SECRET must differ "
+                "(identical secrets break the rotation path)"
+            )
+        for name, value in (
+            ("MODULO_BREAK_GLASS_SECRET", secret),
+            ("MODULO_BREAK_GLASS_STANDBY_SECRET", standby),
+        ):
+            if value and len(value) < _MIN_BREAK_GLASS_SECRET_LEN:
+                raise ValueError(f"{name} must be at least {_MIN_BREAK_GLASS_SECRET_LEN} characters; got {len(value)}")
+
+        if self.modulo_break_glass_ttl_minutes > self.modulo_break_glass_max_ttl_minutes:
+            raise ValueError(
+                "MODULO_BREAK_GLASS_TTL_MINUTES must be <= MODULO_BREAK_GLASS_MAX_TTL_MINUTES "
+                f"({self.modulo_break_glass_ttl_minutes} > {self.modulo_break_glass_max_ttl_minutes})"
+            )
+
+        if self.modulo_break_glass_boot_failure_mode not in ("warn", "fail"):
+            raise ValueError(
+                "MODULO_BREAK_GLASS_BOOT_FAILURE_MODE must be 'warn' or 'fail'; "
+                f"got {self.modulo_break_glass_boot_failure_mode!r}"
+            )
+        return self
+
 
 @lru_cache
 def get_settings(_fresh: bool = False) -> Settings:
     return Settings()
+
+
+def break_glass_boot_findings(settings: Settings) -> list[tuple[bool, str]]:
+    """Return ``(blocking, message)`` boot findings (empty list = clean).
+
+    These are the URL/secret-PRESENCE checks that honour
+    ``MODULO_BREAK_GLASS_BOOT_FAILURE_MODE``: blocking findings raise in
+    fail-mode and warn in warn-mode; non-blocking findings always warn and
+    never fail boot. The TTL bounds, SECRET == STANDBY, and minimum-length
+    checks raise at Settings construction time (unconditional) so they never
+    appear here.
+
+    Blocking (ENABLED=true gated):
+    * ENABLED=true with both secrets empty.
+    * ENABLED=true with empty MODULO_BREAK_GLASS_DATABASE_URL.
+
+    Non-blocking:
+    * either secret empty (rotation path degraded).
+    * ENABLED=false with empty URL.
+    """
+    findings: list[tuple[bool, str]] = []
+    enabled = bool(settings.modulo_break_glass_enabled)
+    has_primary = bool(settings.modulo_break_glass_secret)
+    has_standby = bool(settings.modulo_break_glass_standby_secret)
+    has_url = bool(settings.modulo_break_glass_database_url)
+
+    if enabled and not (has_primary or has_standby):
+        findings.append(
+            (
+                True,
+                "MODULO_BREAK_GLASS_ENABLED=true but both MODULO_BREAK_GLASS_SECRET and "
+                "MODULO_BREAK_GLASS_STANDBY_SECRET are empty",
+            )
+        )
+    elif not (has_primary and has_standby):
+        findings.append(
+            (
+                False,
+                "one of MODULO_BREAK_GLASS_SECRET / MODULO_BREAK_GLASS_STANDBY_SECRET is empty — "
+                "the operator rotation path is degraded",
+            )
+        )
+
+    if enabled and not has_url:
+        findings.append((True, "MODULO_BREAK_GLASS_ENABLED=true but MODULO_BREAK_GLASS_DATABASE_URL is empty"))
+    elif not has_url:
+        findings.append(
+            (
+                False,
+                "MODULO_BREAK_GLASS_DATABASE_URL is empty — the break-glass CLI "
+                "deactivate/force/status commands are inoperable while disabled",
+            )
+        )
+    return findings
+
+
+def validate_break_glass_boot(settings: Settings) -> None:
+    """Boot-time break-glass config assertion honouring warn|fail mode.
+
+    In ``fail`` mode any BLOCKING finding raises ``RuntimeError`` (boot fails);
+    non-blocking findings always log at WARNING and boot continues. In ``warn``
+    mode every finding is logged at WARNING. The allow-list / role-posture
+    assertions from ``bootstrap_role.py`` are FATAL in both modes and are
+    enforced separately at their call site.
+    """
+    findings = break_glass_boot_findings(settings)
+    if not findings:
+        return
+    if settings.modulo_break_glass_boot_failure_mode == "fail":
+        blocking = [message for is_blocking, message in findings if is_blocking]
+        if blocking:
+            raise RuntimeError("Break-glass boot config assertion FAILED:\n  " + "\n".join(blocking))
+    for _is_blocking, message in findings:
+        _log.warning("break_glass.boot_config %s", message)
