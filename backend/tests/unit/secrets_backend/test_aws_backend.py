@@ -72,6 +72,18 @@ class TestAWSSecretsManagerBackend:
         with pytest.raises(KeyError):
             await backend.get_secret("empty-key")
 
+    async def test_get_secret_non_string_secret_string_raises_key_error(self, mock_boto3):
+        """A non-string SecretString (e.g. a number) must not be returned as-is.
+
+        Only str SecretString and bytes SecretBinary are trusted; anything else
+        is treated as a missing secret and surfaces as KeyError.
+        """
+        backend = _make_backend()
+        backend._client.get_secret_value.return_value = {"SecretString": 123}
+
+        with pytest.raises(KeyError):
+            await backend.get_secret("numeric-key")
+
     async def test_set_secret_creates_new(self, mock_boto3):
         backend = _make_backend()
 
@@ -194,6 +206,15 @@ class TestEnsureClient:
         monkeypatch.setenv("AWS_PROFILE", "my-profile")
         monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
         monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+        backend = AWSSecretsManagerBackend()
+
+        await backend._ensure_client()
+
+        mock_boto3.Session.assert_called_once_with(region_name="us-east-1", profile_name="my-profile")
+
+    async def test_profile_takes_precedence_over_static_credentials(self, monkeypatch, mock_boto3):
+        """When both AWS_PROFILE and static credentials are set, the profile wins."""
+        monkeypatch.setenv("AWS_PROFILE", "my-profile")
         backend = AWSSecretsManagerBackend()
 
         await backend._ensure_client()
