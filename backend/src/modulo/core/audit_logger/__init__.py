@@ -300,7 +300,7 @@ async def verify_chain(
 
     if not events:
         # Degenerate case: count reports events but none were fetched (e.g. a
-        # zero max_events). Must not be reported as a valid chain.
+        # zero/negative max_events). Must not be reported as a valid chain.
         return _make_verify_result(
             total_events=total_events,
             checked_events=0,
