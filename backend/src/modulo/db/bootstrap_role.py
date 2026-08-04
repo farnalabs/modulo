@@ -262,6 +262,7 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
 
         # Grant DML on existing tables.
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{app_user}"')
+        await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{bg_user}"')
         await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{app_user}"')
         await conn.execute(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{app_user}"')
         # Grant DML on future tables.

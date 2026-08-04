@@ -1133,3 +1133,365 @@ def test_parse_retry_after_missing():
 def test_parse_retry_after_invalid():
     resp = httpx.Response(429, headers={"Retry-After": "not-a-number"})
     assert _parse_retry_after(resp) is None
+
+
+# -- query: message_search (search.messages) --
+
+
+@respx.mock
+async def test_query_message_search(connector):
+    respx.get("https://slack.com/api/search.messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": {
+                    "matches": [
+                        {"ts": "123456", "text": "Hello world", "user": "U001", "channel": {"id": "C001"}},
+                        {"ts": "123457", "text": "World of agents", "user": "U002", "channel": {"id": "C002"}},
+                    ],
+                    "paging": {"count": 100, "total": 2, "page": 1, "pages": 1},
+                },
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="message_search", filters={"query": "world"}, limit=10),
+    )
+    assert len(result.records) == 2
+    assert result.records[0]["text"] == "Hello world"
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_message_search_multi_page(connector):
+    respx.get("https://slack.com/api/search.messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": {
+                    "matches": [{"ts": "123456", "text": "match", "user": "U001"}],
+                    "paging": {"count": 100, "total": 150, "page": 1, "pages": 2},
+                },
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="message_search", filters={"query": "match"}),
+    )
+    assert result.next_cursor == "2"
+    assert respx.calls.last.request.url.params.get("count") == "100"
+
+
+@respx.mock
+async def test_query_message_search_with_cursor_and_sort(connector):
+    respx.get("https://slack.com/api/search.messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": {
+                    "matches": [{"ts": "123458", "text": "next page", "user": "U002"}],
+                    "paging": {"count": 100, "total": 250, "page": 2, "pages": 3},
+                },
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="message_search",
+            filters={"query": "match", "sort": "timestamp"},
+            cursor="2",
+        ),
+    )
+    assert len(result.records) == 1
+    assert result.next_cursor == "3"
+    params = respx.calls.last.request.url.params
+    assert params.get("page") == "2"
+    assert params.get("sort") == "timestamp"
+
+
+@respx.mock
+async def test_query_message_search_clamps_count_to_max(connector):
+    respx.get("https://slack.com/api/search.messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": {
+                    "matches": [{"ts": "123459", "text": "match", "user": "U001"}],
+                    "paging": {"count": 100, "total": 1, "page": 1, "pages": 1},
+                },
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="message_search", filters={"query": "match"}, limit=500),
+    )
+    assert len(result.records) == 1
+    assert respx.calls.last.request.url.params.get("count") == "100"
+
+
+@respx.mock
+async def test_query_message_search_missing_query(connector):
+    with pytest.raises(ValueError, match="requires 'query' filter"):
+        await connector.query(ConnectorQuery(resource="message_search"))
+
+
+@respx.mock
+async def test_query_message_search_invalid_cursor(connector):
+    with pytest.raises(ValueError, match="cursor must be a numeric page"):
+        await connector.query(
+            ConnectorQuery(resource="message_search", filters={"query": "match"}, cursor="abc"),
+        )
+
+
+@respx.mock
+async def test_query_message_search_api_error(connector):
+    respx.get("https://slack.com/api/search.messages").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "invalid_search"}),
+    )
+    with pytest.raises(ValueError, match="invalid_search"):
+        await connector.query(
+            ConnectorQuery(resource="message_search", filters={"query": "match"}),
+        )
+
+
+@respx.mock
+async def test_query_message_search_http_error(connector):
+    respx.get("https://slack.com/api/search.messages").mock(
+        return_value=httpx.Response(403, text="Forbidden"),
+    )
+    with pytest.raises(ValueError, match="Slack API HTTP 403"):
+        await connector.query(
+            ConnectorQuery(resource="message_search", filters={"query": "match"}),
+        )
+
+
+# -- query: messages cursor pagination + types filter --
+
+
+@respx.mock
+async def test_query_messages_forwards_cursor(connector):
+    respx.get("https://slack.com/api/conversations.history").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": [{"ts": "999", "text": "older page", "user": "U001"}],
+                "response_metadata": {"next_cursor": "page3"},
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="messages", filters={"channel": "C001"}, cursor="page2"),
+    )
+    assert result.next_cursor == "page3"
+    assert respx.calls.last.request.url.params.get("cursor") == "page2"
+
+
+@respx.mock
+async def test_query_messages_types_filter(connector):
+    respx.get("https://slack.com/api/conversations.history").mock(
+        return_value=httpx.Response(200, json={"ok": True, "messages": []}),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="messages", filters={"channel": "C001", "types": "messages,joins"}),
+    )
+    assert len(result.records) == 0
+    assert respx.calls.last.request.url.params.get("types") == "messages,joins"
+
+
+@respx.mock
+async def test_query_thread_replies_forwards_cursor(connector):
+    respx.get("https://slack.com/api/conversations.replies").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": [{"ts": "999", "text": "older reply", "user": "U001"}],
+                "response_metadata": {"next_cursor": "next"},
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="thread_replies",
+            filters={"channel": "C001", "thread_ts": "123.000"},
+            cursor="prev",
+        ),
+    )
+    assert result.next_cursor == "next"
+    assert respx.calls.last.request.url.params.get("cursor") == "prev"
+
+
+# -- write: schedule_message (chat.scheduleMessage) --
+
+
+@respx.mock
+async def test_write_schedule_message(connector):
+    respx.post("https://slack.com/api/chat.scheduleMessage").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "channel": "C001", "post_at": "1610118217", "scheduled_message_id": "Q1234"},
+        ),
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="schedule_message",
+            data={"channel": "C001", "post_at": 1610118217, "text": "Scheduled hello"},
+        ),
+    )
+    assert result["scheduled_message_id"] == "Q1234"
+    body = respx.calls.last.request.content
+    assert b"1610118217" in body
+
+
+@respx.mock
+async def test_write_schedule_message_missing_post_at(connector):
+    with pytest.raises(ValueError, match="Missing 'post_at' in schedule_message"):
+        await connector.write(
+            ConnectorPayload(resource="schedule_message", data={"channel": "C001", "text": "Hello"}),
+        )
+
+
+@respx.mock
+async def test_write_schedule_message_missing_channel(connector):
+    with pytest.raises(ValueError, match="Missing 'channel' in schedule_message"):
+        await connector.write(
+            ConnectorPayload(resource="schedule_message", data={"post_at": 1610118217}),
+        )
+
+
+@respx.mock
+async def test_write_schedule_message_api_error(connector):
+    respx.post("https://slack.com/api/chat.scheduleMessage").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "invalid_post_at"}),
+    )
+    with pytest.raises(ValueError, match="invalid_post_at"):
+        await connector.write(
+            ConnectorPayload(
+                resource="schedule_message",
+                data={"channel": "C001", "post_at": "not-a-timestamp"},
+            ),
+        )
+
+
+@respx.mock
+async def test_write_schedule_message_http_error(connector):
+    respx.post("https://slack.com/api/chat.scheduleMessage").mock(
+        return_value=httpx.Response(500, text="Server Error"),
+    )
+    with pytest.raises(ValueError, match="Slack API HTTP 500"):
+        await connector.write(
+            ConnectorPayload(
+                resource="schedule_message",
+                data={"channel": "C001", "post_at": 1610118217},
+            ),
+        )
+
+
+# -- write: file_upload (files.upload) --
+
+
+@respx.mock
+async def test_write_file_upload_content(connector):
+    respx.post("https://slack.com/api/files.upload").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "file": {"id": "F1234", "name": "notes.txt", "permalink": "https://.../notes.txt"},
+            },
+        ),
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file_upload",
+            data={"filename": "notes.txt", "content": "hello from modulo", "channels": "C001"},
+        ),
+    )
+    assert result["file"]["id"] == "F1234"
+    request = respx.calls.last.request
+    assert request.url.params.get("filename") is None  # filename travels in multipart, not query
+
+
+@respx.mock
+async def test_write_file_upload_bytes(connector):
+    respx.post("https://slack.com/api/files.upload").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "file": {"id": "F5678", "name": "report.bin", "permalink": "https://.../report.bin"},
+            },
+        ),
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file_upload",
+            data={
+                "filename": "report.bin",
+                "file": b"\x00\x01\x02binary",
+                "channels": "C002",
+                "initial_comment": "see report",
+            },
+        ),
+    )
+    assert result["file"]["id"] == "F5678"
+
+
+@respx.mock
+async def test_write_file_upload_missing_filename(connector):
+    with pytest.raises(ValueError, match="Missing 'filename' in file_upload"):
+        await connector.write(
+            ConnectorPayload(resource="file_upload", data={"content": "no name"}),
+        )
+
+
+@respx.mock
+async def test_write_file_upload_missing_content(connector):
+    with pytest.raises(ValueError, match="requires 'content' or 'file'"):
+        await connector.write(
+            ConnectorPayload(resource="file_upload", data={"filename": "notes.txt"}),
+        )
+
+
+@respx.mock
+async def test_write_file_upload_both_content_and_file(connector):
+    with pytest.raises(ValueError, match="exactly one of 'content' or 'file'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="file_upload",
+                data={"filename": "notes.txt", "content": "text", "file": b"bytes"},
+            ),
+        )
+
+
+@respx.mock
+async def test_write_file_upload_api_error(connector):
+    respx.post("https://slack.com/api/files.upload").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "invalid_file"}),
+    )
+    with pytest.raises(ValueError, match="invalid_file"):
+        await connector.write(
+            ConnectorPayload(
+                resource="file_upload",
+                data={"filename": "notes.txt", "content": "hello"},
+            ),
+        )
+
+
+@respx.mock
+async def test_write_file_upload_http_error(connector):
+    respx.post("https://slack.com/api/files.upload").mock(
+        return_value=httpx.Response(413, text="Payload Too Large"),
+    )
+    with pytest.raises(ValueError, match="Slack API HTTP 413"):
+        await connector.write(
+            ConnectorPayload(
+                resource="file_upload",
+                data={"filename": "notes.txt", "content": "hello"},
+            ),
+        )

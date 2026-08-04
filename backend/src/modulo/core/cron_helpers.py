@@ -1,6 +1,6 @@
 """SAQ scheduler helpers — per-item fire jobs, fire_due_triggers, dispatcher_reconcile.
 
-Plan F1 / F3c / F3d. This module is the SAQ replacement for the Celery beat fire
+Plan F1 / F3c / F3d. This module is the SAQ fire scheduler (replaced Celery beat)
 tasks (``CronFireTask`` / ``PollingFireTask`` / ``ReportFireTask``, all removed
 in PR C). All fire logic is reimplemented async against the shared DB session
 pattern.
@@ -293,9 +293,8 @@ async def fire_cron_trigger(
     atomic next_fire_at advance already happened in ``fire_due_triggers`` at
     enqueue time; this job sets ``last_fired_at`` only.
 
-    ``advance_next_fire_at=True`` preserves the legacy Celery behaviour used by
-    ``CronFireTask`` (which advances ``next_fire_at`` at fire time); the Celery
-    beat path was removed in PR C.
+    ``advance_next_fire_at=True`` preserves the legacy behaviour (CronFireTask,
+    removed in PR C).
     """
     from sqlalchemy import update
 
@@ -411,7 +410,7 @@ async def fire_cron_trigger(
 
         # last_fired_at reflects an actual fire (run created). next_fire_at is
         # advanced ONLY at enqueue time (fire_due_triggers) — or here for the
-        # legacy Celery path (advance_next_fire_at=True).
+        # legacy path (pre-PR C).
         values: dict[str, Any] = {"last_fired_at": datetime.now(UTC)}
         if advance_next_fire_at:
             values["next_fire_at"] = compute_next_fire(

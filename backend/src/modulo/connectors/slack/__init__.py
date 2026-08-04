@@ -22,6 +22,7 @@ _RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
 _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
 _MAX_DELAY = 30.0
+_SEARCH_COUNT_MAX = 100
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
@@ -148,6 +149,8 @@ class SlackConnector(ConnectorBase):
                 return await self._get_user_profile(q)
             case "user_lookup":
                 return await self._lookup_user_by_email(q)
+            case "message_search":
+                return await self._search_messages(q)
             case _:
                 raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
@@ -171,6 +174,10 @@ class SlackConnector(ConnectorBase):
                 return await self._archive_channel(payload.data)
             case "channel_unarchive":
                 return await self._unarchive_channel(payload.data)
+            case "schedule_message":
+                return await self._schedule_message(payload.data)
+            case "file_upload":
+                return await self._upload_file(payload.data)
             case _:
                 raise ValueError(f"Unsupported Slack write resource: {payload.resource!r}")
 
@@ -196,6 +203,10 @@ class SlackConnector(ConnectorBase):
             params["oldest"] = q.filters["oldest"]
         if q.filters.get("latest"):
             params["latest"] = q.filters["latest"]
+        if q.filters.get("types"):
+            params["types"] = q.filters["types"]
+        if q.cursor:
+            params["cursor"] = q.cursor
         r = await self._call_api("GET", "/conversations.history", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "conversations.history")
@@ -264,6 +275,8 @@ class SlackConnector(ConnectorBase):
             params["oldest"] = q.filters["oldest"]
         if q.filters.get("latest"):
             params["latest"] = q.filters["latest"]
+        if q.cursor:
+            params["cursor"] = q.cursor
         r = await self._call_api("GET", "/conversations.replies", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "conversations.replies")
@@ -368,6 +381,70 @@ class SlackConnector(ConnectorBase):
         )
         body: dict[str, Any] = await self._parse_json(r)
         _check_slack_ok(body, "chat.delete")
+        return body
+
+    async def _search_messages(self, q: ConnectorQuery) -> ConnectorResult:
+        if "query" not in q.filters:
+            raise ValueError("Slack message_search query requires 'query' filter")
+        query = q.filters["query"]
+        params: dict[str, Any] = {"query": query, "count": min(q.limit, _SEARCH_COUNT_MAX)}
+        if q.filters.get("sort") in ("score", "timestamp"):
+            params["sort"] = q.filters["sort"]
+        if q.cursor:
+            try:
+                params["page"] = int(q.cursor)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Slack message_search cursor must be a numeric page, got {q.cursor!r}") from exc
+        r = await self._call_api("GET", "/search.messages", params=params)
+        body = await self._parse_json(r)
+        _check_slack_ok(body, "search.messages")
+        search = body.get("messages") or {}
+        paging = search.get("paging") or {}
+        page = int(paging.get("page") or 1)
+        pages = int(paging.get("pages") or 1)
+        next_cursor = str(page + 1) if page < pages else None
+        return ConnectorResult(
+            records=search.get("matches", []),
+            next_cursor=next_cursor,
+        )
+
+    async def _schedule_message(self, data: dict[str, Any]) -> dict[str, Any]:
+        if "channel" not in data:
+            raise ValueError("Missing 'channel' in schedule_message payload")
+        if "post_at" not in data:
+            raise ValueError("Missing 'post_at' in schedule_message payload")
+        channel = data["channel"]
+        post_at = data["post_at"]
+        body_data = {k: v for k, v in data.items() if k not in ("channel", "post_at")}
+        r = await self._call_api(
+            "POST",
+            "/chat.scheduleMessage",
+            json={"channel": channel, "post_at": post_at, **body_data},
+        )
+        body: dict[str, Any] = await self._parse_json(r)
+        _check_slack_ok(body, "chat.scheduleMessage")
+        return body
+
+    async def _upload_file(self, data: dict[str, Any]) -> dict[str, Any]:
+        if "filename" not in data:
+            raise ValueError("Missing 'filename' in file_upload payload")
+        filename = data["filename"]
+        content = data.get("content")
+        file_content = data.get("file")
+        if content is None and file_content is None:
+            raise ValueError("file_upload payload requires 'content' or 'file'")
+        if content is not None and file_content is not None:
+            raise ValueError("file_upload payload must provide exactly one of 'content' or 'file'")
+        files: dict[str, Any]
+        if content is not None:
+            files = {"file": (filename, str(content).encode("utf-8"), "application/octet-stream")}
+        else:
+            raw = file_content if isinstance(file_content, bytes) else str(file_content).encode("utf-8")
+            files = {"file": (filename, raw, "application/octet-stream")}
+        form_data = {k: v for k, v in data.items() if k not in ("filename", "content", "file")}
+        r = await self._call_api("POST", "/files.upload", files=files, data=form_data)
+        body: dict[str, Any] = await self._parse_json(r)
+        _check_slack_ok(body, "files.upload")
         return body
 
     async def _join_channel(self, data: dict[str, Any]) -> dict[str, Any]:

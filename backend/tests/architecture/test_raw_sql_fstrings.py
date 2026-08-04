@@ -13,13 +13,14 @@ import re
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
-EXCLUDE_PREFIXES = ("modulo/db/migrations",)
 
 
 def _iter_py_files(root: Path):
     for path in root.rglob("*.py"):
-        rel = path.relative_to(root.parent.parent)  # relative to backend/
-        if any(str(rel).startswith(p) for p in EXCLUDE_PREFIXES):
+        # Skip only files *under* a `migrations` directory, relative to the scan
+        # root: the checkout root may itself contain a `migrations` component,
+        # and a file literally named `migrations.py` is not a migration.
+        if any(part == "migrations" for part in path.relative_to(root).parts[:-1]):
             continue
         yield path
 

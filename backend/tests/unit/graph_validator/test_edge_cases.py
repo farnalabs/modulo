@@ -264,6 +264,58 @@ async def test_input_schema_check_missing_schema_skipped():
     assert result.is_valid
 
 
+async def test_input_schema_check_uuid_schema_id():
+    """A schema_id already parsed as a UUID is used directly (no re-parse)."""
+    sid = uuid.uuid4()
+    session = AsyncMock()
+    sv = MagicMock()
+    sv.definition_json = {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
+    exc = MagicMock()
+    exc.scalar_one_or_none.return_value = sv
+    session.execute = AsyncMock(return_value=exc)
+    result = ValidationResult()
+    await GraphValidator()._check_input_schema_compatibility(
+        {
+            "nodes": [
+                {"id": "a", "input_schema_pin": {"schema_id": sid, "schema_version": "1.0"}},
+                {"id": "b"},
+            ],
+            "edges": [{"source": "a", "target": "b", "type": "normal"}],
+        },
+        {"x": "hello"},
+        session,
+        result,
+    )
+    assert result.is_valid
+    assert not result.issues
+
+
+async def test_input_schema_check_mismatched_payload_errors():
+    """A payload violating the input schema produces INPUT_SCHEMA_MISMATCH."""
+    sid = str(uuid.uuid4())
+    session = AsyncMock()
+    sv = MagicMock()
+    sv.definition_json = {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
+    exc = MagicMock()
+    exc.scalar_one_or_none.return_value = sv
+    session.execute = AsyncMock(return_value=exc)
+    result = ValidationResult()
+    await GraphValidator()._check_input_schema_compatibility(
+        {
+            "nodes": [
+                {"id": "a", "input_schema_pin": {"schema_id": sid, "schema_version": "1.0"}},
+                {"id": "b"},
+            ],
+            "edges": [{"source": "a", "target": "b", "type": "normal"}],
+        },
+        {"other": 1},
+        session,
+        result,
+    )
+    assert not result.is_valid
+    assert any(i.code == "INPUT_SCHEMA_MISMATCH" for i in result.issues)
+
+
 # ---------------------------------------------------------------------------
 # _validate_payload — type edge cases
 # ---------------------------------------------------------------------------
@@ -306,6 +358,24 @@ def test_validate_payload_bool_not_number():
 def test_validate_payload_integer_ok_for_number():
     gv = GraphValidator()
     errors = gv._validate_payload({"a": 5}, {"type": "object", "properties": {"a": {"type": "number"}}})
+    assert errors == []
+
+
+def test_validate_payload_missing_required_field():
+    gv = GraphValidator()
+    errors = gv._validate_payload(
+        {"a": 1},
+        {"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "string"}}, "required": ["b"]},
+    )
+    assert any("Missing required field 'b'" in e for e in errors)
+
+
+def test_validate_payload_required_field_present():
+    gv = GraphValidator()
+    errors = gv._validate_payload(
+        {"a": 1, "b": "x"},
+        {"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "string"}}, "required": ["b"]},
+    )
     assert errors == []
 
 

@@ -299,11 +299,13 @@ async def verify_chain(
     events = list(result.scalars())
 
     if not events:
+        # Degenerate case: count reports events but none were fetched (e.g. a
+        # zero/negative max_events). Must not be reported as a valid chain.
         return _make_verify_result(
-            total_events=0,
+            total_events=total_events,
             checked_events=0,
-            truncated=False,
-            valid=True,
+            truncated=total_events > 0,
+            valid=total_events == 0,
         )
 
     truncated = len(events) < total_events

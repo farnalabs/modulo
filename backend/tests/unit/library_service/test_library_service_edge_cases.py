@@ -1,30 +1,24 @@
 """Unit tests for library_service error paths and edge cases.
 
 Covers:
-  - get_primitive: non-transaction path, ProgrammingError, SQLAlchemyError,
-    dogfood fallback
+  - get_primitive: non-transaction path, ProgrammingError, SQLAlchemyError
   - get_primitive_by_slug: full function (DB hit, modulo/community fallback,
-    dogfood fallback, ProgrammingError, SQLAlchemyError)
-  - copy_to_adapt: created_by RLS user context, dogfood fallback, registry
-    download-count increment, refreshed-None LookupError, ProgrammingError
+    ProgrammingError, SQLAlchemyError)
+  - copy_to_adapt: created_by RLS user context, registry download-count
+    increment, refreshed-None LookupError, ProgrammingError
   - list_primitives: ProgrammingError and generic exception degradation
-  - _ensure_dogfood_primitives: empty/absent payload, duplicate pids, malformed JSON
   - _fetch_published_community_from_db: search filter
 """
 
 import asyncio
-import base64
-import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-import modulo.core.library_service as library_service
 from modulo.core.library_service import (
     _MODULO_PRIMITIVES,
-    _ensure_dogfood_primitives,
     _fetch_published_community_from_db,
     copy_to_adapt,
     get_primitive,
@@ -128,33 +122,6 @@ async def test_get_primitive_raises_on_sqlalchemy_error():
         await get_primitive(session, org_id, uuid.uuid4())
 
 
-async def test_get_primitive_falls_back_to_dogfood_when_enabled(monkeypatch: pytest.MonkeyPatch):
-    session = _mock_session()
-    org_id = uuid.uuid4()
-    pid = uuid.uuid4()
-    dogfood = _fake_primitive(pid=pid)
-
-    monkeypatch.setenv("MODULO_DOGFOOD_ENABLED", "true")
-    monkeypatch.setattr(
-        library_service,
-        "_DOGFOOD_PRIMITIVES",
-        None,
-    )
-
-    with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch.object(
-            library_service,
-            "_ensure_dogfood_primitives",
-            return_value=[dogfood],
-        ),
-    ):
-        result = await get_primitive(session, org_id, pid)
-
-    assert result is dogfood
-
-
 # ---------------------------------------------------------------------------
 # get_primitive_by_slug
 # ---------------------------------------------------------------------------
@@ -251,24 +218,6 @@ async def test_get_primitive_by_slug_raises_on_sqlalchemy_error():
         await get_primitive_by_slug(session, org_id, "schema", "test-prim")
 
 
-async def test_get_primitive_by_slug_falls_back_to_dogfood_when_enabled(monkeypatch: pytest.MonkeyPatch):
-    session = _mock_session()
-    org_id = uuid.uuid4()
-    dogfood = _fake_primitive(primitive_type="schema", slug="dogfood-schema")
-
-    monkeypatch.setenv("MODULO_DOGFOOD_ENABLED", "true")
-    monkeypatch.setattr(library_service, "_DOGFOOD_PRIMITIVES", None)
-
-    with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalar_one_result(None)),
-        patch.object(library_service, "_ensure_dogfood_primitives", return_value=[dogfood]),
-    ):
-        result = await get_primitive_by_slug(session, org_id, "schema", "dogfood-schema")
-
-    assert result is dogfood
-
-
 # ---------------------------------------------------------------------------
 # copy_to_adapt — edge cases
 # ---------------------------------------------------------------------------
@@ -308,27 +257,6 @@ async def test_copy_to_adapt_does_not_set_user_context_without_created_by():
         await copy_to_adapt(session, org_id, source.id)
 
     set_user.assert_not_called()
-
-
-async def test_copy_to_adapt_falls_back_to_dogfood_source(monkeypatch: pytest.MonkeyPatch):
-    session = _mock_session()
-    org_id = uuid.uuid4()
-    pid = uuid.uuid4()
-    dogfood = _fake_primitive(pid=pid, visibility="org")
-    copied = _fake_primitive()
-
-    monkeypatch.setenv("MODULO_DOGFOOD_ENABLED", "true")
-    monkeypatch.setattr(library_service, "_DOGFOOD_PRIMITIVES", None)
-
-    with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch.object(library_service, "_ensure_dogfood_primitives", return_value=[dogfood]),
-        patch("modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=copied),
-    ):
-        result = await copy_to_adapt(session, org_id, pid)
-
-    assert result is copied
 
 
 async def test_copy_to_adapt_raises_when_source_disappears_after_refresh():
@@ -495,49 +423,6 @@ async def test_list_primitives_dedupes_db_community_against_in_memory():
     ids = [p.id for p in result.items]
     assert ids.count(first.id) == 1
     assert extra.id in ids
-
-
-# ---------------------------------------------------------------------------
-# _ensure_dogfood_primitives — edge cases
-# ---------------------------------------------------------------------------
-
-
-def _encoded_entries(entries: list[dict]) -> str:
-    return base64.b64encode(json.dumps(entries).encode()).decode()
-
-
-def test_dogfood_returns_empty_when_no_payload(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("MODULO_DOGFOOD_ENABLED", "true")
-    monkeypatch.delenv("MODULO_DOGFOOD_JSON_B64", raising=False)
-    monkeypatch.setattr(library_service, "_DOGFOOD_PRIMITIVES", None)
-
-    assert _ensure_dogfood_primitives() == []
-
-
-def test_dogfood_skips_duplicate_pids(monkeypatch: pytest.MonkeyPatch):
-    entry = {
-        "pid": "00000000-0000-0000-0000-00000000d002",
-        "primitive_type": "schema",
-        "name": "Dup",
-        "slug": "dup",
-        "description": "d",
-        "content_json": {},
-        "tags": [],
-    }
-    monkeypatch.setenv("MODULO_DOGFOOD_ENABLED", "true")
-    monkeypatch.setenv("MODULO_DOGFOOD_JSON_B64", _encoded_entries([entry, entry]))
-    monkeypatch.setattr(library_service, "_DOGFOOD_PRIMITIVES", None)
-
-    loaded = _ensure_dogfood_primitives()
-    assert len(loaded) == 1
-
-
-def test_dogfood_returns_empty_on_malformed_payload(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("MODULO_DOGFOOD_ENABLED", "true")
-    monkeypatch.setenv("MODULO_DOGFOOD_JSON_B64", "not-json")
-    monkeypatch.setattr(library_service, "_DOGFOOD_PRIMITIVES", None)
-
-    assert _ensure_dogfood_primitives() == []
 
 
 # ---------------------------------------------------------------------------

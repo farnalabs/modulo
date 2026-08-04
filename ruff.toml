@@ -32,7 +32,6 @@ ignore = [
 "deploy/*" = ["T20", "S108"]
 "tests/**" = ["S101", "S105", "S106", "S107", "S108", "S112", "S311", "B007", "B008"]
 "docs/**" = ["T20"]
-"e2b-templates/**" = ["T20"]
 ".semgrep/**" = ["F821"]
 "docs/api/examples/**" = ["T20", "S108"]
 "backend/tests/unit/runtime_provider/*" = ["E402"]
