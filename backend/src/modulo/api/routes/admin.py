@@ -3356,9 +3356,7 @@ async def admin_get_storage(
             detail="This feature is not available. Run database migrations to enable it.",
         ) from None
 
-    breakdown: dict[str, int] = {}
-    for row in status_rows:
-        breakdown[row.status] = row.cnt
+    breakdown = {row.status: row.cnt for row in status_rows}
 
     terminal_states = ("complete", "failed", "eval_failed", "cancelled")
     terminal_count = sum(breakdown.get(s, 0) for s in terminal_states)
