@@ -1185,8 +1185,12 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         run's CREATION path (SAQ mode only), NOT ``dispatcher='saq'``, because
         ``dispatch_run`` returns deferred BEFORE recording dispatched_at/
         dispatcher. NO staleness gate (re-dispatch when capacity frees).
-      * pending + dispatched_at set: ``dispatcher='saq'``, stale by the
+      * pending + dispatched_at set + ``dispatcher='saq'``: stale by the
         re-enqueue window.
+      * pending + dispatched_at set + dispatcher IS NULL: zombie from a
+        fail-fast SAQ enqueue failure — ``dispatch_run`` recorded dispatched_at
+        but the enqueue returned without a job, leaving the run stuck with no
+        dispatcher. NO staleness gate (re-dispatch immediately).
       * running: ``dispatcher='saq'``, heartbeat stale by 2*SAQ_JOB_HEARTBEAT.
 
     ``awaiting_human``/``claimed`` are NEVER re-dispatched (F6a review): a
@@ -1242,6 +1246,14 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         )
         re_dispatch_predicate = or_(
             capacity_deferred,
+            # Zombie branch: pending + dispatched_at set + dispatcher NULL — a
+            # fail-fast SAQ enqueue failure wrote dispatched_at but no job was
+            # enqueued. No staleness gate (re-dispatch immediately).
+            and_(
+                Run.status == "pending",
+                Run.dispatched_at.is_not(None),
+                Run.dispatcher.is_(None),
+            ),
             and_(
                 Run.status == "pending",
                 Run.dispatcher == "saq",
