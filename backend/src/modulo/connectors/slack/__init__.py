@@ -22,6 +22,7 @@ _RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
 _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
 _MAX_DELAY = 30.0
+_SEARCH_COUNT_MAX = 100
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
@@ -386,7 +387,7 @@ class SlackConnector(ConnectorBase):
         if "query" not in q.filters:
             raise ValueError("Slack message_search query requires 'query' filter")
         query = q.filters["query"]
-        params: dict[str, Any] = {"query": query, "count": q.limit}
+        params: dict[str, Any] = {"query": query, "count": min(q.limit, _SEARCH_COUNT_MAX)}
         if q.filters.get("sort") in ("score", "timestamp"):
             params["sort"] = q.filters["sort"]
         if q.cursor:

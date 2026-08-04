@@ -1213,6 +1213,27 @@ async def test_query_message_search_with_cursor_and_sort(connector):
 
 
 @respx.mock
+async def test_query_message_search_clamps_count_to_max(connector):
+    respx.get("https://slack.com/api/search.messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": {
+                    "matches": [{"ts": "123459", "text": "match", "user": "U001"}],
+                    "paging": {"count": 100, "total": 1, "page": 1, "pages": 1},
+                },
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="message_search", filters={"query": "match"}, limit=500),
+    )
+    assert len(result.records) == 1
+    assert respx.calls.last.request.url.params.get("count") == "100"
+
+
+@respx.mock
 async def test_query_message_search_missing_query(connector):
     with pytest.raises(ValueError, match="requires 'query' filter"):
         await connector.query(ConnectorQuery(resource="message_search"))

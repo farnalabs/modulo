@@ -55,7 +55,7 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Default to most recent messages when no timestamp filters provided
 - [x] Paginate through full message history — `q.cursor` is forwarded as the `cursor` param on `conversations.history`
 - [x] Read thread replies via `query("thread_replies")` — calls `conversations.replies`, `q.cursor` forwarded
-- [x] Search messages across channels — `query("message_search")` calls `search.messages` with a required `query` filter
+- [x] Search messages across channels — `query("message_search")` calls `search.messages` with a required `query` filter; `q.limit` clamped to Slack's max `count` of 100
 - [x] Support message type filtering (messages vs joins vs pins) — optional `types` filter on `query("messages")`
 
 ### User Operations — workspace user listing
@@ -78,7 +78,7 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Support ephemeral messages via `write("ephemeral_message")` — calls `chat.postEphemeral` with `channel`, `user`, and `text` (at least one of `channel`/`user` required)
 - [x] Update message via `write("message_update")` — calls `chat.update` with `channel`, `ts`, and updated fields
 - [x] Delete message via `write("message_delete")` — calls `chat.delete` with `channel` and `ts`
-- [x] Upload file to channel via `write("file_upload")` — calls `files.upload` (multipart); `filename` plus exactly one of `content`/`file` required, optional `channels`/`initial_comment`/`thread_ts` passed through
+- [x] Upload file to channel via `write("file_upload")` — calls `files.upload` (multipart); `filename` plus exactly one of `content`/`file` required, optional `channels`/`initial_comment`/`thread_ts` passed through. Note: Slack has deprecated `files.upload` in favor of `getUploadURLExternal`/`completeUploadExternal`; legacy endpoint still works and remains the simplest implementation — revisit if Slack retires it.
 - [x] Schedule message via `write("schedule_message")` — calls `chat.scheduleMessage` with `channel` + `post_at` (UNIX timestamp) required
 
 ### Capability Declaration
