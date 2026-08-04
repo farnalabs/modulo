@@ -2,29 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
 
 from modulo.core.library import DOGFOODING_PIPELINE as IMPORTED_DOGFOODING
-from modulo.core.library.agents import __all__ as agent_exports
-from modulo.core.library.agents import definitions as agent_defs
 from modulo.core.library.workflows.definitions import DOGFOODING_PIPELINE
 
-KNOWN_AGENTS: set[str] = {getattr(agent_defs, name)["name"].lower().replace(" ", "-") for name in agent_exports} | {
-    "complexity-reviewer"
-}
-
-VALID_CONNECTOR_TYPES: set[str] = {
-    "source_control",
-    "ci_runner",
-    "ci_cd",
-    "incident_management",
-    "issue_tracking",
-    "filesystem",
-    "monitoring",
-    "messaging",
-}
+from .helpers import KNOWN_AGENTS, VALID_CONNECTOR_TYPES
 
 
 def test_workflow_exists() -> None:
@@ -113,6 +99,11 @@ def test_all_agent_refs_are_known() -> None:
             assert agent in KNOWN_AGENTS, f"Step '{step['id']}' references unknown agent '{agent}'"
 
 
+def test_known_agents_cover_spec_implementer() -> None:
+    """The simplest workflow uses spec-implementer; the catalog must know it."""
+    assert "spec-implementer" in KNOWN_AGENTS
+
+
 def test_all_connector_bindings_are_valid() -> None:
     for step in DOGFOODING_PIPELINE["pipeline_steps"]:
         binding = step.get("connector_binding")
@@ -147,8 +138,6 @@ def test_default_config_keys() -> None:
 
 
 def test_json_roundtrip() -> None:
-    import json
-
     serialized = json.dumps(DOGFOODING_PIPELINE, default=str)
     deserialized = json.loads(serialized)
     assert deserialized["name"] == "Dogfooding Pipeline"

@@ -360,3 +360,70 @@ class TestSaveAsComposite:
             json={"name": "Test", "selected_node_ids": [str(uuid.uuid4())]},
         )
         assert resp.status_code in (401, 403)
+
+
+class TestCompositeDetectParams:
+    """POST /api/v1/composite-templates/detect-params"""
+
+    def test_detects_placeholders_across_node_prompts(self, client: TestClient) -> None:
+        nodes = [
+            {
+                "id": "n1",
+                "node_type": "agent",
+                "prompt_template": "Respond with {{parameter.tone}} feedback.",
+            },
+            {
+                "id": "n2",
+                "node_type": "agent",
+                "prompt": "Cap length at {{parameter.max_length}} words.",
+            },
+        ]
+        resp = client.post(
+            "/api/v1/composite-templates/detect-params",
+            json={"node_ids": ["n1", "n2"], "nodes": nodes},
+        )
+        assert resp.status_code == 200
+        ports = resp.json()["ports"]
+        by_name = {p["name"]: p for p in ports}
+        assert set(by_name) == {"tone", "max_length"}
+        assert by_name["tone"]["label"] == "Tone"
+        assert by_name["tone"]["target_injection"] == {
+            "mode": "prompt_replace",
+            "node_id": "n1",
+            "injection_point": "prompt_template",
+        }
+        assert by_name["max_length"]["target_injection"]["node_id"] == "n2"
+
+    def test_deduplicates_placeholders_across_nodes(self, client: TestClient) -> None:
+        nodes = [
+            {"id": "n1", "prompt_template": "Use {{parameter.tone}} here."},
+            {"id": "n2", "prompt_template": "Also use {{parameter.tone}}."},
+        ]
+        resp = client.post(
+            "/api/v1/composite-templates/detect-params",
+            json={"nodes": nodes},
+        )
+        assert resp.status_code == 200
+        ports = resp.json()["ports"]
+        assert len(ports) == 1
+        assert ports[0]["name"] == "tone"
+        assert ports[0]["target_injection"]["node_id"] == "n1"
+
+    def test_returns_empty_when_no_placeholders(self, client: TestClient) -> None:
+        nodes = [
+            {"id": "n1", "prompt_template": "No placeholders here."},
+            {"id": "n2", "prompt": 42},
+        ]
+        resp = client.post(
+            "/api/v1/composite-templates/detect-params",
+            json={"nodes": nodes},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ports"] == []
+
+    def test_unauthorized(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.post(
+            "/api/v1/composite-templates/detect-params",
+            json={"nodes": []},
+        )
+        assert resp.status_code in (401, 403)

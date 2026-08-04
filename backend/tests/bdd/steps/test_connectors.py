@@ -1808,6 +1808,46 @@ def step_slack_connector(ctx):
                     ],
                     next_cursor=None,
                 )
+            case "user_presence":
+                user = q.filters.get("user")
+                if not user:
+                    raise ValueError("Slack user_presence query requires 'user' filter")
+                return ConnectorResult(
+                    records=[{"user": user, "presence": "active", "online": True}],
+                    next_cursor=None,
+                )
+            case "user_profile":
+                user = q.filters.get("user")
+                if not user:
+                    raise ValueError("Slack user_profile query requires 'user' filter")
+                return ConnectorResult(
+                    records=[
+                        {
+                            "user": user,
+                            "profile": {"display_name": "Alice", "email": "alice@example.com"},
+                        }
+                    ],
+                    next_cursor=None,
+                )
+            case "user_lookup":
+                email = q.filters.get("email")
+                if not email:
+                    raise ValueError("Slack user_lookup query requires 'email' filter")
+                return ConnectorResult(
+                    records=[{"id": "U001", "name": "alice", "profile": {"email": email}}],
+                    next_cursor=None,
+                )
+            case "message_search":
+                query = q.filters.get("query")
+                if not query:
+                    raise ValueError("Slack message_search query requires 'query' filter")
+                return ConnectorResult(
+                    records=[
+                        {"ts": "123456", "text": f"match for {query}", "user": "U001", "channel": {"id": "C001"}},
+                        {"ts": "123457", "text": "another match", "user": "U002", "channel": {"id": "C002"}},
+                    ],
+                    next_cursor=None,
+                )
             case _:
                 raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
@@ -1826,6 +1866,65 @@ def step_slack_connector(ctx):
                 if not thread_ts:
                     raise ValueError("Missing 'thread_ts' in thread_reply payload")
                 return {"ok": True, "ts": "888777", "channel": channel, "thread_ts": thread_ts}
+            case "ephemeral_message":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in ephemeral_message payload")
+                user = payload.data.get("user")
+                if not user:
+                    raise ValueError("Missing 'user' in ephemeral_message payload")
+                return {"ok": True, "message_ts": "888666", "channel": channel, "user": user}
+            case "message_update":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in message_update payload")
+                ts = payload.data.get("ts")
+                if not ts:
+                    raise ValueError("Missing 'ts' in message_update payload")
+                return {"ok": True, "ts": ts, "channel": channel}
+            case "message_delete":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in message_delete payload")
+                ts = payload.data.get("ts")
+                if not ts:
+                    raise ValueError("Missing 'ts' in message_delete payload")
+                return {"ok": True, "ts": ts, "channel": channel}
+            case "channel_join":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in channel_join payload")
+                return {"ok": True, "channel": {"id": channel, "name": "general", "is_member": True}}
+            case "channel_leave":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in channel_leave payload")
+                return {"ok": True, "channel": channel}
+            case "channel_archive":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in channel_archive payload")
+                return {"ok": True, "channel": channel}
+            case "channel_unarchive":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in channel_unarchive payload")
+                return {"ok": True, "channel": channel}
+            case "schedule_message":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in schedule_message payload")
+                post_at = payload.data.get("post_at")
+                if not post_at:
+                    raise ValueError("Missing 'post_at' in schedule_message payload")
+                return {"ok": True, "channel": channel, "post_at": str(post_at), "scheduled_message_id": "Q1234"}
+            case "file_upload":
+                filename = payload.data.get("filename")
+                if not filename:
+                    raise ValueError("Missing 'filename' in file_upload payload")
+                if payload.data.get("content") is None and payload.data.get("file") is None:
+                    raise ValueError("file_upload payload requires 'content' or 'file'")
+                return {"ok": True, "file": {"id": "F1234", "name": filename, "permalink": "https://.../file"}}
             case _:
                 raise ValueError(f"Unsupported Slack write: {payload.resource!r}")
 
@@ -1931,6 +2030,229 @@ def step_slack_post_thread_reply(resource, channel, thread_ts, text, ctx):
     except Exception as exc:
         ctx["write_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with user "{user}"'))
+def step_slack_query_user(resource, user, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"user": user})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with email "{email}"'))
+def step_slack_query_user_email(resource, email, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"email": email})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with query "{query}"'))
+def step_slack_query_message_search(resource, query, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"query": query})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" without a query filter'))
+def step_slack_query_message_search_no_query(resource, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and post_at "{post_at}"'))
+def step_slack_schedule_message(resource, channel, post_at, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "post_at": post_at, "text": "Scheduled"},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" but no post_at'))
+def step_slack_schedule_message_no_post_at(resource, channel, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"channel": channel, "text": "Scheduled"})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with filename "{filename}" and content "{content}"'))
+def step_slack_file_upload(resource, filename, content, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"filename": filename, "content": content, "channels": "C001"},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with filename "{filename}" but no content'))
+def step_slack_file_upload_no_content(resource, filename, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"filename": filename})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and user "{user}" and text "{text}"'))
+def step_slack_post_ephemeral_message(resource, channel, user, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "user": user, "text": text},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and ts "{ts}" and text "{text}"'))
+def step_slack_update_message(resource, channel, ts, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "ts": ts, "text": text},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and ts "{ts}"'))
+def step_slack_delete_message(resource, channel, ts, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "ts": ts},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}"'))
+def step_slack_channel_write(resource, channel, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"channel": channel})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" but no user'))
+def step_slack_ephemeral_no_user(resource, channel, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"channel": channel, "text": "Hello"})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
 
 
 @then("the records contain channel metadata")
@@ -2171,6 +2493,15 @@ def step_gitlab_connector(ctx):
                     records=[{"id": 10, "name": "test", "status": "success"}],
                     total=1,
                 )
+            case "tree":
+                return ConnectorResult(
+                    records=[
+                        {"id": "t1", "name": "src", "type": "tree", "path": "src"},
+                        {"id": "t2", "name": "README.md", "type": "blob", "path": "README.md"},
+                        {"id": "t3", "name": "main.py", "type": "blob", "path": "src/main.py"},
+                    ],
+                    total=3,
+                )
             case _:
                 raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
 
@@ -2205,6 +2536,30 @@ def step_gitlab_connector(ctx):
                 return {"id": 50, "iid": int(payload.data.get("iid", 0)), "approved": True}
             case "mr_comment":
                 return {"id": 300, "body": payload.data.get("body", ""), "author": {"id": 1}}
+            case "files" | "commit":
+                actions = payload.data.get("actions", [])
+                for action in actions:
+                    path = action.get("file_path", "")
+                    if any(part == ".." for part in path.replace("\\", "/").split("/")):
+                        raise ValueError(f"GitLab resource 'files': path traversal blocked: {path!r}")
+                    previous = action.get("previous_path")
+                    if previous and any(part == ".." for part in previous.replace("\\", "/").split("/")):
+                        raise ValueError(f"GitLab resource 'files': path traversal blocked: {previous!r}")
+                if not actions:
+                    raise ValueError("GitLab resource 'files' requires a non-empty 'actions' list")
+                return {"id": "abc123", "short_id": "abc123", "title": payload.data.get("message", "Update via Modulo")}
+            case "mr_approval_request":
+                if not payload.data.get("user_ids") and not payload.data.get("user_emails"):
+                    raise ValueError(
+                        f"GitLab resource {payload.resource!r} requires 'user_ids' and/or 'user_emails'",
+                    )
+                return {
+                    "id": 3,
+                    "name": payload.data.get("name", "Requested approvers"),
+                    "rule_type": "approval",
+                    "approvals_required": payload.data.get("approvals_required", 1),
+                    "users": payload.data.get("user_ids", []),
+                }
             case _:
                 raise ValueError(f"Unsupported GitLab write: {payload.resource!r}")
 
@@ -2561,6 +2916,145 @@ def step_gitlab_write_mr_comment(project, iid, body, ctx):
     except Exception as exc:
         ctx["write_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query GitLab tree for project "{project}" with path "{path}" and recursive'))
+def step_gitlab_query_tree_recursive(project, path, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(
+        resource="tree",
+        filters={"project": project, "path": path, "recursive": True},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the tree result contains nested entries")
+def step_gitlab_tree_nested(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No tree query result"
+    paths = {r["path"] for r in result.records}
+    assert "src/main.py" in paths, f"Expected nested entry src/main.py in {paths}"
+
+
+@when(parsers.parse('I write GitLab files batch for project "{project}"'))
+def step_gitlab_write_files_batch(project, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="files",
+        data={
+            "project": project,
+            "actions": [
+                {"action": "create", "file_path": "src/a.py", "content": "print(1)"},
+                {"action": "update", "file_path": "src/b.py", "content": "print(2)"},
+                {"action": "delete", "file_path": "src/old.py"},
+            ],
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the batch write reports a commit id")
+def step_gitlab_batch_commit_id(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No batch write result"
+    assert result.get("id"), f"Expected a commit id in {result}"
+
+
+@when(parsers.parse('I write GitLab files batch for project "{project}" with traversal path "{path}"'))
+def step_gitlab_write_files_traversal(project, path, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="files",
+        data={
+            "project": project,
+            "actions": [{"action": "create", "file_path": path, "content": "x"}],
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write GitLab mr_approval_request for project "{project}" and iid "{iid}" for users "{user_ids}"',
+    ),
+)
+def step_gitlab_write_mr_approval_request(project, iid, user_ids, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    parsed_ids = [int(uid) for uid in user_ids.split(",") if uid.strip()]
+    payload = ConnectorPayload(
+        resource="mr_approval_request",
+        data={"project": project, "iid": iid, "user_ids": parsed_ids},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the approval request reports the requested approvers")
+def step_gitlab_approval_request_users(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No approval request result"
+    assert result.get("rule_type") == "approval"
+    assert result.get("users") == [10, 11], f"Expected users [10, 11] in {result}"
+
+
+@when(parsers.parse('I write GitLab mr_approval_request for project "{project}" and iid "{iid}" with no users'))
+def step_gitlab_write_mr_approval_request_no_users(project, iid, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="mr_approval_request",
+        data={"project": project, "iid": iid},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the approval request errors with a missing users message")
+def step_gitlab_approval_request_missing_users(ctx):
+    assert ctx["query_error"], "Expected an error, got none"
+    assert "user_ids" in ctx["query_error"] or "user_emails" in ctx["query_error"], ctx["query_error"]
 
 
 @given("a GitLab connector with invalid token")

@@ -1,4 +1,3 @@
-import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -6,8 +5,6 @@ from langchain_core.messages import BaseMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
-
-logger = logging.getLogger(__name__)
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 

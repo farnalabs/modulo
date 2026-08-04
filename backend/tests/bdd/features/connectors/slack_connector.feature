@@ -93,3 +93,83 @@ Feature: Slack Connector
     Given a Slack connector with valid bot token
     When I write resource "thread_reply" with channel "C001" and thread_ts "123456.000001" and text "A reply"
     Then the write succeeds
+
+  Scenario: Get user presence status
+    Given a Slack connector with valid bot token
+    When I query resource "user_presence" with user "U001"
+    Then the result has records
+
+  Scenario: Get user profile
+    Given a Slack connector with valid bot token
+    When I query resource "user_profile" with user "U001"
+    Then the result has records
+
+  Scenario: Lookup user by email
+    Given a Slack connector with valid bot token
+    When I query resource "user_lookup" with email "alice@example.com"
+    Then the result has records
+
+  Scenario: Post an ephemeral message
+    Given a Slack connector with valid bot token
+    When I write resource "ephemeral_message" with channel "C001" and user "U001" and text "Private note"
+    Then the write succeeds
+
+  Scenario: Update a message
+    Given a Slack connector with valid bot token
+    When I write resource "message_update" with channel "C001" and ts "123456.000001" and text "Edited"
+    Then the write succeeds
+
+  Scenario: Delete a message
+    Given a Slack connector with valid bot token
+    When I write resource "message_delete" with channel "C001" and ts "123456.000001"
+    Then the write succeeds
+
+  Scenario: Join a channel
+    Given a Slack connector with valid bot token
+    When I write resource "channel_join" with channel "C002"
+    Then the write succeeds
+
+  Scenario: Archive a channel
+    Given a Slack connector with valid bot token
+    When I write resource "channel_archive" with channel "C002"
+    Then the write succeeds
+
+  Scenario: Unarchive a channel
+    Given a Slack connector with valid bot token
+    When I write resource "channel_unarchive" with channel "C002"
+    Then the write succeeds
+
+  Scenario: Ephemeral message without user raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "ephemeral_message" with channel "C001" but no user
+    Then the write is an error
+
+  Scenario: Search messages across channels
+    Given a Slack connector with valid bot token
+    When I query resource "message_search" with query "deploy failed"
+    Then the result has records
+
+  Scenario: Search messages without query raises an error
+    Given a Slack connector with valid bot token
+    When I query resource "message_search" without a query filter
+    Then the result is an error
+
+  Scenario: Schedule a message
+    Given a Slack connector with valid bot token
+    When I write resource "schedule_message" with channel "C001" and post_at "1610118217"
+    Then the write succeeds
+
+  Scenario: Schedule message without post_at raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "schedule_message" with channel "C001" but no post_at
+    Then the write is an error
+
+  Scenario: Upload a file to a channel
+    Given a Slack connector with valid bot token
+    When I write resource "file_upload" with filename "notes.txt" and content "hello"
+    Then the write succeeds
+
+  Scenario: Upload file without content raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "file_upload" with filename "notes.txt" but no content
+    Then the write is an error

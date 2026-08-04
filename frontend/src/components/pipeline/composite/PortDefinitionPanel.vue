@@ -8,6 +8,7 @@ import type { ParameterPort, ParameterPortType } from "../../../types/pipeline";
 const props = defineProps<{
   ports: ParameterPort[];
   nodeIds: string[];
+  nodes: Record<string, unknown>[];
 }>();
 
 const emit = defineEmits<{
@@ -139,7 +140,7 @@ async function detectPlaceholders() {
   try {
     const result = await post<{ ports: ParameterPort[] }>(
       "/api/v1/composite-templates/detect-params",
-      { node_ids: props.nodeIds },
+      { node_ids: props.nodeIds, nodes: props.nodes },
     );
     if (result.ports && result.ports.length > 0) {
       const existing = new Set(props.ports.map((p) => p.name));

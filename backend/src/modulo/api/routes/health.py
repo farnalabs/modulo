@@ -30,7 +30,7 @@ from sqlalchemy import text
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
-from modulo.settings import Settings, get_settings
+from modulo.settings import Settings, break_glass_boot_findings, get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -46,6 +46,16 @@ _START_TIME: datetime = datetime.now(UTC)
 _STALE_PROBE_LIMIT = 4
 _consecutive_stale_probes: int = 0
 
+# Break-glass watchdog state, published at boot by the lifespan and exposed on
+# /healthz as ADVISORY only — it never flips readiness.
+_break_glass_watchdog: dict[str, str] = {"status": "ok", "detail": "break-glass watchdog not run at boot"}
+
+
+def set_break_glass_watchdog(status: str, detail: str) -> None:
+    """Record the boot-time break-glass watchdog outcome (called by the lifespan)."""
+    _break_glass_watchdog["status"] = status
+    _break_glass_watchdog["detail"] = detail
+
 
 class CheckResult(BaseModel):
     status: Literal["ok", "degraded", "unavailable"]
@@ -58,6 +68,20 @@ class ReadinessResponse(BaseModel):
     version: str
     uptime_seconds: float
     checks: dict[str, CheckResult]
+
+
+def _check_break_glass() -> CheckResult:
+    """ADVISORY break-glass watchdog exposure — never contributes to readiness.
+
+    Re-evaluates the URL/secret-presence boot findings against the current
+    settings; the allow-list/role-posture assertions are fatal at boot and do
+    not recur here.
+    """
+    settings = get_settings()
+    findings = break_glass_boot_findings(settings)
+    if findings:
+        return CheckResult(status="degraded", detail="; ".join(message for _blocking, message in findings))
+    return CheckResult(status="ok", detail=_break_glass_watchdog.get("detail") or "break-glass boot config clean")
 
 
 def _per_check_timeout(settings: Settings, override_field: str) -> float:
@@ -382,6 +406,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         _check_migrations(),
         _check_saq_workers(),
     )
+    bg_check = _check_break_glass()
 
     checks: dict[str, CheckResult] = {
         "database": db_check,
@@ -389,9 +414,19 @@ async def readiness(response: Response) -> ReadinessResponse:
         "checkpointer": cp_check,
         "migrations": mig_check,
         "saq_workers": saq_check,
+        # ADVISORY only — excluded from the aggregate so a break-glass config
+        # warning never degrades readiness (plan §3 watchdog reduction).
+        "break_glass": bg_check,
     }
 
-    statuses = [c.status for c in checks.values()]
+    # Aggregate over the NON-advisory checks only.
+    statuses = [
+        db_check.status,
+        redis_check.status,
+        cp_check.status,
+        mig_check.status,
+        saq_check.status,
+    ]
     if "unavailable" in statuses:
         overall: Literal["ok", "degraded", "unavailable"] = "unavailable"
         response.status_code = 503
