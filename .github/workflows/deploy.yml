@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      skip_staging_e2e:
+        description: 'Skip staging E2E tests and deploy directly to production'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: deploy-pipeline-${{ github.event.workflow_run.head_branch || github.ref_name }}
@@ -311,7 +316,8 @@ jobs:
 
   deploy-production:
     name: Deploy to app.modulo.run
-    needs: [staging-e2e]
+    needs: [pre-deploy-tests, staging-e2e]
+    if: always() && (needs.staging-e2e.result == 'success' || inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
