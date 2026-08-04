@@ -143,7 +143,7 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
         patch("modulo.api.routes.webhooks.dispatch_run_sync", lambda *a, **k: None),
         # Org-wide pause gate: the mocked org read is a MagicMock that would
         # fail-closed as paused — force the deterministic state instead.
-        patch("modulo.api.routes.webhooks.org_is_paused", new_callable=AsyncMock, return_value=paused),
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=paused),
         # Route-level timestamp/HMAC validation against the mocked trigger's
         # MagicMock config_json would 400/401 the happy path — bypass it (the
         # engine-level HMAC handling is covered by webhook_hmac.feature).
