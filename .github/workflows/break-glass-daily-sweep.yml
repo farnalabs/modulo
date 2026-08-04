@@ -62,20 +62,20 @@ jobs:
           if echo "$OUTPUT" | grep -q "PreconditionError"; then
             # Try to parse JSON output — if present, it's live rows; if not, auth failure
             if echo "$OUTPUT" | python3 -c "
-import sys, json
-data = sys.stdin.read()
-for line in data.split(chr(10)):
-    line = line.strip()
-    if line.startswith('[') or line.startswith('{'):
-        try:
-            rows = json.loads(line)
-            if isinstance(rows, list) and len(rows) > 0:
-                sys.exit(0)
-            break
-        except:
-            continue
-sys.exit(1)
-"; then
+            import sys, json
+            data = sys.stdin.read()
+            for line in data.split(chr(10)):
+                line = line.strip()
+                if line.startswith('[') or line.startswith('{'):
+                    try:
+                        rows = json.loads(line)
+                        if isinstance(rows, list) and len(rows) > 0:
+                            sys.exit(0)
+                        break
+                    except:
+                        continue
+            sys.exit(1)
+            "; then
               echo "::error::LIVE BREAK-GLASS ROWS: $(echo "$OUTPUT" | python3 -c "import sys,json; [print(r.get('org_id',''),r.get('account_id',''),r.get('state','')) for r in (json.loads(next(l for l in sys.stdin.read().split(chr(10)) if l.strip().startswith('['))) or []) if r.get('state')=='live']")"
               exit 5
             else
