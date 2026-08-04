@@ -444,7 +444,9 @@ async def _daily_spend_limit_reached(
     limit = trigger.daily_spend_limit
     if limit is None:
         return None
-    today_start = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    from modulo.core.cost_controller import created_at_day_start
+
+    today_start = created_at_day_start()
     cost_result = await session.execute(
         select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
             Run.trigger_id == trigger.id,

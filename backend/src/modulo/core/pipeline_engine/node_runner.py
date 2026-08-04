@@ -227,16 +227,35 @@ except Exception:
     _log.debug("sandbox_cost.e2b_rate_lookup_failed; using default", exc_info=True)
 
 
+def _e2b_rate_runtime() -> float:
+    """The E2B hourly rate read at RUNTIME via ``get_settings()`` (§3.3).
+
+    Routing the rate through ``get_settings()`` at RUNTIME (instead of the
+    import-time read) is a REAL code change: an env override of
+    ``E2B_SANDBOX_USD_PER_HOUR`` must move the boundary everywhere — including
+    this legacy fallback path — without a process restart. Falls back to the
+    module default when Settings is unavailable (never raises).
+    """
+    try:
+        from modulo.settings import get_settings
+
+        return float(get_settings().e2b_sandbox_usd_per_hour)
+    except Exception:
+        _log.debug("sandbox_cost.e2b_rate_runtime_lookup_failed; using default", exc_info=True)
+        return _E2B_SANDBOX_USD_PER_HOUR
+
+
 def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
     """Estimate the USD cost of a sandbox_agent dispatch.
 
     Combines Modulo's own sandbox uptime estimate (wall-clock seconds at the
-    configured E2B hourly rate) with the agent's self-reported cost estimate
-    (``cost_estimate_usd`` in its structured output contract, written by the
-    agent to /home/user/output.json). Non-finite estimates (NaN/inf) are
+    RUNTIME Settings E2B hourly rate) with the agent's self-reported cost
+    estimate (``cost_estimate_usd`` in its structured output contract, written
+    by the agent to /home/user/output.json). Non-finite estimates (NaN/inf) are
     discarded. Returns a plain JSON-serialisable float.
     """
-    sandbox_cost = round((elapsed_seconds / 3600.0) * _E2B_SANDBOX_USD_PER_HOUR, 6)
+    rate = _e2b_rate_runtime()
+    sandbox_cost = round((elapsed_seconds / 3600.0) * rate, 6)
     agent_reported_cost = 0.0
     if isinstance(output_json, dict):
         try:
