@@ -142,6 +142,12 @@ class SlackConnector(ConnectorBase):
                 return await self._get_channel_members(q)
             case "thread_replies":
                 return await self._get_thread_replies(q)
+            case "user_presence":
+                return await self._get_user_presence(q)
+            case "user_profile":
+                return await self._get_user_profile(q)
+            case "user_lookup":
+                return await self._lookup_user_by_email(q)
             case _:
                 raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
@@ -151,6 +157,20 @@ class SlackConnector(ConnectorBase):
                 return await self._post_message(payload.data)
             case "thread_reply":
                 return await self._post_thread_reply(payload.data)
+            case "ephemeral_message":
+                return await self._post_ephemeral_message(payload.data)
+            case "message_update":
+                return await self._update_message(payload.data)
+            case "message_delete":
+                return await self._delete_message(payload.data)
+            case "channel_join":
+                return await self._join_channel(payload.data)
+            case "channel_leave":
+                return await self._leave_channel(payload.data)
+            case "channel_archive":
+                return await self._archive_channel(payload.data)
+            case "channel_unarchive":
+                return await self._unarchive_channel(payload.data)
             case _:
                 raise ValueError(f"Unsupported Slack write resource: {payload.resource!r}")
 
@@ -267,4 +287,122 @@ class SlackConnector(ConnectorBase):
         )
         body: dict[str, Any] = await self._parse_json(r)
         _check_slack_ok(body, "chat.postMessage (thread)")
+        return body
+
+    async def _get_user_presence(self, q: ConnectorQuery) -> ConnectorResult:
+        if "user" not in q.filters:
+            raise ValueError("Slack user_presence query requires 'user' filter")
+        user = q.filters["user"]
+        r = await self._call_api("GET", "/users.getPresence", params={"user": user})
+        body = await self._parse_json(r)
+        _check_slack_ok(body, "users.getPresence")
+        return ConnectorResult(records=[{"user": user, **body}])
+
+    async def _get_user_profile(self, q: ConnectorQuery) -> ConnectorResult:
+        if "user" not in q.filters:
+            raise ValueError("Slack user_profile query requires 'user' filter")
+        user = q.filters["user"]
+        params: dict[str, Any] = {"user": user}
+        if q.filters.get("include_labels"):
+            params["include_labels"] = q.filters["include_labels"]
+        r = await self._call_api("GET", "/users.profile.get", params=params)
+        body = await self._parse_json(r)
+        _check_slack_ok(body, "users.profile.get")
+        return ConnectorResult(records=[{"user": user, **body}])
+
+    async def _lookup_user_by_email(self, q: ConnectorQuery) -> ConnectorResult:
+        if "email" not in q.filters:
+            raise ValueError("Slack user_lookup query requires 'email' filter")
+        email = q.filters["email"]
+        r = await self._call_api("GET", "/users.lookupByEmail", params={"email": email})
+        body = await self._parse_json(r)
+        _check_slack_ok(body, "users.lookupByEmail")
+        return ConnectorResult(records=[body.get("user", {})])
+
+    async def _post_ephemeral_message(self, data: dict[str, Any]) -> dict[str, Any]:
+        if "channel" not in data:
+            raise ValueError("Missing 'channel' in ephemeral_message payload")
+        if "user" not in data:
+            raise ValueError("Missing 'user' in ephemeral_message payload")
+        channel = data["channel"]
+        user = data["user"]
+        body_data = {k: v for k, v in data.items() if k not in ("channel", "user")}
+        r = await self._call_api(
+            "POST",
+            "/chat.postEphemeral",
+            json={"channel": channel, "user": user, **body_data},
+        )
+        body: dict[str, Any] = await self._parse_json(r)
+        _check_slack_ok(body, "chat.postEphemeral")
+        return body
+
+    async def _update_message(self, data: dict[str, Any]) -> dict[str, Any]:
+        if "channel" not in data:
+            raise ValueError("Missing 'channel' in message_update payload")
+        if "ts" not in data:
+            raise ValueError("Missing 'ts' in message_update payload")
+        channel = data["channel"]
+        ts = data["ts"]
+        body_data = {k: v for k, v in data.items() if k not in ("channel", "ts")}
+        r = await self._call_api(
+            "POST",
+            "/chat.update",
+            json={"channel": channel, "ts": ts, **body_data},
+        )
+        body: dict[str, Any] = await self._parse_json(r)
+        _check_slack_ok(body, "chat.update")
+        return body
+
+    async def _delete_message(self, data: dict[str, Any]) -> dict[str, Any]:
+        if "channel" not in data:
+            raise ValueError("Missing 'channel' in message_delete payload")
+        if "ts" not in data:
+            raise ValueError("Missing 'ts' in message_delete payload")
+        channel = data["channel"]
+        ts = data["ts"]
+        body_data = {k: v for k, v in data.items() if k not in ("channel", "ts")}
+        r = await self._call_api(
+            "POST",
+            "/chat.delete",
+            json={"channel": channel, "ts": ts, **body_data},
+        )
+        body: dict[str, Any] = await self._parse_json(r)
+        _check_slack_ok(body, "chat.delete")
+        return body
+
+    async def _join_channel(self, data: dict[str, Any]) -> dict[str, Any]:
+        if "channel" not in data:
+            raise ValueError("Missing 'channel' in channel_join payload")
+        channel = data["channel"]
+        body_data = {k: v for k, v in data.items() if k != "channel"}
+        r = await self._call_api("POST", "/conversations.join", json={"channel": channel, **body_data})
+        body: dict[str, Any] = await self._parse_json(r)
+        _check_slack_ok(body, "conversations.join")
+        return body
+
+    async def _leave_channel(self, data: dict[str, Any]) -> dict[str, Any]:
+        if "channel" not in data:
+            raise ValueError("Missing 'channel' in channel_leave payload")
+        channel = data["channel"]
+        r = await self._call_api("POST", "/conversations.leave", json={"channel": channel})
+        body: dict[str, Any] = await self._parse_json(r)
+        _check_slack_ok(body, "conversations.leave")
+        return body
+
+    async def _archive_channel(self, data: dict[str, Any]) -> dict[str, Any]:
+        if "channel" not in data:
+            raise ValueError("Missing 'channel' in channel_archive payload")
+        channel = data["channel"]
+        r = await self._call_api("POST", "/conversations.archive", json={"channel": channel})
+        body: dict[str, Any] = await self._parse_json(r)
+        _check_slack_ok(body, "conversations.archive")
+        return body
+
+    async def _unarchive_channel(self, data: dict[str, Any]) -> dict[str, Any]:
+        if "channel" not in data:
+            raise ValueError("Missing 'channel' in channel_unarchive payload")
+        channel = data["channel"]
+        r = await self._call_api("POST", "/conversations.unarchive", json={"channel": channel})
+        body: dict[str, Any] = await self._parse_json(r)
+        _check_slack_ok(body, "conversations.unarchive")
         return body
