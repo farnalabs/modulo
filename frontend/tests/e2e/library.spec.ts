@@ -21,10 +21,14 @@ test.describe('Library Page', () => {
 
     await page.goto('/library')
 
-    const filter = page.getByTestId('library-type-filter')
+    const filter = page.getByTestId('library-type-filter-button')
     await expect(filter).toBeVisible()
+    await filter.click()
 
-    const options = await filter.locator('option').allTextContents()
+    const dropdown = page.getByTestId('library-type-filter-dropdown')
+    await expect(dropdown).toBeVisible()
+
+    const options = await dropdown.locator('label').allTextContents()
     expect(options.length).toBeGreaterThan(1)
   })
 

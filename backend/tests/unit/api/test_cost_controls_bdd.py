@@ -452,3 +452,107 @@ class TestAdminGetSpendLimits:
         assert data["org_daily_spend_limit"] == 100.0
         assert len(data["team_limits"]) == 1
         assert data["team_limits"][0]["daily_spend_limit"] == 50.0
+
+
+# ===========================================================================
+# GET /api/v1/admin/costs/controls — fresh/empty DB regression
+# ===========================================================================
+
+
+class TestAdminGetCostControls:
+    """GET /api/v1/admin/costs/controls against a fresh/empty database.
+
+    The endpoint must return 200 with sensible defaults (empty team list, null
+    budget) when the org exists but has no teams and no spend limit set, and
+    must never 500 on NULL/unusable spend-limit values.
+    """
+
+    ENDPOINT = "/api/v1/admin/costs/controls"
+
+    def test_empty_database_returns_defaults(self, client: TestClient) -> None:
+        """Fresh DB: org present, no teams, NULL org spend limit -> 200 + defaults."""
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.daily_spend_limit = None
+
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["teams"] == []
+        assert data["budget"] is None
+
+    def test_missing_org_returns_defaults(self, client: TestClient) -> None:
+        """No organisation row -> 200 with empty teams and null budget."""
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=None),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["teams"] == []
+        assert data["budget"] is None
+
+    def test_populated_database_returns_values(self, client: TestClient) -> None:
+        """Populated DB: org limit + team limits are returned correctly."""
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.daily_spend_limit = Decimal("1000.00")
+
+        team_a = MagicMock()
+        team_a.id = _TEAM_ID
+        team_a.name = "Alpha"
+        team_a.daily_spend_limit = Decimal("250.50")
+
+        team_b = MagicMock()
+        team_b.id = uuid.UUID("20000000-0000-0000-0000-000000000001")
+        team_b.name = "Beta"
+        team_b.daily_spend_limit = None
+
+        page_result = MagicMock(items=[team_a, team_b], total=2, page=1, page_size=1000)
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["budget"] == 1000.0
+        assert len(data["teams"]) == 2
+        assert data["teams"][0] == {"id": str(_TEAM_ID), "name": "Alpha", "daily_limit_usd": 250.5}
+        assert data["teams"][1]["daily_limit_usd"] is None
+
+    def test_unusable_spend_limit_value_does_not_500(self, client: TestClient) -> None:
+        """A NaN/odd stored spend limit must serialize as null, not 500."""
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.daily_spend_limit = Decimal("NaN")
+
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["teams"] == []
+        assert data["budget"] is None

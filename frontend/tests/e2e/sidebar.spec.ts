@@ -32,6 +32,17 @@ test.describe('Sidebar Navigation', () => {
     await page.goto('/')
 
     const sidebar = page.locator('nav[aria-label="Main navigation"]').first()
+
+    // Expand every collapsed group so all links are visible before asserting
+    const groupHeaders = sidebar.locator('button.sidebar-group-header')
+    const headerCount = await groupHeaders.count()
+    for (let i = 0; i < headerCount; i++) {
+      const header = groupHeaders.nth(i)
+      if ((await header.getAttribute('aria-expanded')) === 'false') {
+        await header.click()
+      }
+    }
+
     const sidebarLinks = sidebar.locator('a.sidebar-link')
     const count = await sidebarLinks.count()
     expect(count).toBeGreaterThan(0)

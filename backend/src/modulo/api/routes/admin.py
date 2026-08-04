@@ -3092,8 +3092,14 @@ async def admin_get_retention(
         ) from None
 
     retention_days = 90
-    if row and isinstance(row, dict):
-        retention_days = row.get("retention_days", 90)
+    if isinstance(row, dict):
+        raw = row.get("retention_days", 90)
+        if isinstance(raw, bool):
+            retention_days = 90
+        elif isinstance(raw, int) and raw > 0:
+            retention_days = raw
+        elif isinstance(raw, str) and raw.isdigit():
+            retention_days = int(raw)
     return RetentionConfigResponse(retention_days=retention_days)
 
 
