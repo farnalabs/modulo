@@ -183,11 +183,12 @@ class TestDeleteSecret:
         mock_session.flush.assert_called_once()
 
     async def test_noop_when_missing(self):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=_make_session())
+        session = _make_session()
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
 
         await backend.delete_secret("missing-key")
 
-        backend._session.flush.assert_called_once()
+        session.flush.assert_called_once()
 
     async def test_no_session_raises_runtime_error(self):
         backend = FernetSecretsBackend(fernet_key=_KEY)

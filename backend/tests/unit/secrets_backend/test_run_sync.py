@@ -47,21 +47,25 @@ class TestRunSync:
 
     async def test_timeout_raises_timeout_error(self) -> None:
         release = threading.Event()
+        done = threading.Event()
 
         def slow() -> None:
             release.wait(5)
+            done.set()
 
         with pytest.raises(TimeoutError):
             await run_sync(slow, timeout_seconds=0.05)
         # Let the worker thread unwind so it does not outlive the test.
         release.set()
-        await asyncio.sleep(0.05)
+        await asyncio.to_thread(done.wait, 5)
 
     async def test_cancellation_propagates(self) -> None:
         release = threading.Event()
+        done = threading.Event()
 
         def long_running() -> None:
             release.wait(5)
+            done.set()
 
         task = asyncio.create_task(run_sync(long_running))
         await asyncio.sleep(0.01)
@@ -70,7 +74,7 @@ class TestRunSync:
             await task
         # Let the worker thread unwind so it does not outlive the test.
         release.set()
-        await asyncio.sleep(0.05)
+        await asyncio.to_thread(done.wait, 5)
 
     def test_default_timeout_is_sane(self) -> None:
         assert DEFAULT_TIMEOUT == 30.0
