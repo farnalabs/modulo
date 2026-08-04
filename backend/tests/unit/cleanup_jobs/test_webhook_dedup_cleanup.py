@@ -188,3 +188,46 @@ class TestCleanupSchedulerLoop:
         assert mock_sleep.await_count == 2
         assert mock_sleep.await_args_list[0].args == (1,)
         assert mock_sleep.await_args_list[1].args == (2,)
+
+    async def test_backoff_caps_at_cleanup_interval(self) -> None:
+        """Exponential backoff must never exceed the cleanup interval."""
+        factory = _make_factory(AsyncMock())
+
+        errors = [OSError("boom")] * 13 + [asyncio.CancelledError()]
+        with (
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
+                side_effect=errors,
+            ) as mock_cleanup,
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+        ):
+            await cleanup_scheduler_loop(factory)
+
+        assert mock_cleanup.await_count == len(errors)
+        assert mock_sleep.await_count == 13
+        assert mock_sleep.await_args_list[-1].args == (_CLEANUP_INTERVAL_SECONDS,)
+
+    async def test_resets_backoff_after_success_preceded_by_errors(self) -> None:
+        """A successful drain must reset backoff to the full interval even after errors."""
+        factory = _make_factory(AsyncMock())
+
+        with (
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.cleanup_old_webhook_events",
+                side_effect=[OSError("boom"), OSError("boom"), BATCH_SIZE, 3, asyncio.CancelledError()],
+            ) as mock_cleanup,
+            patch(
+                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+        ):
+            await cleanup_scheduler_loop(factory)
+
+        assert mock_cleanup.await_count == 5
+        assert mock_sleep.await_count == 3
+        assert mock_sleep.await_args_list[0].args == (1,)
+        assert mock_sleep.await_args_list[1].args == (2,)
+        assert mock_sleep.await_args_list[2].args == (_CLEANUP_INTERVAL_SECONDS,)
