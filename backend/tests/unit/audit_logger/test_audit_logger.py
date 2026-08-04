@@ -323,6 +323,128 @@ class TestVerifyChain:
         assert result["chain_head_match"] is False
         assert result["chain_count_mismatch"] is False
 
+    async def test_verify_chain_count_mismatch(self, session):
+        """A head.event_count disagreeing with the actual count invalidates the chain."""
+        org_id = uuid.uuid4()
+        event_id1 = uuid.uuid4()
+        event_id2 = uuid.uuid4()
+
+        h1 = _compute_event_hash("e1", None, None, None, {}, None, None, str(event_id1), str(org_id), "t1")
+        h2 = _compute_event_hash("e2", None, None, None, {}, None, h1, str(event_id2), str(org_id), "t2")
+
+        e1 = _make_event(event_id=event_id1, org_id=org_id, event_type="e1", previous_hash=None, created_at_val="t1")
+        e2 = _make_event(event_id=event_id2, org_id=org_id, event_type="e2", previous_hash=h1, created_at_val="t2")
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _scalar_result(2)
+            if call_count == 2:
+                return _scalars_result([e1, e2])
+            # Third call: chain head whose event_count does not match reality.
+            head = MagicMock()
+            head.last_event_hash = h2
+            head.event_count = 7
+            return _head_result(head)
+
+        session.execute = _execute
+
+        result = await verify_chain(session, org_id)
+        assert result["valid"] is False
+        assert result["checked_events"] == 2
+        assert result["truncated"] is False
+        assert result["chain_head_match"] is True
+        assert result["chain_count_mismatch"] is True
+
+    async def test_verify_chain_head_count_none_is_valid(self, session):
+        """A head with event_count=None must not trigger a count mismatch."""
+        org_id = uuid.uuid4()
+        event_id1 = uuid.uuid4()
+        event_id2 = uuid.uuid4()
+
+        h1 = _compute_event_hash("e1", None, None, None, {}, None, None, str(event_id1), str(org_id), "t1")
+        h2 = _compute_event_hash("e2", None, None, None, {}, None, h1, str(event_id2), str(org_id), "t2")
+
+        e1 = _make_event(event_id=event_id1, org_id=org_id, event_type="e1", previous_hash=None, created_at_val="t1")
+        e2 = _make_event(event_id=event_id2, org_id=org_id, event_type="e2", previous_hash=h1, created_at_val="t2")
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _scalar_result(2)
+            if call_count == 2:
+                return _scalars_result([e1, e2])
+            head = MagicMock()
+            head.last_event_hash = h2
+            head.event_count = None
+            return _head_result(head)
+
+        session.execute = _execute
+
+        result = await verify_chain(session, org_id)
+        assert result["valid"] is True
+        assert result["chain_head_match"] is True
+        assert result["chain_count_mismatch"] is False
+
+    async def test_verify_detects_tampered_first_event(self, session):
+        """A first event that carries a previous_hash (should be None) is tampering."""
+        org_id = uuid.uuid4()
+        event_id1 = uuid.uuid4()
+        event_id2 = uuid.uuid4()
+
+        e1 = _make_event(
+            event_id=event_id1,
+            org_id=org_id,
+            event_type="e1",
+            previous_hash="stray-hash",
+            created_at_val="t1",
+        )
+        e2 = _make_event(event_id=event_id2, org_id=org_id, event_type="e2", created_at_val="t2")
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _scalar_result(2)
+            return _scalars_result([e1, e2])
+
+        session.execute = _execute
+
+        result = await verify_chain(session, org_id)
+        assert result["valid"] is False
+        assert result["first_gap_index"] == 0
+        assert result["first_tampered_id"] == str(event_id1)
+        assert result["checked_events"] == 1
+
+    async def test_verify_chain_zero_max_events_is_not_valid(self, session):
+        """max_events=0 with events present must not report a valid chain."""
+        org_id = uuid.uuid4()
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _scalar_result(3)
+            return _scalars_result([])
+
+        session.execute = _execute
+
+        result = await verify_chain(session, org_id, max_events=0)
+        assert result["valid"] is False
+        assert result["truncated"] is True
+        assert result["checked_events"] == 0
+        assert result["total_events"] == 3
+
 
 class TestExportChain:
     @pytest.fixture
@@ -513,6 +635,20 @@ class TestGetAuditEventsBatch:
         in_values = sql[sql.index("id IN (") + len("id IN (") : sql.index(")", sql.index("id IN ("))]
         assert len(in_values.split(", ")) == BATCH_MAX_SIZE
 
+    async def test_batch_warns_on_invalid_uuids(self, caplog, session):
+        """Invalid UUIDs are skipped individually with a warning."""
+        org_id = uuid.uuid4()
+
+        async def _execute(*a, **kw):
+            return _scalars_result([])
+
+        session.execute = _execute
+
+        with caplog.at_level(logging.WARNING):
+            result = await get_audit_events_batch(session, org_id, ["not-a-uuid", "also-bad"])
+        assert result == []
+        assert any("invalid UUID" in rec.message for rec in caplog.records)
+
 
 class TestListAuditEvents:
     @pytest.fixture
@@ -564,6 +700,27 @@ class TestListAuditEvents:
         # Falls back to the first page without raising.
         assert result["next_cursor"] is None
 
+    async def test_list_with_invalid_cursor_warns(self, caplog, session):
+        """A malformed cursor logs a warning and falls back to the first page."""
+        org_id = uuid.uuid4()
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _scalar_result(0)
+            return _scalars_result([])
+
+        session.execute = _execute
+
+        with caplog.at_level(logging.WARNING):
+            result = await list_audit_events(session, org_id, cursor="garbage")
+        assert result["items"] == []
+        assert result["next_cursor"] is None
+        assert any("failed to decode cursor" in rec.message for rec in caplog.records)
+
     async def test_list_with_valid_cursor(self, session):
         """A well-formed cursor decodes and positions the next page."""
         import json as _json
@@ -594,6 +751,42 @@ class TestListAuditEvents:
         )
         assert len(result["items"]) == 1
         assert result["next_cursor"] is not None
+
+    async def test_list_with_valid_cursor_reaches_sql(self, session):
+        """A well-formed cursor must position the items query (not just return a page)."""
+        import json as _json
+
+        org_id = uuid.uuid4()
+        cursor_ts = "2025-06-01T00:00:00+00:00"
+        cursor_id = str(uuid.uuid4())
+
+        executed = []
+        call_count = 0
+
+        async def _execute(stmt, *a, **kw):
+            nonlocal call_count
+            call_count += 1
+            executed.append(stmt)
+            if call_count == 1:
+                return _scalar_result(3)
+            return _scalars_result([])
+
+        session.execute = _execute
+
+        result = await list_audit_events(
+            session,
+            org_id,
+            limit=1,
+            cursor=_json.dumps({"c": cursor_ts, "i": cursor_id}),
+        )
+        assert result["total"] == 3
+
+        # The items query (second statement) must carry the composite cursor predicate.
+        sql = [str(stmt.compile(compile_kwargs={"literal_binds": True})) for stmt in executed]
+        assert len(sql) == 2
+        items_sql = sql[1]
+        assert "2025-06-01 00:00:00+00:00" in items_sql
+        assert cursor_id.replace("-", "") in items_sql
 
     async def test_list_with_null_created_at_last(self, caplog, session):
         """A last event with null created_at cannot yield a cursor -> warning."""
@@ -890,3 +1083,40 @@ class TestExportEdgeCases:
 
         result = await export_chain(session, org_id)
         assert result["items"][0]["created_at"] is None
+
+    async def test_export_serializes_actor_and_resource(self, session):
+        """_audit_event_to_dict renders actor_user_id/resource_id as strings when set."""
+        org_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        resource_id = uuid.uuid4()
+
+        async def _execute(*a, **kw):
+            r = MagicMock()
+            r.scalars = MagicMock(
+                return_value=[
+                    _make_event(
+                        org_id=org_id,
+                        event_type="test.event",
+                        account_id=actor_id,
+                        resource_type="pipeline",
+                        resource_id=resource_id,
+                        request_id="req-1",
+                        previous_hash="ph",
+                        created_at_val="2025-06-01T00:00:00+00:00",
+                    )
+                ]
+            )
+            r.scalar = MagicMock(return_value=1)
+            return r
+
+        session.execute = _execute
+
+        result = await export_chain(session, org_id)
+        item = result["items"][0]
+        assert isinstance(item["id"], str)
+        assert item["actor_user_id"] == str(actor_id)
+        assert item["resource_id"] == str(resource_id)
+        assert item["resource_type"] == "pipeline"
+        assert item["request_id"] == "req-1"
+        assert item["previous_hash"] == "ph"
+        assert item["created_at"] == "2025-06-01T00:00:00+00:00"
