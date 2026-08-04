@@ -1,6 +1,10 @@
 # ADR 017 — Celery to SAQ Migration
 
 > Full migration plan: [`docs/adr/plans/celery-to-saq-plan-v10.md`](plans/celery-to-saq-plan-v10.md) (referenced in the delivery-plan tasks `task-saq-migration-pr-a/b/c`).
+>
+> **Superseded — tracker retired.** This ADR references task IDs (`task-saq-migration-pr-a/b/c`) from the
+> retired delivery-plan.json tracker. The tracker is retired (source of truth: Linear); task IDs here are
+> historical references only.
 
 **Date**: 2026-07-31
 **Status**: Accepted
@@ -76,5 +80,5 @@ Replace Celery with **SAQ 0.26.4** as the task queue substrate, pinned in `pypro
 
 - Full plan v10: [`docs/adr/plans/celery-to-saq-plan-v10.md`](plans/celery-to-saq-plan-v10.md)
 - SAQ 0.26.4 source semantics verified during plan review (retry off-by-one, sweeper, cron, dedupe, web bind, CLI invocation)
-- Delivery-plan tasks: `task-saq-migration-pr-a`, `task-saq-migration-pr-b`, `task-saq-migration-pr-c`
+- Delivery-plan tasks (historical — tracker retired, see header notice): `task-saq-migration-pr-a`, `task-saq-migration-pr-b`, `task-saq-migration-pr-c`
 - ADR 012: Managed Postgres Migration — staging dedicated database (`modulo-staging-db`)
