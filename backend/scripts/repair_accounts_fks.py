@@ -160,7 +160,7 @@ async def _fk_exists(conn: asyncpg.Connection, child: str, constraint: str) -> b
 
 async def _accounts_fk_names(conn: asyncpg.Connection) -> set[str]:
     """Return the names of every FK in the DB that references public.accounts."""
-    oid = await conn.fetchval("SELECT to_regclass('public.accounts')")
+    oid = await conn.fetchval("SELECT to_regclass('public.accounts')::oid")
     if oid is None:
         return set()
     rows = await conn.fetch(
@@ -173,16 +173,20 @@ async def _accounts_fk_names(conn: asyncpg.Connection) -> set[str]:
 async def _run_fk_probe(conn: asyncpg.Connection) -> tuple[bool, str]:
     """Scratch-table FK probe against public.accounts.
 
-    Creates a TEMP table with an FK to accounts, then exercises the FK check:
-    with rows present a valid account id must be accepted; with an empty
-    accounts table a missing id must be rejected with an FK violation. On the
-    corrupt catalog every FK operation instead fails with ``permission denied
-    for schema public`` regardless of the role -- that is the corruption
-    signature this probe detects.
+    Creates a temporary scratch table with an FK to accounts, then exercises
+    the FK check: with rows present a valid account id must be accepted; with
+    an empty accounts table a missing id must be rejected with an FK violation.
+    On the corrupt catalog every FK operation instead fails with ``permission
+    denied for schema public`` regardless of the role -- that is the
+    corruption signature this probe detects.
+
+    Uses a permanent (but immediately dropped) scratch table because
+    PostgreSQL only allows FKs from a TEMP table to another TEMP table.
     """
+    await conn.execute("DROP TABLE IF EXISTS public._fk_probe")
     try:
         await conn.execute(
-            "CREATE TEMP TABLE _fk_probe (id uuid PRIMARY KEY, account_id uuid REFERENCES public.accounts (id))"
+            "CREATE TABLE public._fk_probe (id uuid PRIMARY KEY, account_id uuid REFERENCES public.accounts (id))"
         )
     except Exception as exc:
         return False, f"FK probe FAILED at CREATE (corrupt catalog signature): {exc}"
@@ -190,19 +194,21 @@ async def _run_fk_probe(conn: asyncpg.Connection) -> tuple[bool, str]:
         account_id = await conn.fetchval("SELECT id FROM public.accounts LIMIT 1")
         if account_id is not None:
             await conn.execute(
-                "INSERT INTO _fk_probe (id, account_id) VALUES (gen_random_uuid(), $1)",
+                "INSERT INTO public._fk_probe (id, account_id) VALUES (gen_random_uuid(), $1)",
                 account_id,
             )
             return True, "FK probe passed (valid account id accepted by the FK check)"
         try:
-            await conn.execute("INSERT INTO _fk_probe (id, account_id) VALUES (gen_random_uuid(), gen_random_uuid())")
+            await conn.execute(
+                "INSERT INTO public._fk_probe (id, account_id) VALUES (gen_random_uuid(), gen_random_uuid())"
+            )
         except asyncpg.exceptions.ForeignKeyViolationError:
             return True, "FK probe passed (empty accounts: FK violation correctly raised)"
         return False, "FK probe FAILED: missing account id did not raise an FK violation"
     except Exception as exc:
         return False, f"FK probe FAILED at INSERT (corrupt catalog signature): {exc}"
     finally:
-        await conn.execute("DROP TABLE IF EXISTS _fk_probe")
+        await conn.execute("DROP TABLE IF EXISTS public._fk_probe")
 
 
 async def _cmd_check(conn: asyncpg.Connection) -> int:
@@ -253,34 +259,28 @@ async def _rename_accounts_objects(conn: asyncpg.Connection) -> None:
     """
     rows = await conn.fetch(
         """
-        SELECT c.conname AS name, c.contype AS contype,
-               COALESCE(
-                   array_agg(a.attname ORDER BY a.attnum)
-                       FILTER (WHERE a.attname IS NOT NULL),
-                   '{}'::text[]
-               ) AS columns
+        SELECT c.conname AS name, c.contype::text AS contype,
+               pg_get_constraintdef(c.oid) AS definition
         FROM pg_constraint c
         JOIN pg_class rel ON rel.oid = c.conrelid
         JOIN pg_namespace n ON n.oid = rel.relnamespace
-        LEFT JOIN unnest(c.conkey) AS k(k) ON true
-        LEFT JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attnum = k.k
         WHERE n.nspname = 'public' AND rel.relname = 'accounts'
-        GROUP BY c.conname, c.contype
         """
     )
     constraint_renames: list[tuple[str, str]] = []
     for row in rows:
         name: str = row["name"]
         contype: str = row["contype"]
-        columns: list[str] = row["columns"]
+        definition: str = row["definition"]
         if contype == "p":
             canonical = "accounts_pkey"
-        elif contype == "u":
+        elif contype == "u" and "email" in definition:
             canonical = "accounts_email_key"
-        elif contype == "c" and "auth_provider" in columns:
+        elif contype == "c" and "auth_provider" in definition:
             canonical = "ck_accounts_auth_provider"
         elif contype == "c" and any(
-            col in columns for col in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
+            token in definition
+            for token in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
         ):
             canonical = "ck_accounts_break_glass_expiry"
         else:
@@ -305,13 +305,13 @@ async def _rename_accounts_objects(conn: asyncpg.Connection) -> None:
         "accounts_new_email_key": "accounts_email_key",
     }
     for row in index_rows:
-        current: str = row["name"]
-        canonical = index_canonical.get(current)
-        if canonical is None and current.startswith("accounts_new_"):
-            canonical = "accounts_" + current[len("accounts_new_") :]
-        if canonical is None or canonical == current:
+        index_name: str = row["name"]
+        index_target = index_canonical.get(index_name)
+        if index_target is None and index_name.startswith("accounts_new_"):
+            index_target = "accounts_" + index_name[len("accounts_new_") :]
+        if index_target is None or index_target == index_name:
             continue
-        await conn.execute(f"ALTER INDEX public.{_q(current)} RENAME TO {_q(canonical)}")
+        await conn.execute(f"ALTER INDEX public.{_q(index_name)} RENAME TO {_q(index_target)}")
 
 
 async def _cmd_rebuild(conn: asyncpg.Connection, confirmed: bool = False) -> int:
