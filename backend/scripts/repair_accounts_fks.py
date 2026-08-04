@@ -35,9 +35,13 @@ It is a DOCUMENTED repair tool -- it is never run automatically.
 Usage
 -----
     DATABASE_URL=postgresql+asyncpg://... python repair_accounts_fks.py check
-    DATABASE_URL=... python repair_accounts_fks.py rebuild-accounts
+    DATABASE_URL=... python repair_accounts_fks.py --yes rebuild-accounts
     DATABASE_URL=... python repair_accounts_fks.py add-fks
-    DATABASE_URL=... python repair_accounts_fks.py repair
+    DATABASE_URL=... python repair_accounts_fks.py --yes repair
+
+``rebuild-accounts`` and ``repair`` are destructive: they DROP and recreate the
+``accounts`` table. They require the ``--yes`` confirmation flag; without it the
+tool prints the warning and exits non-zero without touching the database.
 """
 
 from __future__ import annotations
@@ -236,11 +240,89 @@ async def _apply_grants(conn: asyncpg.Connection) -> None:
         await conn.execute(statement)
 
 
-async def _cmd_rebuild(conn: asyncpg.Connection) -> int:
+async def _rename_accounts_objects(conn: asyncpg.Connection) -> None:
+    """Restore canonical constraint/index names on the rebuilt ``accounts`` table.
+
+    ``CREATE TABLE accounts_new (LIKE accounts INCLUDING ALL)`` copies the
+    constraints and indexes but names them after the new table
+    (``accounts_new_pkey``, ``accounts_new_email_key``, auto-named CHECK
+    copies). After the rebuild these are renamed back to the names the
+    migrations expect so the repaired catalog matches a freshly-migrated
+    database. Tolerant: each constraint is matched by what it IS (read from
+    pg_constraint), so already-canonical names and absent objects are no-ops.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT c.conname AS name, c.contype AS contype,
+               COALESCE(
+                   array_agg(a.attname ORDER BY a.attnum)
+                       FILTER (WHERE a.attname IS NOT NULL),
+                   '{}'::text[]
+               ) AS columns
+        FROM pg_constraint c
+        JOIN pg_class rel ON rel.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = rel.relnamespace
+        LEFT JOIN unnest(c.conkey) AS k(k) ON true
+        LEFT JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attnum = k.k
+        WHERE n.nspname = 'public' AND rel.relname = 'accounts'
+        GROUP BY c.conname, c.contype
+        """
+    )
+    constraint_renames: list[tuple[str, str]] = []
+    for row in rows:
+        name: str = row["name"]
+        contype: str = row["contype"]
+        columns: list[str] = row["columns"]
+        if contype == "p":
+            canonical = "accounts_pkey"
+        elif contype == "u":
+            canonical = "accounts_email_key"
+        elif contype == "c" and "auth_provider" in columns:
+            canonical = "ck_accounts_auth_provider"
+        elif contype == "c" and any(
+            col in columns for col in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
+        ):
+            canonical = "ck_accounts_break_glass_expiry"
+        else:
+            continue
+        if name != canonical:
+            constraint_renames.append((name, canonical))
+    for current, canonical in constraint_renames:
+        await conn.execute(f"ALTER TABLE public.accounts RENAME CONSTRAINT {_q(current)} TO {_q(canonical)}")
+
+    index_rows = await conn.fetch(
+        """
+        SELECT i.relname AS name
+        FROM pg_class i
+        JOIN pg_index ix ON ix.indexrelid = i.oid
+        JOIN pg_class rel ON rel.oid = ix.indrelid
+        JOIN pg_namespace n ON n.oid = rel.relnamespace
+        WHERE n.nspname = 'public' AND rel.relname = 'accounts'
+        """
+    )
+    index_canonical = {
+        "accounts_new_pkey": "accounts_pkey",
+        "accounts_new_email_key": "accounts_email_key",
+    }
+    for row in index_rows:
+        current: str = row["name"]
+        canonical = index_canonical.get(current)
+        if canonical is None and current.startswith("accounts_new_"):
+            canonical = "accounts_" + current[len("accounts_new_") :]
+        if canonical is None or canonical == current:
+            continue
+        await conn.execute(f"ALTER INDEX public.{_q(current)} RENAME TO {_q(canonical)}")
+
+
+async def _cmd_rebuild(conn: asyncpg.Connection, confirmed: bool = False) -> int:
     """Transactional rebuild of accounts with a fresh catalog entry."""
     print("WARNING: rebuild-accounts DROPs and recreates the accounts table.")
     print("It is destructive. Run 'check' first, ensure all 46 FKs are absent,")
     print("and take a fresh backup before proceeding.")
+    if not confirmed:
+        print("ERROR: destructive action requires explicit confirmation.", file=sys.stderr)
+        print("Re-run with --yes to confirm you understand and have a backup.", file=sys.stderr)
+        return 2
     if await conn.fetchval("SELECT to_regclass('public.accounts')") is None:
         print("ERROR: public.accounts does not exist - nothing to rebuild.")
         return 1
@@ -269,7 +351,8 @@ async def _cmd_rebuild(conn: asyncpg.Connection) -> int:
         await conn.execute("CREATE TABLE public.accounts_new (LIKE public.accounts INCLUDING ALL)")
         await conn.execute("INSERT INTO public.accounts_new SELECT * FROM public.accounts")
         await conn.execute("DROP TABLE public.accounts")
-        await conn.execute("ALTER TABLE public.accounts_new RENAME TO public.accounts")
+        await conn.execute("ALTER TABLE public.accounts_new RENAME TO accounts")
+        await _rename_accounts_objects(conn)
         await _apply_grants(conn)
     after = await conn.fetchval("SELECT count(*) FROM public.accounts")
     print(f"Rebuild complete: {before} rows copied, {after} rows in the rebuilt table.")
@@ -332,25 +415,25 @@ async def _cmd_add_fks(conn: asyncpg.Connection) -> int:
     return 0
 
 
-async def _cmd_repair(conn: asyncpg.Connection) -> int:
+async def _cmd_repair(conn: asyncpg.Connection, confirmed: bool = False) -> int:
     """rebuild-accounts then add-fks, with the same guards."""
-    rc = await _cmd_rebuild(conn)
+    rc = await _cmd_rebuild(conn, confirmed=confirmed)
     if rc != 0:
         return rc
     return await _cmd_add_fks(conn)
 
 
-async def _dispatch(command: str, url: str) -> int:
+async def _dispatch(command: str, url: str, confirmed: bool = False) -> int:
     conn = await asyncpg.connect(url)
     try:
         if command == "check":
             return await _cmd_check(conn)
         if command == "rebuild-accounts":
-            return await _cmd_rebuild(conn)
+            return await _cmd_rebuild(conn, confirmed=confirmed)
         if command == "add-fks":
             return await _cmd_add_fks(conn)
         if command == "repair":
-            return await _cmd_repair(conn)
+            return await _cmd_repair(conn, confirmed=confirmed)
         print(f"ERROR: unknown command {command!r}", file=sys.stderr)
         return 1
     finally:
@@ -367,6 +450,12 @@ def main() -> None:
         choices=("check", "rebuild-accounts", "add-fks", "repair"),
         help="Which repair action to run (see module docstring for details).",
     )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        dest="confirmed",
+        help="Confirm the destructive rebuild-accounts/repair action.",
+    )
     args = parser.parse_args()
 
     raw = os.environ.get("DATABASE_URL")
@@ -374,7 +463,7 @@ def main() -> None:
         print("ERROR: DATABASE_URL is not set.", file=sys.stderr)
         sys.exit(1)
     try:
-        rc = asyncio.run(_dispatch(args.command, _resolve_db_url(raw)))
+        rc = asyncio.run(_dispatch(args.command, _resolve_db_url(raw), args.confirmed))
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
