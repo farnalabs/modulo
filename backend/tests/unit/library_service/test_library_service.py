@@ -1,7 +1,5 @@
 """Unit tests for the library service layer."""
 
-import base64
-import json
 import uuid
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import ProgrammingError
 
-import modulo.core.library_service as library_service
 from modulo.core.library_service import (
     _COMMUNITY_BY_ID,
     _COMMUNITY_BY_SLUG,
@@ -23,7 +20,6 @@ from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
-    _ensure_dogfood_primitives,
     _fetch_published_community_from_db,
     _filter_community,
     _filter_modulo,
@@ -236,46 +232,6 @@ def test_community_primitives_count():
 def test_modulo_by_id_index():
     for p in _MODULO_PRIMITIVES:
         assert _MODULO_BY_ID[p.id] is p
-
-
-# ---------------------------------------------------------------------------
-# Optional external dogfood primitives
-# ---------------------------------------------------------------------------
-
-
-def _encoded_dogfood_fixture() -> str:
-    entry = {
-        "pid": "00000000-0000-0000-0000-00000000d001",
-        "primitive_type": "schema",
-        "name": "External Dogfood Schema",
-        "slug": "external-dogfood-schema",
-        "description": "An externally supplied test primitive.",
-        "content_json": {"fields": [{"name": "value", "type": "string"}]},
-        "tags": ["dogfood"],
-    }
-    return base64.b64encode(json.dumps([entry]).encode()).decode()
-
-
-def test_dogfood_primitives_are_absent_when_disabled(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("MODULO_DOGFOOD_ENABLED", raising=False)
-    monkeypatch.setenv("MODULO_DOGFOOD_JSON_B64", _encoded_dogfood_fixture())
-    monkeypatch.setattr(library_service, "_DOGFOOD_PRIMITIVES", None)
-
-    assert _ensure_dogfood_primitives() == []
-    assert not any("dogfood" in (p.tags or []) for p in _filter_modulo(primitive_type=None, search=None))
-
-
-def test_dogfood_primitives_load_from_external_bundle(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("MODULO_DOGFOOD_ENABLED", "true")
-    monkeypatch.setenv("MODULO_DOGFOOD_JSON_B64", _encoded_dogfood_fixture())
-    monkeypatch.setattr(library_service, "_DOGFOOD_PRIMITIVES", None)
-
-    loaded = _ensure_dogfood_primitives()
-    assert [(p.primitive_type, p.slug) for p in loaded] == [("schema", "external-dogfood-schema")]
-    assert {p.slug for p in _filter_modulo(primitive_type="schema", search=None)} == {
-        *_EXPECTED_MODULO_SLUGS["schema"],
-        "external-dogfood-schema",
-    }
 
 
 # ---------------------------------------------------------------------------

@@ -140,7 +140,7 @@ async def _fire_scheduled_report(
     report_id: uuid.UUID,
     org_id: uuid.UUID,
 ) -> dict[str, Any]:
-    """Core fire logic — runs inside asyncio.run() inside the Celery task."""
+    """Core fire logic — runs inside asyncio.run() (the Celery task was removed in PR C)."""
     engine = _get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 

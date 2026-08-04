@@ -2,10 +2,10 @@
 
 Two worker processes (plan F1/F2):
 
-* ``runs_settings`` — queue ``runs``, concurrency 10, no web UI. Executes
+* ``runs_settings`` — queue ``runs``, concurrency 5 (derived from SAQ_REDIS_POOL_SIZE), no web UI. Executes
   ``execute_run``/``resume_run`` jobs and the per-item fire jobs
   (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``).
-* ``system_settings`` — queue ``system``, concurrency 10, web UI on 8081 bound
+* ``system_settings`` — queue ``system``, concurrency 5 (derived from SAQ_REDIS_POOL_SIZE), web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
   crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
@@ -59,8 +59,8 @@ _log = logging.getLogger(__name__)
 # SAQ runs asyncio jobs in a single process sharing one engine, so raising
 # concurrency does NOT multiply DB connection pools the way Celery prefork
 # does. Sandbox-agent runs spend most of their time awaiting external E2B
-# sandboxes; 10 concurrent jobs is cheap. Bumped from 2 on 2026-08-01.
-_WORKER_CONCURRENCY = 10
+# sandboxes; concurrency derives from SAQ_REDIS_POOL_SIZE (default 5).
+# Pool and concurrency move together — one knob.
 _SHUTDOWN_GRACE_PERIOD_S = 30
 _CANCELLATION_HARD_DEADLINE_S = 60
 _DEQUEUE_TIMEOUT = 5
@@ -119,7 +119,7 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
     oid = uuid.UUID(org_id)
     job = ctx.get("job")
 
-    claimed = await claim_run_async(aeng, run_id, org_id, legacy=False)
+    claimed = await claim_run_async(aeng, run_id, org_id)
     if not claimed:
         _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
         return {"status": "not_claimed"}
@@ -347,7 +347,7 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
     return {
         "queue": _build_queue(queue_name),
         "functions": functions,
-        "concurrency": _WORKER_CONCURRENCY,
+        "concurrency": get_settings().saq_redis_pool_size,
         "shutdown_grace_period_s": _SHUTDOWN_GRACE_PERIOD_S,
         "cancellation_hard_deadline_s": _CANCELLATION_HARD_DEADLINE_S,
         "dequeue_timeout": _DEQUEUE_TIMEOUT,
