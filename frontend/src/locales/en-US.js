@@ -2082,7 +2082,8 @@ export default {
       "remy_performing_actions": "Remy is performing actions on this page",
       "remy_stop": "Stop",
       "modulo": "Modulo",
-      "search_pages": "Search pages"
+      "search_pages": "Search pages",
+      "toggle_theme": "Toggle theme"
     },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",
