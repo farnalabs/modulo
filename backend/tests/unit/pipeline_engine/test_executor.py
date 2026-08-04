@@ -115,6 +115,8 @@ def test_aggregate_sandbox_cost_ignores_non_dict():
         # Non-finite floats must not corrupt the run total.
         "node-h": {"output": {"cost_estimate_usd": float("inf")}},
         "node-i": {"output": {"cost_estimate_usd": float("nan")}},
+        # bool is an int subclass; `cost_estimate_usd: true` must not count as $1.
+        "node-j": {"output": {"cost_estimate_usd": True}},
     }
 
     assert PipelineExecutor._aggregate_sandbox_cost(completed_node_outputs) == Decimal(0)

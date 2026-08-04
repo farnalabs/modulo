@@ -167,6 +167,7 @@
                     v-model="annotations[record.id]"
                     rows="3"
                     maxlength="2000"
+                    :aria-label="$t('views.FeedbackInboxView.annotation_heading')"
                     data-testid="feedback-inbox-annotation"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     :placeholder="$t('views.FeedbackInboxView.add_your_review_annotation')"

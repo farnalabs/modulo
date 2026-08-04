@@ -53,10 +53,10 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Call `conversations.history` under the hood
 - [x] Support optional `oldest` and `latest` timestamp filters
 - [x] Default to most recent messages when no timestamp filters provided
-- [ ] Paginate through full message history — limited to one `conversations.history` call
-- [x] Read thread replies via `query("thread_replies")` — calls `conversations.replies`
-- [ ] Search messages across channels — not implemented
-- [ ] Support message type filtering (messages vs joins vs pins)
+- [x] Paginate through full message history — `q.cursor` is forwarded as the `cursor` param on `conversations.history`
+- [x] Read thread replies via `query("thread_replies")` — calls `conversations.replies`, `q.cursor` forwarded
+- [x] Search messages across channels — `query("message_search")` calls `search.messages` with a required `query` filter
+- [x] Support message type filtering (messages vs joins vs pins) — optional `types` filter on `query("messages")`
 
 ### User Operations — workspace user listing
 
@@ -78,8 +78,8 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Support ephemeral messages via `write("ephemeral_message")` — calls `chat.postEphemeral` with `channel`, `user`, and `text` (at least one of `channel`/`user` required)
 - [x] Update message via `write("message_update")` — calls `chat.update` with `channel`, `ts`, and updated fields
 - [x] Delete message via `write("message_delete")` — calls `chat.delete` with `channel` and `ts`
-- [ ] Upload file to channel — not implemented
-- [ ] Schedule message — not implemented
+- [x] Upload file to channel via `write("file_upload")` — calls `files.upload` (multipart); `filename` plus exactly one of `content`/`file` required, optional `channels`/`initial_comment`/`thread_ts` passed through
+- [x] Schedule message via `write("schedule_message")` — calls `chat.scheduleMessage` with `channel` + `post_at` (UNIX timestamp) required
 
 ### Capability Declaration
 
@@ -120,21 +120,35 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 
 ## Known Gaps
 
-- [ ] **No file uploads**: cannot upload files or share files in channels (`files.upload`)
-- [ ] **No message search**: `search.messages` API not used; agents cannot search across all channels
-- [ ] **Channel history limited**: only one page of `conversations.history` — full history not accessible via pagination
 - [ ] **No bot-in-channel verification**: health check does not verify bot is in at least one channel
 - [ ] **No domain-specific exception types**: all API and network errors use generic `ValueError` — not domain exceptions like `SlackRateLimitError`, `SlackAuthError`
-- [ ] **No scheduling**: `chat.scheduleMessage` not implemented
+- [ ] **No scheduled-message list/delete**: `chat.scheduledMessages.list` / `chat.deleteScheduledMessage` not implemented (schedule-only)
+- [ ] **Legacy `files.upload` endpoint**: `write("file_upload")` uses the legacy `files.upload` method (deprecated in favor of `files.uploadV2`). Still works and is the simplest implementation for small in-memory uploads; track migration to `files.uploadV2` if Slack retires the legacy endpoint.
 
 ### Resolved (2026-08-04)
 
+- [x] ~~**No file uploads**: cannot upload files or share files in channels (`files.upload`)~~ — `write("file_upload")` added.
+- [x] ~~**No message search**: `search.messages` API not used; agents cannot search across all channels~~ — `query("message_search")` added.
+- [x] ~~**Channel history limited**: only one page of `conversations.history` — full history not accessible via pagination~~ — `query("messages")`/`query("thread_replies")` now forward `q.cursor`.
+- [x] ~~**No scheduling**: `chat.scheduleMessage` not implemented~~ — `write("schedule_message")` added.
 - [x] ~~**No ephemeral messages**: `chat.postEphemeral` not implemented~~ — `write("ephemeral_message")` added (`chat.postEphemeral`).
 - [x] ~~**No message update/delete**: `chat.update` and `chat.delete` not implemented~~ — `write("message_update")` and `write("message_delete")` added.
 - [x] ~~**No user presence**: `users.getPresence` not implemented~~ — `query("user_presence")` added.
 - [x] ~~**No lookup by email**: `users.lookupByEmail` not implemented~~ — `query("user_lookup")` added.
 
 ## QA History
+### 2026-08-04 — improve-architecture: 6 behaviours RESOLVED (message search, scheduling, file uploads, history pagination, type filtering)
+
+**RESOLVED 6 behaviours** in the Slack connector (`connectors/slack/__init__.py`):
+
+- **Message search** — `query("message_search")` (`search.messages`): requires a `query` filter, supports optional `sort` (`score`/`timestamp`), `count` from `q.limit`, cursor → `page` (numeric, `ValueError` on non-numeric), and returns the matches with a paging-derived `next_cursor`.
+- **Scheduling** — `write("schedule_message")` (`chat.scheduleMessage`): `channel` + `post_at` (UNIX timestamp) required, remaining fields passed through for text/blocks.
+- **File uploads** — `write("file_upload")` (`files.upload`, multipart): `filename` plus exactly one of `content` (text) or `file` (bytes) required (both → error), optional `channels`/`initial_comment`/`thread_ts` passed as form data.
+- **History pagination** — `query("messages")` and `query("thread_replies")` now forward `q.cursor` to `conversations.history` / `conversations.replies`, so full history is reachable across pages.
+- **Message type filtering** — optional `types` filter on `query("messages")` (e.g. `messages,joins`) forwarded to `conversations.history`.
+
+**Tests:** 22 new unit tests in `test_slack.py` (message_search happy/multi-page/cursor+sort/missing-query/invalid-cursor/api-error/http-error, messages cursor forwarding, messages types filter, thread_replies cursor forwarding, schedule_message happy/missing-post_at/missing-channel/api-error/http-error, file_upload content/bytes/missing-filename/missing-content/both-content-and-file/api-error/http-error) + 6 new BDD scenarios in `slack_connector.feature` (search messages, search-without-query error, schedule message, schedule-without-post_at error, upload file, upload-without-content error) with 7 new step definitions + mock connector handlers in `test_connectors.py`. Updated product map `connectors/slack-connector.md` (6 behaviours `[ ]`→`[x]`, 4 Known Gaps → RESOLVED, BDD count 28→34, QA History). 121/121 slack unit tests + 34/34 slack BDD scenarios pass (19 pre-existing connector-suite BDD failures unchanged), ruff clean, mypy strict clean. Status: partial (bot-in-channel verification, domain-specific exceptions, scheduled-message list/delete remain).
+
 ### 2026-08-04 — improve-architecture: 8 behaviours RESOLVED (user ops, message ops, channel ops)
 
 **RESOLVED 8 behaviours** in the Slack connector (`connectors/slack/__init__.py`):
