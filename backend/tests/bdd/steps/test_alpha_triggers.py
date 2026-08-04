@@ -147,8 +147,8 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
         # Route-level timestamp/HMAC validation against the mocked trigger's
         # MagicMock config_json would 400/401 the happy path — bypass it (the
         # engine-level HMAC handling is covered by webhook_hmac.feature).
-        patch("modulo.api.routes.webhooks._verify_timestamp", return_value=1700000000),
-        patch("modulo.api.routes.webhooks._verify_hmac", return_value=True),
+        patch("modulo.api.routes.webhooks.verify_timestamp", return_value=1700000000),
+        patch("modulo.api.routes.webhooks.verify_hmac", return_value=True),
     ):
         if trigger_missing:
             missing_row = MagicMock()
