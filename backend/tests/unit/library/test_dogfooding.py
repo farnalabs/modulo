@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -137,8 +138,6 @@ def test_default_config_keys() -> None:
 
 
 def test_json_roundtrip() -> None:
-    import json
-
     serialized = json.dumps(DOGFOODING_PIPELINE, default=str)
     deserialized = json.loads(serialized)
     assert deserialized["name"] == "Dogfooding Pipeline"

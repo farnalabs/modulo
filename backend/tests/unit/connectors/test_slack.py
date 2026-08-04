@@ -736,6 +736,377 @@ async def test_thread_reply_api_error(connector):
         )
 
 
+# -- query: user_presence --
+
+
+@respx.mock
+async def test_user_presence(connector):
+    respx.get("https://slack.com/api/users.getPresence").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "user": "U001", "presence": "active", "online": True},
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="user_presence", filters={"user": "U001"}),
+    )
+    assert len(result.records) == 1
+    assert result.records[0]["presence"] == "active"
+    assert result.records[0]["online"] is True
+
+
+@respx.mock
+async def test_user_presence_missing_user(connector):
+    with pytest.raises(ValueError, match="requires 'user' filter"):
+        await connector.query(ConnectorQuery(resource="user_presence"))
+
+
+@respx.mock
+async def test_user_presence_api_error(connector):
+    respx.get("https://slack.com/api/users.getPresence").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "user_not_found"}),
+    )
+    with pytest.raises(ValueError, match="user_not_found"):
+        await connector.query(
+            ConnectorQuery(resource="user_presence", filters={"user": "U99999"}),
+        )
+
+
+# -- query: user_profile --
+
+
+@respx.mock
+async def test_user_profile(connector):
+    respx.get("https://slack.com/api/users.profile.get").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "profile": {"first_name": "Alice", "last_name": "Smith", "email": "alice@example.com"},
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="user_profile", filters={"user": "U001"}),
+    )
+    assert len(result.records) == 1
+    assert result.records[0]["profile"]["first_name"] == "Alice"
+
+
+@respx.mock
+async def test_user_profile_with_include_labels(connector):
+    respx.get("https://slack.com/api/users.profile.get").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "profile": {"display_name": "Alice", "skype": "alice123"}},
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="user_profile",
+            filters={"user": "U001", "include_labels": True},
+        ),
+    )
+    assert result.records[0]["profile"]["skype"] == "alice123"
+    assert respx.calls.last.request.url.params.get("include_labels") == "true"
+
+
+@respx.mock
+async def test_user_profile_missing_user(connector):
+    with pytest.raises(ValueError, match="requires 'user' filter"):
+        await connector.query(ConnectorQuery(resource="user_profile"))
+
+
+@respx.mock
+async def test_user_profile_api_error(connector):
+    respx.get("https://slack.com/api/users.profile.get").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "user_not_found"}),
+    )
+    with pytest.raises(ValueError, match="user_not_found"):
+        await connector.query(
+            ConnectorQuery(resource="user_profile", filters={"user": "U99999"}),
+        )
+
+
+# -- query: user_lookup --
+
+
+@respx.mock
+async def test_user_lookup_by_email(connector):
+    respx.get("https://slack.com/api/users.lookupByEmail").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "user": {
+                    "id": "U001",
+                    "name": "alice",
+                    "profile": {"email": "alice@example.com"},
+                },
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="user_lookup", filters={"email": "alice@example.com"}),
+    )
+    assert len(result.records) == 1
+    assert result.records[0]["id"] == "U001"
+
+
+@respx.mock
+async def test_user_lookup_missing_email(connector):
+    with pytest.raises(ValueError, match="requires 'email' filter"):
+        await connector.query(ConnectorQuery(resource="user_lookup"))
+
+
+@respx.mock
+async def test_user_lookup_api_error(connector):
+    respx.get("https://slack.com/api/users.lookupByEmail").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "users_not_found"}),
+    )
+    with pytest.raises(ValueError, match="users_not_found"):
+        await connector.query(
+            ConnectorQuery(resource="user_lookup", filters={"email": "nobody@example.com"}),
+        )
+
+
+# -- write: ephemeral_message --
+
+
+@respx.mock
+async def test_write_ephemeral_message(connector):
+    respx.post("https://slack.com/api/chat.postEphemeral").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "message_ts": "888666", "channel": "C001"},
+        ),
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="ephemeral_message",
+            data={"channel": "C001", "user": "U001", "text": "Only you can see this"},
+        ),
+    )
+    assert result["message_ts"] == "888666"
+    assert result["channel"] == "C001"
+
+
+@respx.mock
+async def test_write_ephemeral_message_missing_user(connector):
+    with pytest.raises(ValueError, match="Missing 'user' in ephemeral_message"):
+        await connector.write(
+            ConnectorPayload(resource="ephemeral_message", data={"channel": "C001", "text": "Hello"}),
+        )
+
+
+@respx.mock
+async def test_write_ephemeral_message_api_error(connector):
+    respx.post("https://slack.com/api/chat.postEphemeral").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "user_not_in_channel"}),
+    )
+    with pytest.raises(ValueError, match="user_not_in_channel"):
+        await connector.write(
+            ConnectorPayload(
+                resource="ephemeral_message",
+                data={"channel": "C001", "user": "U99999", "text": "Hello"},
+            ),
+        )
+
+
+# -- write: message_update --
+
+
+@respx.mock
+async def test_write_message_update(connector):
+    respx.post("https://slack.com/api/chat.update").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "ts": "1405895017.000506", "channel": "C001"},
+        ),
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="message_update",
+            data={"channel": "C001", "ts": "1405895017.000506", "text": "Updated text"},
+        ),
+    )
+    assert result["ts"] == "1405895017.000506"
+    assert result["channel"] == "C001"
+
+
+@respx.mock
+async def test_write_message_update_missing_ts(connector):
+    with pytest.raises(ValueError, match="Missing 'ts' in message_update"):
+        await connector.write(
+            ConnectorPayload(resource="message_update", data={"channel": "C001", "text": "Hello"}),
+        )
+
+
+@respx.mock
+async def test_write_message_update_api_error(connector):
+    respx.post("https://slack.com/api/chat.update").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "message_not_found"}),
+    )
+    with pytest.raises(ValueError, match="message_not_found"):
+        await connector.write(
+            ConnectorPayload(
+                resource="message_update",
+                data={"channel": "C001", "ts": "111.111", "text": "Hello"},
+            ),
+        )
+
+
+# -- write: message_delete --
+
+
+@respx.mock
+async def test_write_message_delete(connector):
+    respx.post("https://slack.com/api/chat.delete").mock(
+        return_value=httpx.Response(200, json={"ok": True, "ts": "1405895017.000506", "channel": "C001"}),
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="message_delete",
+            data={"channel": "C001", "ts": "1405895017.000506"},
+        ),
+    )
+    assert result["ts"] == "1405895017.000506"
+    assert result["channel"] == "C001"
+
+
+@respx.mock
+async def test_write_message_delete_missing_ts(connector):
+    with pytest.raises(ValueError, match="Missing 'ts' in message_delete"):
+        await connector.write(
+            ConnectorPayload(resource="message_delete", data={"channel": "C001"}),
+        )
+
+
+@respx.mock
+async def test_write_message_delete_api_error(connector):
+    respx.post("https://slack.com/api/chat.delete").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "message_not_found"}),
+    )
+    with pytest.raises(ValueError, match="message_not_found"):
+        await connector.write(
+            ConnectorPayload(
+                resource="message_delete",
+                data={"channel": "C001", "ts": "111.111"},
+            ),
+        )
+
+
+# -- write: channel_join / channel_leave --
+
+
+@respx.mock
+async def test_write_channel_join(connector):
+    respx.post("https://slack.com/api/conversations.join").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "channel": {"id": "C001", "name": "general", "is_member": True}},
+        ),
+    )
+    result = await connector.write(
+        ConnectorPayload(resource="channel_join", data={"channel": "C001"}),
+    )
+    assert result["channel"]["id"] == "C001"
+    assert result["channel"]["is_member"] is True
+
+
+@respx.mock
+async def test_write_channel_join_missing_channel(connector):
+    with pytest.raises(ValueError, match="Missing 'channel' in channel_join"):
+        await connector.write(ConnectorPayload(resource="channel_join", data={}))
+
+
+@respx.mock
+async def test_write_channel_join_api_error(connector):
+    respx.post("https://slack.com/api/conversations.join").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "method_not_supported_for_channel_type"}),
+    )
+    with pytest.raises(ValueError, match="method_not_supported"):
+        await connector.write(
+            ConnectorPayload(resource="channel_join", data={"channel": "C001"}),
+        )
+
+
+@respx.mock
+async def test_write_channel_leave(connector):
+    respx.post("https://slack.com/api/conversations.leave").mock(
+        return_value=httpx.Response(200, json={"ok": True, "channel": "C001"}),
+    )
+    result = await connector.write(
+        ConnectorPayload(resource="channel_leave", data={"channel": "C001"}),
+    )
+    assert result["channel"] == "C001"
+
+
+@respx.mock
+async def test_write_channel_leave_missing_channel(connector):
+    with pytest.raises(ValueError, match="Missing 'channel' in channel_leave"):
+        await connector.write(ConnectorPayload(resource="channel_leave", data={}))
+
+
+# -- write: channel_archive / channel_unarchive --
+
+
+@respx.mock
+async def test_write_channel_archive(connector):
+    respx.post("https://slack.com/api/conversations.archive").mock(
+        return_value=httpx.Response(200, json={"ok": True, "channel": "C001"}),
+    )
+    result = await connector.write(
+        ConnectorPayload(resource="channel_archive", data={"channel": "C001"}),
+    )
+    assert result["channel"] == "C001"
+
+
+@respx.mock
+async def test_write_channel_archive_missing_channel(connector):
+    with pytest.raises(ValueError, match="Missing 'channel' in channel_archive"):
+        await connector.write(ConnectorPayload(resource="channel_archive", data={}))
+
+
+@respx.mock
+async def test_write_channel_archive_api_error(connector):
+    respx.post("https://slack.com/api/conversations.archive").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "already_archived"}),
+    )
+    with pytest.raises(ValueError, match="already_archived"):
+        await connector.write(
+            ConnectorPayload(resource="channel_archive", data={"channel": "C001"}),
+        )
+
+
+@respx.mock
+async def test_write_channel_unarchive(connector):
+    respx.post("https://slack.com/api/conversations.unarchive").mock(
+        return_value=httpx.Response(200, json={"ok": True, "channel": "C001"}),
+    )
+    result = await connector.write(
+        ConnectorPayload(resource="channel_unarchive", data={"channel": "C001"}),
+    )
+    assert result["channel"] == "C001"
+
+
+@respx.mock
+async def test_write_channel_unarchive_missing_channel(connector):
+    with pytest.raises(ValueError, match="Missing 'channel' in channel_unarchive"):
+        await connector.write(ConnectorPayload(resource="channel_unarchive", data={}))
+
+
+@respx.mock
+async def test_write_channel_unarchive_api_error(connector):
+    respx.post("https://slack.com/api/conversations.unarchive").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "not_archived"}),
+    )
+    with pytest.raises(ValueError, match="not_archived"):
+        await connector.write(
+            ConnectorPayload(resource="channel_unarchive", data={"channel": "C001"}),
+        )
+
+
 # -- JSON decode error in query/write --
 
 

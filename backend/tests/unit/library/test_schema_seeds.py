@@ -45,7 +45,7 @@ REQUIRED_PROPERTIES: dict[str, list[str]] = {
 
 
 def test_exactly_22_schemas() -> None:
-    assert len(SCHEMAS) == len(REQUIRED_PROPERTIES)
+    assert len(SCHEMAS) == 22
 
 
 def test_all_schema_names_are_unique() -> None:
@@ -76,12 +76,12 @@ def test_definition_is_valid_json_schema(entry: dict[str, Any]) -> None:
 
 @pytest.mark.parametrize("entry", SCHEMAS, ids=lambda e: e["name"])
 def test_definition_has_title(entry: dict[str, Any]) -> None:
-    assert isinstance(entry["definition"].get("title"), str)
+    assert entry["definition"].get("title"), f"'{entry['name']}' missing title"
 
 
 @pytest.mark.parametrize("entry", SCHEMAS, ids=lambda e: e["name"])
 def test_definition_has_description(entry: dict[str, Any]) -> None:
-    assert isinstance(entry["definition"].get("description"), str)
+    assert entry["definition"].get("description"), f"'{entry['name']}' missing description"
 
 
 @pytest.mark.parametrize("entry", SCHEMAS, ids=lambda e: e["name"])

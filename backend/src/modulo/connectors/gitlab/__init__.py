@@ -38,6 +38,9 @@ _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
 _MAX_DELAY = 30.0
 
+# Actions accepted by the Commits API for multi-file (batch) operations
+_COMMIT_ACTIONS = frozenset({"create", "update", "delete", "move", "chmod"})
+
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from GitLab API response."""
@@ -188,6 +191,7 @@ class GitLabConnector(ConnectorBase):
     Supported query resources:
       "projects"          — list projects accessible to the token
       "file"              — read a file
+      "tree"              — list repository tree entries (optional recursive + path filters)
       "mrs"               — list merge requests (legacy, alias for merge_requests)
       "issues"            — list project issues (filters: state, labels, milestone, search, sort, order_by, assignee_id)
       "issue"             — get single issue by IID
@@ -207,6 +211,7 @@ class GitLabConnector(ConnectorBase):
 
     Supported write resources:
       "file"              — create/update a file
+      "files"             — batch file operations in one commit via the Commits API (create/update/delete/move)
       "file_delete"       — delete a file
       "mr"                — create a merge request (legacy)
       "issue"             — create an issue
@@ -219,6 +224,8 @@ class GitLabConnector(ConnectorBase):
       "file_delete"       — delete a file (data: project, path, ref, commit_message)
       "mr_merge"          — merge a merge request (data: project, iid, optional squash)
       "mr_approve"        — approve a merge request (data: project, iid)
+      "mr_approval_request" — request approval from specific users via an approval rule
+                             (data: project, iid, user_ids/user_emails)
       "mr_comment"        — add a comment to a merge request (data: project, iid, body)
       "mr_note"           — add a comment to a merge request (data: project, iid, body)
       "mr_labels"         — set labels on a merge request (data: project, iid, labels)
@@ -461,6 +468,26 @@ class GitLabConnector(ConnectorBase):
                 if "content" in info:
                     info["content"] = base64.b64decode(info["content"]).decode("utf-8")
                 return ConnectorResult(records=[info], metadata={"rate_limit": _rate_limit_metadata(r)})
+            case "tree":
+                project = self._require_filter(q.filters, "project", q.resource)
+                encoded = _project_path(project)
+                tree_params: dict[str, Any] = {"per_page": q.limit}
+                if "path" in q.filters:
+                    path = q.filters["path"]
+                    _validate_path(path, q.resource)
+                    tree_params["path"] = path
+                if "ref" in q.filters:
+                    tree_params["ref"] = q.filters["ref"]
+                if q.filters.get("recursive"):
+                    tree_params["recursive"] = True
+                _paginate_params(tree_params, q.cursor)
+                r = await self._call_api(
+                    "GET",
+                    f"/projects/{encoded}/repository/tree",
+                    params=tree_params,
+                )
+                entries = _safe_json(r)
+                return self._result(entries, r)
             case "mrs" | "merge_requests":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -664,6 +691,47 @@ class GitLabConnector(ConnectorBase):
                     json=body,
                 )
                 return _safe_json_object(r)
+            case "files" | "commit":
+                project = self._require_filter(payload.data, "project", payload.resource)
+                actions = self._require_filter(payload.data, "actions", payload.resource)
+                if not isinstance(actions, list) or not actions:
+                    raise ValueError(f"GitLab resource {payload.resource!r} requires a non-empty 'actions' list")
+                encoded = _project_path(project)
+                commit_body: dict[str, Any] = {
+                    "branch": payload.data.get("ref", payload.data.get("branch", "main")),
+                    "commit_message": payload.data.get("message", "Update via Modulo"),
+                    "actions": [],
+                }
+                for action in actions:
+                    if not isinstance(action, dict):
+                        raise ValueError(f"GitLab resource {payload.resource!r}: each action must be an object")
+                    action_type = action.get("action")
+                    if action_type not in _COMMIT_ACTIONS:
+                        raise ValueError(
+                            f"GitLab resource {payload.resource!r}: action {action_type!r} must be one of "
+                            f"{sorted(_COMMIT_ACTIONS)}",
+                        )
+                    file_path = action.get("file_path")
+                    if not file_path:
+                        raise ValueError(f"GitLab resource {payload.resource!r}: each action requires 'file_path'")
+                    _validate_path(file_path, payload.resource)
+                    normalized: dict[str, Any] = {"action": action_type, "file_path": file_path}
+                    if "content" in action:
+                        normalized["content"] = action["content"]
+                    if action_type == "move":
+                        previous_path = action.get("previous_path")
+                        if not previous_path:
+                            msg = f"GitLab resource {payload.resource!r}: move action requires 'previous_path'"
+                            raise ValueError(msg)
+                        _validate_path(previous_path, payload.resource)
+                        normalized["previous_path"] = previous_path
+                    commit_body["actions"].append(normalized)
+                r = await self._call_api(
+                    "POST",
+                    f"/projects/{encoded}/repository/commits",
+                    json=commit_body,
+                )
+                return _safe_json_object(r)
             case "file_delete":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 path = self._require_filter(payload.data, "path", payload.resource)
@@ -743,6 +811,31 @@ class GitLabConnector(ConnectorBase):
                     "POST",
                     f"/projects/{encoded}/merge_requests/{mr_iid}/approve",
                     json=approve_body,
+                )
+                return _safe_json_object(r)
+            case "mr_approval_request":
+                project = self._require_filter(payload.data, "project", payload.resource)
+                mr_iid = self._require_filter(payload.data, "iid", payload.resource)
+                encoded = _project_path(project)
+                user_ids = payload.data.get("user_ids") or []
+                user_emails = payload.data.get("user_emails") or []
+                if not user_ids and not user_emails:
+                    raise ValueError(
+                        f"GitLab resource {payload.resource!r} requires 'user_ids' and/or 'user_emails'",
+                    )
+                rule_body: dict[str, Any] = {
+                    "name": payload.data.get("name", "Requested approvers"),
+                    "rule_type": "approval",
+                    "approvals_required": payload.data.get("approvals_required", 1),
+                }
+                if user_ids:
+                    rule_body["user_ids"] = user_ids
+                if user_emails:
+                    rule_body["user_emails"] = user_emails
+                r = await self._call_api(
+                    "POST",
+                    f"/projects/{encoded}/merge_requests/{mr_iid}/approval_rules",
+                    json=rule_body,
                 )
                 return _safe_json_object(r)
             case "mr_labels":

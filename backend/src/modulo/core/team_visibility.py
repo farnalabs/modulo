@@ -11,7 +11,6 @@ organisation, so they never produce a mismatch.
 
 from __future__ import annotations
 
-import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -21,8 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator._types import try_parse_uuid, try_parse_uuids
 from modulo.db.models.connector_instance import ConnectorInstance
-
-_log = logging.getLogger(__name__)
 
 CONNECTOR_TEAM_MISMATCH = "connector_team_mismatch"
 

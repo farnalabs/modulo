@@ -26,7 +26,6 @@ from modulo.db.crud.error_tracking import (
 )
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
 
-logger = logging.getLogger(__name__)
 _log = logging.getLogger(__name__)
 
 _STACKTRACE_FILE_RE = re.compile(r'File "[^"]+", line \d+,')
@@ -253,7 +252,7 @@ async def _dispatch_forwarders(
                     per_org_configs[row.forwarder_type] = row.config_json
 
         except ProgrammingError:
-            logger.exception("core.error_tracking")
+            _log.exception("core.error_tracking")
 
             raise
 
