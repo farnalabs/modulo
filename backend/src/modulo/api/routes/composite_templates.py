@@ -471,6 +471,7 @@ class DetectParamsResponse(BaseModel):
 # expander (modulo.core.composite_engine.expander) so detection and expansion
 # stay consistent.
 
+
 def _detect_parameter_ports(nodes: list[dict[str, Any]]) -> list[ParameterPort]:
     """Scan *nodes* for ``{{parameter.<name>}}`` placeholders.
 

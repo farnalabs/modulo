@@ -924,7 +924,7 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.runs_settings()
         assert settings["queue"].name == "runs"
-        assert settings["concurrency"] == 10
+        assert settings["concurrency"] == 5
         assert settings["shutdown_grace_period_s"] == 30
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
@@ -936,7 +936,7 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.system_settings()
         assert settings["queue"].name == "system"
-        assert settings["concurrency"] == 10
+        assert settings["concurrency"] == 5
         assert settings["shutdown_grace_period_s"] == 30
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
