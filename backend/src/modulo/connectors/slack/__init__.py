@@ -151,6 +151,8 @@ class SlackConnector(ConnectorBase):
                 return await self._lookup_user_by_email(q)
             case "message_search":
                 return await self._search_messages(q)
+            case "scheduled_messages":
+                return await self._list_scheduled_messages(q)
             case _:
                 raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
@@ -178,6 +180,8 @@ class SlackConnector(ConnectorBase):
                 return await self._schedule_message(payload.data)
             case "file_upload":
                 return await self._upload_file(payload.data)
+            case "scheduled_message_delete":
+                return await self._delete_scheduled_message(payload.data)
             case _:
                 raise ValueError(f"Unsupported Slack write resource: {payload.resource!r}")
 
@@ -407,6 +411,37 @@ class SlackConnector(ConnectorBase):
             records=search.get("matches", []),
             next_cursor=next_cursor,
         )
+
+    async def _list_scheduled_messages(self, q: ConnectorQuery) -> ConnectorResult:
+        params: dict[str, Any] = {"limit": q.limit}
+        if q.filters.get("channel"):
+            params["channel"] = q.filters["channel"]
+        if q.cursor:
+            params["cursor"] = q.cursor
+        r = await self._call_api("GET", "/chat.scheduledMessages.list", params=params)
+        body = await self._parse_json(r)
+        _check_slack_ok(body, "chat.scheduledMessages.list")
+        meta = body.get("response_metadata") or {}
+        return ConnectorResult(
+            records=body.get("scheduled_messages", []),
+            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
+        )
+
+    async def _delete_scheduled_message(self, data: dict[str, Any]) -> dict[str, Any]:
+        if "channel" not in data:
+            raise ValueError("Missing 'channel' in scheduled_message_delete payload")
+        if "scheduled_message_id" not in data:
+            raise ValueError("Missing 'scheduled_message_id' in scheduled_message_delete payload")
+        channel = data["channel"]
+        scheduled_message_id = data["scheduled_message_id"]
+        r = await self._call_api(
+            "POST",
+            "/chat.deleteScheduledMessage",
+            json={"channel": channel, "scheduled_message_id": scheduled_message_id},
+        )
+        body: dict[str, Any] = await self._parse_json(r)
+        _check_slack_ok(body, "chat.deleteScheduledMessage")
+        return body
 
     async def _schedule_message(self, data: dict[str, Any]) -> dict[str, Any]:
         if "channel" not in data:

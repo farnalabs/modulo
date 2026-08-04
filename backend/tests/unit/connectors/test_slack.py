@@ -1495,3 +1495,135 @@ async def test_write_file_upload_http_error(connector):
                 data={"filename": "notes.txt", "content": "hello"},
             ),
         )
+
+
+# -- query: scheduled_messages (chat.scheduledMessages.list) --
+
+
+@respx.mock
+async def test_query_scheduled_messages(connector):
+    scheduled = [
+        {"id": "Q1234", "channel_id": "C001", "post_at": 1610118217, "text": "Morning standup"},
+        {"id": "Q1235", "channel_id": "C002", "post_at": 1610118300, "text": "Daily report"},
+    ]
+    respx.get("https://slack.com/api/chat.scheduledMessages.list").mock(
+        return_value=httpx.Response(200, json={"ok": True, "scheduled_messages": scheduled}),
+    )
+    result = await connector.query(ConnectorQuery(resource="scheduled_messages", limit=10))
+    assert len(result.records) == 2
+    assert result.records[0]["id"] == "Q1234"
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_scheduled_messages_with_channel_filter(connector):
+    respx.get("https://slack.com/api/chat.scheduledMessages.list").mock(
+        return_value=httpx.Response(200, json={"ok": True, "scheduled_messages": []}),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="scheduled_messages", filters={"channel": "C001"}, limit=10),
+    )
+    assert result.records == []
+    assert respx.calls.last.request.url.params["channel"] == "C001"
+
+
+@respx.mock
+async def test_query_scheduled_messages_with_cursor(connector):
+    respx.get("https://slack.com/api/chat.scheduledMessages.list").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "scheduled_messages": [{"id": "Q1236", "channel_id": "C001", "post_at": 1610118400}],
+                "response_metadata": {"next_cursor": "page2"},
+            },
+        ),
+    )
+    result = await connector.query(ConnectorQuery(resource="scheduled_messages", cursor="page1"))
+    assert len(result.records) == 1
+    assert result.next_cursor == "page2"
+    assert respx.calls.last.request.url.params["cursor"] == "page1"
+
+
+@respx.mock
+async def test_query_scheduled_messages_api_error(connector):
+    respx.get("https://slack.com/api/chat.scheduledMessages.list").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "missing_scope"}),
+    )
+    with pytest.raises(ValueError, match="missing_scope"):
+        await connector.query(ConnectorQuery(resource="scheduled_messages"))
+
+
+@respx.mock
+async def test_query_scheduled_messages_http_error(connector):
+    respx.get("https://slack.com/api/chat.scheduledMessages.list").mock(
+        return_value=httpx.Response(500, text="Server Error"),
+    )
+    with pytest.raises(ValueError, match="Slack API HTTP 500"):
+        await connector.query(ConnectorQuery(resource="scheduled_messages"))
+
+
+# -- write: scheduled_message_delete (chat.deleteScheduledMessage) --
+
+
+@respx.mock
+async def test_write_scheduled_message_delete(connector):
+    respx.post("https://slack.com/api/chat.deleteScheduledMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True}),
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="scheduled_message_delete",
+            data={"channel": "C001", "scheduled_message_id": "Q1234"},
+        ),
+    )
+    assert result["ok"] is True
+    body = respx.calls.last.request.content
+    assert b"Q1234" in body
+
+
+@respx.mock
+async def test_write_scheduled_message_delete_missing_channel(connector):
+    with pytest.raises(ValueError, match="Missing 'channel' in scheduled_message_delete"):
+        await connector.write(
+            ConnectorPayload(
+                resource="scheduled_message_delete",
+                data={"scheduled_message_id": "Q1234"},
+            ),
+        )
+
+
+@respx.mock
+async def test_write_scheduled_message_delete_missing_id(connector):
+    with pytest.raises(ValueError, match="Missing 'scheduled_message_id' in scheduled_message_delete"):
+        await connector.write(
+            ConnectorPayload(resource="scheduled_message_delete", data={"channel": "C001"}),
+        )
+
+
+@respx.mock
+async def test_write_scheduled_message_delete_api_error(connector):
+    respx.post("https://slack.com/api/chat.deleteScheduledMessage").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "invalid_scheduled_message_id"}),
+    )
+    with pytest.raises(ValueError, match="invalid_scheduled_message_id"):
+        await connector.write(
+            ConnectorPayload(
+                resource="scheduled_message_delete",
+                data={"channel": "C001", "scheduled_message_id": "Q1234"},
+            ),
+        )
+
+
+@respx.mock
+async def test_write_scheduled_message_delete_http_error(connector):
+    respx.post("https://slack.com/api/chat.deleteScheduledMessage").mock(
+        return_value=httpx.Response(500, text="Server Error"),
+    )
+    with pytest.raises(ValueError, match="Slack API HTTP 500"):
+        await connector.write(
+            ConnectorPayload(
+                resource="scheduled_message_delete",
+                data={"channel": "C001", "scheduled_message_id": "Q1234"},
+            ),
+        )
