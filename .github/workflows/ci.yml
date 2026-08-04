@@ -362,10 +362,20 @@ jobs:
           echo "Run: ${RUN_ID}"
           for i in $(seq 1 30); do
             sleep 2
-            STATUS_RESP=$(curl -s -H "Authorization: Bearer ${API_KEY}" "https://app.modulo.run/api/v1/runs/${RUN_ID}")
-            STATUS=$(echo "${STATUS_RESP}" | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"status\",\"\"))")
-            ERROR=$(echo "${STATUS_RESP}" | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"error_code\",\"\"))")
-            echo "  status=${STATUS} error=${ERROR}"
+            STATUS_RESP=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${API_KEY}" "https://app.modulo.run/api/v1/runs/${RUN_ID}")
+            HTTP_CODE=$(echo "${STATUS_RESP}" | tail -1)
+            BODY=$(echo "${STATUS_RESP}" | sed '$d')
+            STATUS=$(echo "${BODY}" | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"status\",\"\"))" 2>/dev/null || echo "")
+            ERROR=$(echo "${BODY}" | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"error_code\",\"\"))" 2>/dev/null || echo "")
+            echo "  http=${HTTP_CODE} status=${STATUS} error=${ERROR}"
+            if [ "${HTTP_CODE}" = "401" ] || [ "${HTTP_CODE}" = "403" ]; then
+              echo "::error::Smoke test auth failed (HTTP ${HTTP_CODE}): the MODULO_SMOKE_TEST_API_KEY secret is invalid or expired. Rotate the secret and re-run this job."
+              exit 1
+            fi
+            if [ "${HTTP_CODE}" != "200" ]; then
+              echo "::error::Smoke test status poll failed (HTTP ${HTTP_CODE})"
+              exit 1
+            fi
             if [ "${STATUS}" = "complete" ]; then echo "- Smoke test passed!"; exit 0; fi
             if [ "${STATUS}" = "failed" ]; then echo "::error::Failed: ${ERROR}"; exit 1; fi
           done
