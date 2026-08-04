@@ -43,8 +43,7 @@ def _has_column(bind, table: str, column: str) -> bool:
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    _add_missing_indexes(bind)
+    _add_missing_indexes()
     _add_missing_foreign_keys()
     _fix_column_types()
     _add_trigger_based_fk_checks()
