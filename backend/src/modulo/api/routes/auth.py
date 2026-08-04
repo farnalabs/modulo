@@ -144,8 +144,8 @@ async def _enforce_break_glass(
             )
     except asyncio.CancelledError:
         raise
-    except HTTPException as exc:
-        raise exc
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("auth.break_glass_hook_error")
         if limiter is not None:
@@ -693,8 +693,9 @@ async def csrf_token(
         return response
     except asyncio.CancelledError:
         raise
-    except HTTPException as exc:
-        raise exc
+    except HTTPException:
+        _log.debug("HTTPException propagated from csrf_token")
+        raise
     except Exception:
         _log.exception("Unexpected error in csrf_token")
         raise HTTPException(

@@ -143,3 +143,33 @@ Feature: Slack Connector
     Given a Slack connector with valid bot token
     When I write resource "ephemeral_message" with channel "C001" but no user
     Then the write is an error
+
+  Scenario: Search messages across channels
+    Given a Slack connector with valid bot token
+    When I query resource "message_search" with query "deploy failed"
+    Then the result has records
+
+  Scenario: Search messages without query raises an error
+    Given a Slack connector with valid bot token
+    When I query resource "message_search" without a query filter
+    Then the result is an error
+
+  Scenario: Schedule a message
+    Given a Slack connector with valid bot token
+    When I write resource "schedule_message" with channel "C001" and post_at "1610118217"
+    Then the write succeeds
+
+  Scenario: Schedule message without post_at raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "schedule_message" with channel "C001" but no post_at
+    Then the write is an error
+
+  Scenario: Upload a file to a channel
+    Given a Slack connector with valid bot token
+    When I write resource "file_upload" with filename "notes.txt" and content "hello"
+    Then the write succeeds
+
+  Scenario: Upload file without content raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "file_upload" with filename "notes.txt" but no content
+    Then the write is an error
